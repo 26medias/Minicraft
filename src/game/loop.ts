@@ -7,8 +7,11 @@ import { raycastVoxel, type VoxelHit } from '../engine/input/raycast';
 import { AIR, BLOCKS, BLOCK_BY_NAME, isSolid, type BlockId } from '../data/blocks.data';
 import type { ParticleSystem } from '../engine/render/particles';
 import type { PrimedOverlay } from '../engine/render/primed-overlay';
+import type { LightRegistry } from '../engine/render/light-registry';
 import { igniteTnt, type PrimedEntry } from './actions';
 import { detonate, tntKey, TNT_CHAIN_FUSE, TNT_PRIME_FUSE } from './tnt';
+
+const LAMP_ID = BLOCK_BY_NAME['lamp'].id;
 
 const VIEW_RADIUS = 4; // chunks loaded around the player
 const REACH = 6;
@@ -47,6 +50,7 @@ export class GameLoop {
 		private uvFor: UvFn,
 		private particles: ParticleSystem | null = null,
 		private overlay: PrimedOverlay | null = null,
+		private lights: LightRegistry | null = null,
 	) {}
 
 	markChunkDirty(cx: number, cz: number) {
@@ -149,6 +153,7 @@ export class GameLoop {
 			// If the block was a primed TNT, cancel its fuse.
 			const k = tntKey(target.x, target.y, target.z);
 			if (this.primedTnt.delete(k)) this.overlay?.remove(target.x, target.y, target.z);
+			if (blockId === LAMP_ID) this.lights?.remove(target.x, target.y, target.z);
 			this.world.setBlock(target.x, target.y, target.z, AIR);
 			this.markChunkDirtyAround(target.x, target.z);
 			this.particles?.spawnBreak(target.x, target.y, target.z, blockId);
@@ -176,6 +181,7 @@ export class GameLoop {
 			this.primedTnt.has(tntKey(x, y, z)),
 		);
 		for (const { x, y, z } of result.destroyed) {
+			if (this.world.getBlock(x, y, z) === LAMP_ID) this.lights?.remove(x, y, z);
 			this.world.setBlock(x, y, z, AIR);
 			this.markChunkDirtyAround(x, z);
 		}

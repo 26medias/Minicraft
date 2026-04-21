@@ -54,6 +54,8 @@ export const BLOCKS: BlockDef[] = [
 		textures: { kind: 'uniform', all: 'black_wool' } },
 	{ id: 15, name: 'tnt', label: 'TNT', solid: true, transparent: false, kidMode: true, hardness: 0.5,
 		textures: { kind: 'top-bottom-side', top: 'tnt_top', bottom: 'tnt_bottom', side: 'tnt_side' } },
+	{ id: 16, name: 'lamp', label: 'Lamp', solid: true, transparent: false, kidMode: true, hardness: 0.3,
+		textures: { kind: 'uniform', all: 'glowstone' } },
 ];
 
 export const BLOCK_BY_NAME: Record<string, BlockDef> = Object.fromEntries(

@@ -246,7 +246,7 @@ git commit -m "chore: scaffold Vite + TypeScript + Three.js project"
 ### Task 2: Configure Vitest, ESLint, Prettier
 
 **Files:**
-- Create: `vitest.config.ts`, `.eslintrc.cjs`, `.prettierrc.json`, `src/engine/smoke.test.ts`
+- Create: `vitest.config.ts`, `eslint.config.js`, `.prettierrc.json`, `src/engine/smoke.test.ts`
 - Modify: `package.json`
 
 - [ ] **Step 1: Install test + lint dev deps**
@@ -269,26 +269,27 @@ export default defineConfig({
 });
 ```
 
-- [ ] **Step 3: Write `.eslintrc.cjs`**
+- [ ] **Step 3: Write `eslint.config.js`**
+
+ESLint v10 (resolved by `npm install`) removed legacy `.eslintrc.*` support entirely, so this project uses flat config. The `flat/recommended` export from `@typescript-eslint/eslint-plugin` bundles parser registration, plugin registration, and both the core `eslint:recommended` rules and the TS-specific rules — prefer it over manually spreading `.rules` from the legacy config, which misses the core rules (`no-var`, `prefer-const`, etc.).
 
 ```js
-/* eslint-env node */
-module.exports = {
-	root: true,
-	parser: '@typescript-eslint/parser',
-	parserOptions: { ecmaVersion: 2022, sourceType: 'module' },
-	plugins: ['@typescript-eslint'],
-	extends: [
-		'eslint:recommended',
-		'plugin:@typescript-eslint/recommended',
-		'prettier',
-	],
-	rules: {
-		'@typescript-eslint/no-unused-vars': ['error', { argsIgnorePattern: '^_' }],
-		'@typescript-eslint/no-explicit-any': 'warn',
+import tseslint from '@typescript-eslint/eslint-plugin';
+import prettierConfig from 'eslint-config-prettier';
+
+export default [
+	{
+		ignores: ['dist/**', 'node_modules/**', 'public/atlas.*'],
 	},
-	ignorePatterns: ['dist', 'node_modules', 'public/atlas.*'],
-};
+	...tseslint.configs['flat/recommended'],
+	{
+		rules: {
+			'@typescript-eslint/no-unused-vars': ['error', { argsIgnorePattern: '^_' }],
+			'@typescript-eslint/no-explicit-any': 'warn',
+		},
+	},
+	prettierConfig,
+];
 ```
 
 - [ ] **Step 4: Write `.prettierrc.json`**
@@ -316,7 +317,7 @@ Extend the `"scripts"` block in `package.json`:
 	"build-atlas": "tsx scripts/build-atlas.ts",
 	"test": "vitest run",
 	"test:watch": "vitest",
-	"lint": "eslint . --ext .ts",
+	"lint": "eslint .",
 	"format": "prettier --write ."
 }
 ```
@@ -347,7 +348,7 @@ Expected: test suite `1 passed`; lint exits 0.
 - [ ] **Step 8: Commit**
 
 ```bash
-git add vitest.config.ts .eslintrc.cjs .prettierrc.json package.json package-lock.json src/engine/smoke.test.ts
+git add vitest.config.ts eslint.config.js .prettierrc.json package.json package-lock.json src/engine/smoke.test.ts
 git commit -m "chore: configure Vitest, ESLint, Prettier"
 ```
 

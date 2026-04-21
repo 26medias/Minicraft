@@ -128,13 +128,13 @@ async function main() {
 					keys.flyDown = down;
 					break;
 				case 'toggleFly':
-					if (down) player.toggleFly();
+					if (down && !e.repeat) player.toggleFly();
 					break;
 				case 'flySpeedUp':
-					if (down) player.adjustFlySpeed(+1);
+					if (down && !e.repeat) player.adjustFlySpeed(+1);
 					break;
 				case 'flySpeedDown':
-					if (down) player.adjustFlySpeed(-1);
+					if (down && !e.repeat) player.adjustFlySpeed(-1);
 					break;
 				default: {
 					if (down && a.startsWith('slot')) {

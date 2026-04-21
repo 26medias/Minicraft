@@ -18,7 +18,8 @@ export type Action =
 	| 'flyDown'
 	| 'flySpeedUp'
 	| 'flySpeedDown'
-	| 'ignite';
+	| 'ignite'
+	| 'pickLightColor';
 
 export const ACTIONS: Action[] = [
 	'forward',
@@ -41,6 +42,7 @@ export const ACTIONS: Action[] = [
 	'flySpeedUp',
 	'flySpeedDown',
 	'ignite',
+	'pickLightColor',
 ];
 
 export const ACTION_LABEL: Record<Action, string> = {
@@ -64,6 +66,7 @@ export const ACTION_LABEL: Record<Action, string> = {
 	flySpeedUp: 'Fly Faster',
 	flySpeedDown: 'Fly Slower',
 	ignite: 'Ignite TNT',
+	pickLightColor: 'Pick Light Color',
 };
 
 export const DEFAULT_KEYBINDINGS: Record<Action, string> = {
@@ -87,9 +90,11 @@ export const DEFAULT_KEYBINDINGS: Record<Action, string> = {
 	flySpeedUp: 'Equal',
 	flySpeedDown: 'Minus',
 	ignite: 'KeyE',
+	pickLightColor: 'KeyC',
 };
 
 export type Options = {
 	kidMode: boolean;
 	keybindings: Record<Action, string>;
+	currentLightColor: string;
 };

@@ -596,9 +596,12 @@ git commit -m "feat(data): Phase 1 block catalog with 15 blocks"
 
 Uses `sharp`. Reads the block catalog, collects unique texture names, lays them out on a 512×512 atlas at 16×16 tile size with 2px edge-replicated padding (so each tile occupies 20×20 on the atlas). Emits `public/atlas.png` + `public/atlas.json` (pixel coords, not UVs, since the consumer divides by atlas size at material-setup time).
 
+Because the project's `tsconfig.json` sets `"types": ["vite/client"]` only, Node globals like `Buffer` and `process` are not typed. The script uses explicit `node:*` imports and `Uint8Array` buffers to work under that config.
+
 ```ts
 import { mkdir, writeFile } from 'node:fs/promises';
 import { dirname, join } from 'node:path';
+import { exit } from 'node:process';
 import sharp from 'sharp';
 import { BLOCKS } from '../src/data/blocks.data.js';
 
@@ -661,9 +664,9 @@ async function main() {
 	console.log(`Wrote ${sorted.length} tiles to ${OUT_PNG} (${ATLAS_SIZE}x${ATLAS_SIZE})`);
 }
 
-async function padEdgeReplicate(src: Buffer, size: number, pad: number): Promise<Buffer> {
+async function padEdgeReplicate(src: Uint8Array, size: number, pad: number): Promise<Uint8Array> {
 	const cell = size + pad * 2;
-	const out = Buffer.alloc(cell * cell * 4);
+	const out = new Uint8Array(cell * cell * 4);
 	const read = (x: number, y: number) => {
 		const cx = Math.max(0, Math.min(size - 1, x));
 		const cy = Math.max(0, Math.min(size - 1, y));
@@ -684,7 +687,7 @@ async function padEdgeReplicate(src: Buffer, size: number, pad: number): Promise
 
 main().catch((err) => {
 	console.error(err);
-	process.exit(1);
+	exit(1);
 });
 ```
 

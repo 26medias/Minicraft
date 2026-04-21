@@ -14,7 +14,7 @@
 		"resolveJsonModule": true,
 		"isolatedModules": true,
 		"useDefineForClassFields": true,
-		"jsx": "preserve",
+		"noEmit": true,
 		"types": ["vite/client"]
 	},
 	"include": ["src", "scripts", "vite.config.ts", "vitest.config.ts"]

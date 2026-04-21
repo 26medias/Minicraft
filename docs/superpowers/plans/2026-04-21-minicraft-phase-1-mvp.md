@@ -167,7 +167,7 @@ Expected: exit 0, `node_modules/` created. Warnings about peer deps are OK; erro
 		"resolveJsonModule": true,
 		"isolatedModules": true,
 		"useDefineForClassFields": true,
-		"jsx": "preserve",
+		"noEmit": true,
 		"types": ["vite/client"]
 	},
 	"include": ["src", "scripts", "vite.config.ts", "vitest.config.ts"]
@@ -2105,9 +2105,9 @@ describe('moveWithCollisions', () => {
 
 	it('sets grounded when landing on a block', () => {
 		const w = new World(1);
-		w.setBlock(10, 40, 10, stone);
-		const r = moveWithCollisions(w, [10.2, 41.2, 10.2], SIZE, [0, -2, 0]);
-		expect(r.position[1]).toBeCloseTo(41, 2);
+		w.setBlock(10, 60, 10, stone); // y=60 is above generated terrain (MAX_H=50)
+		const r = moveWithCollisions(w, [10.2, 61.2, 10.2], SIZE, [0, -2, 0]);
+		expect(r.position[1]).toBeCloseTo(61, 2);
 		expect(r.grounded).toBe(true);
 		expect(r.vy).toBe(0);
 	});
@@ -2164,10 +2164,15 @@ export function moveWithCollisions(
 		vz = 0;
 	}
 
-	// Y axis
+	// Y axis — snap to the block surface we hit so feet/head don't float in mid-air.
 	const newY = py + vy;
 	if (collidesAABB(world, px, newY, pz, sx, sy, sz)) {
-		if (vy < 0) grounded = true;
+		if (vy < 0) {
+			grounded = true;
+			py = Math.floor(py) + EPS; // snap onto the top of the block below
+		} else {
+			py = Math.floor(newY + sy) - sy - EPS; // snap beneath the ceiling we hit
+		}
 		vy = 0;
 	} else {
 		py = newY;

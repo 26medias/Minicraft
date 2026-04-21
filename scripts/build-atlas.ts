@@ -15,6 +15,24 @@ const ASSETS_DIR = 'src/assets/blocks';
 const OUT_PNG = 'public/atlas.png';
 const OUT_JSON = 'public/atlas.json';
 
+// Textures shipped by Mojang as grayscale masks that the game tints at runtime.
+// We have no biomes, so the tint is baked in at build time.
+const TEXTURE_TINTS: Record<string, [number, number, number]> = {
+	grass_block_top: [0x79, 0xC0, 0x5A], // plains-biome grass green
+};
+
+function applyTint(raw: Uint8Array, tint: [number, number, number]): Uint8Array {
+	const [tr, tg, tb] = tint;
+	const out = new Uint8Array(raw.length);
+	for (let i = 0; i < raw.length; i += 4) {
+		out[i + 0] = Math.round((raw[i + 0] * tr) / 255);
+		out[i + 1] = Math.round((raw[i + 1] * tg) / 255);
+		out[i + 2] = Math.round((raw[i + 2] * tb) / 255);
+		out[i + 3] = raw[i + 3];
+	}
+	return out;
+}
+
 async function main() {
 	const names = new Set<string>();
 	for (const b of BLOCKS) {
@@ -58,7 +76,10 @@ async function main() {
 			throw new Error(`Expected 4-channel RGBA for ${name}, got ${raw.info.channels}`);
 		}
 
-		const padded = padEdgeReplicate(raw.data, TILE, PADDING);
+		const tint = TEXTURE_TINTS[name];
+		const pixels = tint ? applyTint(raw.data, tint) : raw.data;
+
+		const padded = padEdgeReplicate(pixels, TILE, PADDING);
 		composites.push({ input: padded, left: x, top: y, raw: { width: CELL, height: CELL, channels: 4 } });
 		tiles[name] = { u: x + PADDING, v: y + PADDING, w: TILE, h: TILE };
 	}

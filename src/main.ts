@@ -15,8 +15,11 @@ import { LocalStorageAdapter } from './persistence/localStorage';
 import { AutoSave } from './persistence/autosave';
 import { ParticleSystem } from './engine/render/particles';
 import { PrimedOverlay } from './engine/render/primed-overlay';
-import { BLOCKS, type BlockId } from './data/blocks.data';
-import { loadOptions } from './persistence/options';
+import { BLOCKS, BLOCK_BY_NAME, type BlockId } from './data/blocks.data';
+import { loadOptions, saveOptions } from './persistence/options';
+import { LightRegistry } from './engine/render/light-registry';
+import { ColorPicker } from './ui/color-picker';
+import { LIGHT_PALETTE } from './data/light-palette.data';
 import type { Action } from './data/keybindings.data';
 
 const REACH = 6;
@@ -30,6 +33,8 @@ async function main() {
 	const adapter = new LocalStorageAdapter();
 	const menu = new MainMenu(app, adapter);
 	const options = new OptionsMenu(app);
+	const lights = new LightRegistry(renderer.scene);
+	const colorPicker = new ColorPicker(app, LIGHT_PALETTE);
 
 	setupPointerLock(renderer.gl.domElement, (dx, dy) => cam.applyMouseDelta(dx, dy));
 
@@ -48,6 +53,8 @@ async function main() {
 
 	async function startGame(seed: number, name: string, mode: null | 'continue') {
 		menu.hide();
+		// Clear any lights from a prior session of startGame (returning from main menu to a new world).
+		for (const entry of [...lights.entries()]) lights.remove(entry.x, entry.y, entry.z);
 		const world = new World(seed);
 		let createdAt = Date.now();
 		let worldName = name;
@@ -72,6 +79,9 @@ async function main() {
 				cam.yaw = save.player.yaw;
 				cam.pitch = save.player.pitch;
 				savedSelectedBlockId = save.player.hotbar[save.player.selected] ?? null;
+				if (save?.lights) {
+					for (const l of save.lights) lights.add(l.x, l.y, l.z, l.color);
+				}
 			}
 		}
 
@@ -145,6 +155,26 @@ async function main() {
 						if (hit) loop.ignite(hit);
 					}
 					break;
+				case 'pickLightColor':
+					if (down && !e.repeat) {
+						const eye = player.eyePosition();
+						const dir = cam.getLookDir();
+						const hit = raycastVoxel(world, eye, [dir.x, dir.y, dir.z], REACH);
+						const target =
+							hit && world.getBlock(hit.x, hit.y, hit.z) === BLOCK_BY_NAME['lamp'].id
+								? hit
+								: null;
+						colorPicker.onPick = (color) => {
+							if (target) {
+								lights.setColor(target.x, target.y, target.z, color);
+								autosave.markDirty();
+							}
+							opts.currentLightColor = color;
+							saveOptions(opts);
+						};
+						colorPicker.show();
+					}
+					break;
 				default: {
 					if (down && a.startsWith('slot')) {
 						const n = Number(a.slice(4)) - 1;
@@ -185,11 +215,12 @@ async function main() {
 			}),
 			{ name: worldName, createdAt },
 			() => alert('Save storage full. Auto-save disabled for this session.'),
+			() => [...lights.entries()],
 		);
 
 		const particles = new ParticleSystem(renderer.scene, renderer.material, atlas);
 		const overlay = new PrimedOverlay(renderer.scene);
-		const loop = new GameLoop(world, renderer, cam, player, keys, atlas.uvFor, particles, overlay);
+		const loop = new GameLoop(world, renderer, cam, player, keys, atlas.uvFor, particles, overlay, lights);
 		loop.onBlockBroken = () => autosave.markDirty();
 		loop.onMiningProgress = (p) => hud.setMiningProgress(p);
 		loop.onFlyStateChange = (tier) => hud.setFlySpeed(tier);
@@ -213,6 +244,15 @@ async function main() {
 					size: [0.6, 1.8, 0.6],
 				});
 				if (!placed) return;
+				if (id === BLOCK_BY_NAME['lamp'].id) {
+					const FACE_OFFSET: Record<string, [number, number, number]> = {
+						px: [1, 0, 0], nx: [-1, 0, 0],
+						py: [0, 1, 0], ny: [0, -1, 0],
+						pz: [0, 0, 1], nz: [0, 0, -1],
+					};
+					const [dx, dy, dz] = FACE_OFFSET[hit.face];
+					lights.add(hit.x + dx, hit.y + dy, hit.z + dz, opts.currentLightColor);
+				}
 				loop.markChunkDirtyAround(hit.x, hit.z);
 				autosave.markDirty();
 			}

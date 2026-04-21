@@ -1,3 +1,4 @@
+import { Buffer } from 'node:buffer';
 import { mkdir, writeFile } from 'node:fs/promises';
 import { dirname, join } from 'node:path';
 import { exit } from 'node:process';
@@ -22,7 +23,8 @@ async function main() {
 		if (t.kind === 'uniform') names.add(t.all);
 		else if (t.kind === 'top-bottom-side') { names.add(t.top); names.add(t.bottom); names.add(t.side); }
 		else if (t.kind === 'columnar') { names.add(t.top); names.add(t.bottom); names.add(t.sides); }
-		else { names.add(t.px); names.add(t.nx); names.add(t.py); names.add(t.ny); names.add(t.pz); names.add(t.nz); }
+		else if (t.kind === 'six') { names.add(t.px); names.add(t.nx); names.add(t.py); names.add(t.ny); names.add(t.pz); names.add(t.nz); }
+		else { throw new Error(`Unknown texture kind: ${(t as { kind: string }).kind}`); }
 	}
 
 	const sorted = [...names].sort();
@@ -45,14 +47,19 @@ async function main() {
 		const y = row * CELL;
 
 		const tilePath = join(ASSETS_DIR, `${name}.png`);
-		const img = sharp(tilePath).resize(TILE, TILE, { kernel: 'nearest' });
+		// ensureAlpha() forces 4-channel RGBA regardless of the source PNG's channel count — Mojang's
+		// Phase 1 assets mix RGB and RGBA, and padEdgeReplicate's stride math assumes 4 channels.
+		const img = sharp(tilePath).resize(TILE, TILE, { kernel: 'nearest' }).ensureAlpha();
 		const raw = await img.raw().toBuffer({ resolveWithObject: true });
 		if (raw.info.width !== TILE || raw.info.height !== TILE) {
 			throw new Error(`Unexpected tile size for ${name}: ${raw.info.width}x${raw.info.height}`);
 		}
+		if (raw.info.channels !== 4) {
+			throw new Error(`Expected 4-channel RGBA for ${name}, got ${raw.info.channels}`);
+		}
 
-		const padded = await padEdgeReplicate(raw.data, TILE, PADDING);
-		composites.push({ input: padded as unknown as Buffer, left: x, top: y, raw: { width: CELL, height: CELL, channels: 4 } });
+		const padded = padEdgeReplicate(raw.data, TILE, PADDING);
+		composites.push({ input: padded, left: x, top: y, raw: { width: CELL, height: CELL, channels: 4 } });
 		tiles[name] = { u: x + PADDING, v: y + PADDING, w: TILE, h: TILE };
 	}
 
@@ -63,9 +70,9 @@ async function main() {
 	console.log(`Wrote ${sorted.length} tiles to ${OUT_PNG} (${ATLAS_SIZE}x${ATLAS_SIZE})`);
 }
 
-async function padEdgeReplicate(src: Uint8Array, size: number, pad: number): Promise<Uint8Array> {
+function padEdgeReplicate(src: Uint8Array, size: number, pad: number): Buffer {
 	const cell = size + pad * 2;
-	const out = new Uint8Array(cell * cell * 4);
+	const out = Buffer.alloc(cell * cell * 4);
 	const read = (x: number, y: number) => {
 		const cx = Math.max(0, Math.min(size - 1, x));
 		const cy = Math.max(0, Math.min(size - 1, y));

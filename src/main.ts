@@ -182,6 +182,7 @@ async function main() {
 		const loop = new GameLoop(world, renderer, cam, player, keys, atlas.uvFor, particles);
 		loop.onBlockBroken = () => autosave.markDirty();
 		loop.onMiningProgress = (p) => hud.setMiningProgress(p);
+		loop.onFlyStateChange = (tier) => hud.setFlySpeed(tier);
 		loop.start();
 
 		window.addEventListener('mousedown', (e) => {

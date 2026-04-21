@@ -6,6 +6,7 @@ const SVG_NS = 'http://www.w3.org/2000/svg';
 const RING_RADIUS = 16;
 const RING_CIRCUMFERENCE = 2 * Math.PI * RING_RADIUS;
 const SLOT_PX = 48;
+const FLY_PIPS = 5;
 
 export class Hud {
 	private root: HTMLElement;
@@ -14,6 +15,8 @@ export class Hud {
 	private miningSvg: SVGSVGElement;
 	private miningArc: SVGCircleElement;
 	private atlas: LoadedAtlas;
+	private flyEl: HTMLDivElement;
+	private flyPips: HTMLDivElement[] = [];
 
 	constructor(container: HTMLElement, atlas: LoadedAtlas) {
 		this.root = container;
@@ -51,6 +54,16 @@ export class Hud {
 		this.hotbarEl = document.createElement('div');
 		this.hotbarEl.id = 'hud-hotbar';
 		this.root.appendChild(this.hotbarEl);
+
+		this.flyEl = document.createElement('div');
+		this.flyEl.id = 'hud-fly-speed';
+		for (let i = 0; i < FLY_PIPS; i++) {
+			const pip = document.createElement('div');
+			pip.className = 'fly-pip';
+			this.flyEl.appendChild(pip);
+			this.flyPips.push(pip);
+		}
+		this.root.appendChild(this.flyEl);
 	}
 
 	setHotbar(ids: BlockId[], selected: number) {
@@ -91,5 +104,13 @@ export class Hud {
 			'stroke-dashoffset',
 			String(RING_CIRCUMFERENCE * (1 - clamped)),
 		);
+	}
+
+	setFlySpeed(tier: number | null) {
+		this.flyEl.classList.toggle('visible', tier !== null);
+		const filled = tier ?? 0;
+		for (let i = 0; i < this.flyPips.length; i++) {
+			this.flyPips[i].classList.toggle('filled', i < filled);
+		}
 	}
 }

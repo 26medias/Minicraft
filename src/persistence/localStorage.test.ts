@@ -74,4 +74,24 @@ describe('LocalStorageAdapter', () => {
 		expect(await adapter.loadWorld(7)).toBeNull();
 		expect((await adapter.listWorlds()).find((w) => w.seed === 7)).toBeUndefined();
 	});
+
+	it('round-trips lights', async () => {
+		const base = sampleSave(11);
+		const save = {
+			...base,
+			lights: [
+				{ x: 1, y: 2, z: 3, color: '#FFF5E0' },
+				{ x: 4, y: 5, z: 6, color: '#88CCFF' },
+			],
+		};
+		await adapter.saveWorld(save);
+		const loaded = await adapter.loadWorld(11);
+		expect(loaded!.lights).toEqual(save.lights);
+	});
+
+	it('loads pre-Task-6 saves (no lights field)', async () => {
+		await adapter.saveWorld(sampleSave(12));
+		const loaded = await adapter.loadWorld(12);
+		expect(loaded!.lights).toBeUndefined();
+	});
 });

@@ -29,8 +29,8 @@ export class Renderer {
 		this.gl.outputColorSpace = THREE.SRGBColorSpace;
 		container.appendChild(this.gl.domElement);
 
-		const amb = new THREE.AmbientLight(0xffffff, 0.6);
-		const sun = new THREE.DirectionalLight(0xffffff, 0.8);
+		const amb = new THREE.AmbientLight(0xffffff, 0.15);
+		const sun = new THREE.DirectionalLight(0xffffff, 1.0);
 		sun.position.set(1, 1.5, 0.5);
 		this.scene.add(amb, sun);
 

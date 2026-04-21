@@ -1213,7 +1213,7 @@ git commit -m "feat(world): deterministic simplex-noise terrain generation"
 import { describe, it, expect } from 'vitest';
 import { World } from './world';
 import { BLOCK_BY_NAME, AIR } from '../../data/blocks.data';
-import { CHUNK_SIZE_X, WORLD_SIZE_X, WORLD_SIZE_Z } from './coords';
+import { CHUNK_SIZE_X, WORLD_SIZE_X } from './coords';
 
 describe('World', () => {
 	it('generates a chunk on demand', () => {
@@ -1285,11 +1285,7 @@ describe('World', () => {
 import type { BlockId } from '../../data/blocks.data';
 import { AIR } from '../../data/blocks.data';
 import { Chunk } from './chunk';
-import {
-	CHUNK_SIZE_X, CHUNK_SIZE_Z,
-	WORLD_CHUNKS_X, WORLD_CHUNKS_Z,
-	inBounds, worldToChunk,
-} from './coords';
+import { WORLD_CHUNKS_X, WORLD_CHUNKS_Z, inBounds, worldToChunk } from './coords';
 import { generateChunk } from './generation';
 
 const key = (cx: number, cz: number) => `${cx},${cz}`;
@@ -1333,6 +1329,10 @@ export class World {
 		const { cx, cz, lx, lz } = worldToChunk(x, z);
 		const c = this.ensureChunk(cx, cz);
 		c.set(lx, y, lz, id);
+		// World-level writes represent game actions — mark modified even when the block
+		// happens to match generation, so the save system persists the intent. Chunk.set
+		// separately keeps `dirty` clean on true no-ops, so meshing cost isn't paid.
+		c.modified = true;
 	}
 
 	modifiedChunks(): Chunk[] {

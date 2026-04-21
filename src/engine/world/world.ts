@@ -45,6 +45,9 @@ export class World {
 		const { cx, cz, lx, lz } = worldToChunk(x, z);
 		const c = this.ensureChunk(cx, cz);
 		c.set(lx, y, lz, id);
+		// World-level writes represent game actions — mark modified even when the block
+		// happens to match generation, so the save system persists the intent. Chunk.set
+		// separately keeps `dirty` clean on true no-ops, so meshing cost isn't paid.
 		c.modified = true;
 	}
 

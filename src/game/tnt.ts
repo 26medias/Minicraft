@@ -14,8 +14,8 @@ export function tntKey(x: number, y: number, z: number): string {
 }
 
 export type DetonationResult = {
-	destroyed: Array<[number, number, number]>;
-	primed: Array<[number, number, number]>;
+	destroyed: Array<{ x: number; y: number; z: number }>;
+	primed: Array<{ x: number; y: number; z: number }>;
 };
 
 /**
@@ -31,16 +31,16 @@ export function detonate(
 	alreadyPrimed: (x: number, y: number, z: number) => boolean,
 ): DetonationResult {
 	const tntId = BLOCK_BY_NAME['tnt'].id;
-	const destroyed: Array<[number, number, number]> = [];
-	const primed: Array<[number, number, number]> = [];
+	const destroyed: Array<{ x: number; y: number; z: number }> = [];
+	const primed: Array<{ x: number; y: number; z: number }> = [];
 
 	if (inBounds(ox, oy, oz) && isSolid(world.getBlock(ox, oy, oz))) {
-		destroyed.push([ox, oy, oz]);
+		destroyed.push({ x: ox, y: oy, z: oz });
 	}
 
 	for (let dy = -TNT_RADIUS; dy <= TNT_RADIUS; dy++) {
-		for (let dx = -TNT_RADIUS; dx <= TNT_RADIUS; dx++) {
-			for (let dz = -TNT_RADIUS; dz <= TNT_RADIUS; dz++) {
+		for (let dz = -TNT_RADIUS; dz <= TNT_RADIUS; dz++) {
+			for (let dx = -TNT_RADIUS; dx <= TNT_RADIUS; dx++) {
 				if (dx === 0 && dy === 0 && dz === 0) continue;
 				if (dx * dx + dy * dy + dz * dz > TNT_RADIUS_SQ) continue;
 				const x = ox + dx;
@@ -50,9 +50,9 @@ export function detonate(
 
 				const id = world.getBlock(x, y, z);
 				if (id === tntId) {
-					if (!alreadyPrimed(x, y, z)) primed.push([x, y, z]);
+					if (!alreadyPrimed(x, y, z)) primed.push({ x, y, z });
 				} else if (isSolid(id)) {
-					destroyed.push([x, y, z]);
+					destroyed.push({ x, y, z });
 				}
 			}
 		}

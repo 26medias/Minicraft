@@ -5,6 +5,9 @@ import { meshChunk } from './engine/world/mesher';
 import { FpCamera } from './engine/render/camera';
 import { setupPointerLock } from './engine/input/pointerLock';
 import { Player, type Keys } from './game/player';
+import { raycastVoxel } from './engine/input/raycast';
+import { mineBlock, placeBlock } from './game/actions';
+import { BLOCK_BY_NAME } from './data/blocks.data';
 
 async function main() {
 	const app = document.getElementById('app')!;
@@ -51,6 +54,58 @@ async function main() {
 		cam.position.set(eye[0], eye[1], eye[2]);
 		cam.sync(renderer.camera);
 	});
+
+	// Phase 1 smoke hotbar so placing has something to place.
+	player.hotbar = [
+		BLOCK_BY_NAME['stone'].id,
+		BLOCK_BY_NAME['dirt'].id,
+		BLOCK_BY_NAME['oak_planks'].id,
+	];
+
+	const REACH = 6;
+
+	window.addEventListener('mousedown', (e) => {
+		if (document.pointerLockElement !== renderer.gl.domElement) return;
+		const eye = player.eyePosition();
+		const dir = cam.getLookDir();
+		const hit = raycastVoxel(world, eye, [dir.x, dir.y, dir.z], REACH);
+		if (!hit) return;
+
+		let changed = false;
+		if (e.button === 0) {
+			changed = !!mineBlock(world, hit);
+		} else if (e.button === 2) {
+			const id = player.hotbar[player.selected];
+			if (id !== undefined) {
+				changed = placeBlock(world, hit, id, {
+					position: player.position,
+					size: [0.6, 1.8, 0.6],
+				});
+			}
+		}
+		if (!changed) return;
+		reMesh(hit.x, hit.y, hit.z);
+	});
+
+	window.addEventListener('contextmenu', (e) => e.preventDefault());
+
+	function reMesh(wx: number, _wy: number, wz: number) {
+		const cx = Math.floor(wx / 16);
+		const cz = Math.floor(wz / 16);
+		const chunks = new Set<string>([`${cx},${cz}`]);
+		const lx = wx - cx * 16,
+			lz = wz - cz * 16;
+		if (lx === 0) chunks.add(`${cx - 1},${cz}`);
+		if (lx === 15) chunks.add(`${cx + 1},${cz}`);
+		if (lz === 0) chunks.add(`${cx},${cz - 1}`);
+		if (lz === 15) chunks.add(`${cx},${cz + 1}`);
+		for (const k of chunks) {
+			const [ccx, ccz] = k.split(',').map(Number);
+			if (!world.chunkInWorld(ccx, ccz)) continue;
+			const c = world.ensureChunk(ccx, ccz);
+			renderer.mountChunkMesh(c, meshChunk(c, world.neighbors(c), atlas.uvFor));
+		}
+	}
 }
 
 main();

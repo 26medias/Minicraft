@@ -13,29 +13,29 @@ const MAX_H = 50;
 const NOISE_SCALE = 1 / 48;
 
 export function generateChunk(chunk: Chunk, seed: number): void {
-    const rng = alea(`minicraft:${seed}`);
-    const noise = createNoise2D(rng);
+	const rng = alea(`minicraft:${seed}`);
+	const noise = createNoise2D(rng);
 
-    const baseX = chunk.cx * CHUNK_SIZE_X;
-    const baseZ = chunk.cz * CHUNK_SIZE_Z;
+	const baseX = chunk.cx * CHUNK_SIZE_X;
+	const baseZ = chunk.cz * CHUNK_SIZE_Z;
 
-    for (let lz = 0; lz < CHUNK_SIZE_Z; lz++) {
-        for (let lx = 0; lx < CHUNK_SIZE_X; lx++) {
-            const wx = baseX + lx;
-            const wz = baseZ + lz;
-            const n = noise(wx * NOISE_SCALE, wz * NOISE_SCALE);
-            const h = Math.floor(MIN_H + (n * 0.5 + 0.5) * (MAX_H - MIN_H));
+	for (let lz = 0; lz < CHUNK_SIZE_Z; lz++) {
+		for (let lx = 0; lx < CHUNK_SIZE_X; lx++) {
+			const wx = baseX + lx;
+			const wz = baseZ + lz;
+			const n = noise(wx * NOISE_SCALE, wz * NOISE_SCALE);
+			const h = Math.floor(MIN_H + (n * 0.5 + 0.5) * (MAX_H - MIN_H));
 
-            for (let y = 0; y <= h; y++) {
-                let id: number;
-                if (y === h) id = GRASS;
-                else if (y >= h - DIRT_BAND) id = DIRT;
-                else id = STONE;
-                chunk.blocks[y * CHUNK_SIZE_X * CHUNK_SIZE_Z + lz * CHUNK_SIZE_X + lx] = id;
-            }
-        }
-    }
+			for (let y = 0; y <= h; y++) {
+				let id: number;
+				if (y === h) id = GRASS;
+				else if (y >= h - DIRT_BAND) id = DIRT;
+				else id = STONE;
+				chunk.blocks[y * CHUNK_SIZE_X * CHUNK_SIZE_Z + lz * CHUNK_SIZE_X + lx] = id;
+			}
+		}
+	}
 
-    chunk.dirty = true;
-    chunk.modified = false;
+	chunk.dirty = true;
+	chunk.modified = false;
 }

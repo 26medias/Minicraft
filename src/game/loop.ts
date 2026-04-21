@@ -30,6 +30,7 @@ export class GameLoop {
 	private leftMouseDown = false;
 
 	onBlockBroken: ((ev: BlockBrokenEvent) => void) | null = null;
+	onMiningProgress: ((progress: number) => void) | null = null;
 
 	constructor(
 		private world: World,
@@ -80,6 +81,7 @@ export class GameLoop {
 		this.cam.sync(this.renderer.camera);
 
 		this.updateMining(dt);
+		this.onMiningProgress?.(this.miningProgress());
 		this.loadNearbyChunks();
 		this.flushDirtyChunks();
 	}

@@ -55,6 +55,20 @@
 	bottom: 0;
 	width: 2px;
 }
+#hud-mining {
+	position: fixed;
+	top: 50%;
+	left: 50%;
+	width: 40px;
+	height: 40px;
+	margin: -20px 0 0 -20px;
+	pointer-events: none;
+	opacity: 0;
+	transition: opacity 0.12s;
+}
+#hud-mining.active {
+	opacity: 1;
+}
 #menu-root {
 	position: fixed;
 	inset: 0;

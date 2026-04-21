@@ -137,6 +137,7 @@ async function main() {
 
 		const loop = new GameLoop(world, renderer, cam, player, keys, atlas.uvFor);
 		loop.onBlockBroken = () => autosave.markDirty();
+		loop.onMiningProgress = (p) => hud.setMiningProgress(p);
 		loop.start();
 
 		window.addEventListener('mousedown', (e) => {

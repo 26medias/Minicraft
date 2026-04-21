@@ -12,7 +12,7 @@ export type ChunkMesh = {
 
 export type UvFn = (id: BlockId, face: Face) => [number, number, number, number];
 
-type Neighbors = { px?: Chunk; nx?: Chunk; pz?: Chunk; nz?: Chunk };
+export type Neighbors = { px?: Chunk; nx?: Chunk; pz?: Chunk; nz?: Chunk };
 
 // Per-face constant data: normal, direction offset, and 4 corner offsets (positions within a unit cube).
 // Winding: CCW when viewed from outside the cube, so front-faces point outward.
@@ -147,18 +147,15 @@ export function meshChunk(chunk: Chunk, neighbors: Neighbors, uvFor: UvFn): Chun
 					if (!shouldEmitFace(id, nb)) continue;
 
 					const [u0, v0, u1, v1] = uvFor(id, face);
-					const faceUvs: [number, number][] = [
-						[u0, v1],
-						[u1, v1],
-						[u1, v0],
-						[u0, v0],
-					];
+					// Per-corner UVs unrolled to avoid array allocation in the inner loop.
+					const uu = [u0, u1, u1, u0];
+					const vv = [v1, v1, v0, v0];
 
 					for (let i = 0; i < 4; i++) {
 						const [ox, oy, oz] = f.corners[i];
 						positions.push(x + ox, y + oy, z + oz);
 						normals.push(f.normal[0], f.normal[1], f.normal[2]);
-						uvs.push(faceUvs[i][0], faceUvs[i][1]);
+						uvs.push(uu[i], vv[i]);
 					}
 					indices.push(vcount, vcount + 1, vcount + 2, vcount, vcount + 2, vcount + 3);
 					vcount += 4;

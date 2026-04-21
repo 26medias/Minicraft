@@ -5,6 +5,7 @@
 	"type": "module",
 	"scripts": {
 		"dev": "vite",
+		"prebuild": "npm run build-atlas",
 		"build": "tsc -b && vite build",
 		"preview": "vite preview",
 		"build-atlas": "tsx scripts/build-atlas.ts",

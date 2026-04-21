@@ -1,5 +1,7 @@
-import type { EncodedChunk, PersistenceAdapter, WorldSave, WorldSummary } from './adapter';
+import type { PersistenceAdapter, RawChunk, WorldSave, WorldSummary } from './adapter';
 import { decodeChunk, encodeChunk } from './codec';
+
+type EncodedChunk = { cx: number; cz: number; data: string };
 
 const NS = 'minicraft:v1';
 const metaKey = (seed: number) => `${NS}:world:${seed}:meta`;
@@ -12,9 +14,9 @@ export class LocalStorageAdapter implements PersistenceAdapter {
 	async loadWorld(seed: number): Promise<WorldSave | null> {
 		const metaRaw = this.storage.getItem(metaKey(seed));
 		if (!metaRaw) return null;
-		const meta = JSON.parse(metaRaw) as Omit<WorldSave, 'modifiedChunks' | 'rawChunks'>;
+		const meta = JSON.parse(metaRaw) as Omit<WorldSave, 'chunks'>;
 
-		const modifiedChunks: EncodedChunk[] = [];
+		const chunks: RawChunk[] = [];
 		for (let i = 0; i < this.storage.length; i++) {
 			const k = this.storage.key(i);
 			if (!k || !k.startsWith(chunkPrefix(seed))) continue;
@@ -22,9 +24,9 @@ export class LocalStorageAdapter implements PersistenceAdapter {
 			const [cxStr, czStr] = suffix.split(':');
 			const data = this.storage.getItem(k);
 			if (!data) continue;
-			modifiedChunks.push({ cx: Number(cxStr), cz: Number(czStr), data });
+			chunks.push({ cx: Number(cxStr), cz: Number(czStr), blocks: decodeChunk(data) });
 		}
-		return { ...meta, modifiedChunks };
+		return { ...meta, chunks };
 	}
 
 	async saveWorld(save: WorldSave): Promise<void> {
@@ -37,9 +39,11 @@ export class LocalStorageAdapter implements PersistenceAdapter {
 			player: save.player,
 		};
 
-		const encoded: EncodedChunk[] = save.rawChunks
-			? save.rawChunks.map((c) => ({ cx: c.cx, cz: c.cz, data: encodeChunk(c.blocks) }))
-			: save.modifiedChunks;
+		const encoded: EncodedChunk[] = save.chunks.map((c) => ({
+			cx: c.cx,
+			cz: c.cz,
+			data: encodeChunk(c.blocks),
+		}));
 
 		try {
 			this.storage.setItem(metaKey(save.seed), JSON.stringify(metaPayload));
@@ -85,9 +89,5 @@ export class LocalStorageAdapter implements PersistenceAdapter {
 			if (k && k.startsWith(chunkPrefix(seed))) toDelete.push(k);
 		}
 		toDelete.forEach((k) => this.storage.removeItem(k));
-	}
-
-	static decodeChunkData(data: string): Uint8Array {
-		return decodeChunk(data);
 	}
 }

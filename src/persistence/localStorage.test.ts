@@ -34,8 +34,7 @@ function sampleSave(seed: number): WorldSave {
 		createdAt: 1000,
 		updatedAt: 2000,
 		player: { x: 10, y: 60, z: 10, yaw: 0, pitch: 0, hotbar: [1, 2, 3], selected: 0 },
-		modifiedChunks: [{ cx: 0, cz: 0, data: '__overwritten__' }],
-		rawChunks: [{ cx: 0, cz: 0, blocks }],
+		chunks: [{ cx: 0, cz: 0, blocks }],
 	};
 }
 
@@ -53,7 +52,8 @@ describe('LocalStorageAdapter', () => {
 		expect(loaded).not.toBeNull();
 		expect(loaded!.seed).toBe(42);
 		expect(loaded!.name).toBe('World 42');
-		expect(loaded!.modifiedChunks).toHaveLength(1);
+		expect(loaded!.chunks).toHaveLength(1);
+		expect(loaded!.chunks[0].blocks[0]).toBe(3);
 	});
 
 	it('returns null for missing world', async () => {

@@ -46,8 +46,7 @@ export class AutoSave {
 			createdAt: this.createdAt,
 			updatedAt: Date.now(),
 			player: this.getPlayer(),
-			modifiedChunks: [],
-			rawChunks: this.world
+			chunks: this.world
 				.modifiedChunks()
 				.map((c) => ({ cx: c.cx, cz: c.cz, blocks: c.blocks })),
 		};

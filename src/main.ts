@@ -13,9 +13,8 @@ import { MainMenu } from './ui/menu';
 import { OptionsMenu } from './ui/options';
 import { LocalStorageAdapter } from './persistence/localStorage';
 import { AutoSave } from './persistence/autosave';
-import { decodeChunk } from './persistence/codec';
 import { BLOCKS } from './data/blocks.data';
-import { loadOptions } from './data/keybindings.data';
+import { loadOptions } from './persistence/options';
 import type { Action } from './data/keybindings.data';
 import { worldToChunk } from './engine/world/coords';
 
@@ -61,10 +60,9 @@ async function main() {
 			} else {
 				worldName = save.name;
 				createdAt = save.createdAt;
-				for (const enc of save.modifiedChunks) {
-					const c = world.ensureChunk(enc.cx, enc.cz);
-					const blocks = decodeChunk(enc.data);
-					c.blocks.set(blocks);
+				for (const rc of save.chunks) {
+					const c = world.ensureChunk(rc.cx, rc.cz);
+					c.blocks.set(rc.blocks);
 					c.modified = true;
 					c.dirty = true;
 				}

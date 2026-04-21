@@ -17,9 +17,9 @@ export type WorldSummary = {
 	updatedAt: number;
 };
 
-export type EncodedChunk = { cx: number; cz: number; data: string };
 export type RawChunk = { cx: number; cz: number; blocks: Uint8Array };
 
+// Callers always see decoded RawChunk[]. Encoding is handled internally by the adapter.
 export type WorldSave = {
 	version: 1;
 	seed: number;
@@ -27,8 +27,7 @@ export type WorldSave = {
 	createdAt: number;
 	updatedAt: number;
 	player: PlayerSave;
-	modifiedChunks: EncodedChunk[]; // on disk
-	rawChunks?: RawChunk[]; // runtime convenience; the adapter encodes/decodes
+	chunks: RawChunk[]; // decoded on load, encoded by the adapter on save
 };
 
 export interface PersistenceAdapter {

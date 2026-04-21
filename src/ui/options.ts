@@ -1,11 +1,5 @@
-import {
-	ACTIONS,
-	ACTION_LABEL,
-	DEFAULT_KEYBINDINGS,
-	loadOptions,
-	saveOptions,
-	type Options,
-} from '../data/keybindings.data';
+import { ACTIONS, ACTION_LABEL, DEFAULT_KEYBINDINGS, type Options } from '../data/keybindings.data';
+import { loadOptions, saveOptions } from '../persistence/options';
 
 export class OptionsMenu {
 	private root: HTMLDivElement;

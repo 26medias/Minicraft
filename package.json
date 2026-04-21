@@ -10,7 +10,7 @@
 		"build-atlas": "tsx scripts/build-atlas.ts",
 		"test": "vitest run",
 		"test:watch": "vitest",
-		"lint": "eslint . --ext .ts",
+		"lint": "eslint .",
 		"format": "prettier --write ."
 	},
 	"dependencies": {

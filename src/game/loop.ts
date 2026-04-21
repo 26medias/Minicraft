@@ -98,6 +98,7 @@ export class GameLoop {
 		const eye = this.player.eyePosition();
 		this.cam.position.set(eye[0], eye[1], eye[2]);
 		this.cam.sync(this.renderer.camera);
+		this.renderer.setSunTarget(this.player.position[0], this.player.position[1], this.player.position[2]);
 
 		this.updateMining(dt);
 		this.onMiningProgress?.(this.miningProgress());

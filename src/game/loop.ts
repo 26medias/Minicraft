@@ -5,6 +5,7 @@ import type { Player, Keys } from './player';
 import { meshChunk, type UvFn } from '../engine/world/mesher';
 import { raycastVoxel } from '../engine/input/raycast';
 import { AIR, BLOCKS, isSolid, type BlockId } from '../data/blocks.data';
+import type { ParticleSystem } from '../engine/render/particles';
 
 const VIEW_RADIUS = 4; // chunks loaded around the player
 const REACH = 6;
@@ -39,6 +40,7 @@ export class GameLoop {
 		private player: Player,
 		private keys: Keys,
 		private uvFor: UvFn,
+		private particles: ParticleSystem | null = null,
 	) {}
 
 	markChunkDirty(cx: number, cz: number) {
@@ -82,6 +84,7 @@ export class GameLoop {
 
 		this.updateMining(dt);
 		this.onMiningProgress?.(this.miningProgress());
+		this.particles?.tick(dt);
 		this.loadNearbyChunks();
 		this.flushDirtyChunks();
 	}
@@ -129,6 +132,7 @@ export class GameLoop {
 			this.mining = null;
 			this.world.setBlock(target.x, target.y, target.z, AIR);
 			this.markChunkDirtyAround(target.x, target.z);
+			this.particles?.spawnBreak(target.x, target.y, target.z, blockId);
 			this.onBlockBroken?.({ x: target.x, y: target.y, z: target.z, blockId });
 		}
 	}

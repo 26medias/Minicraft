@@ -13,6 +13,7 @@ import { MainMenu } from './ui/menu';
 import { OptionsMenu } from './ui/options';
 import { LocalStorageAdapter } from './persistence/localStorage';
 import { AutoSave } from './persistence/autosave';
+import { ParticleSystem } from './engine/render/particles';
 import { BLOCKS } from './data/blocks.data';
 import { loadOptions } from './persistence/options';
 import type { Action } from './data/keybindings.data';
@@ -135,7 +136,8 @@ async function main() {
 			() => alert('Save storage full. Auto-save disabled for this session.'),
 		);
 
-		const loop = new GameLoop(world, renderer, cam, player, keys, atlas.uvFor);
+		const particles = new ParticleSystem(renderer.scene, renderer.material, atlas);
+		const loop = new GameLoop(world, renderer, cam, player, keys, atlas.uvFor, particles);
 		loop.onBlockBroken = () => autosave.markDirty();
 		loop.onMiningProgress = (p) => hud.setMiningProgress(p);
 		loop.start();

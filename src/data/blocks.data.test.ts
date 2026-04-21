@@ -53,4 +53,12 @@ describe('block catalog', () => {
 		expect(kid).toContain('dirt');
 		expect(kid).toContain('stone');
 	});
+
+	it('assigns hardness per block — air 0, soft < wood < stone, glass fastest', () => {
+		expect(BLOCK_BY_NAME['air'].hardness).toBe(0);
+		expect(BLOCK_BY_NAME['glass'].hardness).toBeGreaterThan(0);
+		expect(BLOCK_BY_NAME['glass'].hardness).toBeLessThan(BLOCK_BY_NAME['dirt'].hardness);
+		expect(BLOCK_BY_NAME['dirt'].hardness).toBeLessThan(BLOCK_BY_NAME['oak_planks'].hardness);
+		expect(BLOCK_BY_NAME['oak_planks'].hardness).toBeLessThan(BLOCK_BY_NAME['stone'].hardness);
+	});
 });

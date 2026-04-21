@@ -5,7 +5,7 @@ export type Face = 'px' | 'nx' | 'py' | 'ny' | 'pz' | 'nz';
 export type BlockFaceTextures =
 	| { kind: 'uniform'; all: string }
 	| { kind: 'top-bottom-side'; top: string; bottom: string; side: string }
-	| { kind: 'top-bottom-sides'; top: string; bottom: string; sides: string }
+	| { kind: 'columnar'; top: string; bottom: string; sides: string }
 	| { kind: 'six'; px: string; nx: string; py: string; ny: string; pz: string; nz: string };
 
 export type BlockDef = {
@@ -35,7 +35,7 @@ export const BLOCKS: BlockDef[] = [
 	{ id: 6, name: 'oak_planks', label: 'Oak Planks', solid: true, transparent: false, kidMode: true,
 		textures: { kind: 'uniform', all: 'oak_planks' } },
 	{ id: 7, name: 'oak_log', label: 'Oak Log', solid: true, transparent: false, kidMode: true,
-		textures: { kind: 'top-bottom-sides', top: 'oak_log_top', bottom: 'oak_log_top', sides: 'oak_log' } },
+		textures: { kind: 'columnar', top: 'oak_log_top', bottom: 'oak_log_top', sides: 'oak_log' } },
 	{ id: 8, name: 'glass', label: 'Glass', solid: true, transparent: true, kidMode: true,
 		textures: { kind: 'uniform', all: 'glass' } },
 	{ id: 9, name: 'white_wool', label: 'White Wool', solid: true, transparent: false, kidMode: true,
@@ -61,6 +61,8 @@ export function isSolid(id: BlockId): boolean {
 }
 
 export function isTransparent(id: BlockId): boolean {
+	// Unknown ids default to transparent so the mesher emits the face toward them
+	// (making corruption visible instead of hiding it). Kept inverted from isSolid's default on purpose.
 	return BLOCKS[id]?.transparent ?? true;
 }
 
@@ -75,7 +77,7 @@ export function faceTexture(id: BlockId, face: Face): string | null {
 			if (face === 'py') return t.top;
 			if (face === 'ny') return t.bottom;
 			return t.side;
-		case 'top-bottom-sides':
+		case 'columnar':
 			if (face === 'py') return t.top;
 			if (face === 'ny') return t.bottom;
 			return t.sides;

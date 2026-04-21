@@ -15,8 +15,8 @@ export type LoadedAtlas = {
 };
 
 export async function loadAtlas(
-	pngUrl = '/atlas.png',
-	jsonUrl = '/atlas.json',
+	pngUrl = `${import.meta.env.BASE_URL}atlas.png`,
+	jsonUrl = `${import.meta.env.BASE_URL}atlas.json`,
 ): Promise<LoadedAtlas> {
 	const [texture, atlas] = await Promise.all([
 		loadTexture(pngUrl),

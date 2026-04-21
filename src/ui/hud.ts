@@ -1,9 +1,11 @@
 import type { BlockId } from '../data/blocks.data';
 import { BLOCKS } from '../data/blocks.data';
+import type { LoadedAtlas } from '../engine/render/atlas';
 
 const SVG_NS = 'http://www.w3.org/2000/svg';
 const RING_RADIUS = 16;
 const RING_CIRCUMFERENCE = 2 * Math.PI * RING_RADIUS;
+const SLOT_PX = 48;
 
 export class Hud {
 	private root: HTMLElement;
@@ -11,9 +13,11 @@ export class Hud {
 	private slotEls: HTMLDivElement[] = [];
 	private miningSvg: SVGSVGElement;
 	private miningArc: SVGCircleElement;
+	private atlas: LoadedAtlas;
 
-	constructor(container: HTMLElement) {
+	constructor(container: HTMLElement, atlas: LoadedAtlas) {
 		this.root = container;
+		this.atlas = atlas;
 
 		const crosshair = document.createElement('div');
 		crosshair.id = 'hud-crosshair';
@@ -60,10 +64,23 @@ export class Hud {
 			const el = this.slotEls.pop()!;
 			el.remove();
 		}
+		const scale = SLOT_PX / this.atlas.tileSize;
+		const bgSize = `${this.atlas.size * scale}px ${this.atlas.size * scale}px`;
 		for (let i = 0; i < ids.length; i++) {
-			const def = BLOCKS[ids[i]];
-			this.slotEls[i].textContent = def ? def.label : '';
-			this.slotEls[i].classList.toggle('selected', i === selected);
+			const id = ids[i];
+			const def = BLOCKS[id];
+			const slot = this.slotEls[i];
+			slot.classList.toggle('selected', i === selected);
+			slot.title = def ? def.label : '';
+
+			const rect = this.atlas.tileRect(id, 'px');
+			if (rect) {
+				slot.style.backgroundImage = `url(${this.atlas.pngUrl})`;
+				slot.style.backgroundSize = bgSize;
+				slot.style.backgroundPosition = `-${rect.u * scale}px -${rect.v * scale}px`;
+			} else {
+				slot.style.backgroundImage = '';
+			}
 		}
 	}
 

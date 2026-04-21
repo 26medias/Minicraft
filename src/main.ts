@@ -14,7 +14,7 @@ import { OptionsMenu } from './ui/options';
 import { LocalStorageAdapter } from './persistence/localStorage';
 import { AutoSave } from './persistence/autosave';
 import { ParticleSystem } from './engine/render/particles';
-import { BLOCKS } from './data/blocks.data';
+import { BLOCKS, type BlockId } from './data/blocks.data';
 import { loadOptions } from './persistence/options';
 import type { Action } from './data/keybindings.data';
 
@@ -25,7 +25,7 @@ async function main() {
 	const atlas = await loadAtlas();
 	const renderer = new Renderer(app, atlas);
 	const cam = new FpCamera();
-	const hud = new Hud(app);
+	const hud = new Hud(app, atlas);
 	const adapter = new LocalStorageAdapter();
 	const menu = new MainMenu(app, adapter);
 	const options = new OptionsMenu(app);
@@ -53,6 +53,7 @@ async function main() {
 
 		const player = new Player([256, 60, 256]);
 
+		let savedSelectedBlockId: BlockId | null = null;
 		if (mode === 'continue') {
 			const save = await adapter.loadWorld(seed);
 			if (!save) {
@@ -69,20 +70,24 @@ async function main() {
 				player.position = [save.player.x, save.player.y, save.player.z];
 				cam.yaw = save.player.yaw;
 				cam.pitch = save.player.pitch;
-				player.hotbar = save.player.hotbar;
-				player.selected = save.player.selected;
+				savedSelectedBlockId = save.player.hotbar[save.player.selected] ?? null;
 			}
 		}
 
-		if (player.hotbar.length === 0) {
-			const opts = loadOptions();
-			const pool = BLOCKS.filter((b) => b.id !== 0 && (opts.kidMode ? b.kidMode : true));
-			player.hotbar = pool.slice(0, 9).map((b) => b.id);
+		// Hotbar is always derived from the kid-mode / full block pool — not stored per save.
+		// We preserve the previously-selected block if it's still in the pool; otherwise reset.
+		const opts = loadOptions();
+		const pool = BLOCKS.filter((b) => b.id !== 0 && (opts.kidMode ? b.kidMode : true));
+		player.hotbar = pool.map((b) => b.id);
+		if (savedSelectedBlockId !== null) {
+			const idx = player.hotbar.indexOf(savedSelectedBlockId);
+			player.selected = idx >= 0 ? idx : 0;
+		} else {
+			player.selected = 0;
 		}
 		hud.setHotbar(player.hotbar, player.selected);
 
 		const keys: Keys = { forward: false, back: false, left: false, right: false, jump: false };
-		const opts = loadOptions();
 		const keyToAction: Record<string, Action> = {};
 		for (const [action, code] of Object.entries(opts.keybindings))
 			keyToAction[code] = action as Action;

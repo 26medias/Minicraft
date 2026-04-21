@@ -125,3 +125,7 @@ dist
 .yarn/build-state.yml
 .yarn/install-state.gz
 .pnp.*
+
+# Claude Code — per-agent persistent memory (machine-local) and local settings
+.claude/agent-memory/
+.claude/settings.local.json

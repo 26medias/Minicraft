@@ -125,6 +125,18 @@ async function main() {
 		window.addEventListener('keydown', onKey(true));
 		window.addEventListener('keyup', onKey(false));
 
+		// Tab / Shift+Tab cycle through the hotbar. Not remappable via Options
+		// because the keybinding system captures only e.code (no modifier combos).
+		window.addEventListener('keydown', (e) => {
+			if (e.code !== 'Tab') return;
+			e.preventDefault();
+			if (player.hotbar.length === 0) return;
+			const delta = e.shiftKey ? -1 : 1;
+			player.selected =
+				(player.selected + delta + player.hotbar.length) % player.hotbar.length;
+			hud.setHotbar(player.hotbar, player.selected);
+		});
+
 		const autosave = new AutoSave(
 			adapter,
 			world,

@@ -197,3 +197,19 @@ Static bundle from `vite build` → upload to a **GCP Cloud Storage** bucket con
 - `strict: true` in `tsconfig.json`. No `any` without a `// eslint-disable-next-line` and a reason.
 - No comments explaining *what* code does — only *why*, when the why is non-obvious.
 - Data files (`*.data.ts`) are pure exports, no logic.
+
+## 11. Playtest Checklist
+
+Before handing the laptop to Noah:
+
+- [ ] `npm run build-atlas && npm run build && npm run preview` runs clean
+- [ ] Main menu shows; "New World" creates a world in under 2 seconds
+- [ ] Walking feels responsive; no falling through ground, no stuck-in-wall
+- [ ] Mining works on left click; placing on right click; crosshair aligned with hit
+- [ ] Hotbar 1–9 keys select correct slot; placed block matches selection
+- [ ] Save survives reload: close tab, reopen, Continue restores world + position
+- [ ] Options: kid-mode toggle persists across reloads; keybinding rebinding persists
+- [ ] No console errors in Chrome devtools during 5 minutes of play
+- [ ] World edges: player is blocked at x=0 and x=512 (and z same) — no infinite fall
+
+If any box fails, the bug belongs in a new task or a Phase 1 fix before ship.

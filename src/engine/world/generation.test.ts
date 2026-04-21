@@ -63,3 +63,23 @@ describe('generateChunk', () => {
 		}
 	});
 });
+
+const EXPECTED_HASH = 1833305435; // filled in below by running the test once
+
+function hashBytes(bytes: Uint8Array): number {
+	let h = 2166136261 >>> 0;
+	for (let i = 0; i < bytes.length; i++) {
+		h ^= bytes[i];
+		h = Math.imul(h, 16777619) >>> 0;
+	}
+	return h;
+}
+
+describe('determinism', () => {
+	it('hashes a fixed seed+coord to a stable value', () => {
+		const c = new Chunk(0, 0);
+		generateChunk(c, 2026);
+		const hash = hashBytes(c.blocks);
+		expect(hash).toBe(EXPECTED_HASH);
+	});
+});

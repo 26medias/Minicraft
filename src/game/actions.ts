@@ -1,7 +1,8 @@
 import type { World } from '../engine/world/world';
 import type { VoxelHit } from '../engine/input/raycast';
 import type { BlockId } from '../data/blocks.data';
-import { AIR, isSolid } from '../data/blocks.data';
+import { AIR, isSolid, BLOCK_BY_NAME } from '../data/blocks.data';
+import { tntKey } from './tnt';
 
 const FACE_NORMAL: Record<string, [number, number, number]> = {
 	px: [1, 0, 0],
@@ -34,6 +35,22 @@ export function placeBlock(
 	if (intersectsAabb(tx, ty, tz, playerAabb)) return false;
 
 	world.setBlock(tx, ty, tz, block);
+	return true;
+}
+
+export type PrimedEntry = { x: number; y: number; z: number; fuse: number };
+
+export function igniteTnt(
+	world: World,
+	hit: VoxelHit,
+	registry: Map<string, PrimedEntry>,
+	fuse: number,
+): boolean {
+	const tntId = BLOCK_BY_NAME['tnt'].id;
+	if (world.getBlock(hit.x, hit.y, hit.z) !== tntId) return false;
+	const k = tntKey(hit.x, hit.y, hit.z);
+	if (registry.has(k)) return false;
+	registry.set(k, { x: hit.x, y: hit.y, z: hit.z, fuse });
 	return true;
 }
 

@@ -12,7 +12,13 @@ export type Action =
 	| 'slot6'
 	| 'slot7'
 	| 'slot8'
-	| 'slot9';
+	| 'slot9'
+	| 'toggleFly'
+	| 'flyUp'
+	| 'flyDown'
+	| 'flySpeedUp'
+	| 'flySpeedDown'
+	| 'ignite';
 
 export const ACTIONS: Action[] = [
 	'forward',
@@ -29,6 +35,12 @@ export const ACTIONS: Action[] = [
 	'slot7',
 	'slot8',
 	'slot9',
+	'toggleFly',
+	'flyUp',
+	'flyDown',
+	'flySpeedUp',
+	'flySpeedDown',
+	'ignite',
 ];
 
 export const ACTION_LABEL: Record<Action, string> = {
@@ -46,6 +58,12 @@ export const ACTION_LABEL: Record<Action, string> = {
 	slot7: 'Hotbar 7',
 	slot8: 'Hotbar 8',
 	slot9: 'Hotbar 9',
+	toggleFly: 'Toggle Fly',
+	flyUp: 'Fly Up',
+	flyDown: 'Fly Down',
+	flySpeedUp: 'Fly Faster',
+	flySpeedDown: 'Fly Slower',
+	ignite: 'Ignite TNT',
 };
 
 export const DEFAULT_KEYBINDINGS: Record<Action, string> = {
@@ -63,6 +81,12 @@ export const DEFAULT_KEYBINDINGS: Record<Action, string> = {
 	slot7: 'Digit7',
 	slot8: 'Digit8',
 	slot9: 'Digit9',
+	toggleFly: 'KeyF',
+	flyUp: 'Space',
+	flyDown: 'ShiftLeft',
+	flySpeedUp: 'Equal',
+	flySpeedDown: 'Minus',
+	ignite: 'KeyE',
 };
 
 export type Options = {

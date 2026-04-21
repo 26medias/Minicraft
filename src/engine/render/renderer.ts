@@ -8,7 +8,7 @@ export class Renderer {
 	readonly camera: THREE.PerspectiveCamera;
 	readonly gl: THREE.WebGLRenderer;
 	private chunkGroup: THREE.Group;
-	private material: THREE.Material;
+	readonly material: THREE.Material;
 	private chunkMeshes = new Map<string, THREE.Mesh>();
 	private tickFn: ((dt: number) => void) | null = null;
 	private last = performance.now();

@@ -52,4 +52,23 @@ describe('meshChunk', () => {
 		// c's +x face should be hidden by nx's block
 		expect(mesh.indices.length).toBe(5 * 6);
 	});
+
+	it('side face maps world y=0 to v0 and y=1 to v1 (not upside-down)', () => {
+		const c = new Chunk(0, 0);
+		c.set(5, 5, 5, stone);
+		// Distinguishable corners so u0/v0/u1/v1 are each identifiable in the output.
+		const uv = (): [number, number, number, number] => [0.1, 0.2, 0.8, 0.9];
+		const mesh = meshChunk(c, {}, uv);
+		// FACE_ORDER starts with 'px'. Its corners are ordered [y=0, y=0, y=1, y=1].
+		// Expected UV layout (u, v) per corner: (u0, v0), (u1, v0), (u1, v1), (u0, v1).
+		// toBeCloseTo accounts for Float32Array rounding.
+		expect(mesh.uvs[0]).toBeCloseTo(0.1); // corner 0 U = u0
+		expect(mesh.uvs[1]).toBeCloseTo(0.2); // corner 0 V = v0  (bottom of tile, y=0)
+		expect(mesh.uvs[2]).toBeCloseTo(0.8); // corner 1 U = u1
+		expect(mesh.uvs[3]).toBeCloseTo(0.2); // corner 1 V = v0  (bottom of tile, y=0)
+		expect(mesh.uvs[4]).toBeCloseTo(0.8); // corner 2 U = u1
+		expect(mesh.uvs[5]).toBeCloseTo(0.9); // corner 2 V = v1  (top of tile, y=1)
+		expect(mesh.uvs[6]).toBeCloseTo(0.1); // corner 3 U = u0
+		expect(mesh.uvs[7]).toBeCloseTo(0.9); // corner 3 V = v1  (top of tile, y=1)
+	});
 });

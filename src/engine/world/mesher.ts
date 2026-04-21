@@ -14,13 +14,15 @@ export type UvFn = (id: BlockId, face: Face) => [number, number, number, number]
 
 export type Neighbors = { px?: Chunk; nx?: Chunk; pz?: Chunk; nz?: Chunk };
 
-// Per-face constant data: normal, direction offset, and 4 corner offsets (positions within a unit cube).
+// Per-face constant data: normal, direction offset, 4 corner offsets (positions within a unit cube),
+// and 4 per-corner UV selectors ([uIndex, vIndex] where 0 picks u0/v0, 1 picks u1/v1).
 // Winding: CCW when viewed from outside the cube, so front-faces point outward.
 const FACES: Record<
 	Face,
 	{
 		normal: [number, number, number];
 		corners: [number, number, number][];
+		uvs: [0 | 1, 0 | 1][];
 		dx: number;
 		dy: number;
 		dz: number;
@@ -37,6 +39,13 @@ const FACES: Record<
 			[1, 1, 0],
 			[1, 1, 1],
 		],
+		// Side face: world y=0 -> v0 (tile bottom), world y=1 -> v1 (tile top).
+		uvs: [
+			[0, 0],
+			[1, 0],
+			[1, 1],
+			[0, 1],
+		],
 	},
 	nx: {
 		normal: [-1, 0, 0],
@@ -48,6 +57,12 @@ const FACES: Record<
 			[0, 0, 1],
 			[0, 1, 1],
 			[0, 1, 0],
+		],
+		uvs: [
+			[0, 0],
+			[1, 0],
+			[1, 1],
+			[0, 1],
 		],
 	},
 	py: {
@@ -61,6 +76,13 @@ const FACES: Record<
 			[1, 1, 0],
 			[0, 1, 0],
 		],
+		// Top face: preserves the historical orientation (relevant for directional tiles like oak_log_top).
+		uvs: [
+			[0, 1],
+			[1, 1],
+			[1, 0],
+			[0, 0],
+		],
 	},
 	ny: {
 		normal: [0, -1, 0],
@@ -72,6 +94,12 @@ const FACES: Record<
 			[1, 0, 0],
 			[1, 0, 1],
 			[0, 0, 1],
+		],
+		uvs: [
+			[0, 1],
+			[1, 1],
+			[1, 0],
+			[0, 0],
 		],
 	},
 	pz: {
@@ -85,6 +113,12 @@ const FACES: Record<
 			[1, 1, 1],
 			[0, 1, 1],
 		],
+		uvs: [
+			[0, 0],
+			[1, 0],
+			[1, 1],
+			[0, 1],
+		],
 	},
 	nz: {
 		normal: [0, 0, -1],
@@ -96,6 +130,12 @@ const FACES: Record<
 			[0, 0, 0],
 			[0, 1, 0],
 			[1, 1, 0],
+		],
+		uvs: [
+			[0, 0],
+			[1, 0],
+			[1, 1],
+			[0, 1],
 		],
 	},
 };
@@ -147,15 +187,13 @@ export function meshChunk(chunk: Chunk, neighbors: Neighbors, uvFor: UvFn): Chun
 					if (!shouldEmitFace(id, nb)) continue;
 
 					const [u0, v0, u1, v1] = uvFor(id, face);
-					// Per-corner UVs unrolled to avoid array allocation in the inner loop.
-					const uu = [u0, u1, u1, u0];
-					const vv = [v1, v1, v0, v0];
 
 					for (let i = 0; i < 4; i++) {
 						const [ox, oy, oz] = f.corners[i];
+						const [ui, vi] = f.uvs[i];
 						positions.push(x + ox, y + oy, z + oz);
 						normals.push(f.normal[0], f.normal[1], f.normal[2]);
-						uvs.push(uu[i], vv[i]);
+						uvs.push(ui === 0 ? u0 : u1, vi === 0 ? v0 : v1);
 					}
 					indices.push(vcount, vcount + 1, vcount + 2, vcount, vcount + 2, vcount + 3);
 					vcount += 4;

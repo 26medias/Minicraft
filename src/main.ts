@@ -7,7 +7,7 @@ import { setupPointerLock } from './engine/input/pointerLock';
 import { Player, type Keys } from './game/player';
 import { GameLoop } from './game/loop';
 import { raycastVoxel } from './engine/input/raycast';
-import { mineBlock, placeBlock } from './game/actions';
+import { placeBlock } from './game/actions';
 import { Hud } from './ui/hud';
 import { MainMenu } from './ui/menu';
 import { OptionsMenu } from './ui/options';
@@ -16,7 +16,6 @@ import { AutoSave } from './persistence/autosave';
 import { BLOCKS } from './data/blocks.data';
 import { loadOptions } from './persistence/options';
 import type { Action } from './data/keybindings.data';
-import { worldToChunk } from './engine/world/coords';
 
 const REACH = 6;
 
@@ -137,37 +136,34 @@ async function main() {
 		);
 
 		const loop = new GameLoop(world, renderer, cam, player, keys, atlas.uvFor);
+		loop.onBlockBroken = () => autosave.markDirty();
 		loop.start();
 
 		window.addEventListener('mousedown', (e) => {
 			if (document.pointerLockElement !== renderer.gl.domElement) return;
-			const eye = player.eyePosition();
-			const dir = cam.getLookDir();
-			const hit = raycastVoxel(world, eye, [dir.x, dir.y, dir.z], REACH);
-			if (!hit) return;
-
-			let changed = false;
 			if (e.button === 0) {
-				changed = !!mineBlock(world, hit);
-			} else if (e.button === 2) {
-				const id = player.hotbar[player.selected];
-				if (id !== undefined) {
-					changed = placeBlock(world, hit, id, {
-						position: player.position,
-						size: [0.6, 1.8, 0.6],
-					});
-				}
+				loop.setLeftMouseDown(true);
+				return;
 			}
-			if (!changed) return;
-			const { cx, cz } = worldToChunk(hit.x, hit.z);
-			loop.markChunkDirty(cx, cz);
-			const lx = hit.x - cx * 16,
-				lz = hit.z - cz * 16;
-			if (lx === 0) loop.markChunkDirty(cx - 1, cz);
-			if (lx === 15) loop.markChunkDirty(cx + 1, cz);
-			if (lz === 0) loop.markChunkDirty(cx, cz - 1);
-			if (lz === 15) loop.markChunkDirty(cx, cz + 1);
-			autosave.markDirty();
+			if (e.button === 2) {
+				const eye = player.eyePosition();
+				const dir = cam.getLookDir();
+				const hit = raycastVoxel(world, eye, [dir.x, dir.y, dir.z], REACH);
+				if (!hit) return;
+				const id = player.hotbar[player.selected];
+				if (id === undefined) return;
+				const placed = placeBlock(world, hit, id, {
+					position: player.position,
+					size: [0.6, 1.8, 0.6],
+				});
+				if (!placed) return;
+				loop.markChunkDirtyAround(hit.x, hit.z);
+				autosave.markDirty();
+			}
+		});
+
+		window.addEventListener('mouseup', (e) => {
+			if (e.button === 0) loop.setLeftMouseDown(false);
 		});
 
 		window.addEventListener('contextmenu', (e) => e.preventDefault());

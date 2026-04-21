@@ -17,7 +17,8 @@ export type Action =
 	| 'flyUp'
 	| 'flyDown'
 	| 'flySpeedUp'
-	| 'flySpeedDown';
+	| 'flySpeedDown'
+	| 'ignite';
 
 export const ACTIONS: Action[] = [
 	'forward',
@@ -39,6 +40,7 @@ export const ACTIONS: Action[] = [
 	'flyDown',
 	'flySpeedUp',
 	'flySpeedDown',
+	'ignite',
 ];
 
 export const ACTION_LABEL: Record<Action, string> = {
@@ -61,6 +63,7 @@ export const ACTION_LABEL: Record<Action, string> = {
 	flyDown: 'Fly Down',
 	flySpeedUp: 'Fly Faster',
 	flySpeedDown: 'Fly Slower',
+	ignite: 'Ignite TNT',
 };
 
 export const DEFAULT_KEYBINDINGS: Record<Action, string> = {
@@ -83,6 +86,7 @@ export const DEFAULT_KEYBINDINGS: Record<Action, string> = {
 	flyDown: 'ShiftLeft',
 	flySpeedUp: 'Equal',
 	flySpeedDown: 'Minus',
+	ignite: 'KeyE',
 };
 
 export type Options = {

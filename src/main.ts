@@ -14,6 +14,7 @@ import { OptionsMenu } from './ui/options';
 import { LocalStorageAdapter } from './persistence/localStorage';
 import { AutoSave } from './persistence/autosave';
 import { ParticleSystem } from './engine/render/particles';
+import { PrimedOverlay } from './engine/render/primed-overlay';
 import { BLOCKS, type BlockId } from './data/blocks.data';
 import { loadOptions } from './persistence/options';
 import type { Action } from './data/keybindings.data';
@@ -136,6 +137,14 @@ async function main() {
 				case 'flySpeedDown':
 					if (down && !e.repeat) player.adjustFlySpeed(-1);
 					break;
+				case 'ignite':
+					if (down && !e.repeat) {
+						const eye = player.eyePosition();
+						const dir = cam.getLookDir();
+						const hit = raycastVoxel(world, eye, [dir.x, dir.y, dir.z], REACH);
+						if (hit) loop.ignite(hit);
+					}
+					break;
 				default: {
 					if (down && a.startsWith('slot')) {
 						const n = Number(a.slice(4)) - 1;
@@ -179,7 +188,8 @@ async function main() {
 		);
 
 		const particles = new ParticleSystem(renderer.scene, renderer.material, atlas);
-		const loop = new GameLoop(world, renderer, cam, player, keys, atlas.uvFor, particles);
+		const overlay = new PrimedOverlay(renderer.scene);
+		const loop = new GameLoop(world, renderer, cam, player, keys, atlas.uvFor, particles, overlay);
 		loop.onBlockBroken = () => autosave.markDirty();
 		loop.onMiningProgress = (p) => hud.setMiningProgress(p);
 		loop.onFlyStateChange = (tier) => hud.setFlySpeed(tier);

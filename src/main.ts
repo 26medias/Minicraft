@@ -1,3 +1,4 @@
+import './ui/ui.css';
 import { World } from './engine/world/world';
 import { loadAtlas } from './engine/render/atlas';
 import { Renderer } from './engine/render/renderer';
@@ -8,11 +9,13 @@ import { Player, type Keys } from './game/player';
 import { raycastVoxel } from './engine/input/raycast';
 import { mineBlock, placeBlock } from './game/actions';
 import { BLOCK_BY_NAME } from './data/blocks.data';
+import { Hud } from './ui/hud';
 
 async function main() {
 	const app = document.getElementById('app')!;
 	const atlas = await loadAtlas();
 	const renderer = new Renderer(app, atlas);
+	const hud = new Hud(app);
 	const cam = new FpCamera();
 
 	setupPointerLock(renderer.gl.domElement, (dx, dy) => cam.applyMouseDelta(dx, dy));
@@ -55,12 +58,18 @@ async function main() {
 		cam.sync(renderer.camera);
 	});
 
-	// Phase 1 smoke hotbar so placing has something to place.
 	player.hotbar = [
-		BLOCK_BY_NAME['stone'].id,
+		BLOCK_BY_NAME['grass_block'].id,
 		BLOCK_BY_NAME['dirt'].id,
+		BLOCK_BY_NAME['stone'].id,
+		BLOCK_BY_NAME['cobblestone'].id,
 		BLOCK_BY_NAME['oak_planks'].id,
+		BLOCK_BY_NAME['oak_log'].id,
+		BLOCK_BY_NAME['glass'].id,
+		BLOCK_BY_NAME['red_wool'].id,
+		BLOCK_BY_NAME['blue_wool'].id,
 	];
+	hud.setHotbar(player.hotbar, player.selected);
 
 	const REACH = 6;
 
@@ -88,6 +97,14 @@ async function main() {
 	});
 
 	window.addEventListener('contextmenu', (e) => e.preventDefault());
+
+	window.addEventListener('keydown', (e) => {
+		const n = Number(e.key);
+		if (Number.isInteger(n) && n >= 1 && n <= 9) {
+			player.selected = n - 1;
+			hud.setHotbar(player.hotbar, player.selected);
+		}
+	});
 
 	function reMesh(wx: number, _wy: number, wz: number) {
 		const cx = Math.floor(wx / 16);

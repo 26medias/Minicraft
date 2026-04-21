@@ -1,0 +1,57 @@
+#hud-hotbar {
+	position: fixed;
+	bottom: 16px;
+	left: 50%;
+	transform: translateX(-50%);
+	display: flex;
+	gap: 4px;
+	background: rgba(0, 0, 0, 0.35);
+	padding: 4px;
+	border-radius: 6px;
+	pointer-events: none;
+}
+.hotbar-slot {
+	width: 48px;
+	height: 48px;
+	background: rgba(0, 0, 0, 0.45);
+	border: 2px solid rgba(255, 255, 255, 0.15);
+	border-radius: 4px;
+	display: flex;
+	align-items: center;
+	justify-content: center;
+	color: #fff;
+	font-size: 11px;
+	text-align: center;
+	user-select: none;
+}
+.hotbar-slot.selected {
+	border-color: #fff;
+	box-shadow: 0 0 0 2px rgba(255, 255, 255, 0.25);
+}
+#hud-crosshair {
+	position: fixed;
+	top: 50%;
+	left: 50%;
+	width: 16px;
+	height: 16px;
+	margin: -8px 0 0 -8px;
+	pointer-events: none;
+}
+#hud-crosshair::before,
+#hud-crosshair::after {
+	content: '';
+	position: absolute;
+	background: rgba(255, 255, 255, 0.8);
+}
+#hud-crosshair::before {
+	top: 7px;
+	left: 0;
+	right: 0;
+	height: 2px;
+}
+#hud-crosshair::after {
+	left: 7px;
+	top: 0;
+	bottom: 0;
+	width: 2px;
+}

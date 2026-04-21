@@ -38,6 +38,7 @@ describe('LightRegistry', () => {
 		r.setColor(10, 20, 30, '#FF0000');
 		const l = scene.children.find((c) => c instanceof THREE.PointLight) as THREE.PointLight;
 		expect(l.color.getHexString().toLowerCase()).toBe('ff0000');
+		expect(r.getColor(10, 20, 30)?.toLowerCase()).toBe('#ff0000');
 	});
 
 	it('setColor on an unregistered coord is a no-op (does not throw)', () => {
@@ -69,5 +70,29 @@ describe('LightRegistry', () => {
 			{ x: 1, y: 2, z: 3, color: '#FF0000' },
 			{ x: 4, y: 5, z: 6, color: '#00FF00' },
 		]);
+	});
+
+	it('remove then add at same coord creates a fresh light', () => {
+		const scene = new THREE.Scene();
+		const r = new LightRegistry(scene);
+		r.add(1, 2, 3, '#FFFFFF');
+		r.remove(1, 2, 3);
+		r.add(1, 2, 3, '#FF0000');
+		expect(r.getColor(1, 2, 3)?.toLowerCase()).toBe('#ff0000');
+		expect(scene.children.filter((c) => c instanceof THREE.PointLight).length).toBe(1);
+	});
+
+	it('remove on an unregistered coord is a no-op (does not throw)', () => {
+		const scene = new THREE.Scene();
+		const r = new LightRegistry(scene);
+		expect(() => r.remove(99, 99, 99)).not.toThrow();
+	});
+
+	it('idempotent add preserves the original color', () => {
+		const scene = new THREE.Scene();
+		const r = new LightRegistry(scene);
+		r.add(10, 20, 30, '#FFFFFF');
+		r.add(10, 20, 30, '#FF0000');
+		expect(r.getColor(10, 20, 30)?.toLowerCase()).toBe('#ffffff');
 	});
 });

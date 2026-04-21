@@ -32,6 +32,7 @@ export class GameLoop {
 
 	onBlockBroken: ((ev: BlockBrokenEvent) => void) | null = null;
 	onMiningProgress: ((progress: number) => void) | null = null;
+	onFlyStateChange: ((tier: number | null) => void) | null = null;
 
 	constructor(
 		private world: World,
@@ -84,6 +85,7 @@ export class GameLoop {
 
 		this.updateMining(dt);
 		this.onMiningProgress?.(this.miningProgress());
+		this.onFlyStateChange?.(this.player.flying ? this.player.flySpeedTier : null);
 		this.particles?.tick(dt);
 		this.loadNearbyChunks();
 		this.flushDirtyChunks();

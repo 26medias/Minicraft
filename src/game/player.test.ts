@@ -1,0 +1,125 @@
+import { describe, it, expect } from 'vitest';
+import * as THREE from 'three';
+import { Player, type Keys } from './player';
+import { World } from '../engine/world/world';
+import { BLOCK_BY_NAME } from '../data/blocks.data';
+
+const stone = BLOCK_BY_NAME['stone'].id;
+const FWD = new THREE.Vector3(0, 0, -1);
+const RIGHT = new THREE.Vector3(1, 0, 0);
+
+function noKeys(): Keys {
+	return {
+		forward: false,
+		back: false,
+		left: false,
+		right: false,
+		jump: false,
+		flyUp: false,
+		flyDown: false,
+	};
+}
+
+describe('Player fly mode', () => {
+	it('walking player accumulates downward vy from gravity', () => {
+		const w = new World(1);
+		const p = new Player([100, 60, 100]);
+		const startVy = p.vy;
+		p.update(0.1, w, noKeys(), FWD, RIGHT);
+		expect(p.vy).toBeLessThan(startVy);
+	});
+
+	it('flying player does not accumulate gravity', () => {
+		const w = new World(1);
+		const p = new Player([100, 60, 100]);
+		p.toggleFly();
+		p.update(0.1, w, noKeys(), FWD, RIGHT);
+		expect(p.vy).toBe(0);
+	});
+
+	it('toggleFly zeroes vy on both transitions', () => {
+		const p = new Player([100, 60, 100]);
+		p.vy = -12;
+		p.toggleFly();
+		expect(p.vy).toBe(0);
+		p.vy = 7;
+		p.toggleFly();
+		expect(p.vy).toBe(0);
+	});
+
+	it('flyUp produces positive vy, flyDown negative, neither zero', () => {
+		const w = new World(1);
+		const p = new Player([100, 60, 100]);
+		p.toggleFly(); // flying, tier 2 (default)
+
+		const keysUp = { ...noKeys(), flyUp: true };
+		p.update(0.01, w, keysUp, FWD, RIGHT);
+		expect(p.vy).toBeGreaterThan(0);
+
+		const keysDown = { ...noKeys(), flyDown: true };
+		p.update(0.01, w, keysDown, FWD, RIGHT);
+		expect(p.vy).toBeLessThan(0);
+
+		p.update(0.01, w, noKeys(), FWD, RIGHT);
+		expect(p.vy).toBe(0);
+	});
+
+	it('flyUp and flyDown held together cancel to zero vy', () => {
+		const w = new World(1);
+		const p = new Player([100, 60, 100]);
+		p.toggleFly();
+		const keys = { ...noKeys(), flyUp: true, flyDown: true };
+		p.update(0.01, w, keys, FWD, RIGHT);
+		expect(p.vy).toBe(0);
+	});
+
+	it('flying horizontal speed equals WALK_SPEED * flySpeedTier', () => {
+		const w = new World(1);
+		// Ground: walking speed over 1 second. Place a floor so gravity doesn't move us.
+		for (let dx = -5; dx <= 5; dx++)
+			for (let dz = -5; dz <= 5; dz++) w.setBlock(100 + dx, 59, 100 + dz, stone);
+		const pw = new Player([100, 60, 100]);
+		pw.update(1.0, w, { ...noKeys(), forward: true }, FWD, RIGHT);
+		const walkDz = pw.position[2] - 100;
+
+		const pf = new Player([100, 60, 100]);
+		pf.toggleFly();
+		pf.update(1.0, w, { ...noKeys(), forward: true }, FWD, RIGHT);
+		const flyDzTier2 = pf.position[2] - 100;
+		expect(flyDzTier2).toBeCloseTo(walkDz * 2, 3);
+
+		pf.adjustFlySpeed(+3); // tier 2 → 5
+		const before = pf.position[2];
+		pf.update(1.0, w, { ...noKeys(), forward: true }, FWD, RIGHT);
+		const flyDzTier5 = pf.position[2] - before;
+		expect(flyDzTier5).toBeCloseTo(walkDz * 5, 3);
+	});
+
+	it('adjustFlySpeed clamps to [1, 5] while flying, no-op when not flying', () => {
+		const p = new Player([100, 60, 100]);
+		p.adjustFlySpeed(+1);
+		expect(p.flySpeedTier).toBe(2); // no-op when not flying
+
+		p.toggleFly();
+		expect(p.flySpeedTier).toBe(2);
+		p.adjustFlySpeed(+5);
+		expect(p.flySpeedTier).toBe(5);
+		p.adjustFlySpeed(+1);
+		expect(p.flySpeedTier).toBe(5);
+		p.adjustFlySpeed(-10);
+		expect(p.flySpeedTier).toBe(1);
+		p.adjustFlySpeed(-1);
+		expect(p.flySpeedTier).toBe(1);
+	});
+
+	it('flying player still collides with walls (no clipping)', () => {
+		const w = new World(1);
+		// Wall at x=102 across a vertical strip.
+		for (let dy = 59; dy <= 63; dy++) w.setBlock(102, dy, 100, stone);
+		const p = new Player([100, 60, 99.7]);
+		p.toggleFly();
+		// Push +X hard for 1 second; should stop before x=102.
+		p.update(1.0, w, { ...noKeys(), right: true }, FWD, RIGHT);
+		expect(p.position[0]).toBeLessThan(102);
+	});
+});

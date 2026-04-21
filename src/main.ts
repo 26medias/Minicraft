@@ -87,7 +87,15 @@ async function main() {
 		}
 		hud.setHotbar(player.hotbar, player.selected);
 
-		const keys: Keys = { forward: false, back: false, left: false, right: false, jump: false };
+		const keys: Keys = {
+			forward: false,
+			back: false,
+			left: false,
+			right: false,
+			jump: false,
+			flyUp: false,
+			flyDown: false,
+		};
 		const keyToAction: Record<string, Action> = {};
 		for (const [action, code] of Object.entries(opts.keybindings))
 			keyToAction[code] = action as Action;
@@ -110,6 +118,23 @@ async function main() {
 					break;
 				case 'jump':
 					keys.jump = down;
+					keys.flyUp = down;
+					break;
+				case 'flyUp':
+					keys.jump = down;
+					keys.flyUp = down;
+					break;
+				case 'flyDown':
+					keys.flyDown = down;
+					break;
+				case 'toggleFly':
+					if (down && !e.repeat) player.toggleFly();
+					break;
+				case 'flySpeedUp':
+					if (down && !e.repeat) player.adjustFlySpeed(+1);
+					break;
+				case 'flySpeedDown':
+					if (down && !e.repeat) player.adjustFlySpeed(-1);
 					break;
 				default: {
 					if (down && a.startsWith('slot')) {
@@ -157,6 +182,7 @@ async function main() {
 		const loop = new GameLoop(world, renderer, cam, player, keys, atlas.uvFor, particles);
 		loop.onBlockBroken = () => autosave.markDirty();
 		loop.onMiningProgress = (p) => hud.setMiningProgress(p);
+		loop.onFlyStateChange = (tier) => hud.setFlySpeed(tier);
 		loop.start();
 
 		window.addEventListener('mousedown', (e) => {

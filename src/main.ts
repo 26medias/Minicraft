@@ -21,6 +21,7 @@ import { LightRegistry } from './engine/render/light-registry';
 import { ColorPicker } from './ui/color-picker';
 import { LIGHT_PALETTE } from './data/light-palette.data';
 import type { Action } from './data/keybindings.data';
+import { fillChunkLights } from './engine/world/lighting';
 
 const REACH = 6;
 
@@ -74,6 +75,13 @@ async function main() {
 					c.blocks.set(rc.blocks);
 					c.modified = true;
 					c.dirty = true;
+				}
+				// Lights were computed during ensureChunk using the freshly-generated blocks, then
+				// overwritten by saved blocks. Recompute now that all saved blocks are in place so
+				// cross-chunk BFS sees the correct final state.
+				for (const rc of save.chunks) {
+					const c = world.getChunk(rc.cx, rc.cz);
+					if (c) fillChunkLights(world, c);
 				}
 				player.position = [save.player.x, save.player.y, save.player.z];
 				cam.yaw = save.player.yaw;

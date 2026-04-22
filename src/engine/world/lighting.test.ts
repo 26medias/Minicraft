@@ -123,6 +123,37 @@ describe('fillChunkLights — block light', () => {
 	});
 });
 
+describe('save-load lighting regression', () => {
+	it("regression: skylight is correct after a chunk's blocks are replaced (simulating save-load)", () => {
+		const w = new World(1);
+		// Let the world generate a chunk normally (creates terrain + fills lights).
+		const c = w.ensureChunk(0, 0);
+		// Find the top solid block of column (5, 5).
+		let topSolid = -1;
+		for (let y = 63; y >= 0; y--) {
+			if (c.blocks[indexOf(5, y, 5)] !== AIR) {
+				topSolid = y;
+				break;
+			}
+		}
+		expect(topSolid).toBeGreaterThan(0);
+		// Simulate "kid dug a straight-down shaft that was not in the generated world":
+		// replace blocks in column (5, 5) from topSolid down to some depth with air,
+		// via direct block-array mutation (mimicking c.blocks.set from a save).
+		for (let y = topSolid; y >= 10; y--) {
+			c.blocks[indexOf(5, y, 5)] = AIR;
+		}
+		// BEFORE the fix: lights would still reflect the original generated column — skyLight
+		// at deep shaft voxels would be 0.
+		// AFTER the fix: callers must re-run fillChunkLights once blocks settle.
+		fillChunkLights(w, c);
+		// The shaft column should now be lit top to bottom.
+		for (let y = topSolid; y >= 10; y--) {
+			expect(c.getSky(5, y, 5)).toBe(15);
+		}
+	});
+});
+
 describe('updateLightsForBlockChange', () => {
 	it('mining a lamp clears its propagated light locally', () => {
 		const w = emptyWorld();

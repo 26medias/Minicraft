@@ -72,6 +72,10 @@ export class World {
 		}
 	}
 
+	*allChunks(): Iterable<Chunk> {
+		for (const c of this.chunks.values()) yield c;
+	}
+
 	modifiedChunks(): Chunk[] {
 		const out: Chunk[] = [];
 		for (const c of this.chunks.values()) if (c.modified) out.push(c);

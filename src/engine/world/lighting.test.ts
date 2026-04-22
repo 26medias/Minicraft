@@ -1,5 +1,4 @@
 import { describe, it, expect } from 'vitest';
-import { Chunk } from './chunk';
 import { World } from './world';
 import { BLOCK_BY_NAME, AIR } from '../../data/blocks.data';
 import { fillChunkLights } from './lighting';

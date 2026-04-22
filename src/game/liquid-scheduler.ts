@@ -13,6 +13,7 @@ export class LiquidScheduler {
 	constructor(
 		private world: World,
 		private onChunkDirty: (cx: number, cz: number) => void,
+		private onBlockChanged: (x: number, y: number, z: number) => void = () => {},
 	) {}
 
 	tick(dt: number): void {
@@ -121,6 +122,7 @@ export class LiquidScheduler {
 				z = Number(zs);
 			if (this.world.getBlock(x, y, z) === id) continue;
 			this.world.setBlock(x, y, z, id);
+			this.onBlockChanged(x, y, z);
 			const cx = Math.floor(x / CHUNK_SIZE_X);
 			const cz = Math.floor(z / CHUNK_SIZE_Z);
 			touchedChunks.add(`${cx},${cz}`);

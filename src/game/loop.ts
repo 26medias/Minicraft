@@ -4,13 +4,14 @@ import type { Renderer } from '../engine/render/renderer';
 import type { Player, Keys } from './player';
 import { meshChunk, type UvFn } from '../engine/world/mesher';
 import { raycastVoxel, type VoxelHit } from '../engine/input/raycast';
-import { AIR, BLOCKS, BLOCK_BY_NAME, isSolid, type BlockId } from '../data/blocks.data';
+import { AIR, BLOCKS, BLOCK_BY_NAME, isSolid, isLiquid, type BlockId } from '../data/blocks.data';
 import type { ParticleSystem } from '../engine/render/particles';
 import type { PrimedOverlay } from '../engine/render/primed-overlay';
 import type { LightRegistry } from '../engine/render/light-registry';
 import { igniteTnt, type PrimedEntry } from './actions';
 import { detonate, tntKey, TNT_CHAIN_FUSE, TNT_PRIME_FUSE } from './tnt';
 import { updateLightsForBlockChange } from '../engine/world/lighting';
+import { LiquidScheduler } from './liquid-scheduler';
 
 const LAMP_ID = BLOCK_BY_NAME['lamp'].id;
 
@@ -37,6 +38,7 @@ export class GameLoop {
 	private mining: MiningState | null = null;
 	private leftMouseDown = false;
 	private primedTnt = new Map<string, PrimedEntry>();
+	private scheduler: LiquidScheduler;
 
 	onBlockBroken: ((ev: BlockBrokenEvent) => void) | null = null;
 	onMiningProgress: ((progress: number) => void) | null = null;
@@ -52,7 +54,13 @@ export class GameLoop {
 		private particles: ParticleSystem | null = null,
 		private overlay: PrimedOverlay | null = null,
 		private lights: LightRegistry | null = null,
-	) {}
+	) {
+		this.scheduler = new LiquidScheduler(
+			this.world,
+			(cx, cz) => this.markChunkDirty(cx, cz),
+			(x, y, z) => this.applyLightUpdate(x, y, z),
+		);
+	}
 
 	markChunkDirty(cx: number, cz: number) {
 		this.dirtyChunks.add(`${cx},${cz}`);
@@ -111,6 +119,7 @@ export class GameLoop {
 		this.onMiningProgress?.(this.miningProgress());
 		this.onFlyStateChange?.(this.player.flying ? this.player.flySpeedTier : null);
 		this.particles?.tick(dt);
+		this.scheduler.tick(dt);
 		this.updatePrimedTnt(dt);
 		this.overlay?.tick(dt);
 		this.loadNearbyChunks();
@@ -230,6 +239,17 @@ export class GameLoop {
 				continue;
 			}
 			const c = this.world.ensureChunk(cx, cz);
+			// Ensure gen-placed liquids are in the frontier for at least one tick's check.
+			if (c.liquidFrontier.size === 0) {
+				for (let y = 0; y < 64; y++) {
+					for (let lz = 0; lz < 16; lz++) {
+						for (let lx = 0; lx < 16; lx++) {
+							const idx = y * 16 * 16 + lz * 16 + lx;
+							if (isLiquid(c.blocks[idx])) c.liquidFrontier.add(idx);
+						}
+					}
+				}
+			}
 			const result = meshChunk(c, this.world.neighbors(c), this.uvFor);
 			this.renderer.mountChunkMesh(c, result);
 			this.mountedChunks.add(k);

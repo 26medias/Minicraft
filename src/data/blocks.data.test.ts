@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { BLOCKS, BLOCK_BY_NAME, AIR, isSolid, isTransparent, faceTexture } from './blocks.data';
+import { BLOCKS, BLOCK_BY_NAME, AIR, isSolid, isTransparent, faceTexture, isLiquid } from './blocks.data';
 
 describe('block catalog', () => {
 	it('has air at id 0', () => {
@@ -60,5 +60,52 @@ describe('block catalog', () => {
 		expect(BLOCK_BY_NAME['glass'].hardness).toBeLessThan(BLOCK_BY_NAME['dirt'].hardness);
 		expect(BLOCK_BY_NAME['dirt'].hardness).toBeLessThan(BLOCK_BY_NAME['oak_planks'].hardness);
 		expect(BLOCK_BY_NAME['oak_planks'].hardness).toBeLessThan(BLOCK_BY_NAME['stone'].hardness);
+	});
+});
+
+describe('BlockDef light + liquid fields', () => {
+	it('every block defines lightLevel, lightFilter, liquid', () => {
+		for (const b of BLOCKS) {
+			expect(typeof b.lightLevel).toBe('number');
+			expect(typeof b.lightFilter).toBe('number');
+			expect(['none', 'water', 'lava']).toContain(b.liquid);
+			expect(b.lightLevel).toBeGreaterThanOrEqual(0);
+			expect(b.lightLevel).toBeLessThanOrEqual(15);
+			expect(b.lightFilter).toBeGreaterThanOrEqual(0);
+			expect(b.lightFilter).toBeLessThanOrEqual(15);
+		}
+	});
+
+	it('air has filter 0 and emits nothing', () => {
+		const air = BLOCKS[AIR];
+		expect(air.lightFilter).toBe(0);
+		expect(air.lightLevel).toBe(0);
+		expect(air.liquid).toBe('none');
+	});
+
+	it('glass is fully transparent to light (filter 0)', () => {
+		expect(BLOCK_BY_NAME['glass'].lightFilter).toBe(0);
+		expect(BLOCK_BY_NAME['glass'].lightLevel).toBe(0);
+	});
+
+	it('lamp emits max light (15) and blocks transmitted light (filter 15)', () => {
+		expect(BLOCK_BY_NAME['lamp'].lightLevel).toBe(15);
+		expect(BLOCK_BY_NAME['lamp'].lightFilter).toBe(15);
+	});
+
+	it('all non-lamp non-glass solid blocks have filter 15 and lightLevel 0', () => {
+		const exceptions = new Set(['air', 'glass', 'lamp', 'water', 'lava']);
+		for (const b of BLOCKS) {
+			if (exceptions.has(b.name)) continue;
+			expect(b.lightFilter).toBe(15);
+			expect(b.lightLevel).toBe(0);
+			expect(b.liquid).toBe('none');
+		}
+	});
+
+	it('isLiquid returns false for air and solids, true for water/lava (once added)', () => {
+		expect(isLiquid(AIR)).toBe(false);
+		expect(isLiquid(BLOCK_BY_NAME['stone'].id)).toBe(false);
+		// water/lava assertions land in Task 2.
 	});
 });

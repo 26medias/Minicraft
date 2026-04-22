@@ -64,3 +64,59 @@ describe('fillChunkLights — skylight', () => {
 		expect(c.getSky(5, 39, 5)).toBe(12);
 	});
 });
+
+const lamp = BLOCK_BY_NAME['lamp'].id;
+const lava = BLOCK_BY_NAME['lava'].id;
+
+describe('fillChunkLights — block light', () => {
+	it('a lamp radiates outward with distance decay', () => {
+		const w = emptyWorld();
+		const c = w.getChunk(0, 0)!;
+		for (let dx = 0; dx < 16; dx++) for (let dz = 0; dz < 16; dz++) c.blocks[indexOf(dx, 63, dz)] = stone;
+		c.blocks[indexOf(5, 30, 5)] = lamp;
+		fillChunkLights(w, c, () => '#FFFFFF');
+		const r5 = c.getBlockR(5, 30, 5);
+		expect(r5).toBeGreaterThanOrEqual(14);
+		expect(c.getBlockR(6, 30, 5)).toBeGreaterThanOrEqual(13);
+		expect(c.getBlockR(5, 30, 6)).toBeGreaterThanOrEqual(13);
+		// x=15 is 10 steps away from x=5; at 1 attenuation/step from level 15, value = 5
+		expect(c.getBlockR(15, 30, 5)).toBeLessThan(7);
+	});
+
+	it('a red lamp produces nonzero R and zero G/B', () => {
+		const w = emptyWorld();
+		const c = w.getChunk(0, 0)!;
+		c.blocks[indexOf(5, 30, 5)] = lamp;
+		fillChunkLights(w, c, () => '#FF0000');
+		expect(c.getBlockR(6, 30, 5)).toBeGreaterThan(0);
+		expect(c.getBlockG(6, 30, 5)).toBe(0);
+		expect(c.getBlockB(6, 30, 5)).toBe(0);
+	});
+
+	it('two lamps of different colors blend per-channel via max, not sum', () => {
+		const w = emptyWorld();
+		const c = w.getChunk(0, 0)!;
+		c.blocks[indexOf(5, 30, 5)] = lamp;
+		c.blocks[indexOf(7, 30, 5)] = lamp;
+		fillChunkLights(w, c, (x, _y, _z) => {
+			if (x === 5) return '#FF0000';
+			if (x === 7) return '#0000FF';
+			return '#FFFFFF';
+		});
+		const r = c.getBlockR(6, 30, 5);
+		const b = c.getBlockB(6, 30, 5);
+		expect(r).toBeGreaterThan(0);
+		expect(b).toBeGreaterThan(0);
+		expect(r).toBeLessThanOrEqual(15);
+		expect(b).toBeLessThanOrEqual(15);
+	});
+
+	it('lava emits orange-red light at level 12', () => {
+		const w = emptyWorld();
+		const c = w.getChunk(0, 0)!;
+		c.blocks[indexOf(5, 30, 5)] = lava;
+		fillChunkLights(w, c, () => '#FFFFFF');
+		expect(c.getBlockR(5, 30, 5)).toBeGreaterThanOrEqual(11);
+		expect(c.getBlockR(5, 30, 5)).toBeGreaterThan(c.getBlockB(5, 30, 5));
+	});
+});

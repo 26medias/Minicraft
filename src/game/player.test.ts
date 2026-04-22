@@ -123,3 +123,40 @@ describe('Player fly mode', () => {
 		expect(p.position[0]).toBeLessThan(102);
 	});
 });
+
+describe('Player swim mode', () => {
+	const water = BLOCK_BY_NAME['water'].id;
+
+	it('swimming is false by default', () => {
+		const p = new Player([100, 60, 100]);
+		expect(p.swimming).toBe(false);
+	});
+
+	it('swimming activates when eye voxel is water', () => {
+		const w = new World(1);
+		const p = new Player([100, 60, 100]);
+		w.setBlock(100, 61, 100, water);
+		p.update(0.01, w, noKeys(), FWD, RIGHT);
+		expect(p.swimming).toBe(true);
+	});
+
+	it('swimming deactivates when eye leaves water', () => {
+		const w = new World(1);
+		const p = new Player([100, 60, 100]);
+		w.setBlock(100, 61, 100, water);
+		p.update(0.01, w, noKeys(), FWD, RIGHT);
+		expect(p.swimming).toBe(true);
+		w.setBlock(100, 61, 100, 0);
+		p.update(0.01, w, noKeys(), FWD, RIGHT);
+		expect(p.swimming).toBe(false);
+	});
+
+	it('swimming disables gravity accumulation', () => {
+		const w = new World(1);
+		const p = new Player([100, 60, 100]);
+		w.setBlock(100, 61, 100, water);
+		p.vy = 0;
+		p.update(0.1, w, noKeys(), FWD, RIGHT);
+		expect(p.vy).toBe(0);
+	});
+});

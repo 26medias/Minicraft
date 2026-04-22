@@ -2,13 +2,14 @@ import * as THREE from 'three';
 import type { World } from '../engine/world/world';
 import { moveWithCollisions } from '../engine/physics/collision';
 import type { BlockId } from '../data/blocks.data';
+import { isLiquid } from '../data/blocks.data';
 
-const WALK_SPEED = 5;      // blocks/sec
-const JUMP_SPEED = 8;      // blocks/sec, initial upward velocity
-const GRAVITY = 24;        // blocks/sec^2
+const WALK_SPEED = 5; // blocks/sec
+const JUMP_SPEED = 8; // blocks/sec, initial upward velocity
+const GRAVITY = 24; // blocks/sec^2
 const SIZE: [number, number, number] = [0.6, 1.8, 0.6];
 const EYE_HEIGHT = 1.6;
-const MAX_STEP = 0.4;      // max displacement per physics sub-step (blocks)
+const MAX_STEP = 0.4; // max displacement per physics sub-step (blocks)
 const FLY_TIER_MIN = 1;
 const FLY_TIER_MAX = 5;
 const FLY_TIER_DEFAULT = 2;
@@ -31,6 +32,7 @@ export class Player {
 	selected = 0;
 	flying = false;
 	flySpeedTier = FLY_TIER_DEFAULT;
+	swimming = false;
 
 	constructor(spawn: [number, number, number]) {
 		this.position = spawn;
@@ -53,32 +55,46 @@ export class Player {
 		);
 	}
 
-	update(
-		dt: number,
-		world: World,
-		keys: Keys,
-		forward: THREE.Vector3,
-		right: THREE.Vector3,
-	) {
-		let ix = 0, iz = 0;
-		if (keys.forward) { ix += forward.x; iz += forward.z; }
-		if (keys.back) { ix -= forward.x; iz -= forward.z; }
-		if (keys.left) { ix -= right.x; iz -= right.z; }
-		if (keys.right) { ix += right.x; iz += right.z; }
+	update(dt: number, world: World, keys: Keys, forward: THREE.Vector3, right: THREE.Vector3) {
+		const eye = this.eyePosition();
+		const eyeBlock = world.getBlock(Math.floor(eye[0]), Math.floor(eye[1]), Math.floor(eye[2]));
+		this.swimming = isLiquid(eyeBlock);
+
+		let ix = 0,
+			iz = 0;
+		if (keys.forward) {
+			ix += forward.x;
+			iz += forward.z;
+		}
+		if (keys.back) {
+			ix -= forward.x;
+			iz -= forward.z;
+		}
+		if (keys.left) {
+			ix -= right.x;
+			iz -= right.z;
+		}
+		if (keys.right) {
+			ix += right.x;
+			iz += right.z;
+		}
 
 		const mag = Math.hypot(ix, iz);
 		if (mag > 0) {
-			ix /= mag; iz /= mag;
+			ix /= mag;
+			iz /= mag;
 		}
 		const speed = this.flying ? WALK_SPEED * this.flySpeedTier : WALK_SPEED;
 		const vx = ix * speed * dt;
 		const vz = iz * speed * dt;
 
 		let vyStep: number;
-		if (this.flying) {
+		if (this.flying || this.swimming) {
 			let vy = 0;
-			if (keys.flyUp) vy += speed;
-			if (keys.flyDown) vy -= speed;
+			if (this.flying) {
+				if (keys.flyUp) vy += speed;
+				if (keys.flyDown) vy -= speed;
+			}
 			this.vy = vy;
 			vyStep = vy * dt;
 		} else {
@@ -89,7 +105,9 @@ export class Player {
 
 		const disp = Math.max(Math.abs(vx), Math.abs(vyStep), Math.abs(vz));
 		const steps = Math.max(1, Math.ceil(disp / MAX_STEP));
-		const sx = vx / steps, sy = vyStep / steps, sz = vz / steps;
+		const sx = vx / steps,
+			sy = vyStep / steps,
+			sz = vz / steps;
 		let grounded = false;
 		for (let i = 0; i < steps; i++) {
 			const r = moveWithCollisions(world, this.position, SIZE, [sx, sy, sz]);

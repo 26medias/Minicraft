@@ -434,7 +434,7 @@ function buildLiquidMesh(chunk: Chunk, neighbors: Neighbors, uvFor: UvFn): Chunk
 				if (!isLiquid(here)) continue;
 				for (const face of FACE_ORDER) {
 					const f = FACES[face];
-					const there = readBlockId(chunk, neighbors, x + f.dx, y + f.dy, z + f.dz);
+					const there = neighborBlock(chunk, neighbors, x + f.dx, y + f.dy, z + f.dz);
 					let emit = false;
 					if (there === 0) emit = true;
 					else if (isLiquid(there) && there !== here && here < there) emit = true;
@@ -458,7 +458,17 @@ function buildLiquidMesh(chunk: Chunk, neighbors: Neighbors, uvFor: UvFn): Chunk
 							f.normal[2],
 						);
 						const [cr, cg, cb] = lightSampleToRGB(sample);
-						colors.push(cr, cg, cb);
+						const ao = aoFactorForCorner(
+							chunk,
+							neighbors,
+							x + ox,
+							y + oy,
+							z + oz,
+							f.normal[0],
+							f.normal[1],
+							f.normal[2],
+						);
+						colors.push(cr * ao, cg * ao, cb * ao);
 					}
 					indices.push(vcount, vcount + 1, vcount + 2, vcount, vcount + 2, vcount + 3);
 					vcount += 4;

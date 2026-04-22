@@ -182,4 +182,29 @@ describe('updateLightsForBlockChange', () => {
 		expect(c.getBlockR(3, 25, 3)).toBeGreaterThan(0);
 		expect(c.getBlockR(2, 25, 3)).toBeGreaterThan(0);
 	});
+
+	it('closing a sky opening clears skylight from the shaft below', () => {
+		const w = emptyWorld();
+		const c = w.getChunk(0, 0)!;
+		// Roof everywhere so only the specific column has sky access.
+		for (let dx = 0; dx < 16; dx++)
+			for (let dz = 0; dz < 16; dz++) c.blocks[indexOf(dx, 63, dz)] = stone;
+		// Open a 1-wide shaft at column (5, 5): remove the roof at (5, 63, 5), leave air all the way down to y=20.
+		c.blocks[indexOf(5, 63, 5)] = AIR;
+		// Fill the whole lower region with air (y 20..62) is already air by default (emptyWorld clears to AIR).
+		fillChunkLights(w, c);
+		// Confirm the shaft is lit full-column.
+		expect(c.getSky(5, 62, 5)).toBe(15);
+		expect(c.getSky(5, 40, 5)).toBe(15);
+		expect(c.getSky(5, 25, 5)).toBe(15);
+
+		// Close the hole: place a stone block at (5, 63, 5).
+		c.blocks[indexOf(5, 63, 5)] = stone;
+		updateLightsForBlockChange(w, 5, 63, 5);
+
+		// Shaft below the new stone should go dark (no sky access via any path in this sealed chunk).
+		expect(c.getSky(5, 62, 5)).toBe(0);
+		expect(c.getSky(5, 40, 5)).toBe(0);
+		expect(c.getSky(5, 25, 5)).toBe(0);
+	});
 });

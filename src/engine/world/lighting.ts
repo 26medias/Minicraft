@@ -362,7 +362,20 @@ function removeAndReflood(
 			const nlx = nx - nchunk.cx * CHUNK_SIZE_X;
 			const nlz = nz - nchunk.cz * CHUNK_SIZE_Z;
 			const nValue = getField(nchunk, nlx, ny, nlz, field);
-			if (nValue > 0 && nValue < value) {
+
+			// Skylight downstream-downward special case: skylight propagation preserves
+			// the full-strength value when going straight down through zero-filter air.
+			// When removing, a neighbor below with the same value is downstream of us,
+			// not an independent source — so clear it and continue the removal.
+			const nFilter = filterOf(nchunk.blocks[indexOf(nlx, ny, nlz)]);
+			const isSkylightDownstream =
+				field === 'sky' && dy === -1 && value === 15 && nValue === 15 && nFilter === 0;
+
+			if (isSkylightDownstream) {
+				setField(nchunk, nlx, ny, nlz, field, 0);
+				touched.add(nchunk);
+				remQueue.push({ x: nx, y: ny, z: nz, value: nValue });
+			} else if (nValue > 0 && nValue < value) {
 				setField(nchunk, nlx, ny, nlz, field, 0);
 				touched.add(nchunk);
 				remQueue.push({ x: nx, y: ny, z: nz, value: nValue });

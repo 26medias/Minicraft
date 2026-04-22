@@ -69,6 +69,7 @@ Four per-field passes (sky, R, G, B). Each pass:
 
 1. **Snapshot** the old light value at `(x, y, z)` for this channel.
 2. **Removal BFS** from the origin with the old value. For each neighbour:
+    - **Skylight downward-downstream special case (checked first):** when removing skylight (`field === 'sky'`), the current value is 15, the neighbour is directly below (`dy === -1`), the neighbour also holds 15, and the neighbour block has `lightFilter === 0` — the neighbour is a downstream voxel in a sunlit shaft, not an independent source. Zero it and continue removal downward. Without this check, the standard `neighborValue >= value` branch would incorrectly treat the 15-valued shaft voxel as a frontier source and leave the tunnel lit after the sky opening is closed.
     - If `neighborValue > 0 && neighborValue < value`, zero it and continue removing outward.
     - If `neighborValue >= value`, it's a **frontier source** — enqueue it for the addition BFS.
 3. **Addition BFS** from every frontier source. Re-floods light into the cleared region.

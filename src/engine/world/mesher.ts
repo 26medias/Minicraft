@@ -1,7 +1,7 @@
 import type { BlockId, Face } from '../../data/blocks.data';
-import { isSolid, isTransparent } from '../../data/blocks.data';
+import { BLOCKS, isSolid, isTransparent } from '../../data/blocks.data';
 import type { Chunk } from './chunk';
-import { CHUNK_SIZE_X, CHUNK_SIZE_Y, CHUNK_SIZE_Z } from './coords';
+import { CHUNK_SIZE_X, CHUNK_SIZE_Y, CHUNK_SIZE_Z, indexOf } from './coords';
 
 export type ChunkMesh = {
 	positions: Float32Array;
@@ -218,6 +218,82 @@ function readLight(
 	};
 }
 
+function readBlockId(chunk: Chunk, neighbors: Neighbors, x: number, y: number, z: number): number {
+	if (y < 0 || y >= CHUNK_SIZE_Y) return 0;
+	const inX = x >= 0 && x < CHUNK_SIZE_X;
+	const inZ = z >= 0 && z < CHUNK_SIZE_Z;
+	if (inX && inZ) return chunk.blocks[indexOf(x, y, z)];
+	if (x >= CHUNK_SIZE_X && inZ) return neighbors.px?.blocks[indexOf(0, y, z)] ?? 0;
+	if (x < 0 && inZ) return neighbors.nx?.blocks[indexOf(CHUNK_SIZE_X - 1, y, z)] ?? 0;
+	if (z >= CHUNK_SIZE_Z && inX) return neighbors.pz?.blocks[indexOf(x, y, 0)] ?? 0;
+	if (z < 0 && inX) return neighbors.nz?.blocks[indexOf(x, y, CHUNK_SIZE_Z - 1)] ?? 0;
+	// Diagonal — treat as air (conservatively: no AO darkening from voxels we can't resolve).
+	return 0;
+}
+
+function aoFactorForCorner(
+	chunk: Chunk,
+	neighbors: Neighbors,
+	cornerX: number,
+	cornerY: number,
+	cornerZ: number,
+	nx: number,
+	ny: number,
+	nz: number,
+): number {
+	// For a face with outward normal (nx, ny, nz), the AO-casting voxels are the
+	// blocks sharing the corner that lie IN the face plane (not in the normal direction).
+	// We shift back one step in the normal direction to reach the face level, then
+	// enumerate the 4 voxels around the corner in the two non-normal axes:
+	//   - 1 face voxel (0 non-normal shifts) — the block directly below/beside the corner
+	//   - 2 edge voxels (1 non-normal shift each)
+	//   - 1 diagonal voxel (2 non-normal shifts)
+	// Only edges and diagonal drive darkening; the face voxel is excluded.
+	const axisNormal = Math.abs(nx) > 0 ? 0 : Math.abs(ny) > 0 ? 1 : 2;
+
+	// Step back from the corner one unit in the inward-normal direction.
+	const bx = cornerX - nx;
+	const by = cornerY - ny;
+	const bz = cornerZ - nz;
+
+	type V = { x: number; y: number; z: number; kind: 'edge' | 'diag' | 'face' };
+	const vox: V[] = [];
+
+	for (let dx = -1; dx <= 0; dx++) {
+		for (let dy = -1; dy <= 0; dy++) {
+			for (let dz = -1; dz <= 0; dz++) {
+				// Skip shifts in the normal axis — those move away from the face plane.
+				if (axisNormal === 0 && dx !== 0) continue;
+				if (axisNormal === 1 && dy !== 0) continue;
+				if (axisNormal === 2 && dz !== 0) continue;
+				let shiftedNonNormal = 0;
+				if (axisNormal !== 0 && dx === -1) shiftedNonNormal++;
+				if (axisNormal !== 1 && dy === -1) shiftedNonNormal++;
+				if (axisNormal !== 2 && dz === -1) shiftedNonNormal++;
+				let kind: V['kind'];
+				if (shiftedNonNormal === 0) kind = 'face';
+				else if (shiftedNonNormal === 1) kind = 'edge';
+				else kind = 'diag';
+				vox.push({ x: bx + dx, y: by + dy, z: bz + dz, kind });
+			}
+		}
+	}
+
+	const isOpaque = (v: V) => {
+		const id = readBlockId(chunk, neighbors, v.x, v.y, v.z);
+		const def = BLOCKS[id];
+		return !!def && def.lightFilter >= 15 && def.liquid === 'none';
+	};
+	let edgeCount = 0;
+	let diagOpaque = false;
+	for (const v of vox) {
+		if (v.kind === 'edge' && isOpaque(v)) edgeCount++;
+		if (v.kind === 'diag' && isOpaque(v)) diagOpaque = true;
+	}
+	if (edgeCount >= 2) return diagOpaque ? 0.6 : 0.75;
+	return 1.0;
+}
+
 /**
  * Sample 4 voxels that meet at a corner of a face. cornerX/Y/Z is the corner's
  * integer position; (nx, ny, nz) is the face's outward normal. Returns the
@@ -316,7 +392,17 @@ export function meshChunk(chunk: Chunk, neighbors: Neighbors, uvFor: UvFn): Chun
 							f.normal[2],
 						);
 						const [cr, cg, cb] = lightSampleToRGB(sample);
-						colors.push(cr, cg, cb);
+						const ao = aoFactorForCorner(
+							chunk,
+							neighbors,
+							x + ox,
+							y + oy,
+							z + oz,
+							f.normal[0],
+							f.normal[1],
+							f.normal[2],
+						);
+						colors.push(cr * ao, cg * ao, cb * ao);
 					}
 					indices.push(vcount, vcount + 1, vcount + 2, vcount, vcount + 2, vcount + 3);
 					vcount += 4;

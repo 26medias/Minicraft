@@ -110,3 +110,43 @@ describe('meshChunk — per-vertex colors from lightmap', () => {
 		expect(topFaceVertexCount).toBe(4); // all 4 top-face corners are bright
 	});
 });
+
+describe('meshChunk — ambient occlusion', () => {
+	it('vertex adjacent to two solid neighbors is darker than one with zero', () => {
+		const w = new World(1);
+		const c = w.ensureChunk(0, 0);
+		c.blocks.fill(0);
+		c.blocks[indexOf(5, 30, 5)] = BLOCK_BY_NAME['stone'].id;
+		c.blocks[indexOf(6, 30, 5)] = BLOCK_BY_NAME['stone'].id;
+		c.blocks[indexOf(5, 30, 6)] = BLOCK_BY_NAME['stone'].id;
+		fillChunkLights(w, c);
+		const mesh = meshChunk(c, w.neighbors(c), (_id, _face) => [0, 0, 1, 1]);
+		const verts: { pos: [number, number, number]; rgb: [number, number, number] }[] = [];
+		for (let i = 0; i < mesh.positions.length; i += 3) {
+			const px = mesh.positions[i],
+				py = mesh.positions[i + 1],
+				pz = mesh.positions[i + 2];
+			const ny = mesh.normals[i + 1];
+			if (
+				ny > 0.9 &&
+				Math.floor(px) >= 5 &&
+				Math.floor(px) <= 6 &&
+				py === 31 &&
+				Math.floor(pz) >= 5 &&
+				Math.floor(pz) <= 6
+			) {
+				verts.push({
+					pos: [px, py, pz],
+					rgb: [mesh.colors[i], mesh.colors[i + 1], mesh.colors[i + 2]],
+				});
+			}
+		}
+		const cornerWithAO = verts.find((v) => v.pos[0] === 6 && v.pos[2] === 6);
+		const cornerWithoutAO = verts.find((v) => v.pos[0] === 5 && v.pos[2] === 5);
+		expect(cornerWithAO).toBeDefined();
+		expect(cornerWithoutAO).toBeDefined();
+		const sumAO = cornerWithAO!.rgb.reduce((a, b) => a + b, 0);
+		const sumNoAO = cornerWithoutAO!.rgb.reduce((a, b) => a + b, 0);
+		expect(sumAO).toBeLessThan(sumNoAO);
+	});
+});

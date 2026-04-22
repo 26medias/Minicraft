@@ -49,7 +49,7 @@ Each row in `src/data/blocks.data.ts` carries two new fields:
 propagated = here - max(1, neighborFilter)
 ```
 
-with one special case: **downward propagation through a zero-filter voxel from a full-strength source preserves the value (no decrement)**. This is what makes sunlight stream down an open mineshaft unattenuated. Every other direction, including horizontal under an overhang, attenuates by at least 1 per block. Water (filter 2) attenuates by 2. Opaque blocks (filter 15) block propagation entirely.
+with one special case: **downward propagation through a zero-filter voxel from a full-strength source preserves the value (no decrement)**. This is what makes sunlight stream down an open mineshaft unattenuated. Every other direction attenuates by at least 2 per block horizontally (so tunnels fade over ~7 blocks), at least 1 per block vertically or through filter-bearing media like water. Water (filter 2) attenuates by 2. Opaque blocks (filter 15) block propagation entirely.
 
 **2. Block-light seeding + propagation.** For each voxel with `lightLevel > 0`, compute three per-channel seed values:
 
@@ -94,7 +94,7 @@ Typical mine/place touches tens to hundreds of voxels. Well under a millisecond 
 
 ```
 SKY_COLOR = (0.9, 0.95, 1.0)       // slightly cool-tinted sun
-MIN_AMBIENT = 0.08                 // prevents pitch-black voxels
+MIN_AMBIENT = 0.03                 // prevents pitch-black voxels
 
 skyScale = averagedSkyLight / 15
 blockR/G/B = averagedBlockChannel / 15
@@ -103,7 +103,7 @@ vertexRGB = SKY_COLOR * skyScale + (blockR, blockG, blockB) + MIN_AMBIENT
 vertexRGB = clamp(vertexRGB, 0, 1) * aoFactor
 ```
 
-**Ambient occlusion.** At each corner, the mesher inspects the same 4 outward-side voxels. If two of them (the "edge-adjacent" voxels) are opaque (`lightFilter >= 15` AND `liquid === 'none'`), the vertex's AO factor is `0.75`. If the remaining "diagonal" voxel is also opaque, `0.6`. Otherwise `1.0`. Classic Minecraft corner-inset look.
+**Ambient occlusion.** At each corner, the mesher inspects the same 4 outward-side voxels and counts how many of the "edge-adjacent" voxels are opaque (`lightFilter >= 15` AND `liquid === 'none'`). AO factors by tier: 0 edge-adjacent opaque → 1.0; 1 → 0.85; 2 without diag → 0.7; 2 with diag → 0.5. Classic Minecraft corner-inset look, with single-edge adjacency now producing visible darkening.
 
 ## Renderer integration
 

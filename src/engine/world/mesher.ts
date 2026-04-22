@@ -21,7 +21,7 @@ export type UvFn = (id: BlockId, face: Face) => [number, number, number, number]
 export type Neighbors = { px?: Chunk; nx?: Chunk; pz?: Chunk; nz?: Chunk };
 
 const SKY_COLOR: [number, number, number] = [0.9, 0.95, 1.0];
-const MIN_AMBIENT = 0.08;
+const MIN_AMBIENT = 0.03;
 
 // Per-face constant data: normal, direction offset, 4 corner offsets (positions within a unit cube),
 // and 4 per-corner UV selectors ([uIndex, vIndex] where 0 picks u0/v0, 1 picks u1/v1).
@@ -282,8 +282,10 @@ function aoFactorForCorner(
 		if (v.kind === 'edge' && isOpaque(v)) edgeCount++;
 		if (v.kind === 'diag' && isOpaque(v)) diagOpaque = true;
 	}
-	if (edgeCount >= 2) return diagOpaque ? 0.6 : 0.75;
-	return 1.0;
+	if (edgeCount === 0) return 1.0;
+	if (edgeCount === 1) return 0.85;
+	// edgeCount === 2
+	return diagOpaque ? 0.5 : 0.7;
 }
 
 /**

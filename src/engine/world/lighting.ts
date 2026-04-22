@@ -103,7 +103,7 @@ function propagateSkylight(world: World, queue: Coord[], touched: Set<Chunk>): v
 			if (nFilter >= 15) continue;
 			// Special case: falling straight down through zero-filter preserves value.
 			const attenuation =
-				dy === -1 && nFilter === 0 && here === 15 ? 0 : Math.max(1, nFilter);
+				dy === -1 && nFilter === 0 && here === 15 ? 0 : Math.max(2, nFilter);
 			const propagated = here - attenuation;
 			if (propagated <= 0) continue;
 			if (nchunk.getSky(nlx, ny, nlz) >= propagated) continue;

@@ -53,16 +53,16 @@ describe('fillChunkLights — skylight', () => {
 		expect(c.getSky(5, 39, 5)).toBe(15);
 	});
 
-	it('skylight attenuates by 1 per block horizontally under an overhang', () => {
+	it('skylight attenuates by 2 per block horizontally under an overhang', () => {
 		const w = emptyWorld();
 		const c = w.getChunk(0, 0)!;
 		for (let dx = 0; dx <= 7; dx++)
 			for (let dz = 0; dz < 16; dz++) c.blocks[indexOf(dx, 40, dz)] = stone;
 		fillChunkLights(w, c);
 		expect(c.getSky(8, 39, 5)).toBe(15);
-		expect(c.getSky(7, 39, 5)).toBe(14);
-		expect(c.getSky(6, 39, 5)).toBe(13);
-		expect(c.getSky(5, 39, 5)).toBe(12);
+		expect(c.getSky(7, 39, 5)).toBe(13); // was 14
+		expect(c.getSky(6, 39, 5)).toBe(11); // was 13
+		expect(c.getSky(5, 39, 5)).toBe(9); // was 12
 	});
 });
 

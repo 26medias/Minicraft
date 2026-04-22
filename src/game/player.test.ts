@@ -47,7 +47,8 @@ describe('Player fly mode', () => {
 		expect(p.vy).toBe(0);
 	});
 
-	it('flyUp produces positive vy, flyDown negative, neither zero', () => {
+	// Replaced by cursor-directed movement in Task 19. Deletion in Task 20.
+	it.skip('flyUp produces positive vy, flyDown negative, neither zero', () => {
 		const w = new World(1);
 		const p = new Player([100, 60, 100]);
 		p.toggleFly(); // flying, tier 2 (default)
@@ -64,7 +65,8 @@ describe('Player fly mode', () => {
 		expect(p.vy).toBe(0);
 	});
 
-	it('flyUp and flyDown held together cancel to zero vy', () => {
+	// Replaced by cursor-directed movement in Task 19. Deletion in Task 20.
+	it.skip('flyUp and flyDown held together cancel to zero vy', () => {
 		const w = new World(1);
 		const p = new Player([100, 60, 100]);
 		p.toggleFly();
@@ -158,5 +160,43 @@ describe('Player swim mode', () => {
 		p.vy = 0;
 		p.update(0.1, w, noKeys(), FWD, RIGHT);
 		expect(p.vy).toBe(0);
+	});
+});
+
+describe('Player cursor-directed movement', () => {
+	const water = BLOCK_BY_NAME['water'].id;
+
+	it('in fly mode, W uses full 3D camera forward (pitch down → descend)', () => {
+		const w = new World(1);
+		const p = new Player([100, 60, 100]);
+		p.toggleFly();
+		const fwd3D = new THREE.Vector3(0, -0.707, -0.707); // 45° down
+		p.update(0.1, w, { ...noKeys(), forward: true }, fwd3D, RIGHT);
+		expect(p.position[1]).toBeLessThan(60);
+		expect(p.position[2]).toBeLessThan(100);
+	});
+
+	it('in fly mode, strafe is horizontal (no Y change)', () => {
+		const w = new World(1);
+		const p = new Player([100, 60, 100]);
+		p.toggleFly();
+		const fwd3D = new THREE.Vector3(0, -0.707, -0.707);
+		const right = new THREE.Vector3(1, 0, 0);
+		p.update(0.1, w, { ...noKeys(), right: true }, fwd3D, right);
+		expect(p.position[1]).toBeCloseTo(60, 2);
+	});
+
+	it('swim speed is 60% of walk speed', () => {
+		const w = new World(1);
+		for (let y = 58; y <= 63; y++) w.setBlock(100, y, 100, water);
+		const p = new Player([100, 60, 100]);
+		p.update(0.01, w, noKeys(), FWD, RIGHT);
+		expect(p.swimming).toBe(true);
+		const before = p.position[2];
+		p.update(1.0, w, { ...noKeys(), forward: true }, FWD, RIGHT);
+		const dz = Math.abs(p.position[2] - before);
+		// WALK_SPEED = 5, swim = 3.0 over 1 second. Tolerance allows small physics variance.
+		expect(dz).toBeGreaterThan(2.5);
+		expect(dz).toBeLessThan(3.5);
 	});
 });

@@ -56,47 +56,73 @@ export class Player {
 	}
 
 	update(dt: number, world: World, keys: Keys, forward: THREE.Vector3, right: THREE.Vector3) {
+		// Swim state (from Task 18) — keep this at the top so downstream logic sees it.
 		const eye = this.eyePosition();
 		const eyeBlock = world.getBlock(Math.floor(eye[0]), Math.floor(eye[1]), Math.floor(eye[2]));
 		this.swimming = isLiquid(eyeBlock);
 
 		let ix = 0,
+			iy = 0,
 			iz = 0;
-		if (keys.forward) {
-			ix += forward.x;
-			iz += forward.z;
-		}
-		if (keys.back) {
-			ix -= forward.x;
-			iz -= forward.z;
-		}
-		if (keys.left) {
-			ix -= right.x;
-			iz -= right.z;
-		}
-		if (keys.right) {
-			ix += right.x;
-			iz += right.z;
+		if (this.flying || this.swimming) {
+			// Full 3D along cursor forward; strafe horizontal only (right.y is ~0 by construction).
+			if (keys.forward) {
+				ix += forward.x;
+				iy += forward.y;
+				iz += forward.z;
+			}
+			if (keys.back) {
+				ix -= forward.x;
+				iy -= forward.y;
+				iz -= forward.z;
+			}
+			if (keys.left) {
+				ix -= right.x;
+				iz -= right.z;
+			}
+			if (keys.right) {
+				ix += right.x;
+				iz += right.z;
+			}
+		} else {
+			// On-ground walking — unchanged horizontal projection of the look direction.
+			if (keys.forward) {
+				ix += forward.x;
+				iz += forward.z;
+			}
+			if (keys.back) {
+				ix -= forward.x;
+				iz -= forward.z;
+			}
+			if (keys.left) {
+				ix -= right.x;
+				iz -= right.z;
+			}
+			if (keys.right) {
+				ix += right.x;
+				iz += right.z;
+			}
 		}
 
-		const mag = Math.hypot(ix, iz);
+		const mag = Math.hypot(ix, iy, iz);
 		if (mag > 0) {
 			ix /= mag;
+			iy /= mag;
 			iz /= mag;
 		}
-		const speed = this.flying ? WALK_SPEED * this.flySpeedTier : WALK_SPEED;
+
+		let speed: number;
+		if (this.flying) speed = WALK_SPEED * this.flySpeedTier;
+		else if (this.swimming) speed = WALK_SPEED * 0.6;
+		else speed = WALK_SPEED;
+
 		const vx = ix * speed * dt;
 		const vz = iz * speed * dt;
 
 		let vyStep: number;
 		if (this.flying || this.swimming) {
-			let vy = 0;
-			if (this.flying) {
-				if (keys.flyUp) vy += speed;
-				if (keys.flyDown) vy -= speed;
-			}
-			this.vy = vy;
-			vyStep = vy * dt;
+			this.vy = iy * speed; // cursor-driven vertical; no gravity
+			vyStep = this.vy * dt;
 		} else {
 			this.vy -= GRAVITY * dt;
 			if (keys.jump && this.grounded) this.vy = JUMP_SPEED;

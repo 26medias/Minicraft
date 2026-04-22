@@ -1,4 +1,4 @@
-import type { PersistenceAdapter, PlayerSave, WorldSave } from './adapter';
+import type { LightSave, PersistenceAdapter, PlayerSave, WorldSave } from './adapter';
 import type { World } from '../engine/world/world';
 
 const DEBOUNCE_MS = 5000;
@@ -16,6 +16,7 @@ export class AutoSave {
 		private getPlayer: () => PlayerSave,
 		meta: { name: string; createdAt: number },
 		public onQuotaExceeded: () => void = () => {},
+		private getLights: () => LightSave[] = () => [],
 	) {
 		this.name = meta.name;
 		this.createdAt = meta.createdAt;
@@ -49,6 +50,7 @@ export class AutoSave {
 			chunks: this.world
 				.modifiedChunks()
 				.map((c) => ({ cx: c.cx, cz: c.cz, blocks: c.blocks })),
+			lights: this.getLights(),
 		};
 		try {
 			await this.adapter.saveWorld(save);

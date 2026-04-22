@@ -19,6 +19,8 @@ export type WorldSummary = {
 
 export type RawChunk = { cx: number; cz: number; blocks: Uint8Array };
 
+export type LightSave = { x: number; y: number; z: number; color: string };
+
 // Callers always see decoded RawChunk[]. Encoding is handled internally by the adapter.
 export type WorldSave = {
 	version: 1;
@@ -28,6 +30,7 @@ export type WorldSave = {
 	updatedAt: number;
 	player: PlayerSave;
 	chunks: RawChunk[]; // decoded on load, encoded by the adapter on save
+	lights?: LightSave[];
 };
 
 export interface PersistenceAdapter {

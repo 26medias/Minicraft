@@ -37,6 +37,7 @@ export class LocalStorageAdapter implements PersistenceAdapter {
 			createdAt: save.createdAt,
 			updatedAt: save.updatedAt,
 			player: save.player,
+			lights: save.lights,
 		};
 
 		const encoded: EncodedChunk[] = save.chunks.map((c) => ({

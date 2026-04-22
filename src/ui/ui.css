@@ -164,3 +164,34 @@
 	padding: 0 8px;
 	margin: 0;
 }
+#color-picker-root {
+	position: fixed;
+	inset: 0;
+	background: rgba(0, 0, 0, 0.5);
+	display: flex;
+	align-items: center;
+	justify-content: center;
+	z-index: 20;
+}
+#color-picker-root.hidden {
+	display: none;
+}
+.color-picker-card {
+	background: #2a2a2a;
+	padding: 16px;
+	border-radius: 8px;
+	box-shadow: 0 4px 24px rgba(0, 0, 0, 0.6);
+	display: grid;
+	gap: 6px;
+}
+.color-picker-tile {
+	width: 48px;
+	height: 48px;
+	border: 2px solid rgba(255, 255, 255, 0.3);
+	border-radius: 4px;
+	cursor: pointer;
+	padding: 0;
+}
+.color-picker-tile:hover {
+	border-color: #fff;
+}

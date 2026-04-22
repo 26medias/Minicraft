@@ -198,7 +198,24 @@ Static bundle from `vite build` → upload to a **GCP Cloud Storage** bucket con
 - No comments explaining *what* code does — only *why*, when the why is non-obvious.
 - Data files (`*.data.ts`) are pure exports, no logic.
 
-## 11. Playtest Checklist
+## 11. Post-MVP additions
+
+The following systems were added after the initial Phase 1 MVP shipped. They do not change the tech stack or the Phase 1 / 2 / 3 split, but they expand what "Phase 1" ships with.
+
+- **Fly mode** (F key). 5 speed tiers (`=` / `-`); pip meter above hotbar. Collision still enforced.
+- **TNT** (block id 15). 3-block explosion radius, chain-primed cascades with ~0.1 s stagger, pulsing red "primed" overlay during the ~2.5 s fuse. No damage to the player.
+- **Lamp blocks** (id 16). Each lamp stores a colour picked from a 20-tile pastel palette (C key); colours persist across save/reload via a new `lights` array in the save format.
+- **Voxel light propagation.** Replaces the earlier directional sun + shadow map. Per-voxel `skyLight` + RGB `blockLight` packed 4×4-bit per voxel in a `Uint16Array` on each chunk. BFS flood-fill attenuates by `BlockDef.lightFilter`; incremental updates re-flood only the affected region on each block edit. Rendered via per-vertex colours on the chunk mesh; `MeshLambertMaterial` + `DirectionalLight` + shadow map are gone. Ambient occlusion is computed per face-corner from the same 4-voxel sample. See [`lighting.md`](lighting.md).
+- **Water (id 17) and lava (id 18).** Non-solid, translucent, placeable from the hotbar. `lightFilter` 2 and 3 respectively; lava emits at `lightLevel` 12. A `LiquidScheduler` at 2 Hz applies a fall-or-spread-sideways rule. World-gen now has `SEA_LEVEL = 28` and fills below-sea-level air with water; the top block is sand on the shoreline. See [`liquids.md`](liquids.md).
+- **Swim mode.** Activates when the player's eye is inside a liquid voxel. Gravity off; cursor-directed 3D motion at 60% walk speed. See [`movement.md`](movement.md).
+- **Cursor-directed flight.** Fly also uses the 3D look vector for W/S (pitch drives Y), at the fly-speed-tier multiplier. The old `flyUp` / `flyDown` Space/Shift bindings are removed. On-ground walking still projects forward horizontally.
+- **"Surface jump."** Space triggers a jump when feet are in a liquid voxel but the head is above, so the player can climb out of shallow water onto shore.
+- **Options resilience.** `loadOptions()` filters saved keybindings against the current `ACTIONS` list, so deprecated entries from older saves can't shadow current bindings at the dispatcher.
+- **Build-time texture tinting** extended. `grass_block_top` → plains-biome green (pre-existing); `water_still` → plains-biome blue (new). One row per tint in `scripts/build-atlas.ts`.
+
+Block catalog now has 19 rows (was the planned ~15). New fields on `BlockDef`: `lightLevel: number`, `lightFilter: number`, `liquid: 'none' | 'water' | 'lava'`.
+
+## 12. Playtest Checklist
 
 Before handing the laptop to Noah:
 

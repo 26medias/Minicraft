@@ -1,8 +1,9 @@
 import type { BlockId } from '../../data/blocks.data';
-import { AIR } from '../../data/blocks.data';
+import { AIR, isLiquid } from '../../data/blocks.data';
 import { Chunk } from './chunk';
-import { WORLD_CHUNKS_X, WORLD_CHUNKS_Z, inBounds, worldToChunk } from './coords';
+import { WORLD_CHUNKS_X, WORLD_CHUNKS_Z, inBounds, worldToChunk, indexOf } from './coords';
 import { generateChunk } from './generation';
+import { fillChunkLights } from './lighting';
 
 const key = (cx: number, cz: number) => `${cx},${cz}`;
 
@@ -25,6 +26,7 @@ export class World {
 			c = new Chunk(cx, cz);
 			generateChunk(c, this.seed);
 			this.chunks.set(k, c);
+			fillChunkLights(this, c);
 		}
 		return c;
 	}
@@ -49,6 +51,29 @@ export class World {
 		// happens to match generation, so the save system persists the intent. Chunk.set
 		// separately keeps `dirty` clean on true no-ops, so meshing cost isn't paid.
 		c.modified = true;
+
+		this.markLiquidFrontier(x, y, z);
+		this.markLiquidFrontier(x + 1, y, z);
+		this.markLiquidFrontier(x - 1, y, z);
+		this.markLiquidFrontier(x, y + 1, z);
+		this.markLiquidFrontier(x, y - 1, z);
+		this.markLiquidFrontier(x, y, z + 1);
+		this.markLiquidFrontier(x, y, z - 1);
+	}
+
+	markLiquidFrontier(x: number, y: number, z: number): void {
+		if (!inBounds(x, y, z)) return;
+		const { cx, cz, lx, lz } = worldToChunk(x, z);
+		const c = this.getChunk(cx, cz);
+		if (!c) return;
+		const id = c.get(lx, y, lz);
+		if (isLiquid(id)) {
+			c.liquidFrontier.add(indexOf(lx, y, lz));
+		}
+	}
+
+	*allChunks(): Iterable<Chunk> {
+		for (const c of this.chunks.values()) yield c;
 	}
 
 	modifiedChunks(): Chunk[] {

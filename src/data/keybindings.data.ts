@@ -14,8 +14,6 @@ export type Action =
 	| 'slot8'
 	| 'slot9'
 	| 'toggleFly'
-	| 'flyUp'
-	| 'flyDown'
 	| 'flySpeedUp'
 	| 'flySpeedDown'
 	| 'ignite'
@@ -37,8 +35,6 @@ export const ACTIONS: Action[] = [
 	'slot8',
 	'slot9',
 	'toggleFly',
-	'flyUp',
-	'flyDown',
 	'flySpeedUp',
 	'flySpeedDown',
 	'ignite',
@@ -61,8 +57,6 @@ export const ACTION_LABEL: Record<Action, string> = {
 	slot8: 'Hotbar 8',
 	slot9: 'Hotbar 9',
 	toggleFly: 'Toggle Fly',
-	flyUp: 'Fly Up',
-	flyDown: 'Fly Down',
 	flySpeedUp: 'Fly Faster',
 	flySpeedDown: 'Fly Slower',
 	ignite: 'Ignite TNT',
@@ -85,8 +79,6 @@ export const DEFAULT_KEYBINDINGS: Record<Action, string> = {
 	slot8: 'Digit8',
 	slot9: 'Digit9',
 	toggleFly: 'KeyF',
-	flyUp: 'Space',
-	flyDown: 'ShiftLeft',
 	flySpeedUp: 'Equal',
 	flySpeedDown: 'Minus',
 	ignite: 'KeyE',

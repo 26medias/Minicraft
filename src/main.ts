@@ -104,8 +104,6 @@ async function main() {
 			left: false,
 			right: false,
 			jump: false,
-			flyUp: false,
-			flyDown: false,
 		};
 		const keyToAction: Record<string, Action> = {};
 		for (const [action, code] of Object.entries(opts.keybindings))
@@ -129,14 +127,6 @@ async function main() {
 					break;
 				case 'jump':
 					keys.jump = down;
-					keys.flyUp = down;
-					break;
-				case 'flyUp':
-					keys.jump = down;
-					keys.flyUp = down;
-					break;
-				case 'flyDown':
-					keys.flyDown = down;
 					break;
 				case 'toggleFly':
 					if (down && !e.repeat) player.toggleFly();
@@ -220,7 +210,17 @@ async function main() {
 
 		const particles = new ParticleSystem(renderer.scene, renderer.material, atlas);
 		const overlay = new PrimedOverlay(renderer.scene);
-		const loop = new GameLoop(world, renderer, cam, player, keys, atlas.uvFor, particles, overlay, lights);
+		const loop = new GameLoop(
+			world,
+			renderer,
+			cam,
+			player,
+			keys,
+			atlas.uvFor,
+			particles,
+			overlay,
+			lights,
+		);
 		loop.onBlockBroken = () => autosave.markDirty();
 		loop.onMiningProgress = (p) => hud.setMiningProgress(p);
 		loop.onFlyStateChange = (tier) => hud.setFlySpeed(tier);
@@ -244,16 +244,23 @@ async function main() {
 					size: [0.6, 1.8, 0.6],
 				});
 				if (!placed) return;
+				const FACE_OFFSET: Record<string, [number, number, number]> = {
+					px: [1, 0, 0],
+					nx: [-1, 0, 0],
+					py: [0, 1, 0],
+					ny: [0, -1, 0],
+					pz: [0, 0, 1],
+					nz: [0, 0, -1],
+				};
+				const [dx, dy, dz] = FACE_OFFSET[hit.face];
+				const placedX = hit.x + dx,
+					placedY = hit.y + dy,
+					placedZ = hit.z + dz;
 				if (id === BLOCK_BY_NAME['lamp'].id) {
-					const FACE_OFFSET: Record<string, [number, number, number]> = {
-						px: [1, 0, 0], nx: [-1, 0, 0],
-						py: [0, 1, 0], ny: [0, -1, 0],
-						pz: [0, 0, 1], nz: [0, 0, -1],
-					};
-					const [dx, dy, dz] = FACE_OFFSET[hit.face];
-					lights.add(hit.x + dx, hit.y + dy, hit.z + dz, opts.currentLightColor);
+					lights.add(placedX, placedY, placedZ, opts.currentLightColor);
 				}
 				loop.markChunkDirtyAround(hit.x, hit.z);
+				loop.applyLightUpdate(placedX, placedY, placedZ);
 				autosave.markDirty();
 			}
 		});

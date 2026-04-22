@@ -4,12 +4,14 @@ import type { Renderer } from '../engine/render/renderer';
 import type { Player, Keys } from './player';
 import { meshChunk, type UvFn } from '../engine/world/mesher';
 import { raycastVoxel, type VoxelHit } from '../engine/input/raycast';
-import { AIR, BLOCKS, BLOCK_BY_NAME, isSolid, type BlockId } from '../data/blocks.data';
+import { AIR, BLOCKS, BLOCK_BY_NAME, isSolid, isLiquid, type BlockId } from '../data/blocks.data';
 import type { ParticleSystem } from '../engine/render/particles';
 import type { PrimedOverlay } from '../engine/render/primed-overlay';
 import type { LightRegistry } from '../engine/render/light-registry';
 import { igniteTnt, type PrimedEntry } from './actions';
 import { detonate, tntKey, TNT_CHAIN_FUSE, TNT_PRIME_FUSE } from './tnt';
+import { updateLightsForBlockChange } from '../engine/world/lighting';
+import { LiquidScheduler } from './liquid-scheduler';
 
 const LAMP_ID = BLOCK_BY_NAME['lamp'].id;
 
@@ -36,6 +38,7 @@ export class GameLoop {
 	private mining: MiningState | null = null;
 	private leftMouseDown = false;
 	private primedTnt = new Map<string, PrimedEntry>();
+	private scheduler: LiquidScheduler;
 
 	onBlockBroken: ((ev: BlockBrokenEvent) => void) | null = null;
 	onMiningProgress: ((progress: number) => void) | null = null;
@@ -51,10 +54,23 @@ export class GameLoop {
 		private particles: ParticleSystem | null = null,
 		private overlay: PrimedOverlay | null = null,
 		private lights: LightRegistry | null = null,
-	) {}
+	) {
+		this.scheduler = new LiquidScheduler(
+			this.world,
+			(cx, cz) => this.markChunkDirty(cx, cz),
+			(x, y, z) => this.applyLightUpdate(x, y, z),
+		);
+	}
 
 	markChunkDirty(cx: number, cz: number) {
 		this.dirtyChunks.add(`${cx},${cz}`);
+	}
+
+	applyLightUpdate(x: number, y: number, z: number): void {
+		const getLampColor = (lx: number, ly: number, lz: number): string | null =>
+			this.lights?.getColor(lx, ly, lz) ?? null;
+		const touched = updateLightsForBlockChange(this.world, x, y, z, getLampColor);
+		for (const c of touched) this.markChunkDirty(c.cx, c.cz);
 	}
 
 	/** Mark the chunk containing a world block + any neighbor chunks if the block sits on a chunk edge. */
@@ -92,18 +108,21 @@ export class GameLoop {
 	}
 
 	private tick(dt: number) {
-		const fwd = this.cam.getForward();
+		// Use getLookDir() (full 3D, includes pitch) so that cursor-directed fly/swim
+		// movement contributes a Y component. On-ground walking still only reads x/z
+		// from this vector, so there's no horizontal-speed regression.
+		const fwd = this.cam.getLookDir();
 		const right = this.cam.getRight();
 		this.player.update(dt, this.world, this.keys, fwd, right);
 		const eye = this.player.eyePosition();
 		this.cam.position.set(eye[0], eye[1], eye[2]);
 		this.cam.sync(this.renderer.camera);
-		this.renderer.setSunTarget(this.player.position[0], this.player.position[1], this.player.position[2]);
 
 		this.updateMining(dt);
 		this.onMiningProgress?.(this.miningProgress());
 		this.onFlyStateChange?.(this.player.flying ? this.player.flySpeedTier : null);
 		this.particles?.tick(dt);
+		this.scheduler.tick(dt);
 		this.updatePrimedTnt(dt);
 		this.overlay?.tick(dt);
 		this.loadNearbyChunks();
@@ -157,6 +176,7 @@ export class GameLoop {
 			if (blockId === LAMP_ID) this.lights?.remove(target.x, target.y, target.z);
 			this.world.setBlock(target.x, target.y, target.z, AIR);
 			this.markChunkDirtyAround(target.x, target.z);
+			this.applyLightUpdate(target.x, target.y, target.z);
 			this.particles?.spawnBreak(target.x, target.y, target.z, blockId);
 			this.onBlockBroken?.({ x: target.x, y: target.y, z: target.z, blockId });
 		}
@@ -185,6 +205,7 @@ export class GameLoop {
 			if (this.world.getBlock(x, y, z) === LAMP_ID) this.lights?.remove(x, y, z);
 			this.world.setBlock(x, y, z, AIR);
 			this.markChunkDirtyAround(x, z);
+			this.applyLightUpdate(x, y, z);
 		}
 		for (const { x, y, z } of result.primed) {
 			this.primedTnt.set(tntKey(x, y, z), { x, y, z, fuse: TNT_CHAIN_FUSE });
@@ -221,8 +242,19 @@ export class GameLoop {
 				continue;
 			}
 			const c = this.world.ensureChunk(cx, cz);
-			const mesh = meshChunk(c, this.world.neighbors(c), this.uvFor);
-			this.renderer.mountChunkMesh(c, mesh);
+			// Ensure gen-placed liquids are in the frontier for at least one tick's check.
+			if (c.liquidFrontier.size === 0) {
+				for (let y = 0; y < 64; y++) {
+					for (let lz = 0; lz < 16; lz++) {
+						for (let lx = 0; lx < 16; lx++) {
+							const idx = y * 16 * 16 + lz * 16 + lx;
+							if (isLiquid(c.blocks[idx])) c.liquidFrontier.add(idx);
+						}
+					}
+				}
+			}
+			const result = meshChunk(c, this.world.neighbors(c), this.uvFor);
+			this.renderer.mountChunkMesh(c, result);
 			this.mountedChunks.add(k);
 			this.dirtyChunks.delete(k);
 		}

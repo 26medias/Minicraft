@@ -15,8 +15,6 @@ function noKeys(): Keys {
 		left: false,
 		right: false,
 		jump: false,
-		flyUp: false,
-		flyDown: false,
 	};
 }
 
@@ -44,32 +42,6 @@ describe('Player fly mode', () => {
 		expect(p.vy).toBe(0);
 		p.vy = 7;
 		p.toggleFly();
-		expect(p.vy).toBe(0);
-	});
-
-	it('flyUp produces positive vy, flyDown negative, neither zero', () => {
-		const w = new World(1);
-		const p = new Player([100, 60, 100]);
-		p.toggleFly(); // flying, tier 2 (default)
-
-		const keysUp = { ...noKeys(), flyUp: true };
-		p.update(0.01, w, keysUp, FWD, RIGHT);
-		expect(p.vy).toBeGreaterThan(0);
-
-		const keysDown = { ...noKeys(), flyDown: true };
-		p.update(0.01, w, keysDown, FWD, RIGHT);
-		expect(p.vy).toBeLessThan(0);
-
-		p.update(0.01, w, noKeys(), FWD, RIGHT);
-		expect(p.vy).toBe(0);
-	});
-
-	it('flyUp and flyDown held together cancel to zero vy', () => {
-		const w = new World(1);
-		const p = new Player([100, 60, 100]);
-		p.toggleFly();
-		const keys = { ...noKeys(), flyUp: true, flyDown: true };
-		p.update(0.01, w, keys, FWD, RIGHT);
 		expect(p.vy).toBe(0);
 	});
 
@@ -121,5 +93,112 @@ describe('Player fly mode', () => {
 		// Push +X hard for 1 second; should stop before x=102.
 		p.update(1.0, w, { ...noKeys(), right: true }, FWD, RIGHT);
 		expect(p.position[0]).toBeLessThan(102);
+	});
+});
+
+describe('Player swim mode', () => {
+	const water = BLOCK_BY_NAME['water'].id;
+
+	it('swimming is false by default', () => {
+		const p = new Player([100, 60, 100]);
+		expect(p.swimming).toBe(false);
+	});
+
+	it('swimming activates when eye voxel is water', () => {
+		const w = new World(1);
+		const p = new Player([100, 60, 100]);
+		w.setBlock(100, 61, 100, water);
+		p.update(0.01, w, noKeys(), FWD, RIGHT);
+		expect(p.swimming).toBe(true);
+	});
+
+	it('swimming deactivates when eye leaves water', () => {
+		const w = new World(1);
+		const p = new Player([100, 60, 100]);
+		w.setBlock(100, 61, 100, water);
+		p.update(0.01, w, noKeys(), FWD, RIGHT);
+		expect(p.swimming).toBe(true);
+		w.setBlock(100, 61, 100, 0);
+		p.update(0.01, w, noKeys(), FWD, RIGHT);
+		expect(p.swimming).toBe(false);
+	});
+
+	it('swimming disables gravity accumulation', () => {
+		const w = new World(1);
+		const p = new Player([100, 60, 100]);
+		w.setBlock(100, 61, 100, water);
+		p.vy = 0;
+		p.update(0.1, w, noKeys(), FWD, RIGHT);
+		expect(p.vy).toBe(0);
+	});
+});
+
+describe('Player jump on ground', () => {
+	it('Space on solid ground produces positive vy', () => {
+		const w = new World(1);
+		// Place a floor so the player is grounded.
+		for (let dx = -2; dx <= 2; dx++)
+			for (let dz = -2; dz <= 2; dz++) w.setBlock(100 + dx, 59, 100 + dz, stone);
+		const p = new Player([100, 60, 100]);
+		// Settle onto the floor with one small tick (no jump).
+		p.update(0.01, w, noKeys(), FWD, RIGHT);
+		expect(p.grounded).toBe(true);
+		// Now press Space — vy must become positive.
+		p.update(0.01, w, { ...noKeys(), jump: true }, FWD, RIGHT);
+		expect(p.vy).toBeGreaterThan(0);
+	});
+});
+
+describe('Player cursor-directed movement', () => {
+	const water = BLOCK_BY_NAME['water'].id;
+
+	it('in fly mode, W uses full 3D camera forward (pitch down → descend)', () => {
+		const w = new World(1);
+		const p = new Player([100, 60, 100]);
+		p.toggleFly();
+		const fwd3D = new THREE.Vector3(0, -0.707, -0.707); // 45° down
+		p.update(0.1, w, { ...noKeys(), forward: true }, fwd3D, RIGHT);
+		expect(p.position[1]).toBeLessThan(60);
+		expect(p.position[2]).toBeLessThan(100);
+	});
+
+	it('in fly mode, strafe is horizontal (no Y change)', () => {
+		const w = new World(1);
+		const p = new Player([100, 60, 100]);
+		p.toggleFly();
+		const fwd3D = new THREE.Vector3(0, -0.707, -0.707);
+		const right = new THREE.Vector3(1, 0, 0);
+		p.update(0.1, w, { ...noKeys(), right: true }, fwd3D, right);
+		expect(p.position[1]).toBeCloseTo(60, 2);
+	});
+
+	it('swim speed is 60% of walk speed', () => {
+		const w = new World(1);
+		for (let y = 58; y <= 63; y++) w.setBlock(100, y, 100, water);
+		const p = new Player([100, 60, 100]);
+		p.update(0.01, w, noKeys(), FWD, RIGHT);
+		expect(p.swimming).toBe(true);
+		const before = p.position[2];
+		p.update(1.0, w, { ...noKeys(), forward: true }, FWD, RIGHT);
+		const dz = Math.abs(p.position[2] - before);
+		// WALK_SPEED = 5, swim = 3.0 over 1 second. Tolerance allows small physics variance.
+		expect(dz).toBeGreaterThan(2.5);
+		expect(dz).toBeLessThan(3.5);
+	});
+
+	it('Space jumps out of shallow water (feet in liquid, eye in air)', () => {
+		const w = new World(1);
+		const water = BLOCK_BY_NAME['water'].id;
+		// Solid floor at y=29; water at y=30; player feet at y=30 (in water), eye at y=31.6 (above water).
+		w.setBlock(100, 29, 100, BLOCK_BY_NAME['stone'].id);
+		w.setBlock(100, 30, 100, water);
+		const p = new Player([100, 30, 100]);
+		p.update(0.01, w, noKeys(), FWD, RIGHT);
+		expect(p.swimming).toBe(false);
+		// Before jump
+		expect(p.vy).toBeLessThanOrEqual(0);
+		// Press Space — vy should become positive.
+		p.update(0.01, w, { ...noKeys(), jump: true }, FWD, RIGHT);
+		expect(p.vy).toBeGreaterThan(0);
 	});
 });

@@ -86,7 +86,7 @@ describe('generateChunk — flatter terrain', () => {
 	});
 });
 
-const EXPECTED_HASH = 4044981068; // filled in below by running the test once
+const EXPECTED_HASH = 4166549171; // filled in below by running the test once
 
 function hashBytes(bytes: Uint8Array): number {
 	let h = 2166136261 >>> 0;
@@ -96,6 +96,84 @@ function hashBytes(bytes: Uint8Array): number {
 	}
 	return h;
 }
+
+describe('generateChunk — sea-level water fill', () => {
+	it('columns with h < SEA_LEVEL get water at y from h+1 to SEA_LEVEL', () => {
+		const c = new Chunk(0, 1);
+		generateChunk(c, 42);
+		const WATER = BLOCK_BY_NAME['water'].id;
+		let foundLowColumn = false;
+		for (let lx = 0; lx < 16 && !foundLowColumn; lx++) {
+			for (let lz = 0; lz < 16 && !foundLowColumn; lz++) {
+				let h = -1;
+				for (let y = 63; y >= 0; y--) {
+					const id = c.blocks[y * 16 * 16 + lz * 16 + lx];
+					if (id !== 0 && id !== WATER) {
+						h = y;
+						break;
+					}
+				}
+				if (h >= 0 && h < 28) {
+					foundLowColumn = true;
+					for (let y = h + 1; y <= 28; y++) {
+						expect(c.blocks[y * 16 * 16 + lz * 16 + lx]).toBe(WATER);
+					}
+					for (let y = 29; y < 64; y++) {
+						expect(c.blocks[y * 16 * 16 + lz * 16 + lx]).toBe(0);
+					}
+				}
+			}
+		}
+		expect(foundLowColumn).toBe(true);
+	});
+
+	it('columns with h >= SEA_LEVEL have no water', () => {
+		const c = new Chunk(9, 9);
+		generateChunk(c, 42);
+		const WATER = BLOCK_BY_NAME['water'].id;
+		for (let lx = 0; lx < 16; lx++) {
+			for (let lz = 0; lz < 16; lz++) {
+				let h = -1;
+				for (let y = 63; y >= 0; y--) {
+					const id = c.blocks[y * 16 * 16 + lz * 16 + lx];
+					if (id !== 0 && id !== WATER) {
+						h = y;
+						break;
+					}
+				}
+				if (h >= 28) {
+					for (let y = 0; y < 64; y++) {
+						expect(c.blocks[y * 16 * 16 + lz * 16 + lx]).not.toBe(WATER);
+					}
+				}
+			}
+		}
+	});
+
+	it('top block is sand for underwater/shoreline columns, grass otherwise', () => {
+		const c = new Chunk(3, 3);
+		generateChunk(c, 42);
+		const GRASS = BLOCK_BY_NAME['grass_block'].id;
+		const SAND = BLOCK_BY_NAME['sand'].id;
+		const WATER = BLOCK_BY_NAME['water'].id;
+		for (let lx = 0; lx < 16; lx++) {
+			for (let lz = 0; lz < 16; lz++) {
+				let h = -1;
+				for (let y = 63; y >= 0; y--) {
+					const id = c.blocks[y * 16 * 16 + lz * 16 + lx];
+					if (id !== 0 && id !== WATER) {
+						h = y;
+						break;
+					}
+				}
+				if (h < 0) continue;
+				const top = c.blocks[h * 16 * 16 + lz * 16 + lx];
+				if (h < 28) expect(top).toBe(SAND);
+				else expect(top).toBe(GRASS);
+			}
+		}
+	});
+});
 
 describe('determinism', () => {
 	it('hashes a fixed seed+coord to a stable value', () => {

@@ -33,14 +33,18 @@ export class Renderer {
 		this.gl.setPixelRatio(window.devicePixelRatio);
 		this.gl.outputColorSpace = THREE.SRGBColorSpace;
 		this.gl.shadowMap.enabled = true;
-		this.gl.shadowMap.type = THREE.PCFSoftShadowMap;
+		// PCFShadowMap (not PCFSoftShadowMap): voxel geometry is all sharp concave
+		// corners, and the soft-filter kernel leaks light at every wall-floor seam.
+		// Hard-edged PCF produces pixel-precise shadow boundaries that match the
+		// blocky aesthetic.
+		this.gl.shadowMap.type = THREE.PCFShadowMap;
 		container.appendChild(this.gl.domElement);
 
 		const amb = new THREE.AmbientLight(0xffffff, 0.2);
 		const sun = new THREE.DirectionalLight(0xffffff, 1.0);
 		sun.position.set(...SUN_OFFSET);
 		sun.castShadow = true;
-		sun.shadow.mapSize.set(2048, 2048);
+		sun.shadow.mapSize.set(4096, 4096);
 		sun.shadow.camera.near = 0.5;
 		sun.shadow.camera.far = 200;
 		sun.shadow.camera.left = -48;

@@ -94,17 +94,19 @@ describe('meshChunk — per-vertex colors from lightmap', () => {
 		c.blocks[indexOf(5, 30, 5)] = BLOCK_BY_NAME['stone'].id;
 		fillChunkLights(w, c);
 		const mesh = meshChunk(c, w.neighbors(c), (_id, _face) => [0, 0, 1, 1]);
-		let foundBright = false;
+		let topFaceVertexCount = 0;
 		for (let i = 0; i < mesh.normals.length; i += 3) {
 			if (mesh.normals[i + 1] > 0.9) {
 				const r = mesh.colors[i];
 				const g = mesh.colors[i + 1];
 				const b = mesh.colors[i + 2];
+				expect(Number.isNaN(r)).toBe(false);
+				expect(Number.isNaN(g)).toBe(false);
+				expect(Number.isNaN(b)).toBe(false);
 				expect(r + g + b).toBeGreaterThan(1.5);
-				foundBright = true;
-				break;
+				topFaceVertexCount++;
 			}
 		}
-		expect(foundBright).toBe(true);
+		expect(topFaceVertexCount).toBe(4); // all 4 top-face corners are bright
 	});
 });

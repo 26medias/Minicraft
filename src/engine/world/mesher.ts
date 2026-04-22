@@ -195,19 +195,20 @@ function readLight(
 	let target: Chunk | undefined;
 	let lx = x,
 		lz = z;
-	if (x >= CHUNK_SIZE_X) {
+	if (x >= CHUNK_SIZE_X && inZ) {
 		target = neighbors.px;
 		lx = 0;
-	} else if (x < 0) {
+	} else if (x < 0 && inZ) {
 		target = neighbors.nx;
 		lx = CHUNK_SIZE_X - 1;
-	} else if (z >= CHUNK_SIZE_Z) {
+	} else if (z >= CHUNK_SIZE_Z && inX) {
 		target = neighbors.pz;
 		lz = 0;
-	} else if (z < 0) {
+	} else if (z < 0 && inX) {
 		target = neighbors.nz;
 		lz = CHUNK_SIZE_Z - 1;
 	}
+	// else: true diagonal (both axes OOB) — target stays undefined, falls through to 0.
 	if (!target) return { sky: 0, r: 0, g: 0, b: 0 };
 	return {
 		sky: target.getSky(lx, y, lz),

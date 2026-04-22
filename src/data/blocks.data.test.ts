@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { BLOCKS, BLOCK_BY_NAME, AIR, isSolid, isTransparent, faceTexture, isLiquid } from './blocks.data';
+import { BLOCKS, BLOCK_BY_NAME, AIR, isSolid, isTransparent, faceTexture, isLiquid, WATER, LAVA } from './blocks.data';
 
 describe('block catalog', () => {
 	it('has air at id 0', () => {
@@ -107,5 +107,41 @@ describe('BlockDef light + liquid fields', () => {
 		expect(isLiquid(AIR)).toBe(false);
 		expect(isLiquid(BLOCK_BY_NAME['stone'].id)).toBe(false);
 		// water/lava assertions land in Task 2.
+	});
+});
+
+describe('water and lava', () => {
+	it('water has id 17, is non-solid, translucent, liquid=water, filter 2, emit 0', () => {
+		const w = BLOCK_BY_NAME['water'];
+		expect(w.id).toBe(17);
+		expect(w.solid).toBe(false);
+		expect(w.transparent).toBe(true);
+		expect(w.kidMode).toBe(true);
+		expect(w.liquid).toBe('water');
+		expect(w.lightFilter).toBe(2);
+		expect(w.lightLevel).toBe(0);
+		expect(w.hardness).toBe(0);
+	});
+
+	it('lava has id 18, is non-solid, translucent, liquid=lava, filter 3, emit 12', () => {
+		const l = BLOCK_BY_NAME['lava'];
+		expect(l.id).toBe(18);
+		expect(l.solid).toBe(false);
+		expect(l.transparent).toBe(true);
+		expect(l.kidMode).toBe(true);
+		expect(l.liquid).toBe('lava');
+		expect(l.lightFilter).toBe(3);
+		expect(l.lightLevel).toBe(12);
+		expect(l.hardness).toBe(0);
+	});
+
+	it('WATER and LAVA constants match the block rows', () => {
+		expect(BLOCKS[WATER].name).toBe('water');
+		expect(BLOCKS[LAVA].name).toBe('lava');
+	});
+
+	it('isLiquid is true for water and lava', () => {
+		expect(isLiquid(WATER)).toBe(true);
+		expect(isLiquid(LAVA)).toBe(true);
 	});
 });

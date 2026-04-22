@@ -77,6 +77,12 @@ export const BLOCKS: BlockDef[] = [
 	{ id: 16, name: 'lamp', label: 'Lamp', solid: true, transparent: false, kidMode: true, hardness: 0.3,
 		lightLevel: 15, lightFilter: 15, liquid: 'none',
 		textures: { kind: 'uniform', all: 'glowstone' } },
+	{ id: 17, name: 'water', label: 'Water', solid: false, transparent: true, kidMode: true, hardness: 0,
+		lightLevel: 0, lightFilter: 2, liquid: 'water',
+		textures: { kind: 'uniform', all: 'water_still' } },
+	{ id: 18, name: 'lava', label: 'Lava', solid: false, transparent: true, kidMode: true, hardness: 0,
+		lightLevel: 12, lightFilter: 3, liquid: 'lava',
+		textures: { kind: 'uniform', all: 'lava_still' } },
 ];
 
 export const BLOCK_BY_NAME: Record<string, BlockDef> = Object.fromEntries(

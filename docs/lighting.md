@@ -105,6 +105,20 @@ vertexRGB = clamp(vertexRGB, 0, 1) * aoFactor
 
 **Ambient occlusion.** At each corner, the mesher inspects the same 4 outward-side voxels and counts how many of the "edge-adjacent" voxels are opaque (`lightFilter >= 15` AND `liquid === 'none'`). AO factors by tier: 0 edge-adjacent opaque → 1.0; 1 → 0.85; 2 without diag → 0.7; 2 with diag → 0.5. Classic Minecraft corner-inset look, with single-edge adjacency now producing visible darkening.
 
+## Cast shadows
+
+Directional shadows via per-voxel ray-cast toward a fixed sun direction (`[-0.5, 1.0, -0.3]` normalized — upper-NW). Each non-opaque voxel traces a DDA ray up to 32 blocks; if the ray hits an opaque block, the voxel is in shadow.
+
+Storage: `Chunk.sunlit: Uint8Array` (1 byte per voxel; 16 KB per chunk). Early exits make it cheap:
+- Opaque voxels skip the ray (their own `sunlit` value is never sampled).
+- Voxels with `skyLight === 0` skip the ray (fully enclosed, can't reach sky via any path).
+
+Computed lazily at mesh time (before `meshChunk` runs), not at chunk generation — this avoids recursive chunk generation when the ray crosses a chunk boundary. When the ray exits the loaded region, it's treated as "no hit" (sunlit).
+
+Mesher integration: `sampleCornerShadow` averages `sunlit` across the 4 voxels at each face corner (same geometry as `sampleCornerLight`), producing a 0..1 fraction. Each vertex RGB is multiplied by `SHADOW_FLOOR + (1 - SHADOW_FLOOR) * fraction`, with `SHADOW_FLOOR = 0.5`.
+
+Invalidation: on any block change, `GameLoop.applyLightUpdate` flags the containing chunk and the three SE neighbors as `shadowsDirty`. The next mesh pass recomputes.
+
 ## Renderer integration
 
 `MeshBasicMaterial({ map, vertexColors: true })` for both the opaque and liquid passes. No `DirectionalLight`, no `AmbientLight`, no shadow map. All illumination comes from the per-vertex `color` attribute that the mesher writes. The liquid material adds `transparent: true, depthWrite: false, side: DoubleSide` so water surfaces alpha-blend without occluding geometry behind them and are visible from both sides.
@@ -113,8 +127,9 @@ vertexRGB = clamp(vertexRGB, 0, 1) * aoFactor
 
 - `src/engine/world/lighting.ts` — BFS module (`fillChunkLights`, `updateLightsForBlockChange`, helpers).
 - `src/engine/world/lighting.test.ts` — coverage for column seeding, overhang attenuation, RGB blending, incremental updates.
-- `src/engine/world/chunk.ts` — packed-nibble storage + accessors.
-- `src/engine/world/mesher.ts` — `sampleCornerLight`, `lightSampleToRGB`, `aoFactorForCorner`, and the opaque/liquid vertex pipelines.
+- `src/engine/world/shadows.ts` — per-voxel DDA sun raycast (`computeChunkShadows`, `rayHitsSolidInLoadedChunks`).
+- `src/engine/world/chunk.ts` — packed-nibble storage + accessors; `sunlit` byte array.
+- `src/engine/world/mesher.ts` — `sampleCornerLight`, `lightSampleToRGB`, `aoFactorForCorner`, `sampleCornerShadow`, and the opaque/liquid vertex pipelines.
 - `src/engine/render/renderer.ts` — `MeshBasicMaterial` setup, `mountChunkMesh` writing the `color` attribute.
 - `src/game/loop.ts` — `applyLightUpdate` wiring; called after every block edit.
 

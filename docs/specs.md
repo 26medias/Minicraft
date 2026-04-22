@@ -212,6 +212,7 @@ The following systems were added after the initial Phase 1 MVP shipped. They do 
 - **"Surface jump."** Space triggers a jump when feet are in a liquid voxel but the head is above, so the player can climb out of shallow water onto shore.
 - **Options resilience.** `loadOptions()` filters saved keybindings against the current `ACTIONS` list, so deprecated entries from older saves can't shadow current bindings at the dispatcher.
 - **Build-time texture tinting** extended. `grass_block_top` → plains-biome green (pre-existing); `water_still` → plains-biome blue (new). One row per tint in `scripts/build-atlas.ts`.
+- **Directional cast shadows via per-voxel DDA raycast.** Each non-opaque voxel traces a DDA ray toward the fixed sun direction (upper-NW); if blocked within 32 blocks the voxel is in shadow. Stored as `Chunk.sunlit: Uint8Array`, sampled per face-corner by the mesher (same geometry as AO), multiplied into vertex RGB with a 0.5 shadow floor. See [`lighting.md`](lighting.md).
 
 Block catalog now has 19 rows (was the planned ~15). New fields on `BlockDef`: `lightLevel: number`, `lightFilter: number`, `liquid: 'none' | 'water' | 'lava'`.
 

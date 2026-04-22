@@ -6,15 +6,18 @@ export class Chunk {
 	readonly cz: number;
 	readonly blocks: Uint8Array;
 	readonly lights: Uint16Array;
+	readonly sunlit: Uint8Array;
 	readonly liquidFrontier: Set<number> = new Set();
 	dirty = true;
 	modified = false;
+	shadowsDirty = true;
 
 	constructor(cx: number, cz: number) {
 		this.cx = cx;
 		this.cz = cz;
 		this.blocks = new Uint8Array(BLOCKS_PER_CHUNK);
 		this.lights = new Uint16Array(BLOCKS_PER_CHUNK);
+		this.sunlit = new Uint8Array(BLOCKS_PER_CHUNK);
 	}
 
 	get(x: number, y: number, z: number): BlockId {

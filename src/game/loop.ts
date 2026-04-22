@@ -3,6 +3,7 @@ import type { FpCamera } from '../engine/render/camera';
 import type { Renderer } from '../engine/render/renderer';
 import type { Player, Keys } from './player';
 import { meshChunk, type UvFn } from '../engine/world/mesher';
+import { computeChunkShadows } from '../engine/world/shadows';
 import { raycastVoxel, type VoxelHit } from '../engine/input/raycast';
 import { AIR, BLOCKS, BLOCK_BY_NAME, isSolid, isLiquid, type BlockId } from '../data/blocks.data';
 import type { ParticleSystem } from '../engine/render/particles';
@@ -70,7 +71,27 @@ export class GameLoop {
 		const getLampColor = (lx: number, ly: number, lz: number): string | null =>
 			this.lights?.getColor(lx, ly, lz) ?? null;
 		const touched = updateLightsForBlockChange(this.world, x, y, z, getLampColor);
-		for (const c of touched) this.markChunkDirty(c.cx, c.cz);
+		for (const c of touched) {
+			this.markChunkDirty(c.cx, c.cz);
+			c.shadowsDirty = true;
+		}
+		// Also flag chunks in the shadow direction (SE of the edit) since a placed/removed
+		// block can shadow further SE.
+		const edited = this.world.getChunk(Math.floor(x / 16), Math.floor(z / 16));
+		if (edited) {
+			edited.shadowsDirty = true;
+			const seNeighbors = [
+				this.world.getChunk(edited.cx + 1, edited.cz),
+				this.world.getChunk(edited.cx, edited.cz + 1),
+				this.world.getChunk(edited.cx + 1, edited.cz + 1),
+			];
+			for (const n of seNeighbors) {
+				if (n) {
+					n.shadowsDirty = true;
+					this.markChunkDirty(n.cx, n.cz);
+				}
+			}
+		}
 	}
 
 	/** Mark the chunk containing a world block + any neighbor chunks if the block sits on a chunk edge. */
@@ -252,6 +273,11 @@ export class GameLoop {
 						}
 					}
 				}
+			}
+			if (c.shadowsDirty) computeChunkShadows(this.world, c);
+			// Neighbors may have received shadow changes from edits near chunk boundaries; recompute if dirty.
+			for (const n of Object.values(this.world.neighbors(c))) {
+				if (n && n.shadowsDirty) computeChunkShadows(this.world, n);
 			}
 			const result = meshChunk(c, this.world.neighbors(c), this.uvFor);
 			this.renderer.mountChunkMesh(c, result);

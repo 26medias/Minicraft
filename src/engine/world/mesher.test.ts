@@ -5,6 +5,7 @@ import { BLOCK_BY_NAME } from '../../data/blocks.data';
 import { World } from './world';
 import { indexOf } from './coords';
 import { fillChunkLights } from './lighting';
+import { computeChunkShadows } from './shadows';
 
 const stone = BLOCK_BY_NAME['stone'].id;
 
@@ -93,6 +94,7 @@ describe('meshChunk — per-vertex colors from lightmap', () => {
 		c.blocks.fill(0);
 		c.blocks[indexOf(5, 30, 5)] = BLOCK_BY_NAME['stone'].id;
 		fillChunkLights(w, c);
+		computeChunkShadows(w, c);
 		const result = meshChunk(c, w.neighbors(c), (_id, _face) => [0, 0, 1, 1]);
 		const mesh = result.opaque;
 		let topFaceVertexCount = 0;
@@ -104,6 +106,8 @@ describe('meshChunk — per-vertex colors from lightmap', () => {
 				expect(Number.isNaN(r)).toBe(false);
 				expect(Number.isNaN(g)).toBe(false);
 				expect(Number.isNaN(b)).toBe(false);
+				// With shadow computation: open sky voxel is sunlit=1, so shadowFactor=1.0.
+				// r+g+b must exceed 1.5 for clearly sunlit geometry.
 				expect(r + g + b).toBeGreaterThan(1.5);
 				topFaceVertexCount++;
 			}

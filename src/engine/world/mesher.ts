@@ -22,6 +22,7 @@ export type Neighbors = { px?: Chunk; nx?: Chunk; pz?: Chunk; nz?: Chunk };
 
 const SKY_COLOR: [number, number, number] = [0.9, 0.95, 1.0];
 const MIN_AMBIENT = 0.03;
+const SHADOW_FLOOR = 0.5;
 
 // Per-face constant data: normal, direction offset, 4 corner offsets (positions within a unit cube),
 // and 4 per-corner UV selectors ([uIndex, vIndex] where 0 picks u0/v0, 1 picks u1/v1).
@@ -348,6 +349,47 @@ function lightSampleToRGB(s: LightSample): [number, number, number] {
 	return [r, g, b];
 }
 
+function readSunlit(chunk: Chunk, neighbors: Neighbors, x: number, y: number, z: number): number {
+	if (y < 0 || y >= CHUNK_SIZE_Y) return 1;
+	const inX = x >= 0 && x < CHUNK_SIZE_X;
+	const inZ = z >= 0 && z < CHUNK_SIZE_Z;
+	if (inX && inZ) return chunk.sunlit[indexOf(x, y, z)];
+	if (x >= CHUNK_SIZE_X && inZ) return neighbors.px?.sunlit[indexOf(0, y, z)] ?? 1;
+	if (x < 0 && inZ) return neighbors.nx?.sunlit[indexOf(CHUNK_SIZE_X - 1, y, z)] ?? 1;
+	if (z >= CHUNK_SIZE_Z && inX) return neighbors.pz?.sunlit[indexOf(x, y, 0)] ?? 1;
+	if (z < 0 && inX) return neighbors.nz?.sunlit[indexOf(x, y, CHUNK_SIZE_Z - 1)] ?? 1;
+	return 1;
+}
+
+function sampleCornerShadow(
+	chunk: Chunk,
+	neighbors: Neighbors,
+	cornerX: number,
+	cornerY: number,
+	cornerZ: number,
+	nx: number,
+	ny: number,
+	nz: number,
+): number {
+	let sum = 0,
+		count = 0;
+	for (let dx = -1; dx <= 0; dx++) {
+		for (let dy = -1; dy <= 0; dy++) {
+			for (let dz = -1; dz <= 0; dz++) {
+				if (nx === 1 && dx !== 0) continue;
+				if (nx === -1 && dx !== -1) continue;
+				if (ny === 1 && dy !== 0) continue;
+				if (ny === -1 && dy !== -1) continue;
+				if (nz === 1 && dz !== 0) continue;
+				if (nz === -1 && dz !== -1) continue;
+				sum += readSunlit(chunk, neighbors, cornerX + dx, cornerY + dy, cornerZ + dz);
+				count++;
+			}
+		}
+	}
+	return count > 0 ? sum / count : 1;
+}
+
 export function meshChunk(chunk: Chunk, neighbors: Neighbors, uvFor: UvFn): ChunkMeshResult {
 	return {
 		opaque: buildOpaqueMesh(chunk, neighbors, uvFor),
@@ -403,7 +445,19 @@ function buildOpaqueMesh(chunk: Chunk, neighbors: Neighbors, uvFor: UvFn): Chunk
 							f.normal[1],
 							f.normal[2],
 						);
-						colors.push(cr * ao, cg * ao, cb * ao);
+						const sunlitFrac = sampleCornerShadow(
+							chunk,
+							neighbors,
+							x + ox,
+							y + oy,
+							z + oz,
+							f.normal[0],
+							f.normal[1],
+							f.normal[2],
+						);
+						const shadowFactor = SHADOW_FLOOR + (1 - SHADOW_FLOOR) * sunlitFrac;
+						const mult = ao * shadowFactor;
+						colors.push(cr * mult, cg * mult, cb * mult);
 					}
 					indices.push(vcount, vcount + 1, vcount + 2, vcount, vcount + 2, vcount + 3);
 					vcount += 4;
@@ -470,7 +524,19 @@ function buildLiquidMesh(chunk: Chunk, neighbors: Neighbors, uvFor: UvFn): Chunk
 							f.normal[1],
 							f.normal[2],
 						);
-						colors.push(cr * ao, cg * ao, cb * ao);
+						const sunlitFrac = sampleCornerShadow(
+							chunk,
+							neighbors,
+							x + ox,
+							y + oy,
+							z + oz,
+							f.normal[0],
+							f.normal[1],
+							f.normal[2],
+						);
+						const shadowFactor = SHADOW_FLOOR + (1 - SHADOW_FLOOR) * sunlitFrac;
+						const mult = ao * shadowFactor;
+						colors.push(cr * mult, cg * mult, cb * mult);
 					}
 					indices.push(vcount, vcount + 1, vcount + 2, vcount, vcount + 2, vcount + 3);
 					vcount += 4;

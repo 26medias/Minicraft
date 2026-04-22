@@ -6,6 +6,7 @@ export class Chunk {
 	readonly cz: number;
 	readonly blocks: Uint8Array;
 	readonly lights: Uint16Array;
+	readonly liquidFrontier: Set<number> = new Set();
 	dirty = true;
 	modified = false;
 

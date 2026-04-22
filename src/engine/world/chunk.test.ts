@@ -83,3 +83,10 @@ describe('Chunk lightmap', () => {
 		expect(c.getSky(0, 0, 0)).toBe(15);
 	});
 });
+
+describe('Chunk.liquidFrontier', () => {
+	it('is an empty Set on a fresh chunk', () => {
+		const c = new Chunk(0, 0);
+		expect(c.liquidFrontier.size).toBe(0);
+	});
+});

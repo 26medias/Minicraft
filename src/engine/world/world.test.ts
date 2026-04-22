@@ -1,7 +1,7 @@
 import { describe, it, expect } from 'vitest';
 import { World } from './world';
 import { BLOCK_BY_NAME, AIR } from '../../data/blocks.data';
-import { CHUNK_SIZE_X, WORLD_SIZE_X } from './coords';
+import { CHUNK_SIZE_X, WORLD_SIZE_X, indexOf } from './coords';
 
 describe('World', () => {
 	it('generates a chunk on demand', () => {
@@ -61,5 +61,41 @@ describe('World', () => {
 		expect(n.nx?.cx).toBe(4);
 		expect(n.pz?.cz).toBe(6);
 		expect(n.nz?.cz).toBe(4);
+	});
+});
+
+describe('World.markLiquidFrontier', () => {
+	it('setting a liquid block adds it to that chunk\'s frontier', () => {
+		const w = new World(1);
+		const water = BLOCK_BY_NAME['water'].id;
+		w.setBlock(100, 30, 100, water);
+		const cx = Math.floor(100 / 16);
+		const cz = Math.floor(100 / 16);
+		const lx = 100 - cx * 16;
+		const lz = 100 - cz * 16;
+		const c = w.getChunk(cx, cz)!;
+		expect(c.liquidFrontier.has(indexOf(lx, 30, lz))).toBe(true);
+	});
+
+	it('setting a non-liquid next to an existing liquid adds the liquid to the frontier', () => {
+		const w = new World(1);
+		const water = BLOCK_BY_NAME['water'].id;
+		const stone = BLOCK_BY_NAME['stone'].id;
+		w.setBlock(100, 30, 100, water);
+		const c = w.getChunk(Math.floor(100 / 16), Math.floor(100 / 16))!;
+		c.liquidFrontier.clear();
+		w.setBlock(101, 30, 100, stone);
+		expect(c.liquidFrontier.size).toBeGreaterThan(0);
+	});
+
+	it('setting a block at chunk boundary adds liquid to the neighbor chunk\'s frontier', () => {
+		const w = new World(1);
+		const water = BLOCK_BY_NAME['water'].id;
+		const stone = BLOCK_BY_NAME['stone'].id;
+		w.setBlock(15, 30, 5, water);
+		const c0 = w.getChunk(0, 0)!;
+		c0.liquidFrontier.clear();
+		w.setBlock(16, 30, 5, stone);
+		expect(c0.liquidFrontier.size).toBeGreaterThan(0);
 	});
 });

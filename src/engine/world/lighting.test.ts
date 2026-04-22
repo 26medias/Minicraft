@@ -120,3 +120,63 @@ describe('fillChunkLights — block light', () => {
 		expect(c.getBlockR(5, 30, 5)).toBeGreaterThan(c.getBlockB(5, 30, 5));
 	});
 });
+
+import { updateLightsForBlockChange } from './lighting';
+
+describe('updateLightsForBlockChange', () => {
+	it('mining a lamp clears its propagated light locally', () => {
+		const w = emptyWorld();
+		const c = w.getChunk(0, 0)!;
+		c.blocks[indexOf(5, 30, 5)] = lamp;
+		fillChunkLights(w, c, () => '#FFFFFF');
+		expect(c.getBlockR(6, 30, 5)).toBeGreaterThan(0);
+
+		c.blocks[indexOf(5, 30, 5)] = AIR;
+		updateLightsForBlockChange(w, 5, 30, 5, () => '#FFFFFF');
+		expect(c.getBlockR(5, 30, 5)).toBe(0);
+		expect(c.getBlockR(6, 30, 5)).toBe(0);
+	});
+
+	it('breaking a wall between dark and lit re-floods light into the dark side', () => {
+		const w = emptyWorld();
+		const c = w.getChunk(0, 0)!;
+		// Roof everywhere so skylight doesn't confuse.
+		for (let dx = 0; dx < 16; dx++) for (let dz = 0; dz < 16; dz++) c.blocks[indexOf(dx, 63, dz)] = stone;
+		// Wall at x=8 for y=10..40.
+		for (let y = 10; y <= 40; y++) for (let dz = 0; dz < 16; dz++) c.blocks[indexOf(8, y, dz)] = stone;
+		// Lamp at (4, 30, 5).
+		c.blocks[indexOf(4, 30, 5)] = lamp;
+		fillChunkLights(w, c, () => '#FFFFFF');
+		expect(c.getBlockR(7, 30, 5)).toBeGreaterThan(0);
+		expect(c.getBlockR(9, 30, 5)).toBe(0);
+
+		// Remove one block from the wall at (8, 30, 5).
+		c.blocks[indexOf(8, 30, 5)] = AIR;
+		updateLightsForBlockChange(w, 8, 30, 5, () => '#FFFFFF');
+		expect(c.getBlockR(9, 30, 5)).toBeGreaterThan(0);
+	});
+
+	it('placing a lamp in a dark room lights it up', () => {
+		const w = emptyWorld();
+		const c = w.getChunk(0, 0)!;
+		// Sealed 5x11x5 box at (0..5)×(20..30)×(0..5) with floor/roof/walls.
+		for (let y = 20; y <= 30; y++) {
+			for (let dx = 0; dx <= 5; dx++) {
+				for (let dz = 0; dz <= 5; dz++) {
+					if (y === 20 || y === 30 || dx === 0 || dx === 5 || dz === 0 || dz === 5) {
+						c.blocks[indexOf(dx, y, dz)] = stone;
+					}
+				}
+			}
+		}
+		// Roof over the rest of the chunk too so no stray skylight leaks in from outside the box.
+		for (let dx = 0; dx < 16; dx++) for (let dz = 0; dz < 16; dz++) c.blocks[indexOf(dx, 63, dz)] = stone;
+		fillChunkLights(w, c, () => '#FFFFFF');
+		expect(c.getBlockR(3, 25, 3)).toBe(0);
+
+		c.blocks[indexOf(3, 25, 3)] = lamp;
+		updateLightsForBlockChange(w, 3, 25, 3, () => '#FFFFFF');
+		expect(c.getBlockR(3, 25, 3)).toBeGreaterThan(0);
+		expect(c.getBlockR(2, 25, 3)).toBeGreaterThan(0);
+	});
+});

@@ -59,6 +59,13 @@ export class Player {
 		const eyeBlock = world.getBlock(Math.floor(eye[0]), Math.floor(eye[1]), Math.floor(eye[2]));
 		this.swimming = isLiquid(eyeBlock);
 
+		const feetBlock = world.getBlock(
+			Math.floor(this.position[0]),
+			Math.floor(this.position[1]),
+			Math.floor(this.position[2]),
+		);
+		const feetInLiquid = isLiquid(feetBlock);
+
 		let ix = 0,
 			iy = 0,
 			iz = 0;
@@ -123,7 +130,7 @@ export class Player {
 			vyStep = this.vy * dt;
 		} else {
 			this.vy -= GRAVITY * dt;
-			if (keys.jump && this.grounded) this.vy = JUMP_SPEED;
+			if (keys.jump && (this.grounded || feetInLiquid)) this.vy = JUMP_SPEED;
 			vyStep = this.vy * dt;
 		}
 

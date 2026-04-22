@@ -18,7 +18,8 @@ const OUT_JSON = 'public/atlas.json';
 // Textures shipped by Mojang as grayscale masks that the game tints at runtime.
 // We have no biomes, so the tint is baked in at build time.
 const TEXTURE_TINTS: Record<string, [number, number, number]> = {
-	grass_block_top: [0x79, 0xC0, 0x5A], // plains-biome grass green
+	grass_block_top: [0x79, 0xc0, 0x5a], // plains-biome grass green
+	water_still: [0x3f, 0x76, 0xe4], // Minecraft plains-biome water blue
 };
 
 function applyTint(raw: Uint8Array, tint: [number, number, number]): Uint8Array {
@@ -39,10 +40,24 @@ async function main() {
 		if (!b.textures) continue;
 		const t = b.textures;
 		if (t.kind === 'uniform') names.add(t.all);
-		else if (t.kind === 'top-bottom-side') { names.add(t.top); names.add(t.bottom); names.add(t.side); }
-		else if (t.kind === 'columnar') { names.add(t.top); names.add(t.bottom); names.add(t.sides); }
-		else if (t.kind === 'six') { names.add(t.px); names.add(t.nx); names.add(t.py); names.add(t.ny); names.add(t.pz); names.add(t.nz); }
-		else { throw new Error(`Unknown texture kind: ${(t as { kind: string }).kind}`); }
+		else if (t.kind === 'top-bottom-side') {
+			names.add(t.top);
+			names.add(t.bottom);
+			names.add(t.side);
+		} else if (t.kind === 'columnar') {
+			names.add(t.top);
+			names.add(t.bottom);
+			names.add(t.sides);
+		} else if (t.kind === 'six') {
+			names.add(t.px);
+			names.add(t.nx);
+			names.add(t.py);
+			names.add(t.ny);
+			names.add(t.pz);
+			names.add(t.nz);
+		} else {
+			throw new Error(`Unknown texture kind: ${(t as { kind: string }).kind}`);
+		}
 	}
 
 	const sorted = [...names].sort();
@@ -51,7 +66,12 @@ async function main() {
 	}
 
 	const canvas = sharp({
-		create: { width: ATLAS_SIZE, height: ATLAS_SIZE, channels: 4, background: { r: 0, g: 0, b: 0, alpha: 0 } },
+		create: {
+			width: ATLAS_SIZE,
+			height: ATLAS_SIZE,
+			channels: 4,
+			background: { r: 0, g: 0, b: 0, alpha: 0 },
+		},
 	});
 
 	const composites: sharp.OverlayOptions[] = [];
@@ -70,7 +90,9 @@ async function main() {
 		const img = sharp(tilePath).resize(TILE, TILE, { kernel: 'nearest' }).ensureAlpha();
 		const raw = await img.raw().toBuffer({ resolveWithObject: true });
 		if (raw.info.width !== TILE || raw.info.height !== TILE) {
-			throw new Error(`Unexpected tile size for ${name}: ${raw.info.width}x${raw.info.height}`);
+			throw new Error(
+				`Unexpected tile size for ${name}: ${raw.info.width}x${raw.info.height}`,
+			);
 		}
 		if (raw.info.channels !== 4) {
 			throw new Error(`Expected 4-channel RGBA for ${name}, got ${raw.info.channels}`);
@@ -80,13 +102,21 @@ async function main() {
 		const pixels = tint ? applyTint(raw.data, tint) : raw.data;
 
 		const padded = padEdgeReplicate(pixels, TILE, PADDING);
-		composites.push({ input: padded, left: x, top: y, raw: { width: CELL, height: CELL, channels: 4 } });
+		composites.push({
+			input: padded,
+			left: x,
+			top: y,
+			raw: { width: CELL, height: CELL, channels: 4 },
+		});
 		tiles[name] = { u: x + PADDING, v: y + PADDING, w: TILE, h: TILE };
 	}
 
 	await mkdir(dirname(OUT_PNG), { recursive: true });
 	await canvas.composite(composites).png({ compressionLevel: 9 }).toFile(OUT_PNG);
-	await writeFile(OUT_JSON, JSON.stringify({ size: ATLAS_SIZE, tileSize: TILE, tiles }, null, '\t'));
+	await writeFile(
+		OUT_JSON,
+		JSON.stringify({ size: ATLAS_SIZE, tileSize: TILE, tiles }, null, '\t'),
+	);
 
 	console.log(`Wrote ${sorted.length} tiles to ${OUT_PNG} (${ATLAS_SIZE}x${ATLAS_SIZE})`);
 }

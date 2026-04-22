@@ -169,4 +169,20 @@ describe('Player cursor-directed movement', () => {
 		expect(dz).toBeGreaterThan(2.5);
 		expect(dz).toBeLessThan(3.5);
 	});
+
+	it('Space jumps out of shallow water (feet in liquid, eye in air)', () => {
+		const w = new World(1);
+		const water = BLOCK_BY_NAME['water'].id;
+		// Solid floor at y=29; water at y=30; player feet at y=30 (in water), eye at y=31.6 (above water).
+		w.setBlock(100, 29, 100, BLOCK_BY_NAME['stone'].id);
+		w.setBlock(100, 30, 100, water);
+		const p = new Player([100, 30, 100]);
+		p.update(0.01, w, noKeys(), FWD, RIGHT);
+		expect(p.swimming).toBe(false);
+		// Before jump
+		expect(p.vy).toBeLessThanOrEqual(0);
+		// Press Space — vy should become positive.
+		p.update(0.01, w, { ...noKeys(), jump: true }, FWD, RIGHT);
+		expect(p.vy).toBeGreaterThan(0);
+	});
 });

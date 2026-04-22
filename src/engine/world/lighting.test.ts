@@ -1,7 +1,7 @@
 import { describe, it, expect } from 'vitest';
 import { World } from './world';
 import { BLOCK_BY_NAME, AIR } from '../../data/blocks.data';
-import { fillChunkLights } from './lighting';
+import { fillChunkLights, updateLightsForBlockChange } from './lighting';
 import { CHUNK_SIZE_Y, indexOf } from './coords';
 
 const stone = BLOCK_BY_NAME['stone'].id;
@@ -56,7 +56,8 @@ describe('fillChunkLights — skylight', () => {
 	it('skylight attenuates by 1 per block horizontally under an overhang', () => {
 		const w = emptyWorld();
 		const c = w.getChunk(0, 0)!;
-		for (let dx = 0; dx <= 7; dx++) for (let dz = 0; dz < 16; dz++) c.blocks[indexOf(dx, 40, dz)] = stone;
+		for (let dx = 0; dx <= 7; dx++)
+			for (let dz = 0; dz < 16; dz++) c.blocks[indexOf(dx, 40, dz)] = stone;
 		fillChunkLights(w, c);
 		expect(c.getSky(8, 39, 5)).toBe(15);
 		expect(c.getSky(7, 39, 5)).toBe(14);
@@ -72,7 +73,8 @@ describe('fillChunkLights — block light', () => {
 	it('a lamp radiates outward with distance decay', () => {
 		const w = emptyWorld();
 		const c = w.getChunk(0, 0)!;
-		for (let dx = 0; dx < 16; dx++) for (let dz = 0; dz < 16; dz++) c.blocks[indexOf(dx, 63, dz)] = stone;
+		for (let dx = 0; dx < 16; dx++)
+			for (let dz = 0; dz < 16; dz++) c.blocks[indexOf(dx, 63, dz)] = stone;
 		c.blocks[indexOf(5, 30, 5)] = lamp;
 		fillChunkLights(w, c, () => '#FFFFFF');
 		const r5 = c.getBlockR(5, 30, 5);
@@ -121,8 +123,6 @@ describe('fillChunkLights — block light', () => {
 	});
 });
 
-import { updateLightsForBlockChange } from './lighting';
-
 describe('updateLightsForBlockChange', () => {
 	it('mining a lamp clears its propagated light locally', () => {
 		const w = emptyWorld();
@@ -141,9 +141,11 @@ describe('updateLightsForBlockChange', () => {
 		const w = emptyWorld();
 		const c = w.getChunk(0, 0)!;
 		// Roof everywhere so skylight doesn't confuse.
-		for (let dx = 0; dx < 16; dx++) for (let dz = 0; dz < 16; dz++) c.blocks[indexOf(dx, 63, dz)] = stone;
+		for (let dx = 0; dx < 16; dx++)
+			for (let dz = 0; dz < 16; dz++) c.blocks[indexOf(dx, 63, dz)] = stone;
 		// Wall at x=8 for y=10..40.
-		for (let y = 10; y <= 40; y++) for (let dz = 0; dz < 16; dz++) c.blocks[indexOf(8, y, dz)] = stone;
+		for (let y = 10; y <= 40; y++)
+			for (let dz = 0; dz < 16; dz++) c.blocks[indexOf(8, y, dz)] = stone;
 		// Lamp at (4, 30, 5).
 		c.blocks[indexOf(4, 30, 5)] = lamp;
 		fillChunkLights(w, c, () => '#FFFFFF');
@@ -170,7 +172,8 @@ describe('updateLightsForBlockChange', () => {
 			}
 		}
 		// Roof over the rest of the chunk too so no stray skylight leaks in from outside the box.
-		for (let dx = 0; dx < 16; dx++) for (let dz = 0; dz < 16; dz++) c.blocks[indexOf(dx, 63, dz)] = stone;
+		for (let dx = 0; dx < 16; dx++)
+			for (let dz = 0; dz < 16; dz++) c.blocks[indexOf(dx, 63, dz)] = stone;
 		fillChunkLights(w, c, () => '#FFFFFF');
 		expect(c.getBlockR(3, 25, 3)).toBe(0);
 

@@ -18,7 +18,8 @@ function parseHex(hex: string): [number, number, number] {
 }
 
 // Resolve lamp and lava ids lazily so `BLOCKS` is fully populated by the time this runs.
-let _lampId = -1, _lavaId = -1;
+let _lampId = -1,
+	_lavaId = -1;
 function lampId(): number {
 	if (_lampId < 0) _lampId = BLOCKS.findIndex((b) => b.name === 'lamp');
 	return _lampId;
@@ -38,7 +39,11 @@ function filterOf(id: number): number {
  * the set of chunks touched (includes the target chunk plus any neighbors reached
  * by BFS propagation).
  */
-export function fillChunkLights(world: World, chunk: Chunk, getLampColor?: LampColorLookup): Set<Chunk> {
+export function fillChunkLights(
+	world: World,
+	chunk: Chunk,
+	getLampColor?: LampColorLookup,
+): Set<Chunk> {
 	chunk.lights.fill(0);
 	const touched = new Set<Chunk>();
 	touched.add(chunk);
@@ -77,12 +82,17 @@ function propagateSkylight(world: World, queue: Coord[], touched: Set<Chunk>): v
 		if (here <= 0) continue;
 
 		const dirs: [number, number, number][] = [
-			[1, 0, 0], [-1, 0, 0],
-			[0, 1, 0], [0, -1, 0],
-			[0, 0, 1], [0, 0, -1],
+			[1, 0, 0],
+			[-1, 0, 0],
+			[0, 1, 0],
+			[0, -1, 0],
+			[0, 0, 1],
+			[0, 0, -1],
 		];
 		for (const [dx, dy, dz] of dirs) {
-			const nx = x + dx, ny = y + dy, nz = z + dz;
+			const nx = x + dx,
+				ny = y + dy,
+				nz = z + dz;
 			if (ny < 0 || ny >= CHUNK_SIZE_Y) continue;
 			const nchunk = chunkAtWorld(world, nx, nz);
 			if (!nchunk) continue;
@@ -92,7 +102,8 @@ function propagateSkylight(world: World, queue: Coord[], touched: Set<Chunk>): v
 			const nFilter = filterOf(nid);
 			if (nFilter >= 15) continue;
 			// Special case: falling straight down through zero-filter preserves value.
-			const attenuation = dy === -1 && nFilter === 0 && here === 15 ? 0 : Math.max(1, nFilter);
+			const attenuation =
+				dy === -1 && nFilter === 0 && here === 15 ? 0 : Math.max(1, nFilter);
 			const propagated = here - attenuation;
 			if (propagated <= 0) continue;
 			if (nchunk.getSky(nlx, ny, nlz) >= propagated) continue;
@@ -112,7 +123,12 @@ function chunkAtWorld(world: World, x: number, z: number): Chunk | undefined {
 
 type RGBQueueEntry = { x: number; y: number; z: number; channel: 0 | 1 | 2 };
 
-function seedBlockLight(world: World, chunk: Chunk, touched: Set<Chunk>, getLampColor?: LampColorLookup): void {
+function seedBlockLight(
+	world: World,
+	chunk: Chunk,
+	touched: Set<Chunk>,
+	getLampColor?: LampColorLookup,
+): void {
 	const queue: RGBQueueEntry[] = [];
 	const baseX = chunk.cx * CHUNK_SIZE_X;
 	const baseZ = chunk.cz * CHUNK_SIZE_Z;
@@ -139,7 +155,14 @@ function seedBlockLight(world: World, chunk: Chunk, touched: Set<Chunk>, getLamp
 				const curG = chunk.getBlockG(x, y, z);
 				const curB = chunk.getBlockB(x, y, z);
 				if (rSeed > curR || gSeed > curG || bSeed > curB) {
-					chunk.setBlockRGB(x, y, z, Math.max(rSeed, curR), Math.max(gSeed, curG), Math.max(bSeed, curB));
+					chunk.setBlockRGB(
+						x,
+						y,
+						z,
+						Math.max(rSeed, curR),
+						Math.max(gSeed, curG),
+						Math.max(bSeed, curB),
+					);
 				}
 				if (rSeed > 0) queue.push({ x: baseX + x, y, z: baseZ + z, channel: 0 });
 				if (gSeed > 0) queue.push({ x: baseX + x, y, z: baseZ + z, channel: 1 });
@@ -153,13 +176,23 @@ function seedBlockLight(world: World, chunk: Chunk, touched: Set<Chunk>, getLamp
 
 function getChannel(chunk: Chunk, lx: number, y: number, lz: number, ch: 0 | 1 | 2): number {
 	switch (ch) {
-		case 0: return chunk.getBlockR(lx, y, lz);
-		case 1: return chunk.getBlockG(lx, y, lz);
-		case 2: return chunk.getBlockB(lx, y, lz);
+		case 0:
+			return chunk.getBlockR(lx, y, lz);
+		case 1:
+			return chunk.getBlockG(lx, y, lz);
+		case 2:
+			return chunk.getBlockB(lx, y, lz);
 	}
 }
 
-function setChannel(chunk: Chunk, lx: number, y: number, lz: number, ch: 0 | 1 | 2, v: number): void {
+function setChannel(
+	chunk: Chunk,
+	lx: number,
+	y: number,
+	lz: number,
+	ch: 0 | 1 | 2,
+	v: number,
+): void {
 	const r = chunk.getBlockR(lx, y, lz);
 	const g = chunk.getBlockG(lx, y, lz);
 	const b = chunk.getBlockB(lx, y, lz);
@@ -170,9 +203,12 @@ function setChannel(chunk: Chunk, lx: number, y: number, lz: number, ch: 0 | 1 |
 
 function propagateBlockLight(world: World, queue: RGBQueueEntry[], touched: Set<Chunk>): void {
 	const dirs: [number, number, number][] = [
-		[1, 0, 0], [-1, 0, 0],
-		[0, 1, 0], [0, -1, 0],
-		[0, 0, 1], [0, 0, -1],
+		[1, 0, 0],
+		[-1, 0, 0],
+		[0, 1, 0],
+		[0, -1, 0],
+		[0, 0, 1],
+		[0, 0, -1],
 	];
 	while (queue.length) {
 		const { x, y, z, channel } = queue.shift()!;
@@ -184,7 +220,9 @@ function propagateBlockLight(world: World, queue: RGBQueueEntry[], touched: Set<
 		if (here <= 0) continue;
 
 		for (const [dx, dy, dz] of dirs) {
-			const nx = x + dx, ny = y + dy, nz = z + dz;
+			const nx = x + dx,
+				ny = y + dy,
+				nz = z + dz;
 			if (ny < 0 || ny >= CHUNK_SIZE_Y) continue;
 			const nchunk = chunkAtWorld(world, nx, nz);
 			if (!nchunk) continue;
@@ -215,128 +253,133 @@ function propagateBlockLight(world: World, queue: RGBQueueEntry[], touched: Set<
  * Returns the set of chunks whose lights changed.
  */
 export function updateLightsForBlockChange(
-    world: World,
-    x: number,
-    y: number,
-    z: number,
-    getLampColor?: LampColorLookup,
+	world: World,
+	x: number,
+	y: number,
+	z: number,
+	getLampColor?: LampColorLookup,
 ): Set<Chunk> {
-    const touched = new Set<Chunk>();
-    const chunk = chunkAtWorld(world, x, z);
-    if (!chunk) return touched;
-    touched.add(chunk);
+	const touched = new Set<Chunk>();
+	const chunk = chunkAtWorld(world, x, z);
+	if (!chunk) return touched;
+	touched.add(chunk);
 
-    const lx = x - chunk.cx * CHUNK_SIZE_X;
-    const lz = z - chunk.cz * CHUNK_SIZE_Z;
-    const oldSky = chunk.getSky(lx, y, lz);
-    const oldR = chunk.getBlockR(lx, y, lz);
-    const oldG = chunk.getBlockG(lx, y, lz);
-    const oldB = chunk.getBlockB(lx, y, lz);
+	const lx = x - chunk.cx * CHUNK_SIZE_X;
+	const lz = z - chunk.cz * CHUNK_SIZE_Z;
+	const oldSky = chunk.getSky(lx, y, lz);
+	const oldR = chunk.getBlockR(lx, y, lz);
+	const oldG = chunk.getBlockG(lx, y, lz);
+	const oldB = chunk.getBlockB(lx, y, lz);
 
-    chunk.setSky(lx, y, lz, 0);
-    chunk.setBlockRGB(lx, y, lz, 0, 0, 0);
+	chunk.setSky(lx, y, lz, 0);
+	chunk.setBlockRGB(lx, y, lz, 0, 0, 0);
 
-    removeAndReflood(world, x, y, z, oldSky, touched, 'sky');
-    removeAndReflood(world, x, y, z, oldR, touched, 'r');
-    removeAndReflood(world, x, y, z, oldG, touched, 'g');
-    removeAndReflood(world, x, y, z, oldB, touched, 'b');
+	removeAndReflood(world, x, y, z, oldSky, touched, 'sky');
+	removeAndReflood(world, x, y, z, oldR, touched, 'r');
+	removeAndReflood(world, x, y, z, oldG, touched, 'g');
+	removeAndReflood(world, x, y, z, oldB, touched, 'b');
 
-    // If the new block is passable (filter < 15), re-flood from lit neighbors
-    // into the changed voxel — this handles the "break a wall, let light in" case.
-    refloodFromNeighbors(world, x, y, z, touched);
+	// If the new block is passable (filter < 15), re-flood from lit neighbors
+	// into the changed voxel — this handles the "break a wall, let light in" case.
+	refloodFromNeighbors(world, x, y, z, touched);
 
-    reSeedSkylightColumn(world, x, z, touched);
+	reSeedSkylightColumn(world, x, z, touched);
 
-    // New emitter?
-    const newId = chunk.blocks[indexOf(lx, y, lz)];
-    const def = BLOCKS[newId];
-    if (def && def.lightLevel > 0) {
-        let color: [number, number, number] = [1, 1, 1];
-        if (newId === lampId()) {
-            color = parseHex(getLampColor?.(x, y, z) ?? '#FFFFFF');
-        } else if (newId === lavaId()) {
-            color = parseHex(LAVA_LIGHT_COLOR);
-        }
-        const r = Math.round(color[0] * def.lightLevel);
-        const g = Math.round(color[1] * def.lightLevel);
-        const b = Math.round(color[2] * def.lightLevel);
-        const curR = chunk.getBlockR(lx, y, lz);
-        const curG = chunk.getBlockG(lx, y, lz);
-        const curB = chunk.getBlockB(lx, y, lz);
-        chunk.setBlockRGB(lx, y, lz, Math.max(r, curR), Math.max(g, curG), Math.max(b, curB));
-        const q: RGBQueueEntry[] = [];
-        if (r > 0) q.push({ x, y, z, channel: 0 });
-        if (g > 0) q.push({ x, y, z, channel: 1 });
-        if (b > 0) q.push({ x, y, z, channel: 2 });
-        propagateBlockLight(world, q, touched);
-    }
+	// New emitter?
+	const newId = chunk.blocks[indexOf(lx, y, lz)];
+	const def = BLOCKS[newId];
+	if (def && def.lightLevel > 0) {
+		let color: [number, number, number] = [1, 1, 1];
+		if (newId === lampId()) {
+			color = parseHex(getLampColor?.(x, y, z) ?? '#FFFFFF');
+		} else if (newId === lavaId()) {
+			color = parseHex(LAVA_LIGHT_COLOR);
+		}
+		const r = Math.round(color[0] * def.lightLevel);
+		const g = Math.round(color[1] * def.lightLevel);
+		const b = Math.round(color[2] * def.lightLevel);
+		const curR = chunk.getBlockR(lx, y, lz);
+		const curG = chunk.getBlockG(lx, y, lz);
+		const curB = chunk.getBlockB(lx, y, lz);
+		chunk.setBlockRGB(lx, y, lz, Math.max(r, curR), Math.max(g, curG), Math.max(b, curB));
+		const q: RGBQueueEntry[] = [];
+		if (r > 0) q.push({ x, y, z, channel: 0 });
+		if (g > 0) q.push({ x, y, z, channel: 1 });
+		if (b > 0) q.push({ x, y, z, channel: 2 });
+		propagateBlockLight(world, q, touched);
+	}
 
-    return touched;
+	return touched;
 }
 
 type Field = 'sky' | 'r' | 'g' | 'b';
 
 function getField(chunk: Chunk, lx: number, y: number, lz: number, f: Field): number {
-    if (f === 'sky') return chunk.getSky(lx, y, lz);
-    if (f === 'r') return chunk.getBlockR(lx, y, lz);
-    if (f === 'g') return chunk.getBlockG(lx, y, lz);
-    return chunk.getBlockB(lx, y, lz);
+	if (f === 'sky') return chunk.getSky(lx, y, lz);
+	return getChannel(chunk, lx, y, lz, f === 'r' ? 0 : f === 'g' ? 1 : 2);
 }
 
 function setField(chunk: Chunk, lx: number, y: number, lz: number, f: Field, v: number): void {
-    const r = chunk.getBlockR(lx, y, lz);
-    const g = chunk.getBlockG(lx, y, lz);
-    const b = chunk.getBlockB(lx, y, lz);
-    if (f === 'sky') chunk.setSky(lx, y, lz, v);
-    else if (f === 'r') chunk.setBlockRGB(lx, y, lz, v, g, b);
-    else if (f === 'g') chunk.setBlockRGB(lx, y, lz, r, v, b);
-    else chunk.setBlockRGB(lx, y, lz, r, g, v);
+	if (f === 'sky') {
+		chunk.setSky(lx, y, lz, v);
+		return;
+	}
+	setChannel(chunk, lx, y, lz, f === 'r' ? 0 : f === 'g' ? 1 : 2, v);
 }
 
 function removeAndReflood(
-    world: World,
-    ox: number, oy: number, oz: number,
-    oldLight: number,
-    touched: Set<Chunk>,
-    field: Field,
+	world: World,
+	ox: number,
+	oy: number,
+	oz: number,
+	oldLight: number,
+	touched: Set<Chunk>,
+	field: Field,
 ): void {
-    if (oldLight <= 0) return;
-    const remQueue: { x: number; y: number; z: number; value: number }[] = [{ x: ox, y: oy, z: oz, value: oldLight }];
-    const addQueue: { x: number; y: number; z: number }[] = [];
-    const dirs: [number, number, number][] = [
-        [1, 0, 0], [-1, 0, 0],
-        [0, 1, 0], [0, -1, 0],
-        [0, 0, 1], [0, 0, -1],
-    ];
+	if (oldLight <= 0) return;
+	const remQueue: { x: number; y: number; z: number; value: number }[] = [
+		{ x: ox, y: oy, z: oz, value: oldLight },
+	];
+	const addQueue: { x: number; y: number; z: number }[] = [];
+	const dirs: [number, number, number][] = [
+		[1, 0, 0],
+		[-1, 0, 0],
+		[0, 1, 0],
+		[0, -1, 0],
+		[0, 0, 1],
+		[0, 0, -1],
+	];
 
-    while (remQueue.length) {
-        const { x, y, z, value } = remQueue.shift()!;
-        for (const [dx, dy, dz] of dirs) {
-            const nx = x + dx, ny = y + dy, nz = z + dz;
-            if (ny < 0 || ny >= CHUNK_SIZE_Y) continue;
-            const nchunk = chunkAtWorld(world, nx, nz);
-            if (!nchunk) continue;
-            const nlx = nx - nchunk.cx * CHUNK_SIZE_X;
-            const nlz = nz - nchunk.cz * CHUNK_SIZE_Z;
-            const nValue = getField(nchunk, nlx, ny, nlz, field);
-            if (nValue > 0 && nValue < value) {
-                setField(nchunk, nlx, ny, nlz, field, 0);
-                touched.add(nchunk);
-                remQueue.push({ x: nx, y: ny, z: nz, value: nValue });
-            } else if (nValue >= value) {
-                addQueue.push({ x: nx, y: ny, z: nz });
-            }
-        }
-    }
+	while (remQueue.length) {
+		const { x, y, z, value } = remQueue.shift()!;
+		for (const [dx, dy, dz] of dirs) {
+			const nx = x + dx,
+				ny = y + dy,
+				nz = z + dz;
+			if (ny < 0 || ny >= CHUNK_SIZE_Y) continue;
+			const nchunk = chunkAtWorld(world, nx, nz);
+			if (!nchunk) continue;
+			const nlx = nx - nchunk.cx * CHUNK_SIZE_X;
+			const nlz = nz - nchunk.cz * CHUNK_SIZE_Z;
+			const nValue = getField(nchunk, nlx, ny, nlz, field);
+			if (nValue > 0 && nValue < value) {
+				setField(nchunk, nlx, ny, nlz, field, 0);
+				touched.add(nchunk);
+				remQueue.push({ x: nx, y: ny, z: nz, value: nValue });
+			} else if (nValue >= value) {
+				addQueue.push({ x: nx, y: ny, z: nz });
+			}
+		}
+	}
 
-    if (field === 'sky') {
-        const q: Coord[] = addQueue.map((c) => ({ ...c }));
-        propagateSkylight(world, q, touched);
-    } else {
-        const ch: 0 | 1 | 2 = field === 'r' ? 0 : field === 'g' ? 1 : 2;
-        const q: RGBQueueEntry[] = addQueue.map((c) => ({ x: c.x, y: c.y, z: c.z, channel: ch }));
-        propagateBlockLight(world, q, touched);
-    }
+	if (field === 'sky') {
+		const q: Coord[] = addQueue.map((c) => ({ ...c }));
+		propagateSkylight(world, q, touched);
+	} else {
+		const ch: 0 | 1 | 2 = field === 'r' ? 0 : field === 'g' ? 1 : 2;
+		const q: RGBQueueEntry[] = addQueue.map((c) => ({ x: c.x, y: c.y, z: c.z, channel: ch }));
+		propagateBlockLight(world, q, touched);
+	}
 }
 
 /**
@@ -345,50 +388,61 @@ function removeAndReflood(
  * "break a wall and let existing light spill through" case where the changed
  * voxel itself had zero stored light before the change.
  */
-function refloodFromNeighbors(world: World, x: number, y: number, z: number, touched: Set<Chunk>): void {
-    const chunk = chunkAtWorld(world, x, z);
-    if (!chunk) return;
-    const lx = x - chunk.cx * CHUNK_SIZE_X;
-    const lz = z - chunk.cz * CHUNK_SIZE_Z;
-    const newId = chunk.blocks[indexOf(lx, y, lz)];
-    if (filterOf(newId) >= 15) return; // new block is opaque — nothing can enter
+function refloodFromNeighbors(
+	world: World,
+	x: number,
+	y: number,
+	z: number,
+	touched: Set<Chunk>,
+): void {
+	const chunk = chunkAtWorld(world, x, z);
+	if (!chunk) return;
+	const lx = x - chunk.cx * CHUNK_SIZE_X;
+	const lz = z - chunk.cz * CHUNK_SIZE_Z;
+	const newId = chunk.blocks[indexOf(lx, y, lz)];
+	if (filterOf(newId) >= 15) return; // new block is opaque — nothing can enter
 
-    const dirs: [number, number, number][] = [
-        [1, 0, 0], [-1, 0, 0],
-        [0, 1, 0], [0, -1, 0],
-        [0, 0, 1], [0, 0, -1],
-    ];
-    const skyQ: Coord[] = [];
-    const rgbQ: RGBQueueEntry[] = [];
-    for (const [dx, dy, dz] of dirs) {
-        const nx = x + dx, ny = y + dy, nz = z + dz;
-        if (ny < 0 || ny >= CHUNK_SIZE_Y) continue;
-        const nchunk = chunkAtWorld(world, nx, nz);
-        if (!nchunk) continue;
-        const nlx = nx - nchunk.cx * CHUNK_SIZE_X;
-        const nlz = nz - nchunk.cz * CHUNK_SIZE_Z;
-        if (nchunk.getSky(nlx, ny, nlz) > 0) skyQ.push({ x: nx, y: ny, z: nz });
-        if (nchunk.getBlockR(nlx, ny, nlz) > 0) rgbQ.push({ x: nx, y: ny, z: nz, channel: 0 });
-        if (nchunk.getBlockG(nlx, ny, nlz) > 0) rgbQ.push({ x: nx, y: ny, z: nz, channel: 1 });
-        if (nchunk.getBlockB(nlx, ny, nlz) > 0) rgbQ.push({ x: nx, y: ny, z: nz, channel: 2 });
-    }
-    if (skyQ.length) propagateSkylight(world, skyQ, touched);
-    if (rgbQ.length) propagateBlockLight(world, rgbQ, touched);
+	const dirs: [number, number, number][] = [
+		[1, 0, 0],
+		[-1, 0, 0],
+		[0, 1, 0],
+		[0, -1, 0],
+		[0, 0, 1],
+		[0, 0, -1],
+	];
+	const skyQ: Coord[] = [];
+	const rgbQ: RGBQueueEntry[] = [];
+	for (const [dx, dy, dz] of dirs) {
+		const nx = x + dx,
+			ny = y + dy,
+			nz = z + dz;
+		if (ny < 0 || ny >= CHUNK_SIZE_Y) continue;
+		const nchunk = chunkAtWorld(world, nx, nz);
+		if (!nchunk) continue;
+		const nlx = nx - nchunk.cx * CHUNK_SIZE_X;
+		const nlz = nz - nchunk.cz * CHUNK_SIZE_Z;
+		if (nchunk.getSky(nlx, ny, nlz) > 0) skyQ.push({ x: nx, y: ny, z: nz });
+		if (nchunk.getBlockR(nlx, ny, nlz) > 0) rgbQ.push({ x: nx, y: ny, z: nz, channel: 0 });
+		if (nchunk.getBlockG(nlx, ny, nlz) > 0) rgbQ.push({ x: nx, y: ny, z: nz, channel: 1 });
+		if (nchunk.getBlockB(nlx, ny, nlz) > 0) rgbQ.push({ x: nx, y: ny, z: nz, channel: 2 });
+	}
+	if (skyQ.length) propagateSkylight(world, skyQ, touched);
+	if (rgbQ.length) propagateBlockLight(world, rgbQ, touched);
 }
 
 function reSeedSkylightColumn(world: World, wx: number, wz: number, touched: Set<Chunk>): void {
-    const chunk = chunkAtWorld(world, wx, wz);
-    if (!chunk) return;
-    const lx = wx - chunk.cx * CHUNK_SIZE_X;
-    const lz = wz - chunk.cz * CHUNK_SIZE_Z;
-    const q: Coord[] = [];
-    for (let y = CHUNK_SIZE_Y - 1; y >= 0; y--) {
-        const id = chunk.blocks[indexOf(lx, y, lz)];
-        if (filterOf(id) >= 15) break;
-        if (chunk.getSky(lx, y, lz) < 15) {
-            chunk.setSky(lx, y, lz, 15);
-            q.push({ x: wx, y, z: wz });
-        }
-    }
-    if (q.length) propagateSkylight(world, q, touched);
+	const chunk = chunkAtWorld(world, wx, wz);
+	if (!chunk) return;
+	const lx = wx - chunk.cx * CHUNK_SIZE_X;
+	const lz = wz - chunk.cz * CHUNK_SIZE_Z;
+	const q: Coord[] = [];
+	for (let y = CHUNK_SIZE_Y - 1; y >= 0; y--) {
+		const id = chunk.blocks[indexOf(lx, y, lz)];
+		if (filterOf(id) >= 15) break;
+		if (chunk.getSky(lx, y, lz) < 15) {
+			chunk.setSky(lx, y, lz, 15);
+			q.push({ x: wx, y, z: wz });
+		}
+	}
+	if (q.length) propagateSkylight(world, q, touched);
 }

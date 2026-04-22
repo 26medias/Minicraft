@@ -96,6 +96,7 @@ export class Renderer {
 		g.setAttribute('position', new THREE.BufferAttribute(mesh.positions, 3));
 		g.setAttribute('normal', new THREE.BufferAttribute(mesh.normals, 3));
 		g.setAttribute('uv', new THREE.BufferAttribute(mesh.uvs, 2));
+		g.setAttribute('color', new THREE.BufferAttribute(mesh.colors, 3));
 		g.setIndex(new THREE.BufferAttribute(mesh.indices, 1));
 		g.computeBoundingSphere();
 

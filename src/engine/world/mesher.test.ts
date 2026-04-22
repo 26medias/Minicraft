@@ -2,6 +2,9 @@ import { describe, it, expect } from 'vitest';
 import { Chunk } from './chunk';
 import { meshChunk } from './mesher';
 import { BLOCK_BY_NAME } from '../../data/blocks.data';
+import { World } from './world';
+import { indexOf } from './coords';
+import { fillChunkLights } from './lighting';
 
 const stone = BLOCK_BY_NAME['stone'].id;
 
@@ -70,5 +73,38 @@ describe('meshChunk', () => {
 		expect(mesh.uvs[5]).toBeCloseTo(0.9); // corner 2 V = v1  (top of tile, y=1)
 		expect(mesh.uvs[6]).toBeCloseTo(0.1); // corner 3 U = u0
 		expect(mesh.uvs[7]).toBeCloseTo(0.9); // corner 3 V = v1  (top of tile, y=1)
+	});
+});
+
+describe('meshChunk — per-vertex colors from lightmap', () => {
+	it('mesh includes a colors attribute matching positions in length', () => {
+		const w = new World(1);
+		const c = w.ensureChunk(0, 0);
+		c.blocks[indexOf(1, 30, 1)] = BLOCK_BY_NAME['stone'].id;
+		fillChunkLights(w, c);
+		const mesh = meshChunk(c, w.neighbors(c), (_id, _face) => [0, 0, 1, 1]);
+		expect(mesh.colors).toBeInstanceOf(Float32Array);
+		expect(mesh.colors.length).toBe(mesh.positions.length);
+	});
+
+	it('a fully-lit vertex (sky=15) has a bright RGB', () => {
+		const w = new World(1);
+		const c = w.ensureChunk(0, 0);
+		c.blocks.fill(0);
+		c.blocks[indexOf(5, 30, 5)] = BLOCK_BY_NAME['stone'].id;
+		fillChunkLights(w, c);
+		const mesh = meshChunk(c, w.neighbors(c), (_id, _face) => [0, 0, 1, 1]);
+		let foundBright = false;
+		for (let i = 0; i < mesh.normals.length; i += 3) {
+			if (mesh.normals[i + 1] > 0.9) {
+				const r = mesh.colors[i];
+				const g = mesh.colors[i + 1];
+				const b = mesh.colors[i + 2];
+				expect(r + g + b).toBeGreaterThan(1.5);
+				foundBright = true;
+				break;
+			}
+		}
+		expect(foundBright).toBe(true);
 	});
 });

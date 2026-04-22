@@ -7,12 +7,16 @@ export type ChunkMesh = {
 	positions: Float32Array;
 	normals: Float32Array;
 	uvs: Float32Array;
+	colors: Float32Array;
 	indices: Uint32Array;
 };
 
 export type UvFn = (id: BlockId, face: Face) => [number, number, number, number];
 
 export type Neighbors = { px?: Chunk; nx?: Chunk; pz?: Chunk; nz?: Chunk };
+
+const SKY_COLOR: [number, number, number] = [0.9, 0.95, 1.0];
+const MIN_AMBIENT = 0.08;
 
 // Per-face constant data: normal, direction offset, 4 corner offsets (positions within a unit cube),
 // and 4 per-corner UV selectors ([uIndex, vIndex] where 0 picks u0/v0, 1 picks u1/v1).
@@ -168,10 +172,116 @@ function shouldEmitFace(here: BlockId, there: BlockId): boolean {
 	return false;
 }
 
+type LightSample = { sky: number; r: number; g: number; b: number };
+
+function readLight(
+	chunk: Chunk,
+	neighbors: Neighbors,
+	x: number,
+	y: number,
+	z: number,
+): LightSample {
+	if (y < 0 || y >= CHUNK_SIZE_Y) return { sky: 0, r: 0, g: 0, b: 0 };
+	const inX = x >= 0 && x < CHUNK_SIZE_X;
+	const inZ = z >= 0 && z < CHUNK_SIZE_Z;
+	if (inX && inZ) {
+		return {
+			sky: chunk.getSky(x, y, z),
+			r: chunk.getBlockR(x, y, z),
+			g: chunk.getBlockG(x, y, z),
+			b: chunk.getBlockB(x, y, z),
+		};
+	}
+	let target: Chunk | undefined;
+	let lx = x,
+		lz = z;
+	if (x >= CHUNK_SIZE_X) {
+		target = neighbors.px;
+		lx = 0;
+	} else if (x < 0) {
+		target = neighbors.nx;
+		lx = CHUNK_SIZE_X - 1;
+	} else if (z >= CHUNK_SIZE_Z) {
+		target = neighbors.pz;
+		lz = 0;
+	} else if (z < 0) {
+		target = neighbors.nz;
+		lz = CHUNK_SIZE_Z - 1;
+	}
+	if (!target) return { sky: 0, r: 0, g: 0, b: 0 };
+	return {
+		sky: target.getSky(lx, y, lz),
+		r: target.getBlockR(lx, y, lz),
+		g: target.getBlockG(lx, y, lz),
+		b: target.getBlockB(lx, y, lz),
+	};
+}
+
+/**
+ * Sample 4 voxels that meet at a corner of a face. cornerX/Y/Z is the corner's
+ * integer position; (nx, ny, nz) is the face's outward normal. Returns the
+ * averaged (sky, r, g, b) of the 4 voxels on the outward side of the face.
+ */
+function sampleCornerLight(
+	chunk: Chunk,
+	neighbors: Neighbors,
+	cornerX: number,
+	cornerY: number,
+	cornerZ: number,
+	nx: number,
+	ny: number,
+	nz: number,
+): LightSample {
+	let sumSky = 0,
+		sumR = 0,
+		sumG = 0,
+		sumB = 0,
+		count = 0;
+	for (let dx = -1; dx <= 0; dx++) {
+		for (let dy = -1; dy <= 0; dy++) {
+			for (let dz = -1; dz <= 0; dz++) {
+				// Filter to the 4 voxels on the outward side of the face.
+				if (nx === 1 && dx !== 0) continue;
+				if (nx === -1 && dx !== -1) continue;
+				if (ny === 1 && dy !== 0) continue;
+				if (ny === -1 && dy !== -1) continue;
+				if (nz === 1 && dz !== 0) continue;
+				if (nz === -1 && dz !== -1) continue;
+				const vx = cornerX + dx;
+				const vy = cornerY + dy;
+				const vz = cornerZ + dz;
+				const s = readLight(chunk, neighbors, vx, vy, vz);
+				sumSky += s.sky;
+				sumR += s.r;
+				sumG += s.g;
+				sumB += s.b;
+				count++;
+			}
+		}
+	}
+	if (count === 0) return { sky: 0, r: 0, g: 0, b: 0 };
+	return { sky: sumSky / count, r: sumR / count, g: sumG / count, b: sumB / count };
+}
+
+function lightSampleToRGB(s: LightSample): [number, number, number] {
+	const skyScale = s.sky / 15;
+	const blockR = s.r / 15;
+	const blockG = s.g / 15;
+	const blockB = s.b / 15;
+	let r = SKY_COLOR[0] * skyScale + blockR + MIN_AMBIENT;
+	let g = SKY_COLOR[1] * skyScale + blockG + MIN_AMBIENT;
+	let b = SKY_COLOR[2] * skyScale + blockB + MIN_AMBIENT;
+	if (r > 1) r = 1;
+	if (g > 1) g = 1;
+	if (b > 1) b = 1;
+	return [r, g, b];
+}
+
 export function meshChunk(chunk: Chunk, neighbors: Neighbors, uvFor: UvFn): ChunkMesh {
 	const positions: number[] = [];
 	const normals: number[] = [];
 	const uvs: number[] = [];
+	const colors: number[] = [];
 	const indices: number[] = [];
 	let vcount = 0;
 
@@ -194,6 +304,18 @@ export function meshChunk(chunk: Chunk, neighbors: Neighbors, uvFor: UvFn): Chun
 						positions.push(x + ox, y + oy, z + oz);
 						normals.push(f.normal[0], f.normal[1], f.normal[2]);
 						uvs.push(ui === 0 ? u0 : u1, vi === 0 ? v0 : v1);
+						const sample = sampleCornerLight(
+							chunk,
+							neighbors,
+							x + ox,
+							y + oy,
+							z + oz,
+							f.normal[0],
+							f.normal[1],
+							f.normal[2],
+						);
+						const [cr, cg, cb] = lightSampleToRGB(sample);
+						colors.push(cr, cg, cb);
 					}
 					indices.push(vcount, vcount + 1, vcount + 2, vcount, vcount + 2, vcount + 3);
 					vcount += 4;
@@ -206,6 +328,7 @@ export function meshChunk(chunk: Chunk, neighbors: Neighbors, uvFor: UvFn): Chun
 		positions: new Float32Array(positions),
 		normals: new Float32Array(normals),
 		uvs: new Float32Array(uvs),
+		colors: new Float32Array(colors),
 		indices: new Uint32Array(indices),
 	};
 }

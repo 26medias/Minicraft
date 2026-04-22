@@ -112,13 +112,15 @@ describe('meshChunk — per-vertex colors from lightmap', () => {
 });
 
 describe('meshChunk — ambient occlusion', () => {
-	it('vertex adjacent to two solid neighbors is darker than one with zero', () => {
+	it('vertex adjacent to two solid blocks above is darker than one with zero', () => {
 		const w = new World(1);
 		const c = w.ensureChunk(0, 0);
 		c.blocks.fill(0);
+		// The face block itself.
 		c.blocks[indexOf(5, 30, 5)] = BLOCK_BY_NAME['stone'].id;
-		c.blocks[indexOf(6, 30, 5)] = BLOCK_BY_NAME['stone'].id;
-		c.blocks[indexOf(5, 30, 6)] = BLOCK_BY_NAME['stone'].id;
+		// Two "towers" above the face — these are the edge voxels for the top-face corner at (6, 31, 6).
+		c.blocks[indexOf(6, 31, 5)] = BLOCK_BY_NAME['stone'].id;
+		c.blocks[indexOf(5, 31, 6)] = BLOCK_BY_NAME['stone'].id;
 		fillChunkLights(w, c);
 		const mesh = meshChunk(c, w.neighbors(c), (_id, _face) => [0, 0, 1, 1]);
 		const verts: { pos: [number, number, number]; rgb: [number, number, number] }[] = [];
@@ -127,14 +129,8 @@ describe('meshChunk — ambient occlusion', () => {
 				py = mesh.positions[i + 1],
 				pz = mesh.positions[i + 2];
 			const ny = mesh.normals[i + 1];
-			if (
-				ny > 0.9 &&
-				Math.floor(px) >= 5 &&
-				Math.floor(px) <= 6 &&
-				py === 31 &&
-				Math.floor(pz) >= 5 &&
-				Math.floor(pz) <= 6
-			) {
+			// Top face of (5, 30, 5) — corners at py=31, x in [5,6], z in [5,6].
+			if (ny > 0.9 && py === 31 && px >= 5 && px <= 6 && pz >= 5 && pz <= 6) {
 				verts.push({
 					pos: [px, py, pz],
 					rgb: [mesh.colors[i], mesh.colors[i + 1], mesh.colors[i + 2]],

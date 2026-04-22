@@ -241,31 +241,19 @@ function aoFactorForCorner(
 	ny: number,
 	nz: number,
 ): number {
-	// For a face with outward normal (nx, ny, nz), the AO-casting voxels are the
-	// blocks sharing the corner that lie IN the face plane (not in the normal direction).
-	// We shift back one step in the normal direction to reach the face level, then
-	// enumerate the 4 voxels around the corner in the two non-normal axes:
-	//   - 1 face voxel (0 non-normal shifts) — the block directly below/beside the corner
-	//   - 2 edge voxels (1 non-normal shift each)
-	//   - 1 diagonal voxel (2 non-normal shifts)
-	// Only edges and diagonal drive darkening; the face voxel is excluded.
 	const axisNormal = Math.abs(nx) > 0 ? 0 : Math.abs(ny) > 0 ? 1 : 2;
-
-	// Step back from the corner one unit in the inward-normal direction.
-	const bx = cornerX - nx;
-	const by = cornerY - ny;
-	const bz = cornerZ - nz;
-
 	type V = { x: number; y: number; z: number; kind: 'edge' | 'diag' | 'face' };
 	const vox: V[] = [];
-
 	for (let dx = -1; dx <= 0; dx++) {
 		for (let dy = -1; dy <= 0; dy++) {
 			for (let dz = -1; dz <= 0; dz++) {
-				// Skip shifts in the normal axis — those move away from the face plane.
-				if (axisNormal === 0 && dx !== 0) continue;
-				if (axisNormal === 1 && dy !== 0) continue;
-				if (axisNormal === 2 && dz !== 0) continue;
+				// Same filter as sampleCornerLight: keep voxels on the OUTWARD side of the face.
+				if (nx === 1 && dx !== 0) continue;
+				if (nx === -1 && dx !== -1) continue;
+				if (ny === 1 && dy !== 0) continue;
+				if (ny === -1 && dy !== -1) continue;
+				if (nz === 1 && dz !== 0) continue;
+				if (nz === -1 && dz !== -1) continue;
 				let shiftedNonNormal = 0;
 				if (axisNormal !== 0 && dx === -1) shiftedNonNormal++;
 				if (axisNormal !== 1 && dy === -1) shiftedNonNormal++;
@@ -274,11 +262,10 @@ function aoFactorForCorner(
 				if (shiftedNonNormal === 0) kind = 'face';
 				else if (shiftedNonNormal === 1) kind = 'edge';
 				else kind = 'diag';
-				vox.push({ x: bx + dx, y: by + dy, z: bz + dz, kind });
+				vox.push({ x: cornerX + dx, y: cornerY + dy, z: cornerZ + dz, kind });
 			}
 		}
 	}
-
 	const isOpaque = (v: V) => {
 		const id = readBlockId(chunk, neighbors, v.x, v.y, v.z);
 		const def = BLOCKS[id];

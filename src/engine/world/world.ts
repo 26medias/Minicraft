@@ -3,6 +3,7 @@ import { AIR, isLiquid } from '../../data/blocks.data';
 import { Chunk } from './chunk';
 import { WORLD_CHUNKS_X, WORLD_CHUNKS_Z, inBounds, worldToChunk, indexOf } from './coords';
 import { generateChunk } from './generation';
+import { fillChunkLights } from './lighting';
 
 const key = (cx: number, cz: number) => `${cx},${cz}`;
 
@@ -25,6 +26,7 @@ export class World {
 			c = new Chunk(cx, cz);
 			generateChunk(c, this.seed);
 			this.chunks.set(k, c);
+			fillChunkLights(this, c);
 		}
 		return c;
 	}

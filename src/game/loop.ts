@@ -10,6 +10,7 @@ import type { PrimedOverlay } from '../engine/render/primed-overlay';
 import type { LightRegistry } from '../engine/render/light-registry';
 import { igniteTnt, type PrimedEntry } from './actions';
 import { detonate, tntKey, TNT_CHAIN_FUSE, TNT_PRIME_FUSE } from './tnt';
+import { updateLightsForBlockChange } from '../engine/world/lighting';
 
 const LAMP_ID = BLOCK_BY_NAME['lamp'].id;
 
@@ -55,6 +56,13 @@ export class GameLoop {
 
 	markChunkDirty(cx: number, cz: number) {
 		this.dirtyChunks.add(`${cx},${cz}`);
+	}
+
+	applyLightUpdate(x: number, y: number, z: number): void {
+		const getLampColor = (lx: number, ly: number, lz: number): string | null =>
+			this.lights?.getColor(lx, ly, lz) ?? null;
+		const touched = updateLightsForBlockChange(this.world, x, y, z, getLampColor);
+		for (const c of touched) this.markChunkDirty(c.cx, c.cz);
 	}
 
 	/** Mark the chunk containing a world block + any neighbor chunks if the block sits on a chunk edge. */
@@ -156,6 +164,7 @@ export class GameLoop {
 			if (blockId === LAMP_ID) this.lights?.remove(target.x, target.y, target.z);
 			this.world.setBlock(target.x, target.y, target.z, AIR);
 			this.markChunkDirtyAround(target.x, target.z);
+			this.applyLightUpdate(target.x, target.y, target.z);
 			this.particles?.spawnBreak(target.x, target.y, target.z, blockId);
 			this.onBlockBroken?.({ x: target.x, y: target.y, z: target.z, blockId });
 		}
@@ -184,6 +193,7 @@ export class GameLoop {
 			if (this.world.getBlock(x, y, z) === LAMP_ID) this.lights?.remove(x, y, z);
 			this.world.setBlock(x, y, z, AIR);
 			this.markChunkDirtyAround(x, z);
+			this.applyLightUpdate(x, y, z);
 		}
 		for (const { x, y, z } of result.primed) {
 			this.primedTnt.set(tntKey(x, y, z), { x, y, z, fuse: TNT_CHAIN_FUSE });

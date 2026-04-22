@@ -41,7 +41,7 @@ export class LiquidScheduler {
 		for (const { x, y, z } of snapshot) {
 			const here = this.world.getBlock(x, y, z);
 			if (!isLiquid(here)) continue;
-			// Fall rule only for this task.
+			// Fall rule takes priority.
 			if (y > 0) {
 				const below = this.world.getBlock(x, y - 1, z);
 				if (below === AIR) {
@@ -54,9 +54,54 @@ export class LiquidScheduler {
 					}
 				}
 			}
+			// Sideways spread: if we couldn't fall, spread to horizontal air neighbors.
+			const sideDirs: [number, number][] = [
+				[1, 0],
+				[-1, 0],
+				[0, 1],
+				[0, -1],
+			];
+			for (const [dx, dz] of sideDirs) {
+				const nx = x + dx,
+					nz = z + dz;
+				if (this.world.getBlock(nx, y, nz) === AIR) {
+					pending.push({ x: nx, y, z: nz, id: here });
+				}
+			}
 		}
 
 		this.commit(pending);
+		this.decayFrontier(chunks);
+	}
+
+	private decayFrontier(chunks: Chunk[]): void {
+		for (const c of chunks) {
+			const toRemove: number[] = [];
+			const baseX = c.cx * CHUNK_SIZE_X;
+			const baseZ = c.cz * CHUNK_SIZE_Z;
+			for (const idx of c.liquidFrontier) {
+				const y = Math.floor(idx / (CHUNK_SIZE_X * CHUNK_SIZE_Z));
+				const rem = idx - y * CHUNK_SIZE_X * CHUNK_SIZE_Z;
+				const lz = Math.floor(rem / CHUNK_SIZE_X);
+				const lx = rem - lz * CHUNK_SIZE_X;
+				const x = baseX + lx,
+					z = baseZ + lz;
+				if (!isLiquid(this.world.getBlock(x, y, z))) {
+					toRemove.push(idx);
+					continue;
+				}
+				const neighbors = [
+					this.world.getBlock(x + 1, y, z),
+					this.world.getBlock(x - 1, y, z),
+					this.world.getBlock(x, y - 1, z),
+					this.world.getBlock(x, y, z + 1),
+					this.world.getBlock(x, y, z - 1),
+				];
+				const hasAir = neighbors.some((n) => n === AIR);
+				if (!hasAir) toRemove.push(idx);
+			}
+			for (const i of toRemove) c.liquidFrontier.delete(i);
+		}
 	}
 
 	private commit(pending: PendingWrite[]): void {

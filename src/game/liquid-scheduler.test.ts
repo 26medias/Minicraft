@@ -74,3 +74,52 @@ describe('LiquidScheduler — fall rule', () => {
 		expect(w.getBlock(260, 29, 260)).toBe(water);
 	});
 });
+
+import { indexOf } from '../engine/world/coords';
+
+describe('LiquidScheduler — sideways spread', () => {
+	it('liquid with solid below spreads horizontally to adjacent air', () => {
+		const w = freshWorld();
+		w.setBlock(260, 29, 260, stone);
+		w.setBlock(261, 29, 260, stone); // neighbor support
+		w.setBlock(260, 30, 260, water);
+		const s = new LiquidScheduler(w, () => {});
+		s.tick(0.6);
+		expect(w.getBlock(261, 30, 260)).toBe(water);
+	});
+
+	it('liquid does not spread upward', () => {
+		const w = freshWorld();
+		w.setBlock(260, 29, 260, stone);
+		w.setBlock(260, 30, 260, water);
+		const s = new LiquidScheduler(w, () => {});
+		s.tick(0.6);
+		expect(w.getBlock(260, 31, 260)).toBe(AIR);
+	});
+
+	it('fall takes priority over sideways-spread', () => {
+		const w = freshWorld();
+		w.setBlock(260, 30, 260, water);
+		const s = new LiquidScheduler(w, () => {});
+		s.tick(0.6);
+		expect(w.getBlock(260, 29, 260)).toBe(water);
+		expect(w.getBlock(261, 30, 260)).toBe(AIR);
+	});
+
+	it('fully-enclosed liquid drops out of the active frontier', () => {
+		const w = freshWorld();
+		w.setBlock(260, 30, 260, water);
+		w.setBlock(260, 29, 260, stone);
+		w.setBlock(260, 31, 260, stone);
+		w.setBlock(259, 30, 260, stone);
+		w.setBlock(261, 30, 260, stone);
+		w.setBlock(260, 30, 259, stone);
+		w.setBlock(260, 30, 261, stone);
+		const s = new LiquidScheduler(w, () => {});
+		s.tick(0.6);
+		const c = w.getChunk(Math.floor(260 / 16), Math.floor(260 / 16))!;
+		const lx = 260 % 16,
+			lz = 260 % 16;
+		expect(c.liquidFrontier.has(indexOf(lx, 30, lz))).toBe(false);
+	});
+});

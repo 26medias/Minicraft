@@ -5,6 +5,7 @@ export class Chunk {
 	readonly cx: number;
 	readonly cz: number;
 	readonly blocks: Uint8Array;
+	readonly lights: Uint16Array;
 	dirty = true;
 	modified = false;
 
@@ -12,6 +13,7 @@ export class Chunk {
 		this.cx = cx;
 		this.cz = cz;
 		this.blocks = new Uint8Array(BLOCKS_PER_CHUNK);
+		this.lights = new Uint16Array(BLOCKS_PER_CHUNK);
 	}
 
 	get(x: number, y: number, z: number): BlockId {
@@ -24,5 +26,35 @@ export class Chunk {
 		this.blocks[i] = id;
 		this.dirty = true;
 		this.modified = true;
+	}
+
+	getSky(x: number, y: number, z: number): number {
+		return (this.lights[indexOf(x, y, z)] >> 12) & 0xf;
+	}
+
+	setSky(x: number, y: number, z: number, v: number): void {
+		const i = indexOf(x, y, z);
+		const masked = Math.min(15, Math.max(0, v)) & 0xf;
+		this.lights[i] = (this.lights[i] & 0x0fff) | (masked << 12);
+	}
+
+	getBlockR(x: number, y: number, z: number): number {
+		return (this.lights[indexOf(x, y, z)] >> 8) & 0xf;
+	}
+
+	getBlockG(x: number, y: number, z: number): number {
+		return (this.lights[indexOf(x, y, z)] >> 4) & 0xf;
+	}
+
+	getBlockB(x: number, y: number, z: number): number {
+		return this.lights[indexOf(x, y, z)] & 0xf;
+	}
+
+	setBlockRGB(x: number, y: number, z: number, r: number, g: number, b: number): void {
+		const i = indexOf(x, y, z);
+		const rm = Math.min(15, Math.max(0, r)) & 0xf;
+		const gm = Math.min(15, Math.max(0, g)) & 0xf;
+		const bm = Math.min(15, Math.max(0, b)) & 0xf;
+		this.lights[i] = (this.lights[i] & 0xf000) | (rm << 8) | (gm << 4) | bm;
 	}
 }

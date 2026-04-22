@@ -104,8 +104,6 @@ async function main() {
 			left: false,
 			right: false,
 			jump: false,
-			flyUp: false,
-			flyDown: false,
 		};
 		const keyToAction: Record<string, Action> = {};
 		for (const [action, code] of Object.entries(opts.keybindings))
@@ -129,14 +127,6 @@ async function main() {
 					break;
 				case 'jump':
 					keys.jump = down;
-					keys.flyUp = down;
-					break;
-				case 'flyUp':
-					keys.jump = down;
-					keys.flyUp = down;
-					break;
-				case 'flyDown':
-					keys.flyDown = down;
 					break;
 				case 'toggleFly':
 					if (down && !e.repeat) player.toggleFly();

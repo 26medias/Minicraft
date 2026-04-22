@@ -15,8 +15,6 @@ function noKeys(): Keys {
 		left: false,
 		right: false,
 		jump: false,
-		flyUp: false,
-		flyDown: false,
 	};
 }
 
@@ -44,34 +42,6 @@ describe('Player fly mode', () => {
 		expect(p.vy).toBe(0);
 		p.vy = 7;
 		p.toggleFly();
-		expect(p.vy).toBe(0);
-	});
-
-	// Replaced by cursor-directed movement in Task 19. Deletion in Task 20.
-	it.skip('flyUp produces positive vy, flyDown negative, neither zero', () => {
-		const w = new World(1);
-		const p = new Player([100, 60, 100]);
-		p.toggleFly(); // flying, tier 2 (default)
-
-		const keysUp = { ...noKeys(), flyUp: true };
-		p.update(0.01, w, keysUp, FWD, RIGHT);
-		expect(p.vy).toBeGreaterThan(0);
-
-		const keysDown = { ...noKeys(), flyDown: true };
-		p.update(0.01, w, keysDown, FWD, RIGHT);
-		expect(p.vy).toBeLessThan(0);
-
-		p.update(0.01, w, noKeys(), FWD, RIGHT);
-		expect(p.vy).toBe(0);
-	});
-
-	// Replaced by cursor-directed movement in Task 19. Deletion in Task 20.
-	it.skip('flyUp and flyDown held together cancel to zero vy', () => {
-		const w = new World(1);
-		const p = new Player([100, 60, 100]);
-		p.toggleFly();
-		const keys = { ...noKeys(), flyUp: true, flyDown: true };
-		p.update(0.01, w, keys, FWD, RIGHT);
 		expect(p.vy).toBe(0);
 	});
 

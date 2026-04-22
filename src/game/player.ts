@@ -20,8 +20,6 @@ export type Keys = {
 	left: boolean;
 	right: boolean;
 	jump: boolean;
-	flyUp: boolean;
-	flyDown: boolean;
 };
 
 export class Player {

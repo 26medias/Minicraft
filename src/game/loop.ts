@@ -98,7 +98,11 @@ export class GameLoop {
 		const eye = this.player.eyePosition();
 		this.cam.position.set(eye[0], eye[1], eye[2]);
 		this.cam.sync(this.renderer.camera);
-		this.renderer.setSunTarget(this.player.position[0], this.player.position[1], this.player.position[2]);
+		this.renderer.setSunTarget(
+			this.player.position[0],
+			this.player.position[1],
+			this.player.position[2],
+		);
 
 		this.updateMining(dt);
 		this.onMiningProgress?.(this.miningProgress());
@@ -221,8 +225,8 @@ export class GameLoop {
 				continue;
 			}
 			const c = this.world.ensureChunk(cx, cz);
-			const mesh = meshChunk(c, this.world.neighbors(c), this.uvFor);
-			this.renderer.mountChunkMesh(c, mesh);
+			const result = meshChunk(c, this.world.neighbors(c), this.uvFor);
+			this.renderer.mountChunkMesh(c, result);
 			this.mountedChunks.add(k);
 			this.dirtyChunks.delete(k);
 		}

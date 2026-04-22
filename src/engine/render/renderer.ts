@@ -1,6 +1,6 @@
 import * as THREE from 'three';
 import type { Chunk } from '../world/chunk';
-import type { ChunkMesh } from '../world/mesher';
+import type { ChunkMeshResult } from '../world/mesher';
 import type { LoadedAtlas } from './atlas';
 
 // Sun offset from player, preserving the original (1, 1.5, 0.5) direction but scaled
@@ -12,9 +12,11 @@ export class Renderer {
 	readonly camera: THREE.PerspectiveCamera;
 	readonly gl: THREE.WebGLRenderer;
 	private chunkGroup: THREE.Group;
-	readonly material: THREE.Material;
-	private sun: THREE.DirectionalLight;
 	private chunkMeshes = new Map<string, THREE.Mesh>();
+	private liquidMeshes = new Map<string, THREE.Mesh>();
+	readonly material: THREE.Material;
+	readonly liquidMaterial: THREE.Material;
+	private sun: THREE.DirectionalLight;
 	private tickFn: ((dt: number) => void) | null = null;
 	private last = performance.now();
 
@@ -70,6 +72,14 @@ export class Renderer {
 			side: THREE.FrontSide,
 		});
 
+		this.liquidMaterial = new THREE.MeshLambertMaterial({
+			map: atlas.texture,
+			transparent: true,
+			depthWrite: false,
+			side: THREE.DoubleSide,
+			alphaTest: 0.01,
+		});
+
 		this.resize();
 		window.addEventListener('resize', () => this.resize());
 		requestAnimationFrame(this.frame);
@@ -79,33 +89,52 @@ export class Renderer {
 		this.tickFn = fn;
 	}
 
-	mountChunkMesh(chunk: Chunk, mesh: ChunkMesh): void {
+	mountChunkMesh(chunk: Chunk, meshResult: ChunkMeshResult): void {
 		const k = `${chunk.cx},${chunk.cz}`;
-		const existing = this.chunkMeshes.get(k);
-		if (existing) {
-			this.chunkGroup.remove(existing);
-			(existing.geometry as THREE.BufferGeometry).dispose();
-		}
 
-		if (mesh.indices.length === 0) {
+		// Opaque
+		const existingOpaque = this.chunkMeshes.get(k);
+		if (existingOpaque) {
+			this.chunkGroup.remove(existingOpaque);
+			(existingOpaque.geometry as THREE.BufferGeometry).dispose();
 			this.chunkMeshes.delete(k);
-			return;
+		}
+		if (meshResult.opaque.indices.length > 0) {
+			const g = new THREE.BufferGeometry();
+			g.setAttribute('position', new THREE.BufferAttribute(meshResult.opaque.positions, 3));
+			g.setAttribute('normal', new THREE.BufferAttribute(meshResult.opaque.normals, 3));
+			g.setAttribute('uv', new THREE.BufferAttribute(meshResult.opaque.uvs, 2));
+			g.setAttribute('color', new THREE.BufferAttribute(meshResult.opaque.colors, 3));
+			g.setIndex(new THREE.BufferAttribute(meshResult.opaque.indices, 1));
+			g.computeBoundingSphere();
+			const m = new THREE.Mesh(g, this.material);
+			m.position.set(chunk.cx * 16, 0, chunk.cz * 16);
+			m.castShadow = true;
+			m.receiveShadow = true;
+			this.chunkGroup.add(m);
+			this.chunkMeshes.set(k, m);
 		}
 
-		const g = new THREE.BufferGeometry();
-		g.setAttribute('position', new THREE.BufferAttribute(mesh.positions, 3));
-		g.setAttribute('normal', new THREE.BufferAttribute(mesh.normals, 3));
-		g.setAttribute('uv', new THREE.BufferAttribute(mesh.uvs, 2));
-		g.setAttribute('color', new THREE.BufferAttribute(mesh.colors, 3));
-		g.setIndex(new THREE.BufferAttribute(mesh.indices, 1));
-		g.computeBoundingSphere();
-
-		const m = new THREE.Mesh(g, this.material);
-		m.position.set(chunk.cx * 16, 0, chunk.cz * 16);
-		m.castShadow = true;
-		m.receiveShadow = true;
-		this.chunkGroup.add(m);
-		this.chunkMeshes.set(k, m);
+		// Liquid
+		const existingLiquid = this.liquidMeshes.get(k);
+		if (existingLiquid) {
+			this.chunkGroup.remove(existingLiquid);
+			(existingLiquid.geometry as THREE.BufferGeometry).dispose();
+			this.liquidMeshes.delete(k);
+		}
+		if (meshResult.liquid && meshResult.liquid.indices.length > 0) {
+			const g = new THREE.BufferGeometry();
+			g.setAttribute('position', new THREE.BufferAttribute(meshResult.liquid.positions, 3));
+			g.setAttribute('normal', new THREE.BufferAttribute(meshResult.liquid.normals, 3));
+			g.setAttribute('uv', new THREE.BufferAttribute(meshResult.liquid.uvs, 2));
+			g.setAttribute('color', new THREE.BufferAttribute(meshResult.liquid.colors, 3));
+			g.setIndex(new THREE.BufferAttribute(meshResult.liquid.indices, 1));
+			g.computeBoundingSphere();
+			const m = new THREE.Mesh(g, this.liquidMaterial);
+			m.position.set(chunk.cx * 16, 0, chunk.cz * 16);
+			this.chunkGroup.add(m);
+			this.liquidMeshes.set(k, m);
+		}
 	}
 
 	/** Keep the sun's shadow frustum centred on the player each tick. */

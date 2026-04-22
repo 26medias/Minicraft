@@ -1,5 +1,5 @@
 import type { BlockId, Face } from '../../data/blocks.data';
-import { BLOCKS, isSolid, isTransparent } from '../../data/blocks.data';
+import { BLOCKS, isLiquid, isSolid, isTransparent } from '../../data/blocks.data';
 import type { Chunk } from './chunk';
 import { CHUNK_SIZE_X, CHUNK_SIZE_Y, CHUNK_SIZE_Z, indexOf } from './coords';
 
@@ -9,6 +9,11 @@ export type ChunkMesh = {
 	uvs: Float32Array;
 	colors: Float32Array;
 	indices: Uint32Array;
+};
+
+export type ChunkMeshResult = {
+	opaque: ChunkMesh;
+	liquid: ChunkMesh | null;
 };
 
 export type UvFn = (id: BlockId, face: Face) => [number, number, number, number];
@@ -341,7 +346,14 @@ function lightSampleToRGB(s: LightSample): [number, number, number] {
 	return [r, g, b];
 }
 
-export function meshChunk(chunk: Chunk, neighbors: Neighbors, uvFor: UvFn): ChunkMesh {
+export function meshChunk(chunk: Chunk, neighbors: Neighbors, uvFor: UvFn): ChunkMeshResult {
+	return {
+		opaque: buildOpaqueMesh(chunk, neighbors, uvFor),
+		liquid: buildLiquidMesh(chunk, neighbors, uvFor),
+	};
+}
+
+function buildOpaqueMesh(chunk: Chunk, neighbors: Neighbors, uvFor: UvFn): ChunkMesh {
 	const positions: number[] = [];
 	const normals: number[] = [];
 	const uvs: number[] = [];
@@ -398,6 +410,64 @@ export function meshChunk(chunk: Chunk, neighbors: Neighbors, uvFor: UvFn): Chun
 		}
 	}
 
+	return {
+		positions: new Float32Array(positions),
+		normals: new Float32Array(normals),
+		uvs: new Float32Array(uvs),
+		colors: new Float32Array(colors),
+		indices: new Uint32Array(indices),
+	};
+}
+
+function buildLiquidMesh(chunk: Chunk, neighbors: Neighbors, uvFor: UvFn): ChunkMesh | null {
+	const positions: number[] = [];
+	const normals: number[] = [];
+	const uvs: number[] = [];
+	const colors: number[] = [];
+	const indices: number[] = [];
+	let vcount = 0;
+
+	for (let y = 0; y < CHUNK_SIZE_Y; y++) {
+		for (let z = 0; z < CHUNK_SIZE_Z; z++) {
+			for (let x = 0; x < CHUNK_SIZE_X; x++) {
+				const here = chunk.get(x, y, z);
+				if (!isLiquid(here)) continue;
+				for (const face of FACE_ORDER) {
+					const f = FACES[face];
+					const there = readBlockId(chunk, neighbors, x + f.dx, y + f.dy, z + f.dz);
+					let emit = false;
+					if (there === 0) emit = true;
+					else if (isLiquid(there) && there !== here && here < there) emit = true;
+					if (!emit) continue;
+
+					const [u0, v0, u1, v1] = uvFor(here, face);
+					for (let i = 0; i < 4; i++) {
+						const [ox, oy, oz] = f.corners[i];
+						const [ui, vi] = f.uvs[i];
+						positions.push(x + ox, y + oy, z + oz);
+						normals.push(f.normal[0], f.normal[1], f.normal[2]);
+						uvs.push(ui === 0 ? u0 : u1, vi === 0 ? v0 : v1);
+						const sample = sampleCornerLight(
+							chunk,
+							neighbors,
+							x + ox,
+							y + oy,
+							z + oz,
+							f.normal[0],
+							f.normal[1],
+							f.normal[2],
+						);
+						const [cr, cg, cb] = lightSampleToRGB(sample);
+						colors.push(cr, cg, cb);
+					}
+					indices.push(vcount, vcount + 1, vcount + 2, vcount, vcount + 2, vcount + 3);
+					vcount += 4;
+				}
+			}
+		}
+	}
+
+	if (indices.length === 0) return null;
 	return {
 		positions: new Float32Array(positions),
 		normals: new Float32Array(normals),

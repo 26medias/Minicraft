@@ -64,7 +64,29 @@ describe('generateChunk', () => {
 	});
 });
 
-const EXPECTED_HASH = 1833305435; // filled in below by running the test once
+describe('generateChunk — flatter terrain', () => {
+	it('heightmap values fall within the new range [24, 34]', () => {
+		const c = new Chunk(5, 5);
+		generateChunk(c, 42);
+		const tops = new Set<number>();
+		for (let lx = 0; lx < 16; lx++) {
+			for (let lz = 0; lz < 16; lz++) {
+				for (let y = 63; y >= 0; y--) {
+					if (c.blocks[y * 16 * 16 + lz * 16 + lx] !== 0) {
+						tops.add(y);
+						break;
+					}
+				}
+			}
+		}
+		for (const t of tops) {
+			expect(t).toBeGreaterThanOrEqual(24);
+			expect(t).toBeLessThanOrEqual(34);
+		}
+	});
+});
+
+const EXPECTED_HASH = 4044981068; // filled in below by running the test once
 
 function hashBytes(bytes: Uint8Array): number {
 	let h = 2166136261 >>> 0;

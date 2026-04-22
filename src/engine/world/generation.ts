@@ -7,10 +7,11 @@ import { BLOCK_BY_NAME } from '../../data/blocks.data';
 const GRASS = BLOCK_BY_NAME['grass_block'].id;
 const DIRT = BLOCK_BY_NAME['dirt'].id;
 const STONE = BLOCK_BY_NAME['stone'].id;
+const MIN_H = 24;
+const MAX_H = 34;
+const NOISE_SCALE = 1 / 64;
+export const SEA_LEVEL = 28;
 const DIRT_BAND = 3;
-const MIN_H = 20;
-const MAX_H = 50;
-const NOISE_SCALE = 1 / 48;
 
 export function generateChunk(chunk: Chunk, seed: number): void {
 	const rng = alea(`minicraft:${seed}`);

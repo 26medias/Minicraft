@@ -133,6 +133,22 @@ describe('Player swim mode', () => {
 	});
 });
 
+describe('Player jump on ground', () => {
+	it('Space on solid ground produces positive vy', () => {
+		const w = new World(1);
+		// Place a floor so the player is grounded.
+		for (let dx = -2; dx <= 2; dx++)
+			for (let dz = -2; dz <= 2; dz++) w.setBlock(100 + dx, 59, 100 + dz, stone);
+		const p = new Player([100, 60, 100]);
+		// Settle onto the floor with one small tick (no jump).
+		p.update(0.01, w, noKeys(), FWD, RIGHT);
+		expect(p.grounded).toBe(true);
+		// Now press Space — vy must become positive.
+		p.update(0.01, w, { ...noKeys(), jump: true }, FWD, RIGHT);
+		expect(p.vy).toBeGreaterThan(0);
+	});
+});
+
 describe('Player cursor-directed movement', () => {
 	const water = BLOCK_BY_NAME['water'].id;
 

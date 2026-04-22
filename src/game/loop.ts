@@ -108,7 +108,10 @@ export class GameLoop {
 	}
 
 	private tick(dt: number) {
-		const fwd = this.cam.getForward();
+		// Use getLookDir() (full 3D, includes pitch) so that cursor-directed fly/swim
+		// movement contributes a Y component. On-ground walking still only reads x/z
+		// from this vector, so there's no horizontal-speed regression.
+		const fwd = this.cam.getLookDir();
 		const right = this.cam.getRight();
 		this.player.update(dt, this.world, this.keys, fwd, right);
 		const eye = this.player.eyePosition();

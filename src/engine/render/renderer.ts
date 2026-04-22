@@ -42,17 +42,17 @@ export class Renderer {
 		sun.castShadow = true;
 		sun.shadow.mapSize.set(2048, 2048);
 		sun.shadow.camera.near = 0.5;
-		sun.shadow.camera.far = 250;
+		sun.shadow.camera.far = 200;
 		sun.shadow.camera.left = -48;
 		sun.shadow.camera.right = 48;
 		sun.shadow.camera.top = 48;
 		sun.shadow.camera.bottom = -48;
-		// Bias tuned for axis-aligned voxel geometry. normalBias > ~0.03 pushes the
-		// shadow sample far enough along the floor's +Y normal that the block above
-		// it stops being a valid occluder, producing a bright band at every floor-wall
-		// joint underground. 0.02 keeps self-shadow acne in check without leaking.
+		// Voxel geometry is all axis-aligned, so a tiny depth bias is enough to
+		// suppress self-shadow acne. Any normalBias > 0 offsets the shadow sample
+		// along the receiver's own normal and starts leaking light at floor-wall
+		// joints, so keep it at 0.
 		sun.shadow.bias = -0.0005;
-		sun.shadow.normalBias = 0.02;
+		sun.shadow.normalBias = 0;
 		this.sun = sun;
 		this.scene.add(amb, sun, sun.target);
 

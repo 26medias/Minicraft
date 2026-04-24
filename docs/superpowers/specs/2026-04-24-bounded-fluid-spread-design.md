@@ -151,28 +151,21 @@ Both writes go through `world.setBlock`, which dirties chunks and triggers light
 
 ### Phase 3 — drain (new)
 
-For each flow voxel in every chunk's frontier:
+Drain runs as the *first* mutating phase of each tick (before spread), and writes `AIR` immediately — not via a deferred "next-tick flush" queue. It uses a BFS to find flow cells that are no longer reachable from any source, and peels the cascade from the *outside in*:
 
-```text
-let valid_feeder =
-       (above is same-type liquid)                       // column rule
-    || (any horizontal neighbour is same-type source)    // adjacent to source
-    || (any horizontal neighbour is same-type flow with lower distance)
+1. Collect every flow cell in every chunk's frontier as a candidate. Also collect every in-frontier source.
+2. **BFS pass A** — seed from the in-frontier sources and mark every reachable same-type-liquid cell as alive (6-axis neighbours, including `+y` for column stability).
+3. **BFS pass B** — for each un-reached candidate, walk its connected component via same-type-liquid neighbours. If the component contains a source (including a source that had decayed out of the frontier because it was fully-enclosed), mark every cell in the component alive. Otherwise collect every flow cell in the component (including interior cells that had decayed out of the frontier) as an orphan.
+4. Partition orphans by liquid type. For each type, find the current *maximum* `distance` among its orphans and drain only those — `world.setBlock(x, y, z, AIR)` (which auto-clears the `fluidMeta` entry and re-seeds frontier neighbours).
+5. Return the set of drained positions so that Phase 1 (spread) can skip them as write targets this same tick (otherwise a neighbouring flow cell with remaining budget would immediately refill the cell we just drained).
 
-if (!valid_feeder) queue_for_removal(idx)
-```
+Result: one ring peels per tick, from the outside in. A 4-radius water pool with no column drains in 4 ticks (≈ 2 s). Sources are never drained.
 
-The queued removals are committed at the *start* of the next tick (so the visible drain rate is one ring per 0.5 s). Each removal:
-
-- Writes `AIR` to the voxel.
-- Deletes the entry from `fluidMeta`.
-- Adds same-type liquid neighbours to the frontier so the cascade can propagate outward.
-
-A 4-deep falling column feeding a 4-radius pool drains in ~8 ticks (≈ 4 s) after the source is mined.
+Why outside-in rather than the more intuitive "cell loses its feeder first" rule: a per-voxel feeder check (flow survives if it has a same-type neighbour with lower `distance`) peels *inside-out* — the cells at distance 1 lose their source neighbour first and drain, leaving the outer ring stranded. That looks wrong for a user mental model of "the water flows back toward the missing source". BFS-from-sources correctly identifies the whole orphaned component at once and we choose to drain the visually outermost ring per tick.
 
 ### Cost bound
 
-Per-tick work is `O(active frontier)`, which equals the perimeter of the actively-changing puddle plus the currently-draining flow front. A stable pool has perimeter O(0) thanks to existing frontier decay. The world-gen ocean has zero `fluidMeta` entries and zero frontier work. A lava block dropped on flat ground produces at most ~13 voxels of total spread, period.
+Per-tick work is `O(active connected liquid volume)`, which equals the frontier perimeter plus — during an active drain cascade — the orphaned component traversed by BFS pass B. A stable pool has perimeter 0 thanks to existing frontier decay, so steady-state cost is 0. The world-gen ocean's sources carry no `fluidMeta` entries and aren't entered into the frontier by generation, so undisturbed ocean stays free. A lava block dropped on flat ground produces at most ~13 voxels of total spread, period; the BFS traverses at most that many cells per drain tick.
 
 ## Edge cases
 

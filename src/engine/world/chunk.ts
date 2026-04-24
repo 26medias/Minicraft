@@ -10,8 +10,6 @@ export class Chunk {
 	readonly liquidFrontier: Set<number> = new Set();
 	/** Packed flow metadata, sparse — only flow voxels have entries. Source = absence of entry. */
 	readonly fluidMeta: Map<number, number> = new Map();
-	/** Runtime-only set of voxel indices queued for drain on the next tick. Not persisted. */
-	readonly pendingDrain: Set<number> = new Set();
 	dirty = true;
 	modified = false;
 	shadowsDirty = true;

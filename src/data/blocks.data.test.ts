@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { BLOCKS, BLOCK_BY_NAME, AIR, isSolid, isTransparent, faceTexture, isLiquid, WATER, LAVA, OBSIDIAN } from './blocks.data';
+import { BLOCKS, BLOCK_BY_NAME, AIR, isSolid, isTransparent, faceTexture, isLiquid, WATER, LAVA } from './blocks.data';
 
 describe('block catalog', () => {
 	it('has air at id 0', () => {

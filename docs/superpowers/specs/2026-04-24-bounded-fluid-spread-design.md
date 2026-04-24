@@ -165,7 +165,9 @@ Why outside-in rather than the more intuitive "cell loses its feeder first" rule
 
 ### Cost bound
 
-Per-tick work is `O(active connected liquid volume)`, which equals the frontier perimeter plus — during an active drain cascade — the orphaned component traversed by BFS pass B. A stable pool has perimeter 0 thanks to existing frontier decay, so steady-state cost is 0. The world-gen ocean's sources carry no `fluidMeta` entries and aren't entered into the frontier by generation, so undisturbed ocean stays free. A lava block dropped on flat ground produces at most ~13 voxels of total spread, period; the BFS traverses at most that many cells per drain tick.
+Per-tick work is `O(active connected liquid volume)`, which equals the frontier perimeter plus — during an active drain cascade — the orphaned component traversed by BFS pass B. A stable pool has perimeter 0 thanks to existing frontier decay, so steady-state cost is 0.
+
+For the world-gen ocean, sources carry no `fluidMeta` entries, but chunk mounting seeds every liquid voxel into the frontier for one tick. Frontier decay removes all ocean interior cells immediately; only coastline cells (water adjacent to any non-liquid) survive. Subsequent ticks cost O(coastline within the loaded chunk set). This is sub-millisecond at kid-play scales but is not literally zero. A lava block dropped on flat ground produces at most ~13 voxels of total spread; the BFS traverses at most that many cells per drain tick.
 
 ## Edge cases
 

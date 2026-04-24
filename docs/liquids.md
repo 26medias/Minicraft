@@ -129,7 +129,11 @@ Scan the snapshot + its 6-axis neighbours. For each lava voxel with ≥1 water n
 
 ### Cost bound
 
-Per-tick work is `O(active connected liquid volume)`, which equals the frontier perimeter plus — during an active drain cascade — the orphaned component traversed by BFS. Stable pools decay to perimeter 0 and cost nothing. Undisturbed world-gen ocean has no `fluidMeta` entries and no frontier, so cost is zero. A lava block dropped on flat ground creates at most ~13 voxels of total spread.
+Per-tick work is `O(active connected liquid volume)`, which equals the frontier perimeter plus — during an active drain cascade — the orphaned component traversed by BFS. Stable pools decay to perimeter 0 and cost nothing.
+
+**World-gen ocean cost.** Freshly-mounted ocean chunks seed the frontier with every liquid voxel (`GameLoop.flushDirtyChunks`). Within one tick, frontier decay removes every cell whose 5 non-sky neighbours are all non-air — which is every ocean interior cell — leaving only the coastline cells (water touching AIR somewhere). After that, BFS pass A from ocean-surface sources walks the connected ocean in its worst moment, but cost is bounded by the *loaded* chunk set (view radius), not the whole map. Mining a coastal cell re-seeds a small neighbourhood and the next tick re-walks a local component. In practice this is sub-millisecond at kid-play scales; it is not literally zero. If you build a test world full of water and teleport around rapidly, the drain BFS is the dominant per-tick cost.
+
+A lava block dropped on flat ground creates at most ~13 voxels of total spread.
 
 ## Interaction with other systems
 

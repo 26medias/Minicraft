@@ -224,8 +224,9 @@ export class LiquidScheduler {
 		const bfsDirs: [number, number, number][] = [
 			[1, 0, 0], [-1, 0, 0], [0, 1, 0], [0, -1, 0], [0, 0, 1], [0, 0, -1],
 		];
-		while (queue.length > 0) {
-			const n = queue.shift()!;
+		// Head-index cursor instead of Array.shift(), which is O(n) per dequeue in V8.
+		for (let h = 0; h < queue.length; h++) {
+			const n = queue[h];
 			for (const [dx, dy, dz] of bfsDirs) {
 				const nx = n.x + dx, ny = n.y + dy, nz = n.z + dz;
 				const k = `${nx},${ny},${nz}`;
@@ -252,8 +253,8 @@ export class LiquidScheduler {
 			localSeen.add(rootK);
 			localFlowCells.push({ x: cand.x, y: cand.y, z: cand.z, id: cand.id });
 			let foundSource = false;
-			while (localQueue.length > 0) {
-				const n = localQueue.shift()!;
+			for (let h = 0; h < localQueue.length; h++) {
+				const n = localQueue[h];
 				for (const [dx, dy, dz] of bfsDirs) {
 					const nx = n.x + dx, ny = n.y + dy, nz = n.z + dz;
 					const k = `${nx},${ny},${nz}`;

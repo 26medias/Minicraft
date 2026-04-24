@@ -73,6 +73,10 @@ async function main() {
 				for (const rc of save.chunks) {
 					const c = world.ensureChunk(rc.cx, rc.cz);
 					c.blocks.set(rc.blocks);
+					c.fluidMeta.clear();
+					if (rc.fluidMeta) {
+						for (const [idx, packed] of rc.fluidMeta) c.fluidMeta.set(idx, packed);
+					}
 					c.modified = true;
 					c.dirty = true;
 				}

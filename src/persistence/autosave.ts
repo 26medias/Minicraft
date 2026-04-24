@@ -47,9 +47,12 @@ export class AutoSave {
 			createdAt: this.createdAt,
 			updatedAt: Date.now(),
 			player: this.getPlayer(),
-			chunks: this.world
-				.modifiedChunks()
-				.map((c) => ({ cx: c.cx, cz: c.cz, blocks: c.blocks })),
+			chunks: this.world.modifiedChunks().map((c) => ({
+				cx: c.cx,
+				cz: c.cz,
+				blocks: c.blocks,
+				fluidMeta: c.fluidMeta.size > 0 ? new Map(c.fluidMeta) : undefined,
+			})),
 			lights: this.getLights(),
 		};
 		try {

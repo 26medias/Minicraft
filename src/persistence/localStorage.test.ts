@@ -95,3 +95,51 @@ describe('LocalStorageAdapter', () => {
 		expect(loaded!.lights).toBeUndefined();
 	});
 });
+
+describe('LocalStorageAdapter — fluidMeta round-trip', () => {
+	it('persists and restores per-chunk fluidMeta', async () => {
+		const storage = new MemStorage();
+		const adapter = new LocalStorageAdapter(storage as unknown as Storage);
+		const blocks = new Uint8Array(BLOCKS_PER_CHUNK);
+		const fluidMeta = new Map<number, number>([
+			[42, 0x82],
+			[777, 0x84],
+		]);
+		const save: WorldSave = {
+			version: 1,
+			seed: 999,
+			name: 'test',
+			createdAt: 1,
+			updatedAt: 1,
+			player: { x: 0, y: 0, z: 0, yaw: 0, pitch: 0, hotbar: [], selected: 0 },
+			chunks: [{ cx: 0, cz: 0, blocks, fluidMeta }],
+		};
+		await adapter.saveWorld(save);
+		const loaded = await adapter.loadWorld(999);
+		expect(loaded).not.toBeNull();
+		const rc = loaded!.chunks.find((c) => c.cx === 0 && c.cz === 0)!;
+		expect(rc.fluidMeta).toBeDefined();
+		expect(rc.fluidMeta!.size).toBe(2);
+		expect(rc.fluidMeta!.get(42)).toBe(0x82);
+		expect(rc.fluidMeta!.get(777)).toBe(0x84);
+	});
+
+	it('loads chunks without fluidMeta (legacy save) as undefined', async () => {
+		const storage = new MemStorage();
+		const adapter = new LocalStorageAdapter(storage as unknown as Storage);
+		const blocks = new Uint8Array(BLOCKS_PER_CHUNK);
+		const save: WorldSave = {
+			version: 1,
+			seed: 999,
+			name: 'test',
+			createdAt: 1,
+			updatedAt: 1,
+			player: { x: 0, y: 0, z: 0, yaw: 0, pitch: 0, hotbar: [], selected: 0 },
+			chunks: [{ cx: 0, cz: 0, blocks }], // no fluidMeta
+		};
+		await adapter.saveWorld(save);
+		const loaded = await adapter.loadWorld(999);
+		const rc = loaded!.chunks.find((c) => c.cx === 0 && c.cz === 0)!;
+		expect(rc.fluidMeta).toBeUndefined();
+	});
+});

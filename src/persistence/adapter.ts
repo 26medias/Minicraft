@@ -17,7 +17,13 @@ export type WorldSummary = {
 	updatedAt: number;
 };
 
-export type RawChunk = { cx: number; cz: number; blocks: Uint8Array };
+export type RawChunk = {
+	cx: number;
+	cz: number;
+	blocks: Uint8Array;
+	/** Optional sparse fluid metadata (flow voxels only). Absent on legacy saves. */
+	fluidMeta?: Map<number, number>;
+};
 
 export type LightSave = { x: number; y: number; z: number; color: string };
 

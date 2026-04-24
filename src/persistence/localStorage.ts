@@ -1,7 +1,7 @@
 import type { PersistenceAdapter, RawChunk, WorldSave, WorldSummary } from './adapter';
-import { decodeChunk, encodeChunk } from './codec';
+import { decodeChunk, decodeFluidMeta, encodeChunk, encodeFluidMeta } from './codec';
 
-type EncodedChunk = { cx: number; cz: number; data: string };
+type ChunkPayload = { blocks: string; fluidMeta?: string };
 
 const NS = 'minicraft:v1';
 const metaKey = (seed: number) => `${NS}:world:${seed}:meta`;
@@ -24,7 +24,8 @@ export class LocalStorageAdapter implements PersistenceAdapter {
 			const [cxStr, czStr] = suffix.split(':');
 			const data = this.storage.getItem(k);
 			if (!data) continue;
-			chunks.push({ cx: Number(cxStr), cz: Number(czStr), blocks: decodeChunk(data) });
+			const rc = parseChunkPayload(Number(cxStr), Number(czStr), data);
+			chunks.push(rc);
 		}
 		return { ...meta, chunks };
 	}
@@ -40,11 +41,13 @@ export class LocalStorageAdapter implements PersistenceAdapter {
 			lights: save.lights,
 		};
 
-		const encoded: EncodedChunk[] = save.chunks.map((c) => ({
-			cx: c.cx,
-			cz: c.cz,
-			data: encodeChunk(c.blocks),
-		}));
+		const encoded: { cx: number; cz: number; data: string }[] = save.chunks.map((c) => {
+			const payload: ChunkPayload = { blocks: encodeChunk(c.blocks) };
+			if (c.fluidMeta && c.fluidMeta.size > 0) {
+				payload.fluidMeta = encodeFluidMeta(c.fluidMeta);
+			}
+			return { cx: c.cx, cz: c.cz, data: JSON.stringify(payload) };
+		});
 
 		try {
 			this.storage.setItem(metaKey(save.seed), JSON.stringify(metaPayload));
@@ -91,4 +94,19 @@ export class LocalStorageAdapter implements PersistenceAdapter {
 		}
 		toDelete.forEach((k) => this.storage.removeItem(k));
 	}
+}
+
+function parseChunkPayload(cx: number, cz: number, data: string): RawChunk {
+	// Legacy saves stored the bare encoded-blocks string here. Detect by trying to JSON.parse.
+	try {
+		const obj = JSON.parse(data) as ChunkPayload;
+		if (obj && typeof obj.blocks === 'string') {
+			const rc: RawChunk = { cx, cz, blocks: decodeChunk(obj.blocks) };
+			if (obj.fluidMeta) rc.fluidMeta = decodeFluidMeta(obj.fluidMeta);
+			return rc;
+		}
+	} catch {
+		// Fall through — legacy format.
+	}
+	return { cx, cz, blocks: decodeChunk(data) };
 }

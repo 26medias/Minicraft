@@ -90,3 +90,48 @@ describe('Chunk.liquidFrontier', () => {
 		expect(c.liquidFrontier.size).toBe(0);
 	});
 });
+
+describe('Chunk.fluidMeta', () => {
+	it('starts empty', () => {
+		const c = new Chunk(0, 0);
+		expect(c.fluidMeta.size).toBe(0);
+	});
+
+	it('setFluidMeta(distance) stores a packed byte and isFlow returns true', () => {
+		const c = new Chunk(0, 0);
+		c.setFluidMeta(3, 4, 5, 2);
+		expect(c.isFlow(3, 4, 5)).toBe(true);
+		expect(c.getFlowDistance(3, 4, 5)).toBe(2);
+	});
+
+	it('without an entry, isFlow returns false (treated as source)', () => {
+		const c = new Chunk(0, 0);
+		expect(c.isFlow(3, 4, 5)).toBe(false);
+	});
+
+	it('clearFluidMeta removes the entry', () => {
+		const c = new Chunk(0, 0);
+		c.setFluidMeta(3, 4, 5, 2);
+		c.clearFluidMeta(3, 4, 5);
+		expect(c.isFlow(3, 4, 5)).toBe(false);
+	});
+
+	it('setFluidMeta marks the chunk modified', () => {
+		const c = new Chunk(0, 0);
+		c.modified = false;
+		c.setFluidMeta(0, 0, 0, 0);
+		expect(c.modified).toBe(true);
+	});
+
+	it('clearFluidMeta marks the chunk modified only if an entry existed', () => {
+		const c = new Chunk(0, 0);
+		c.setFluidMeta(0, 0, 0, 0);
+		c.modified = false;
+		c.clearFluidMeta(0, 0, 0);
+		expect(c.modified).toBe(true);
+
+		c.modified = false;
+		c.clearFluidMeta(1, 1, 1); // no entry
+		expect(c.modified).toBe(false);
+	});
+});

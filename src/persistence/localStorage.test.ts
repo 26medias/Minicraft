@@ -2,6 +2,7 @@ import { describe, it, expect, beforeEach } from 'vitest';
 import { LocalStorageAdapter } from './localStorage';
 import type { WorldSave } from './adapter';
 import { BLOCKS_PER_CHUNK } from '../engine/world/coords';
+import { encodeChunk } from './codec';
 
 class MemStorage {
 	private store = new Map<string, string>();
@@ -141,5 +142,34 @@ describe('LocalStorageAdapter — fluidMeta round-trip', () => {
 		const loaded = await adapter.loadWorld(999);
 		const rc = loaded!.chunks.find((c) => c.cx === 0 && c.cz === 0)!;
 		expect(rc.fluidMeta).toBeUndefined();
+	});
+
+	it('loads pre-Task-6 on-disk format (bare base64 blob, no JSON wrapper)', async () => {
+		// Synthesize a save in the pre-Task-6 format — bare encoded blocks string as the
+		// per-chunk storage value, no JSON wrapper — and confirm it still loads.
+		const storage = new MemStorage();
+		const adapter = new LocalStorageAdapter(storage as unknown as Storage);
+		const blocks = new Uint8Array(BLOCKS_PER_CHUNK);
+		blocks[0] = 7;
+		blocks[100] = 3;
+		storage.setItem(
+			'minicraft:v1:world:123:meta',
+			JSON.stringify({
+				version: 1,
+				seed: 123,
+				name: 'legacy',
+				createdAt: 1,
+				updatedAt: 1,
+				player: { x: 0, y: 0, z: 0, yaw: 0, pitch: 0, hotbar: [], selected: 0 },
+			}),
+		);
+		storage.setItem('minicraft:v1:world:123:chunk:0:0', encodeChunk(blocks));
+
+		const loaded = await adapter.loadWorld(123);
+		expect(loaded).not.toBeNull();
+		expect(loaded!.chunks).toHaveLength(1);
+		expect(loaded!.chunks[0].blocks[0]).toBe(7);
+		expect(loaded!.chunks[0].blocks[100]).toBe(3);
+		expect(loaded!.chunks[0].fluidMeta).toBeUndefined();
 	});
 });

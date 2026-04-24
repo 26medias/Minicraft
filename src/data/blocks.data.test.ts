@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { BLOCKS, BLOCK_BY_NAME, AIR, isSolid, isTransparent, faceTexture, isLiquid, WATER, LAVA } from './blocks.data';
+import { BLOCKS, BLOCK_BY_NAME, AIR, isSolid, isTransparent, faceTexture, isLiquid, WATER, LAVA, OBSIDIAN } from './blocks.data';
 
 describe('block catalog', () => {
 	it('has air at id 0', () => {
@@ -143,5 +143,20 @@ describe('water and lava', () => {
 	it('isLiquid is true for water and lava', () => {
 		expect(isLiquid(WATER)).toBe(true);
 		expect(isLiquid(LAVA)).toBe(true);
+	});
+});
+
+describe('obsidian block', () => {
+	it('is defined and has expected properties', () => {
+		const obsidian = BLOCK_BY_NAME['obsidian'];
+		expect(obsidian).toBeDefined();
+		expect(obsidian.solid).toBe(true);
+		expect(obsidian.transparent).toBe(false);
+		expect(obsidian.kidMode).toBe(true);
+		expect(obsidian.liquid).toBe('none');
+		expect(obsidian.hardness).toBe(1.2);
+		expect(obsidian.lightLevel).toBe(0);
+		expect(obsidian.lightFilter).toBe(15);
+		expect(obsidian.textures).toEqual({ kind: 'uniform', all: 'obsidian' });
 	});
 });

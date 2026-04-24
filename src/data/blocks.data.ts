@@ -83,6 +83,9 @@ export const BLOCKS: BlockDef[] = [
 	{ id: 18, name: 'lava', label: 'Lava', solid: false, transparent: true, kidMode: true, hardness: 0,
 		lightLevel: 12, lightFilter: 3, liquid: 'lava',
 		textures: { kind: 'uniform', all: 'lava_still' } },
+	{ id: 19, name: 'obsidian', label: 'Obsidian', solid: true, transparent: false, kidMode: true, hardness: 1.2,
+		lightLevel: 0, lightFilter: 15, liquid: 'none',
+		textures: { kind: 'uniform', all: 'obsidian' } },
 ];
 
 export const BLOCK_BY_NAME: Record<string, BlockDef> = Object.fromEntries(
@@ -127,3 +130,4 @@ export function isLiquid(id: BlockId): boolean {
 // that external callers can import stable symbol names.
 export const WATER: BlockId = 17;
 export const LAVA: BlockId = 18;
+export const OBSIDIAN: BlockId = 19;

@@ -72,13 +72,13 @@ Each `Chunk` gains a single new field:
 fluidMeta: Map<number, number>  // local voxel index → packed meta byte
 ```
 
-Packed byte layout:
+Packed byte layout (only flow voxels have entries; sources have none):
 
 | Bit  | Meaning                                  |
 |------|------------------------------------------|
-| 7    | `1` = flow, `0` = source                 |
-| 4–6  | reserved                                 |
-| 0–3  | `distance` for flow (0–15); ignored for source |
+| 7    | always `1` — marker so the raw byte is non-zero and self-identifying |
+| 4–6  | reserved (write 0)                       |
+| 0–3  | `distance` (0–15)                        |
 
 **The default rule is the storage win.** Any liquid voxel with **no entry** in `fluidMeta` is treated as a **source**. So:
 
@@ -117,8 +117,8 @@ The scheduler still ticks at 2 Hz (every 0.5 s). Each tick has three phases.
 For every voxel in the snapshot of all chunks' liquid frontiers:
 
 ```text
-let meta      = chunk.fluidMeta.get(idx)            // undefined → source
-let isSource  = meta === undefined || (meta & 0x80) === 0
+let meta      = chunk.fluidMeta.get(idx)            // undefined → source (sources never have entries)
+let isSource  = meta === undefined
 let distance  = isSource ? 0 : (meta & 0x0F)
 let budget    = id === WATER ? 4 : 2
 

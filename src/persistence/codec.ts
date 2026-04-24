@@ -54,3 +54,34 @@ function readVarInt(src: Uint8Array, i: number): { value: number; next: number }
 	}
 	return { value: v, next: i };
 }
+
+export function encodeFluidMeta(map: Map<number, number>): string {
+	if (map.size === 0) return '';
+	const out: number[] = [];
+	writeVarInt(out, map.size);
+	for (const [idx, packed] of map) {
+		writeVarInt(out, idx);
+		out.push(packed & 0xff);
+	}
+	const deflated = deflate(new Uint8Array(out));
+	return btoa(String.fromCharCode(...deflated));
+}
+
+export function decodeFluidMeta(encoded: string): Map<number, number> {
+	const map = new Map<number, number>();
+	if (encoded === '') return map;
+	const bin = atob(encoded);
+	const bytes = new Uint8Array(bin.length);
+	for (let i = 0; i < bin.length; i++) bytes[i] = bin.charCodeAt(i);
+	const buf = inflate(bytes);
+	let i = 0;
+	const { value: count, next: afterCount } = readVarInt(buf, i);
+	i = afterCount;
+	for (let k = 0; k < count; k++) {
+		const { value: idx, next } = readVarInt(buf, i);
+		i = next;
+		const packed = buf[i++];
+		map.set(idx, packed);
+	}
+	return map;
+}

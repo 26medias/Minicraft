@@ -47,9 +47,30 @@ export class World {
 		const { cx, cz, lx, lz } = worldToChunk(x, z);
 		const c = this.ensureChunk(cx, cz);
 		c.set(lx, y, lz, id);
+		// Regular writes (player placement, world-gen, scheduler-AIR) carry no flow state:
+		// any stale entry must go so the cell is treated as a source / non-liquid next tick.
+		c.clearFluidMeta(lx, y, lz);
 		// World-level writes represent game actions — mark modified even when the block
 		// happens to match generation, so the save system persists the intent. Chunk.set
 		// separately keeps `dirty` clean on true no-ops, so meshing cost isn't paid.
+		c.modified = true;
+
+		this.markLiquidFrontier(x, y, z);
+		this.markLiquidFrontier(x + 1, y, z);
+		this.markLiquidFrontier(x - 1, y, z);
+		this.markLiquidFrontier(x, y + 1, z);
+		this.markLiquidFrontier(x, y - 1, z);
+		this.markLiquidFrontier(x, y, z + 1);
+		this.markLiquidFrontier(x, y, z - 1);
+	}
+
+	/** Scheduler-only: write a liquid voxel as flow with the given distance from source. */
+	setBlockFlow(x: number, y: number, z: number, id: BlockId, distance: number): void {
+		if (!inBounds(x, y, z)) return;
+		const { cx, cz, lx, lz } = worldToChunk(x, z);
+		const c = this.ensureChunk(cx, cz);
+		c.set(lx, y, lz, id);
+		c.setFluidMeta(lx, y, lz, distance);
 		c.modified = true;
 
 		this.markLiquidFrontier(x, y, z);

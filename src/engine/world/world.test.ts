@@ -1,7 +1,7 @@
 import { describe, it, expect } from 'vitest';
 import { World } from './world';
 import { BLOCK_BY_NAME, AIR } from '../../data/blocks.data';
-import { CHUNK_SIZE_X, WORLD_SIZE_X, indexOf } from './coords';
+import { CHUNK_SIZE_X, WORLD_SIZE_X, indexOf, worldToChunk } from './coords';
 
 describe('World', () => {
 	it('generates a chunk on demand', () => {
@@ -97,5 +97,71 @@ describe('World.markLiquidFrontier', () => {
 		c0.liquidFrontier.clear();
 		w.setBlock(16, 30, 5, stone);
 		expect(c0.liquidFrontier.size).toBeGreaterThan(0);
+	});
+});
+
+const water = BLOCK_BY_NAME['water'].id;
+
+function freshWorld(): World {
+	const w = new World(1);
+	const c = w.ensureChunk(16, 16);
+	c.blocks.fill(AIR);
+	c.fluidMeta.clear();
+	c.liquidFrontier.clear();
+	return w;
+}
+
+describe('World.setBlock — fluidMeta interaction', () => {
+	it('regular setBlock(water) clears any existing fluidMeta entry → cell is a source', () => {
+		const w = freshWorld();
+		const { cx, cz, lx, lz } = worldToChunk(260, 260);
+		const c = w.getChunk(cx, cz)!;
+		// Pretend a previous scheduler write left a flow entry here
+		c.setFluidMeta(lx, 30, lz, 3);
+		expect(c.isFlow(lx, 30, lz)).toBe(true);
+
+		w.setBlock(260, 30, 260, water);
+
+		expect(w.getBlock(260, 30, 260)).toBe(water);
+		expect(c.isFlow(lx, 30, lz)).toBe(false);
+	});
+
+	it('regular setBlock(AIR) clears any existing fluidMeta entry', () => {
+		const w = freshWorld();
+		const { cx, cz, lx, lz } = worldToChunk(260, 260);
+		const c = w.getChunk(cx, cz)!;
+		c.set(lx, 30, lz, water);
+		c.setFluidMeta(lx, 30, lz, 2);
+
+		w.setBlock(260, 30, 260, AIR);
+
+		expect(c.isFlow(lx, 30, lz)).toBe(false);
+	});
+});
+
+describe('World.setBlockFlow', () => {
+	it('writes the block id and a flow entry with the given distance', () => {
+		const w = freshWorld();
+		const { cx, cz, lx, lz } = worldToChunk(260, 260);
+		const c = w.getChunk(cx, cz)!;
+
+		w.setBlockFlow(260, 30, 260, water, 2);
+
+		expect(w.getBlock(260, 30, 260)).toBe(water);
+		expect(c.isFlow(lx, 30, lz)).toBe(true);
+		expect(c.getFlowDistance(lx, 30, lz)).toBe(2);
+	});
+
+	it('overwrites a prior source with a flow entry', () => {
+		const w = freshWorld();
+		const { cx, cz, lx, lz } = worldToChunk(260, 260);
+		const c = w.getChunk(cx, cz)!;
+		w.setBlock(260, 30, 260, water); // source
+		expect(c.isFlow(lx, 30, lz)).toBe(false);
+
+		w.setBlockFlow(260, 30, 260, water, 1);
+
+		expect(c.isFlow(lx, 30, lz)).toBe(true);
+		expect(c.getFlowDistance(lx, 30, lz)).toBe(1);
 	});
 });

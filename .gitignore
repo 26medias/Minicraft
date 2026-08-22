@@ -142,3 +142,6 @@ public/atlas.json
 .serena/
 screenshots/
 smoke-test-*.png
+
+# Cloud Function build output
+api/build/

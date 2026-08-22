@@ -3,7 +3,7 @@ import prettierConfig from 'eslint-config-prettier';
 
 export default [
 	{
-		ignores: ['dist/**', 'node_modules/**', 'public/atlas.*'],
+		ignores: ['dist/**', 'node_modules/**', 'public/atlas.*', 'api/build/**', 'api/node_modules/**'],
 	},
 	...tseslint.configs['flat/recommended'],
 	{

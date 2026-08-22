@@ -234,6 +234,7 @@ async function main() {
 			lights,
 		);
 		loop.onBlockBroken = () => autosave.markDirty();
+		loop.onWorldMutated = () => autosave.markDirty();
 		loop.onMiningProgress = (p) => hud.setMiningProgress(p);
 		loop.onFlyStateChange = (tier) => hud.setFlySpeed(tier);
 		loop.start();

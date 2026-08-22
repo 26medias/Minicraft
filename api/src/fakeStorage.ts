@@ -1,7 +1,10 @@
 /** In-memory stand-in for a GCS bucket, including ifGenerationMatch semantics. */
 
+// Mirrors the real @google-cloud/storage shape: the precondition lives under
+// preconditionOpts. Accepting a top-level ifGenerationMatch here would make the
+// unit tests pass against a handler that GCS silently ignores.
 export type SaveOpts = {
-	ifGenerationMatch?: string | number;
+	preconditionOpts?: { ifGenerationMatch?: string | number };
 	metadata?: { contentType?: string; cacheControl?: string; metadata?: Record<string, string> };
 };
 
@@ -23,8 +26,9 @@ export class FakeFile {
 	async save(contents: string, opts: SaveOpts = {}): Promise<void> {
 		this.bucket.calls++;
 		const existing = this.bucket.entries.get(this.name);
-		if (opts.ifGenerationMatch !== undefined) {
-			const want = String(opts.ifGenerationMatch);
+		const pre = opts.preconditionOpts?.ifGenerationMatch;
+		if (pre !== undefined) {
+			const want = String(pre);
 			const have = existing ? String(existing.generation) : '0';
 			if (want !== have) throw new PreconditionFailed();
 		}

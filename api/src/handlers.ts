@@ -11,13 +11,18 @@ const ALLOWED_ORIGINS = [
 ];
 
 /** Minimal structural view of the bucket, so tests can inject a fake. */
+export type SaveOpts = {
+	preconditionOpts?: { ifGenerationMatch?: string | number };
+	metadata?: { contentType?: string; cacheControl?: string; metadata?: Record<string, string> };
+};
+
 export interface BucketLike {
 	file(name: string): FileLike;
 	getFiles(opts?: { prefix?: string }): Promise<[FileLike[]]>;
 }
 export interface FileLike {
 	name: string;
-	save(contents: string, opts?: unknown): Promise<void>;
+	save(contents: string, opts?: SaveOpts): Promise<void>;
 	download(): Promise<[Buffer]>;
 	getMetadata(): Promise<[{ generation: string; size: number; metadata: Record<string, string> }]>;
 	delete(opts?: { ifGenerationMatch?: string | number }): Promise<void>;
@@ -248,7 +253,10 @@ export function createApp(bucket: BucketLike): Express {
 
 		try {
 			await file.save(JSON.stringify(world), {
-				ifGenerationMatch: precondition,
+				// The real client takes the precondition under preconditionOpts.
+				// A top-level ifGenerationMatch is silently IGNORED by GCS — the
+				// deployed API returned 200 for a stale generation until this was fixed.
+				preconditionOpts: { ifGenerationMatch: precondition },
 				metadata: {
 					contentType: 'application/json',
 					cacheControl: 'no-store',

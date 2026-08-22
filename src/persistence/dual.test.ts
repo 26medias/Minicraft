@@ -180,6 +180,28 @@ describe('DualAdapter load arbitration', () => {
 		expect(list.filter((w) => w.name.includes('copy from'))).toHaveLength(0);
 	});
 
+	it('does not fork after a normal save-then-load cycle', async () => {
+		// The realistic flow: save (both legs ok), then load. If the local copy does
+		// not record the generation the cloud assigned, every load looks like a
+		// divergence and the menu fills with "(copy from this device)" duplicates.
+		let gen = 5;
+		const cloud = fakeCloud({
+			saveWorld: async () => {
+				gen++;
+				return { local: 'ok', cloud: 'ok' } as const;
+			},
+			generationFor: () => String(gen),
+			loadWorld: async () => save({ lastSyncedGeneration: String(gen) }),
+		});
+		const dual = new DualAdapter(local, cloud);
+
+		await dual.saveWorld(save());
+		await dual.loadWorld(ID);
+
+		const forks = (await local.listWorlds()).filter((w) => w.name.includes('copy from'));
+		expect(forks).toHaveLength(0);
+	});
+
 	it('keeps both copies exactly once when they genuinely diverge', async () => {
 		await local.saveWorld(save({ lastSyncedGeneration: '5', name: 'Castle' }));
 		const cloud = fakeCloud({

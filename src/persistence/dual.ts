@@ -66,6 +66,16 @@ export class DualAdapter implements PersistenceAdapter {
 		try {
 			await this.cloud.saveWorld(save, encoded);
 			this.needsUpload.delete(save.id);
+			// Stamp the local copy with the generation the cloud just assigned, so the
+			// next load sees an ancestor rather than a divergence.
+			const gen = this.cloud.generationFor(save.id);
+			if (gen && localOutcome === 'ok') {
+				try {
+					this.local.setSyncedGeneration(save.id, gen);
+				} catch {
+					// Losing the stamp costs a spurious fork, never data.
+				}
+			}
 			return { local: localOutcome, cloud: 'ok' };
 		} catch {
 			this.needsUpload.add(save.id);

@@ -154,6 +154,18 @@ export class LocalStorageAdapter implements PersistenceAdapter {
 		}
 	}
 
+	/**
+	 * Records the cloud generation this local copy now matches. Without it, every
+	 * load after a successful save looks like a divergence and forks a duplicate.
+	 */
+	setSyncedGeneration(id: string, generation: string): void {
+		const raw = this.storage.getItem(v2MetaKey(id));
+		if (!raw) return;
+		const meta = JSON.parse(raw) as Record<string, unknown>;
+		meta.lastSyncedGeneration = generation;
+		this.storage.setItem(v2MetaKey(id), JSON.stringify(meta));
+	}
+
 	async listWorlds(): Promise<WorldSummary[]> {
 		const out: WorldSummary[] = [];
 		const adopted = new Set<string>();

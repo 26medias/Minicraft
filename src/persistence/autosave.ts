@@ -6,7 +6,8 @@ const DEBOUNCE_MS = 5000;
 export class AutoSave {
 	private dirty = false;
 	private timer: ReturnType<typeof setTimeout> | null = null;
-	private quotaHit = false;
+	private dirtySeq = 0;
+	private inFlight: Promise<void> | null = null;
 	private name: string;
 	private createdAt: number;
 
@@ -28,8 +29,8 @@ export class AutoSave {
 	}
 
 	markDirty() {
-		if (this.quotaHit) return;
 		this.dirty = true;
+		this.dirtySeq++;
 		if (this.timer) return;
 		this.timer = setTimeout(() => {
 			this.timer = null;
@@ -38,8 +39,26 @@ export class AutoSave {
 	}
 
 	async flush(): Promise<void> {
-		if (!this.dirty || this.quotaHit) return;
-		this.dirty = false;
+		if (!this.dirty) return;
+		// Serialize saves: two concurrent writes of the whole world can interleave and
+		// leave storage holding a mix of both.
+		if (this.inFlight) {
+			await this.inFlight.catch(() => {});
+			if (!this.dirty) return;
+		}
+		const run = this.doSave();
+		this.inFlight = run;
+		try {
+			await run;
+		} finally {
+			if (this.inFlight === run) this.inFlight = null;
+		}
+	}
+
+	private async doSave(): Promise<void> {
+		// Capture the edit counter alongside the snapshot: an edit made while this save
+		// is in flight is not in the snapshot, so its dirty flag must survive.
+		const seq = this.dirtySeq;
 		const save: WorldSave = {
 			version: 1,
 			seed: this.world.seed,
@@ -57,9 +76,9 @@ export class AutoSave {
 		};
 		try {
 			await this.adapter.saveWorld(save);
+			if (this.dirtySeq === seq) this.dirty = false;
 		} catch (err) {
 			if ((err as Error).message === 'QUOTA_EXCEEDED') {
-				this.quotaHit = true;
 				this.onQuotaExceeded();
 				return;
 			}

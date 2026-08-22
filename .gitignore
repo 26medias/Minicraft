@@ -136,3 +136,9 @@ dist/
 # Generated atlas (rebuilt from src/assets/blocks)
 public/atlas.png
 public/atlas.json
+
+# Agent/tool artifacts
+.playwright-mcp/
+.serena/
+screenshots/
+smoke-test-*.png

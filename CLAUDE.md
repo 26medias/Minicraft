@@ -20,12 +20,21 @@ When in doubt about scope, lean toward removing features, not adding them. See `
 
 ## Repo State
 
-The project is **pre-implementation**. As of now the repo contains only:
-- `README.md` — vision & planned tech stack
-- `src/assets/blocks/` — 1,083 block PNGs extracted from a local Minecraft 1.21.6 install (flat directory, no subfolders)
-- `.gitignore` / `.gitattributes` — standard Node-style ignore list
+The project is **implemented and deployed**. TypeScript + Vite + Three.js, with
+vitest for tests. `npm run dev` serves it at `localhost:5173`; the built bundle
+is hosted at `https://noah.leap-forward.ca/minicraft/`.
 
-There is **no `package.json`, no build tool, no source code yet**. The tech stack named in the README (TypeScript + Vite + Three.js, GCP bucket + Cloudflare hosting) is a **plan, not a decision** — don't assume any of it is wired up. Confirm with the user before scaffolding.
+Layout: `src/engine/` (world, render, input), `src/game/` (loop, player,
+liquids, TNT), `src/ui/`, `src/persistence/`, `src/data/` (`*.data.ts` are pure
+data). `api/` holds the Cloud Function for cloud saves and deploys separately.
+
+Per-subsystem docs live in `docs/`: `lighting.md`, `liquids.md`, `movement.md`,
+`persistence.md`. `docs/specs.md` is the source of truth for the tech stack.
+
+⚠ **The kid's real worlds live in the localStorage of
+`https://noah.leap-forward.ca` and in `gs://minicraft-worlds`. Never point tests
+at the production site.** Test at `localhost:5173`. `./deploy.sh` deploys the API
+only — the website is deployed by hand.
 
 ## Assets
 

@@ -12,6 +12,7 @@ import { Hud } from './ui/hud';
 import { MainMenu } from './ui/menu';
 import { OptionsMenu } from './ui/options';
 import { LocalStorageAdapter } from './persistence/localStorage';
+import { isLegacyId, newWorldId, seedFromLegacyId } from './persistence/uuid';
 import { AutoSave } from './persistence/autosave';
 import { ParticleSystem } from './engine/render/particles';
 import { PrimedOverlay } from './engine/render/primed-overlay';
@@ -45,14 +46,19 @@ async function main() {
 				options.show(() => showMenu());
 				return;
 			}
-			if (action.type === 'new') startGame(action.seed, action.name, null);
-			else startGame(action.seed, '', 'continue');
+			if (action.type === 'new') startGame(action.id, action.seed, action.name, null);
+			else startGame(action.id, action.seed, '', 'continue');
 		});
 	}
 
 	showMenu();
 
-	async function startGame(seed: number, name: string, mode: null | 'continue') {
+	async function startGame(
+		worldId: string,
+		seed: number,
+		name: string,
+		mode: null | 'continue',
+	) {
 		menu.hide();
 		// Clear any lights from a prior session of startGame (returning from main menu to a new world).
 		for (const entry of [...lights.entries()]) lights.remove(entry.x, entry.y, entry.z);
@@ -62,11 +68,22 @@ async function main() {
 
 		const player = new Player([256, 60, 256]);
 
+		// A legacy (v1) world is adopted under a fresh uuid the first time it is played.
+		// Writing v2 records under its `legacy:` id would make both namespaces yield the
+		// same id next launch: the v1 copy would win the load and the prune sweep would
+		// then delete this session's chunks.
+		let activeId = worldId;
+		if (isLegacyId(worldId)) {
+			const seedOfLegacy = seedFromLegacyId(worldId);
+			activeId = adapter.adoptedId(seedOfLegacy) ?? newWorldId();
+			adapter.adoptLegacy(seedOfLegacy, activeId);
+		}
+
 		let savedSelectedBlockId: BlockId | null = null;
 		if (mode === 'continue') {
-			const save = await adapter.loadWorld(seed);
+			const save = await adapter.loadWorld(worldId);
 			if (!save) {
-				console.warn('No save for seed', seed);
+				console.warn('No save for world', worldId);
 			} else {
 				worldName = save.name;
 				createdAt = save.createdAt;
@@ -215,7 +232,7 @@ async function main() {
 				hotbar: player.hotbar,
 				selected: player.selected,
 			}),
-			{ name: worldName, createdAt },
+			{ id: activeId, name: worldName, createdAt },
 			() => alert('Save storage full. Auto-save disabled for this session.'),
 			() => [...lights.entries()],
 		);

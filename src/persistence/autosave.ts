@@ -10,15 +10,17 @@ export class AutoSave {
 	private inFlight: Promise<void> | null = null;
 	private name: string;
 	private createdAt: number;
+	private id: string;
 
 	constructor(
 		private adapter: PersistenceAdapter,
 		private world: World,
 		private getPlayer: () => PlayerSave,
-		meta: { name: string; createdAt: number },
+		meta: { id: string; name: string; createdAt: number },
 		public onQuotaExceeded: () => void = () => {},
 		private getLights: () => LightSave[] = () => [],
 	) {
+		this.id = meta.id;
 		this.name = meta.name;
 		this.createdAt = meta.createdAt;
 
@@ -60,7 +62,8 @@ export class AutoSave {
 		// is in flight is not in the snapshot, so its dirty flag must survive.
 		const seq = this.dirtySeq;
 		const save: WorldSave = {
-			version: 1,
+			version: 2,
+			id: this.id,
 			seed: this.world.seed,
 			name: this.name,
 			createdAt: this.createdAt,

@@ -1,8 +1,9 @@
 import type { PersistenceAdapter } from '../persistence/adapter';
+import { newWorldId } from '../persistence/uuid';
 
 export type MenuAction =
-	| { type: 'new'; seed: number; name: string }
-	| { type: 'continue'; seed: number }
+	| { type: 'new'; id: string; seed: number; name: string }
+	| { type: 'continue'; id: string; seed: number }
 	| { type: 'options' };
 
 export class MainMenu {
@@ -50,14 +51,14 @@ export class MainMenu {
 				row.className = 'world-row';
 				const label = document.createElement('span');
 				label.textContent = `${w.name} (seed ${w.seed})`;
-				label.onclick = () => this.onAction?.({ type: 'continue', seed: w.seed });
+				label.onclick = () => this.onAction?.({ type: 'continue', id: w.id, seed: w.seed });
 				const del = document.createElement('button');
 				del.className = 'delete';
 				del.textContent = 'Delete';
 				del.onclick = async (e) => {
 					e.stopPropagation();
 					if (!confirm(`Delete "${w.name}"?`)) return;
-					await this.adapter.deleteWorld(w.seed);
+					await this.adapter.deleteWorld(w.id);
 					await this.renderHome();
 				};
 				row.appendChild(label);
@@ -97,7 +98,7 @@ export class MainMenu {
 			const name =
 				(card.querySelector('#w-name') as HTMLInputElement).value.trim() || 'My World';
 			const seed = Number((card.querySelector('#w-seed') as HTMLInputElement).value) || 0;
-			this.onAction?.({ type: 'new', seed, name });
+			this.onAction?.({ type: 'new', id: newWorldId(), seed, name });
 		};
 		card.appendChild(create);
 		card.appendChild(back);

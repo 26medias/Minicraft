@@ -21,11 +21,16 @@ function fakeWorld(): World {
 	return { seed: 1, modifiedChunks: () => [] } as unknown as World;
 }
 
+const WORLD_ID = '11111111-1111-4111-8111-111111111111';
 const PLAYER: PlayerSave = { x: 0, y: 0, z: 0, yaw: 0, pitch: 0, hotbar: [], selected: 0 };
 
 function makeAdapter(saveWorld: (s: WorldSave) => Promise<void>): PersistenceAdapter {
+	const wrapped = async (s: WorldSave) => {
+		await saveWorld(s);
+		return { local: 'ok', cloud: 'skipped' } as const;
+	};
 	return {
-		saveWorld,
+		saveWorld: wrapped,
 		loadWorld: async () => null,
 		listWorlds: async () => [],
 		deleteWorld: async () => {},
@@ -33,7 +38,7 @@ function makeAdapter(saveWorld: (s: WorldSave) => Promise<void>): PersistenceAda
 }
 
 function makeAutoSave(adapter: PersistenceAdapter, onQuota: () => void = () => {}) {
-	return new AutoSave(adapter, fakeWorld(), () => PLAYER, { name: 'w', createdAt: 0 }, onQuota);
+	return new AutoSave(adapter, fakeWorld(), () => PLAYER, { id: WORLD_ID, name: 'w', createdAt: 0 }, onQuota);
 }
 
 describe('AutoSave failure handling', () => {
@@ -135,7 +140,7 @@ describe('AutoSave failure handling', () => {
 			snapshots.push(s.chunks.length);
 			if (++n === 1) await gate;
 		});
-		const autosave = new AutoSave(adapter, world, () => PLAYER, { name: 'w', createdAt: 0 });
+		const autosave = new AutoSave(adapter, world, () => PLAYER, { id: WORLD_ID, name: 'w', createdAt: 0 });
 
 		dug = 1;
 		autosave.markDirty();

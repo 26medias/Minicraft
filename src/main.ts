@@ -12,6 +12,9 @@ import { Hud } from './ui/hud';
 import { MainMenu } from './ui/menu';
 import { OptionsMenu } from './ui/options';
 import { LocalStorageAdapter } from './persistence/localStorage';
+import { CloudAdapter } from './persistence/cloud';
+import { DualAdapter } from './persistence/dual';
+import { isLegacyId, newWorldId, seedFromLegacyId } from './persistence/uuid';
 import { AutoSave } from './persistence/autosave';
 import { ParticleSystem } from './engine/render/particles';
 import { PrimedOverlay } from './engine/render/primed-overlay';
@@ -31,7 +34,18 @@ async function main() {
 	const renderer = new Renderer(app, atlas);
 	const cam = new FpCamera();
 	const hud = new Hud(app, atlas);
-	const adapter = new LocalStorageAdapter();
+	const localAdapter = new LocalStorageAdapter();
+	// Absent env var -> local-only. A missing URL must degrade, not throw.
+	const apiUrl = import.meta.env.VITE_MINICRAFT_API_URL as string | undefined;
+	const cloudAdapter = apiUrl ? new CloudAdapter(apiUrl) : null;
+	const adapter = new DualAdapter(localAdapter, cloudAdapter);
+
+	const saveStatus = document.createElement('div');
+	saveStatus.id = 'save-status';
+	saveStatus.className = 'saved';
+	saveStatus.textContent = cloudAdapter ? 'Saved' : 'Saved on this device';
+	app.appendChild(saveStatus);
+
 	const menu = new MainMenu(app, adapter);
 	const options = new OptionsMenu(app);
 	const lights = new LightRegistry(renderer.scene);
@@ -45,14 +59,19 @@ async function main() {
 				options.show(() => showMenu());
 				return;
 			}
-			if (action.type === 'new') startGame(action.seed, action.name, null);
-			else startGame(action.seed, '', 'continue');
+			if (action.type === 'new') startGame(action.id, action.seed, action.name, null);
+			else startGame(action.id, action.seed, '', 'continue');
 		});
 	}
 
 	showMenu();
 
-	async function startGame(seed: number, name: string, mode: null | 'continue') {
+	async function startGame(
+		worldId: string,
+		seed: number,
+		name: string,
+		mode: null | 'continue',
+	) {
 		menu.hide();
 		// Clear any lights from a prior session of startGame (returning from main menu to a new world).
 		for (const entry of [...lights.entries()]) lights.remove(entry.x, entry.y, entry.z);
@@ -62,11 +81,22 @@ async function main() {
 
 		const player = new Player([256, 60, 256]);
 
+		// A legacy (v1) world is adopted under a fresh uuid the first time it is played.
+		// Writing v2 records under its `legacy:` id would make both namespaces yield the
+		// same id next launch: the v1 copy would win the load and the prune sweep would
+		// then delete this session's chunks.
+		let activeId = worldId;
+		if (isLegacyId(worldId)) {
+			const seedOfLegacy = seedFromLegacyId(worldId);
+			activeId = localAdapter.adoptedId(seedOfLegacy) ?? newWorldId();
+			localAdapter.adoptLegacy(seedOfLegacy, activeId);
+		}
+
 		let savedSelectedBlockId: BlockId | null = null;
 		if (mode === 'continue') {
-			const save = await adapter.loadWorld(seed);
+			const save = await adapter.loadWorld(worldId);
 			if (!save) {
-				console.warn('No save for seed', seed);
+				console.warn('No save for world', worldId);
 			} else {
 				worldName = save.name;
 				createdAt = save.createdAt;
@@ -215,10 +245,23 @@ async function main() {
 				hotbar: player.hotbar,
 				selected: player.selected,
 			}),
-			{ name: worldName, createdAt },
-			() => alert('Save storage full. Auto-save disabled for this session.'),
+			{ id: activeId, name: worldName, createdAt },
+			() => {
+				saveStatus.textContent = 'Storage on this device is full';
+			},
 			() => [...lights.entries()],
 		);
+		autosave.onStatus = (status) => {
+			saveStatus.className = status;
+			saveStatus.textContent =
+				status === 'saving'
+					? 'Saving…'
+					: status === 'local-only'
+						? 'Saved on this device only'
+						: status === 'error'
+							? 'Save failed'
+							: 'Saved';
+		};
 
 		const particles = new ParticleSystem(renderer.scene, renderer.material, atlas);
 		const overlay = new PrimedOverlay(renderer.scene);
@@ -234,6 +277,7 @@ async function main() {
 			lights,
 		);
 		loop.onBlockBroken = () => autosave.markDirty();
+		loop.onWorldMutated = () => autosave.markDirty();
 		loop.onMiningProgress = (p) => hud.setMiningProgress(p);
 		loop.onFlyStateChange = (tier) => hud.setFlySpeed(tier);
 		loop.start();

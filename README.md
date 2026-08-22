@@ -20,7 +20,7 @@ Current catalog: 19 blocks (grass, dirt, stone, cobblestone, sand, oak planks, o
 - **Compression:** [`pako`](https://github.com/nodeca/pako).
 - **Physics:** hand-rolled swept-AABB voxel collision with sub-stepping — no physics library.
 - **Textures:** Mojang's block PNGs atlased at build time via [`sharp`](https://sharp.pixelplumbing.com/). Select textures are biome-tinted in the build step (grass top: green; water: blue).
-- **Tests:** [Vitest](https://vitest.dev/) — 148 unit tests covering the mesher, physics, world generation determinism, block catalog, player state (including fly + swim mode), TNT detonation, the light registry, voxel lighting propagation (sky + RGB block light, incremental updates, AO), and the liquid scheduler (fall rule, sideways spread, frontier decay).
+- **Tests:** [Vitest](https://vitest.dev/) — 268 unit tests covering the mesher, physics, world generation determinism, block catalog, player state (including fly + swim mode), TNT detonation, the light registry, voxel lighting propagation (sky + RGB block light, incremental updates, AO), and the liquid scheduler (fall rule, sideways spread, frontier decay), and persistence (v1/v2 formats, cloud + dual adapters, autosave failure handling, and the worlds API).
 - **Lint / format:** ESLint + Prettier.
 
 ## Prerequisites

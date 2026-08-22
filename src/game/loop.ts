@@ -42,6 +42,7 @@ export class GameLoop {
 	private scheduler: LiquidScheduler;
 
 	onBlockBroken: ((ev: BlockBrokenEvent) => void) | null = null;
+	onWorldMutated: (() => void) | null = null;
 	onMiningProgress: ((progress: number) => void) | null = null;
 	onFlyStateChange: ((tier: number | null) => void) | null = null;
 
@@ -143,8 +144,7 @@ export class GameLoop {
 		this.onMiningProgress?.(this.miningProgress());
 		this.onFlyStateChange?.(this.player.flying ? this.player.flySpeedTier : null);
 		this.particles?.tick(dt);
-		this.scheduler.tick(dt);
-		this.updatePrimedTnt(dt);
+		this.simulate(dt);
 		this.overlay?.tick(dt);
 		this.loadNearbyChunks();
 		this.flushDirtyChunks();
@@ -203,8 +203,20 @@ export class GameLoop {
 		}
 	}
 
-	private updatePrimedTnt(dt: number): void {
-		if (this.primedTnt.size === 0) return;
+	/**
+	 * The simulation-only slice of a tick, split out so autosave wiring can be tested
+	 * without a WebGL renderer. Fires onWorldMutated when the sim changed a block:
+	 * TNT and liquids mutate chunks without going through the place/break paths, so
+	 * without this their edits are never marked dirty and are lost on tab close.
+	 */
+	simulate(dt: number): void {
+		const liquidsChanged = this.scheduler.tick(dt);
+		const tntChanged = this.updatePrimedTnt(dt);
+		if (liquidsChanged || tntChanged) this.onWorldMutated?.();
+	}
+
+	private updatePrimedTnt(dt: number): boolean {
+		if (this.primedTnt.size === 0) return false;
 		const expired: PrimedEntry[] = [];
 		for (const entry of this.primedTnt.values()) {
 			entry.fuse -= dt;
@@ -216,6 +228,7 @@ export class GameLoop {
 			this.overlay?.remove(entry.x, entry.y, entry.z);
 			this.detonateAt(entry.x, entry.y, entry.z);
 		}
+		return expired.length > 0;
 	}
 
 	private detonateAt(ox: number, oy: number, oz: number): void {

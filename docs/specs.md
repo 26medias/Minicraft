@@ -32,7 +32,7 @@ Mobs, combat, health, hunger, damage, multiplayer, networking gameplay, day/nigh
 | UI overlay | Plain HTML + CSS | Hotbar / menu don't warrant React or Vue |
 | PRNG | `alea` | Seedable, deterministic, small |
 | Noise | `simplex-noise` (jwagner) | Fast, dependency-free |
-| Save validation | `zod` (optional) | Guards against corrupted save blobs |
+| Save validation | `zod` | Guards against corrupted save blobs. In use server-side in `api/` — every chunk is decoded before a world is stored |
 | Testing | **Vitest** | Vite-native |
 | Lint / format | ESLint + Prettier | Standard |
 | Physics | none — hand-rolled AABB | A physics lib is overkill for voxel collision |
@@ -97,7 +97,17 @@ Async on purpose, even for `localStorage` — the Phase 2 remote swap must be a 
 - **Only modified chunks are persisted.** Untouched chunks regenerate from the seed.
 - Chunk payload: RLE-encode the `Uint8Array`, `deflate`, base64. Typical modified chunk → sub-kilobyte.
 - Auto-save is **debounced to ~5 s** and also fires on `blur` / `visibilitychange`.
-- Wrap writes in try/catch — `QuotaExceededError` is real; on quota failure, surface a UI warning and stop auto-save until resolved.
+- Wrap writes in try/catch — `QuotaExceededError` is real; on quota failure, surface a UI warning. (It must NOT stop auto-save: the cloud leg has room even when the device does not.)
+
+### Phase 2 implementation — shipped
+Worlds are also stored in `gs://minicraft-worlds` behind an unauthenticated
+Gen2 Cloud Function. Identity moved from the seed to an immutable uuid, the key
+scheme gained a `minicraft:v2:` namespace, and the two backends run as
+independent legs so neither failing loses an edit. v1 keys remain readable and
+are never written or deleted.
+
+See **`docs/persistence.md`** for the full design — it supersedes the Phase 1/2
+split described here.
 
 ## 6. Module Structure
 
@@ -165,7 +175,7 @@ docs/
 - Crafting as data (`recipes.data.ts`) + pure resolver, triggered from hotbar. No crafting table.
 - "All blocks" mode with a second atlas.
 - Trees, ores, caves in generation.
-- Remote persistence adapter (likely GCP Cloud Run endpoint).
+- ~~Remote persistence adapter~~ — **shipped**, as a Cloud Function + GCS rather than Cloud Run + Firestore. See `docs/persistence.md`.
 - Block place / break sounds.
 
 ### Phase 3 or never
@@ -187,7 +197,13 @@ docs/
 
 ## 9. Deployment
 
-Static bundle from `vite build` → upload to a **GCP Cloud Storage** bucket configured for static hosting → fronted by **Cloudflare** on a private subdomain. No server in Phase 1. Phase 2's remote persistence endpoint is a separate concern (likely Cloud Run + Firestore or a minimal KV) and does not affect the static bundle.
+Static bundle from `vite build` → upload to a **GCP Cloud Storage** bucket configured for static hosting → fronted by **Cloudflare** on a private subdomain. No server for the game itself.
+
+The save API is a separate concern and does not affect the static bundle: a Gen2
+Cloud Function (`minicraft-api`) over a GCS bucket, deployed with `./deploy.sh`.
+**That script never touches the website bucket** — the site is deployed by hand.
+The client reaches the API through `VITE_MINICRAFT_API_URL`, which is baked into
+the bundle and publicly readable; the API is unauthenticated by design.
 
 **Gate the subdomain.** Either HTTP basic auth at the Cloudflare edge, or an unlisted URL, until the Mojang textures are replaced with original or licensed art.
 

@@ -195,3 +195,52 @@
 .color-picker-tile:hover {
 	border-color: #fff;
 }
+
+.menu-section {
+	margin: 14px 0 4px;
+	font-size: 13px;
+	letter-spacing: 0.04em;
+	text-transform: uppercase;
+	opacity: 0.65;
+}
+
+.menu-loading {
+	margin: 12px 0;
+	opacity: 0.7;
+}
+
+.menu-warning {
+	margin: 8px 0;
+	padding: 6px 8px;
+	border-radius: 4px;
+	background: rgba(210, 140, 40, 0.18);
+	color: #f0c070;
+	font-size: 13px;
+}
+
+#save-status {
+	position: fixed;
+	top: 10px;
+	right: 12px;
+	padding: 4px 10px;
+	border-radius: 4px;
+	background: rgba(0, 0, 0, 0.45);
+	color: #d8d8d8;
+	font: 12px system-ui, sans-serif;
+	pointer-events: none;
+	transition: opacity 0.3s;
+}
+
+#save-status.saved {
+	opacity: 0;
+}
+
+#save-status.local-only {
+	color: #f0c070;
+	opacity: 1;
+}
+
+#save-status.error {
+	color: #f08080;
+	opacity: 1;
+}

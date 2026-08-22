@@ -40,6 +40,7 @@ type PendingWrite = { x: number; y: number; z: number; id: number; flowDistance:
 
 export class LiquidScheduler {
 	private accumulator = 0;
+	private changed = false;
 
 	constructor(
 		private world: World,
@@ -47,10 +48,11 @@ export class LiquidScheduler {
 		private onBlockChanged: (x: number, y: number, z: number) => void = () => {},
 	) {}
 
-	tick(dt: number): void {
+	tick(dt: number): boolean {
 		this.accumulator += dt;
-		if (this.accumulator < TICK_INTERVAL) return;
+		if (this.accumulator < TICK_INTERVAL) return false;
 		this.accumulator = 0;
+		this.changed = false;
 
 		// Snapshot the frontier BEFORE any mutation.
 		const snapshot = this.takeSnapshot();
@@ -68,6 +70,8 @@ export class LiquidScheduler {
 
 		// Frontier maintenance — drop fully-enclosed pool interiors.
 		this.decayFrontier();
+
+		return this.changed;
 	}
 
 	private takeSnapshot(): Coord[] {
@@ -166,6 +170,7 @@ export class LiquidScheduler {
 		for (const w of reactionWrites) {
 			if (this.world.getBlock(w.x, w.y, w.z) === w.id) continue;
 			this.world.setBlock(w.x, w.y, w.z, w.id);
+		this.changed = true;
 			this.onBlockChanged(w.x, w.y, w.z);
 			const cx = Math.floor(w.x / CHUNK_SIZE_X);
 			const cz = Math.floor(w.z / CHUNK_SIZE_Z);
@@ -317,6 +322,7 @@ export class LiquidScheduler {
 			for (const o of arr) {
 				if (o.distance !== maxDist) continue;
 				this.world.setBlock(o.x, o.y, o.z, AIR);
+			this.changed = true;
 				this.onBlockChanged(o.x, o.y, o.z);
 				drainedThisTick.add(`${o.x},${o.y},${o.z}`);
 				touchedChunks.add(`${o.chunk.cx},${o.chunk.cz}`);
@@ -382,8 +388,10 @@ export class LiquidScheduler {
 			if (current === w.id && !isLiquid(w.id)) continue;
 			if (w.flowDistance === null) {
 				this.world.setBlock(x, y, z, w.id);
+			this.changed = true;
 			} else {
 				this.world.setBlockFlow(x, y, z, w.id, w.flowDistance);
+			this.changed = true;
 			}
 			this.onBlockChanged(x, y, z);
 			const cx = Math.floor(x / CHUNK_SIZE_X);

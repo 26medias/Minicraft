@@ -50,7 +50,11 @@ export class LocalStorageAdapter implements PersistenceAdapter {
 		});
 
 		try {
-			this.storage.setItem(metaKey(save.seed), JSON.stringify(metaPayload));
+			// Meta is written LAST, on purpose. A save interrupted by a quota error
+			// leaves a mix of old and new chunks; if the new meta were already in
+			// place that mixture would advertise itself as the newer save and win
+			// any comparison against a good copy. Written last, the torn state keeps
+			// the previous updatedAt and loses.
 			const keep = new Set(encoded.map((c) => chunkKey(save.seed, c.cx, c.cz)));
 			const toDelete: string[] = [];
 			for (let i = 0; i < this.storage.length; i++) {
@@ -59,6 +63,7 @@ export class LocalStorageAdapter implements PersistenceAdapter {
 			}
 			toDelete.forEach((k) => this.storage.removeItem(k));
 			for (const c of encoded) this.storage.setItem(chunkKey(save.seed, c.cx, c.cz), c.data);
+			this.storage.setItem(metaKey(save.seed), JSON.stringify(metaPayload));
 		} catch (err) {
 			if (err instanceof DOMException && err.name === 'QuotaExceededError') {
 				throw new Error('QUOTA_EXCEEDED');

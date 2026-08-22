@@ -173,3 +173,53 @@ describe('LocalStorageAdapter — fluidMeta round-trip', () => {
 		expect(loaded!.chunks[0].fluidMeta).toBeUndefined();
 	});
 });
+
+describe('LocalStorageAdapter torn saves', () => {
+	function multiChunkSave(seed: number, fill: number): WorldSave {
+		const chunks = [0, 1, 2, 3].map((i) => {
+			const blocks = new Uint8Array(BLOCKS_PER_CHUNK);
+			blocks.fill(fill);
+			return { cx: i, cz: 0, blocks };
+		});
+		return {
+			version: 1,
+			seed,
+			name: `World ${seed}`,
+			createdAt: 1000,
+			updatedAt: 1000,
+			player: { x: 0, y: 60, z: 0, yaw: 0, pitch: 0, hotbar: [1], selected: 0 },
+			chunks,
+		};
+	}
+
+	it('keeps the old updatedAt when a save is interrupted partway through', async () => {
+		const storage = new MemStorage();
+		const adapter = new LocalStorageAdapter(storage as unknown as Storage);
+
+		await adapter.saveWorld(multiChunkSave(7, 9));
+
+		// Fail on the 3rd chunk write, leaving a genuine mixture on disk.
+		let chunkWrites = 0;
+		const realSet = storage.setItem.bind(storage);
+		storage.setItem = (k: string, v: string) => {
+			if (k.includes(':chunk:') && ++chunkWrites === 3) {
+				throw new DOMException('full', 'QuotaExceededError');
+			}
+			realSet(k, v);
+		};
+
+		const second = multiChunkSave(7, 3);
+		second.updatedAt = 2000;
+		await expect(adapter.saveWorld(second)).rejects.toThrow('QUOTA_EXCEEDED');
+
+		storage.setItem = realSet;
+
+		const loaded = await adapter.loadWorld(7);
+		const fills = new Set((loaded?.chunks ?? []).map((c) => c.blocks[0]));
+
+		// The torn state is real: some chunks are from the new save, some from the old.
+		expect(fills.size).toBeGreaterThan(1);
+		// ...but it must not advertise itself as the newer save.
+		expect(loaded?.updatedAt).toBe(1000);
+	});
+});

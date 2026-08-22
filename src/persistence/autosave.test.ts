@@ -179,3 +179,121 @@ describe('AutoSave failure handling', () => {
 		expect(saves).toBe(2);
 	});
 });
+
+describe('AutoSave cloud behaviour', () => {
+	let listeners: Listeners;
+	beforeEach(() => {
+		listeners = stubDom();
+	});
+	afterEach(() => vi.unstubAllGlobals());
+
+	function dualLike(result: () => SaveResultLike, sync?: () => void) {
+		const calls = { save: 0, sync: 0, needsUpload: [] as string[] };
+		const adapter = {
+			saveWorld: async () => {
+				calls.save++;
+				return result();
+			},
+			saveLocalSync: () => {
+				calls.sync++;
+				sync?.();
+			},
+			markNeedsUpload: (id: string) => calls.needsUpload.push(id),
+			loadWorld: async () => null,
+			listWorlds: async () => [],
+			deleteWorld: async () => {},
+		} as unknown as PersistenceAdapter;
+		return { adapter, calls };
+	}
+
+	it('reports local-only when the cloud leg fails but the local one succeeds', async () => {
+		const { adapter } = dualLike(() => ({ local: 'ok', cloud: 'failed' }));
+		const a = makeAutoSave(adapter);
+		const seen: string[] = [];
+		a.onStatus = (s) => seen.push(s);
+
+		a.markDirty();
+		await a.flush();
+
+		expect(seen).toContain('local-only');
+		a.dispose();
+	});
+
+	it('reports saved when both legs succeed', async () => {
+		const { adapter } = dualLike(() => ({ local: 'ok', cloud: 'ok' }));
+		const a = makeAutoSave(adapter);
+		const seen: string[] = [];
+		a.onStatus = (s) => seen.push(s);
+
+		a.markDirty();
+		await a.flush();
+
+		expect(seen[seen.length - 1]).toBe('saved');
+		a.dispose();
+	});
+
+	it('reports error when both legs fail', async () => {
+		const { adapter } = dualLike(() => ({ local: 'error', cloud: 'failed' }));
+		const a = makeAutoSave(adapter);
+		const seen: string[] = [];
+		a.onStatus = (s) => seen.push(s);
+
+		a.markDirty();
+		await a.flush();
+
+		expect(seen[seen.length - 1]).toBe('error');
+		a.dispose();
+	});
+
+	it('surfaces a local quota failure even when the cloud write succeeded', async () => {
+		const { adapter } = dualLike(() => ({ local: 'quota', cloud: 'ok' }));
+		let quota = 0;
+		const a = makeAutoSave(adapter, () => quota++);
+
+		a.markDirty();
+		await a.flush();
+
+		expect(quota).toBe(1);
+		a.dispose();
+	});
+
+	it('stays dirty and retries after a failed cloud leg', async () => {
+		const { adapter, calls } = dualLike(() => ({ local: 'ok', cloud: 'failed' }));
+		const a = makeAutoSave(adapter);
+
+		a.markDirty();
+		await a.flush();
+		expect(calls.save).toBe(1);
+
+		// Still dirty, so an explicit flush saves again rather than short-circuiting.
+		await a.flush();
+		expect(calls.save).toBe(2);
+		a.dispose();
+	});
+
+	it('writes locally and flags an upload on pagehide, with no cloud call', async () => {
+		// keepalive fetch caps at 64 KiB, so the cloud leg cannot run during unload.
+		const { adapter, calls } = dualLike(() => ({ local: 'ok', cloud: 'ok' }));
+		const a = makeAutoSave(adapter);
+
+		a.markDirty();
+		listeners.get('pagehide')!();
+
+		expect(calls.sync).toBe(1);
+		expect(calls.save).toBe(0);
+		expect(calls.needsUpload).toContain(WORLD_ID);
+		a.dispose();
+	});
+
+	it('does nothing on pagehide when there are no unsaved edits', async () => {
+		const { adapter, calls } = dualLike(() => ({ local: 'ok', cloud: 'ok' }));
+		const a = makeAutoSave(adapter);
+
+		listeners.get('pagehide')!();
+
+		expect(calls.sync).toBe(0);
+		a.dispose();
+	});
+});
+
+type SaveResultLike = { local: 'ok' | 'quota' | 'error'; cloud: 'ok' | 'failed' | 'skipped' };

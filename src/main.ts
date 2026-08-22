@@ -12,6 +12,8 @@ import { Hud } from './ui/hud';
 import { MainMenu } from './ui/menu';
 import { OptionsMenu } from './ui/options';
 import { LocalStorageAdapter } from './persistence/localStorage';
+import { CloudAdapter } from './persistence/cloud';
+import { DualAdapter } from './persistence/dual';
 import { isLegacyId, newWorldId, seedFromLegacyId } from './persistence/uuid';
 import { AutoSave } from './persistence/autosave';
 import { ParticleSystem } from './engine/render/particles';
@@ -32,7 +34,18 @@ async function main() {
 	const renderer = new Renderer(app, atlas);
 	const cam = new FpCamera();
 	const hud = new Hud(app, atlas);
-	const adapter = new LocalStorageAdapter();
+	const localAdapter = new LocalStorageAdapter();
+	// Absent env var -> local-only. A missing URL must degrade, not throw.
+	const apiUrl = import.meta.env.VITE_MINICRAFT_API_URL as string | undefined;
+	const cloudAdapter = apiUrl ? new CloudAdapter(apiUrl) : null;
+	const adapter = new DualAdapter(localAdapter, cloudAdapter);
+
+	const saveStatus = document.createElement('div');
+	saveStatus.id = 'save-status';
+	saveStatus.className = 'saved';
+	saveStatus.textContent = cloudAdapter ? 'Saved' : 'Saved on this device';
+	app.appendChild(saveStatus);
+
 	const menu = new MainMenu(app, adapter);
 	const options = new OptionsMenu(app);
 	const lights = new LightRegistry(renderer.scene);
@@ -75,8 +88,8 @@ async function main() {
 		let activeId = worldId;
 		if (isLegacyId(worldId)) {
 			const seedOfLegacy = seedFromLegacyId(worldId);
-			activeId = adapter.adoptedId(seedOfLegacy) ?? newWorldId();
-			adapter.adoptLegacy(seedOfLegacy, activeId);
+			activeId = localAdapter.adoptedId(seedOfLegacy) ?? newWorldId();
+			localAdapter.adoptLegacy(seedOfLegacy, activeId);
 		}
 
 		let savedSelectedBlockId: BlockId | null = null;
@@ -233,9 +246,22 @@ async function main() {
 				selected: player.selected,
 			}),
 			{ id: activeId, name: worldName, createdAt },
-			() => alert('Save storage full. Auto-save disabled for this session.'),
+			() => {
+				saveStatus.textContent = 'Storage on this device is full';
+			},
 			() => [...lights.entries()],
 		);
+		autosave.onStatus = (status) => {
+			saveStatus.className = status;
+			saveStatus.textContent =
+				status === 'saving'
+					? 'Saving…'
+					: status === 'local-only'
+						? 'Saved on this device only'
+						: status === 'error'
+							? 'Save failed'
+							: 'Saved';
+		};
 
 		const particles = new ParticleSystem(renderer.scene, renderer.material, atlas);
 		const overlay = new PrimedOverlay(renderer.scene);

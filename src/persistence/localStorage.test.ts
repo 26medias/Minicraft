@@ -281,6 +281,20 @@ describe('LocalStorageAdapter legacy adoption', () => {
 		expect(reloaded!.id).toBe(UUID);
 	});
 
+	it('still loads the v1 data on the first play after adoption', async () => {
+		// Adoption happens before the first load, so the v2 record does not exist yet.
+		// Without a fallback the world would open empty.
+		const storage = new MemStorage();
+		const adapter = new LocalStorageAdapter(storage as unknown as Storage);
+		seedV1(storage, 42, 9);
+
+		adapter.adoptLegacy(42, UUID);
+
+		const loaded = await adapter.loadWorld(legacyId(42));
+		expect(loaded).not.toBeNull();
+		expect(loaded!.chunks[0].blocks[0]).toBe(9);
+	});
+
 	it('never lists two rows with the same id', async () => {
 		const storage = new MemStorage();
 		const adapter = new LocalStorageAdapter(storage as unknown as Storage);

@@ -45,7 +45,9 @@ export class LocalStorageAdapter implements PersistenceAdapter {
 		if (isLegacyId(id)) {
 			const seed = seedFromLegacyId(id);
 			const adopted = this.adoptedId(seed);
-			if (adopted) return this.loadV2(adopted);
+			// Adoption is recorded before the first load, so the v2 record may not
+			// exist yet. Falling back to v1 is what makes that first play work.
+			if (adopted) return this.loadV2(adopted) ?? this.loadV1(seed, adopted);
 			return this.loadV1(seed, id);
 		}
 		return this.loadV2(id);

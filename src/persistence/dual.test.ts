@@ -277,6 +277,39 @@ describe('DualAdapter list and delete', () => {
 		expect(list[0].origin).toBe('local');
 	});
 
+	it('reports that the cloud list failed rather than silently returning fewer worlds', async () => {
+		// An empty menu with no warning reads as "my worlds are gone" to a seven-year-
+		// old, which is the most alarming possible outcome for a purely transient
+		// network error.
+		const cloud = fakeCloud({
+			listWorlds: async () => {
+				throw new CloudError('NETWORK');
+			},
+		});
+		const dual = new DualAdapter(local, cloud);
+
+		expect(dual.cloudListFailed).toBe(false);
+		await dual.listWorlds();
+		expect(dual.cloudListFailed).toBe(true);
+	});
+
+	it('clears the failed flag once the cloud list succeeds again', async () => {
+		let fail = true;
+		const cloud = fakeCloud({
+			listWorlds: async () => {
+				if (fail) throw new CloudError('NETWORK');
+				return [];
+			},
+		});
+		const dual = new DualAdapter(local, cloud);
+
+		await dual.listWorlds();
+		expect(dual.cloudListFailed).toBe(true);
+		fail = false;
+		await dual.listWorlds();
+		expect(dual.cloudListFailed).toBe(false);
+	});
+
 	it('does not delete locally when the cloud delete fails', async () => {
 		await local.saveWorld(save());
 		const cloud = fakeCloud({

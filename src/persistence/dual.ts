@@ -19,6 +19,11 @@ import { isLegacyId, newWorldId } from './uuid';
 export class DualAdapter implements PersistenceAdapter {
 	/** Worlds whose local copy is ahead of the cloud and needs uploading. */
 	private needsUpload = new Set<string>();
+	/**
+	 * True when the last listWorlds() could not reach the cloud. The menu must say
+	 * so: an empty list with no warning reads as "my worlds are gone".
+	 */
+	cloudListFailed = false;
 
 	constructor(
 		private local: LocalStorageAdapter,
@@ -154,7 +159,9 @@ export class DualAdapter implements PersistenceAdapter {
 		let cloudList: WorldSummary[] = [];
 		try {
 			cloudList = await this.cloud.listWorlds();
+			this.cloudListFailed = false;
 		} catch {
+			this.cloudListFailed = true;
 			return localList.map((w) => ({ ...w, origin: 'local' as const }));
 		}
 

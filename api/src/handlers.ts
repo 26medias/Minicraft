@@ -8,6 +8,9 @@ const ALLOWED_ORIGINS = [
 	'https://noah.leap-forward.ca',
 	'http://localhost:5173',
 	'http://127.0.0.1:5173',
+	// `vite preview` — used to rehearse the production bundle before deploying.
+	'http://localhost:4173',
+	'http://127.0.0.1:4173',
 ];
 
 /** Minimal structural view of the bucket, so tests can inject a fake. */

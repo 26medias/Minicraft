@@ -40,6 +40,10 @@ export class MainMenu {
 		let offline = false;
 		try {
 			worlds = await this.adapter.listWorlds();
+			// Reaching the cloud can fail without listWorlds() throwing: the local
+			// list still comes back. Without this the menu shows an empty card and
+			// no explanation, which reads as "my worlds are gone".
+			offline = (this.adapter as { cloudListFailed?: boolean }).cloudListFailed === true;
 		} catch {
 			offline = true;
 		}
@@ -54,7 +58,8 @@ export class MainMenu {
 		if (offline) {
 			const warn = document.createElement('div');
 			warn.className = 'menu-warning';
-			warn.textContent = "Can't reach cloud saves. Worlds on this device still work.";
+			warn.textContent =
+				"Can't reach cloud saves right now — your worlds are safe, they just can't be listed. Worlds on this device still work.";
 			card.appendChild(warn);
 		}
 

@@ -145,3 +145,6 @@ smoke-test-*.png
 
 # Cloud Function build output
 api/build/
+
+# Kid's world backups — never commit these
+backup/

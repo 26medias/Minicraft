@@ -9,6 +9,19 @@ import type { LocalStorageAdapter } from './localStorage';
 import type { CloudAdapter } from './cloud';
 import { isLegacyId, newWorldId } from './uuid';
 
+function sameContent(a: EncodedChunk[], b: EncodedChunk[]): boolean {
+	if (a.length !== b.length) return false;
+	const key = (c: EncodedChunk) => `${c.cx},${c.cz}`;
+	const byCoord = new Map(b.map((c) => [key(c), c]));
+	for (const c of a) {
+		const other = byCoord.get(key(c));
+		if (!other) return false;
+		if (other.blocks !== c.blocks) return false;
+		if ((other.fluidMeta ?? '') !== (c.fluidMeta ?? '')) return false;
+	}
+	return true;
+}
+
 /**
  * Composes the local and cloud adapters. Two rules govern everything here:
  *
@@ -123,12 +136,35 @@ export class DualAdapter implements PersistenceAdapter {
 			cloudCopy.lastSyncedGeneration != null &&
 			localCopy.lastSyncedGeneration === cloudCopy.lastSyncedGeneration;
 
-		if (ancestor) return cloudCopy;
+		if (ancestor) {
+			this.adopt(cloudCopy);
+			return cloudCopy;
+		}
 
-		// Diverged. Preserve the local copy as its own visible world before loading
-		// the cloud one, so neither side is lost and the kid can open both.
+		// A missing or mismatched generation means ancestry is UNKNOWN, not that the
+		// copies differ. Forking on that alone produced a duplicate on every load,
+		// and each duplicate was itself unstamped, so it forked again. Compare the
+		// content before concluding anything was lost.
+		if (sameContent(this.encode(localCopy), this.encode(cloudCopy))) {
+			this.adopt(cloudCopy);
+			return cloudCopy;
+		}
+
+		// Genuinely different. Preserve the local copy as its own visible world
+		// before loading the cloud one, so neither side is lost.
 		await this.forkLocalCopy(localCopy);
+		this.adopt(cloudCopy);
 		return cloudCopy;
+	}
+
+	/** Records that the local copy now matches this cloud generation. */
+	private adopt(cloudCopy: WorldSave): void {
+		if (!cloudCopy.lastSyncedGeneration) return;
+		try {
+			this.local.setSyncedGeneration(cloudCopy.id, cloudCopy.lastSyncedGeneration);
+		} catch {
+			// Only costs a redundant content comparison next time.
+		}
 	}
 
 	private async forkLocalCopy(localCopy: WorldSave): Promise<void> {
@@ -147,6 +183,16 @@ export class DualAdapter implements PersistenceAdapter {
 		}
 		try {
 			await this.cloud?.saveWorld(fork, encoded);
+			// Stamp the fork too. An unstamped fork diverges from itself on the next
+			// load and forks again — that is what produced "(copy) (copy)".
+			const gen = this.cloud?.generationFor(forkId);
+			if (gen) {
+				try {
+					this.local.setSyncedGeneration(forkId, gen);
+				} catch {
+					/* costs a comparison, not data */
+				}
+			}
 		} catch {
 			this.needsUpload.add(forkId);
 		}

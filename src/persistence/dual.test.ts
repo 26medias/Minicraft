@@ -202,10 +202,71 @@ describe('DualAdapter load arbitration', () => {
 		expect(forks).toHaveLength(0);
 	});
 
-	it('keeps both copies exactly once when they genuinely diverge', async () => {
-		await local.saveWorld(save({ lastSyncedGeneration: '5', name: 'Castle' }));
+	it('does not fork when the local copy has no generation but identical content', async () => {
+		// A missing stamp means "ancestry unknown", NOT "diverged". Treating it as
+		// divergence forked a copy on every single load.
+		await local.saveWorld(save({ lastSyncedGeneration: null }));
+		const cloud = fakeCloud({ loadWorld: async () => save({ lastSyncedGeneration: '9' }) });
+		const dual = new DualAdapter(local, cloud);
+
+		await dual.loadWorld(ID);
+
+		const forks = (await local.listWorlds()).filter((w) => w.name.includes('copy from'));
+		expect(forks).toHaveLength(0);
+	});
+
+	it('does not fork the same world repeatedly across loads', async () => {
+		// The exponential case: each fork was itself unstamped, so opening it forked
+		// again, producing "(copy from this device) (copy from this device)".
+		const distinctive = new Uint8Array(BLOCKS_PER_CHUNK);
+		distinctive.fill(11);
+		await local.saveWorld(
+			save({ lastSyncedGeneration: '5', chunks: [{ cx: 0, cz: 0, blocks: distinctive }] }),
+		);
+		let gen = 9;
 		const cloud = fakeCloud({
-			loadWorld: async () => save({ lastSyncedGeneration: '9', name: 'Castle' }),
+			loadWorld: async () => save({ lastSyncedGeneration: String(gen) }),
+			saveWorld: async () => {
+				gen++;
+				return { local: 'ok', cloud: 'ok' } as const;
+			},
+			generationFor: () => String(gen),
+		});
+		const dual = new DualAdapter(local, cloud);
+
+		await dual.loadWorld(ID);
+		const afterFirst = (await local.listWorlds()).filter((w) => w.name.includes('copy from'));
+		expect(afterFirst).toHaveLength(1);
+
+		// Re-open the fork itself several times: it must never spawn another.
+		for (let i = 0; i < 3; i++) await dual.loadWorld(afterFirst[0].id);
+
+		const forks = (await local.listWorlds()).filter((w) => w.name.includes('copy from'));
+		expect(forks).toHaveLength(1);
+		expect(forks.some((w) => w.name.includes('copy from this device) (copy'))).toBe(false);
+	});
+
+	it('keeps both copies exactly once when they genuinely diverge', async () => {
+		// The content must actually differ — a generation mismatch alone is not
+		// divergence, it is unknown ancestry.
+		const localBlocks = new Uint8Array(BLOCKS_PER_CHUNK);
+		localBlocks.fill(11);
+		await local.saveWorld(
+			save({
+				lastSyncedGeneration: '5',
+				name: 'Castle',
+				chunks: [{ cx: 0, cz: 0, blocks: localBlocks }],
+			}),
+		);
+		const cloudBlocks = new Uint8Array(BLOCKS_PER_CHUNK);
+		cloudBlocks.fill(4);
+		const cloud = fakeCloud({
+			loadWorld: async () =>
+				save({
+					lastSyncedGeneration: '9',
+					name: 'Castle',
+					chunks: [{ cx: 0, cz: 0, blocks: cloudBlocks }],
+				}),
 		});
 		const dual = new DualAdapter(local, cloud);
 

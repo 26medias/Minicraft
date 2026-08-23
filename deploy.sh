@@ -26,8 +26,20 @@ verify() {
 	local failures=0
 
 	echo "==> Verifying gs://${BUCKET}"
-	if ! gcloud storage buckets describe "gs://${BUCKET}" --project="${PROJECT}" >/dev/null 2>&1; then
+	local describe_err
+	if ! describe_err=$(gcloud storage buckets describe "gs://${BUCKET}" --project="${PROJECT}" 2>&1 >/dev/null); then
+		# Distinguish expired credentials from a genuinely missing bucket: reporting
+		# "does not exist" for an auth failure invites someone to recreate a bucket
+		# that is perfectly fine.
+		if echo "${describe_err}" | grep -qiE 'reauth|credential|auth login|invalid_grant|does not have permission|forbidden'; then
+			echo "CANNOT VERIFY: gcloud credentials are not usable."
+			echo "  Run: gcloud auth login"
+			echo "  (This says nothing about the bucket — check the API instead:"
+			echo "   curl -s ${API_HINT:-https://minicraft-api-uv67ojrpvq-uc.a.run.app}/health )"
+			return 2
+		fi
 		echo "FAIL: bucket does not exist"
+		echo "${describe_err}" | head -3
 		return 1
 	fi
 

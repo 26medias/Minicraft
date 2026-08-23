@@ -14,6 +14,33 @@ const FLY_TIER_MIN = 1;
 const FLY_TIER_MAX = 5;
 const FLY_TIER_DEFAULT = 2;
 
+/**
+ * The world is 64 blocks tall (y 0..63). These bounds let Noah drop into the void
+ * and fly well above the terrain — both of which he likes — without ever losing
+ * sight of the world. Before they existed, walking off the edge of the map meant
+ * an unbounded fall, and autosave persisted it: one world was recovered at
+ * y = -193917, which loads as an empty blue screen.
+ */
+export const VOID_FLOOR_Y = -24;
+export const SKY_CEILING_Y = 120;
+
+const WORLD_MIN_XZ = 0.5;
+const WORLD_MAX_XZ = 511.5;
+
+function clamp(v: number, lo: number, hi: number): number {
+	if (!Number.isFinite(v)) return (lo + hi) / 2;
+	return Math.min(hi, Math.max(lo, v));
+}
+
+/** Brings a saved spawn back into the world, repairing already-broken saves. */
+export function sanitizeSpawn(pos: [number, number, number]): [number, number, number] {
+	return [
+		clamp(pos[0], WORLD_MIN_XZ, WORLD_MAX_XZ),
+		clamp(pos[1], VOID_FLOOR_Y, SKY_CEILING_Y),
+		clamp(pos[2], WORLD_MIN_XZ, WORLD_MAX_XZ),
+	];
+}
+
 export type Keys = {
 	forward: boolean;
 	back: boolean;
@@ -33,7 +60,7 @@ export class Player {
 	swimming = false;
 
 	constructor(spawn: [number, number, number]) {
-		this.position = spawn;
+		this.position = sanitizeSpawn(spawn);
 	}
 
 	eyePosition(): [number, number, number] {
@@ -147,6 +174,18 @@ export class Player {
 			if (r.vy === 0) this.vy = 0;
 			if (r.vx === 0 && r.vz === 0 && r.vy === 0) break;
 		}
+
+		// Keep the player inside the world. Leaving it horizontally means there is no
+		// ground to land on, which is how an endless fall starts.
+		const [cx, cy, cz] = sanitizeSpawn(this.position);
+		if (cy !== this.position[1]) {
+			// Landing on the void floor or bumping the ceiling cancels vertical speed,
+			// so the player rests there rather than accumulating velocity.
+			this.vy = 0;
+			if (cy === VOID_FLOOR_Y) grounded = true;
+		}
+		this.position = [cx, cy, cz];
+
 		this.grounded = grounded;
 	}
 }

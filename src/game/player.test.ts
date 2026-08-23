@@ -1,8 +1,14 @@
 import { describe, it, expect } from 'vitest';
 import * as THREE from 'three';
-import { Player, type Keys } from './player';
+import {
+	Player,
+	type Keys,
+	VOID_FLOOR_Y,
+	SKY_CEILING_Y,
+	sanitizeSpawn,
+} from './player';
 import { World } from '../engine/world/world';
-import { BLOCK_BY_NAME } from '../data/blocks.data';
+import { AIR, BLOCK_BY_NAME } from '../data/blocks.data';
 
 const stone = BLOCK_BY_NAME['stone'].id;
 const FWD = new THREE.Vector3(0, 0, -1);
@@ -200,5 +206,62 @@ describe('Player cursor-directed movement', () => {
 		// Press Space — vy should become positive.
 		p.update(0.01, w, { ...noKeys(), jump: true }, FWD, RIGHT);
 		expect(p.vy).toBeGreaterThan(0);
+	});
+});
+
+describe('Player world bounds', () => {
+	function openWorld(): World {
+		const w = new World(1);
+		const c = w.ensureChunk(16, 16);
+		c.blocks.fill(AIR);
+		return w;
+	}
+	const noKeys: Keys = { forward: false, back: false, left: false, right: false, jump: false };
+	const fwd = new THREE.Vector3(0, 0, -1);
+	const right = new THREE.Vector3(1, 0, 0);
+
+	it('stops falling at the void floor instead of dropping forever', () => {
+		const p = new Player([260, 40, 260]);
+		const w = openWorld();
+		// No ground anywhere: without a floor this falls without limit.
+		for (let i = 0; i < 2000; i++) p.update(1 / 60, w, noKeys, fwd, right);
+		expect(p.position[1]).toBeGreaterThanOrEqual(VOID_FLOOR_Y);
+		expect(Number.isFinite(p.position[1])).toBe(true);
+	});
+
+	it('can still see the world from the void floor', () => {
+		// The floor must be close enough that the terrain above stays in view.
+		expect(VOID_FLOOR_Y).toBeGreaterThan(-64);
+		expect(VOID_FLOOR_Y).toBeLessThan(0);
+	});
+
+	it('does not let the player fly above the sky ceiling', () => {
+		const p = new Player([260, 40, 260]);
+		p.flying = true;
+		const w = openWorld();
+		for (let i = 0; i < 4000; i++) {
+			p.vy = 20;
+			p.update(1 / 60, w, { ...noKeys, jump: true }, fwd, right);
+		}
+		expect(p.position[1]).toBeLessThanOrEqual(SKY_CEILING_Y);
+	});
+
+	it('keeps the player inside the horizontal world bounds', () => {
+		const p = new Player([600, 40, -30]);
+		p.update(1 / 60, openWorld(), noKeys, fwd, right);
+		expect(Number.isFinite(p.position[0])).toBe(true);
+		expect(p.position[0]).toBeGreaterThanOrEqual(0);
+		expect(p.position[0]).toBeLessThanOrEqual(512);
+		expect(p.position[2]).toBeGreaterThanOrEqual(0);
+		expect(p.position[2]).toBeLessThanOrEqual(512);
+	});
+
+	it('repairs a saved position that is already out of bounds', () => {
+		// Noah's world was saved at y = -193917 after falling out of the map.
+		const p = new Player(sanitizeSpawn([282.3, -193917.6, 512.87]));
+		expect(p.position[1]).toBeGreaterThanOrEqual(VOID_FLOOR_Y);
+		expect(p.position[1]).toBeLessThanOrEqual(SKY_CEILING_Y);
+		expect(p.position[2]).toBeLessThan(512);
+		expect(p.position[2]).toBeGreaterThanOrEqual(0);
 	});
 });

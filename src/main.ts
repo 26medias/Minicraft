@@ -4,7 +4,7 @@ import { loadAtlas } from './engine/render/atlas';
 import { Renderer } from './engine/render/renderer';
 import { FpCamera } from './engine/render/camera';
 import { setupPointerLock } from './engine/input/pointerLock';
-import { Player, type Keys } from './game/player';
+import { Player, sanitizeSpawn, type Keys } from './game/player';
 import { GameLoop } from './game/loop';
 import { raycastVoxel } from './engine/input/raycast';
 import { placeBlock } from './game/actions';
@@ -117,7 +117,9 @@ async function main() {
 					const c = world.getChunk(rc.cx, rc.cz);
 					if (c) fillChunkLights(world, c);
 				}
-				player.position = [save.player.x, save.player.y, save.player.z];
+				// Repairs a save written while the player was outside the world: one
+				// world came back at y = -193917, which loads as an empty sky.
+				player.position = sanitizeSpawn([save.player.x, save.player.y, save.player.z]);
 				cam.yaw = save.player.yaw;
 				cam.pitch = save.player.pitch;
 				savedSelectedBlockId = save.player.hotbar[save.player.selected] ?? null;

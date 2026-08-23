@@ -6,6 +6,7 @@ import {
 	VOID_FLOOR_Y,
 	SKY_CEILING_Y,
 	sanitizeSpawn,
+	findSafeSpawn,
 } from './player';
 import { World } from '../engine/world/world';
 import { AIR, BLOCK_BY_NAME } from '../data/blocks.data';
@@ -263,5 +264,49 @@ describe('Player world bounds', () => {
 		expect(p.position[1]).toBeLessThanOrEqual(SKY_CEILING_Y);
 		expect(p.position[2]).toBeLessThan(512);
 		expect(p.position[2]).toBeGreaterThanOrEqual(0);
+	});
+});
+
+describe('findSafeSpawn', () => {
+	it('drops the player onto the surface of their saved column', () => {
+		const w = new World(1);
+		const c = w.ensureChunk(16, 16);
+		c.blocks.fill(AIR);
+		// solid floor at y=20 across the chunk
+		for (let x = 0; x < 16; x++)
+			for (let z = 0; z < 16; z++) w.setBlock(256 + x, 20, 256 + z, stone);
+
+		const p = findSafeSpawn(w, [260.5, 55, 260.5]);
+		expect(p[1]).toBe(21);
+		expect(p[0]).toBe(260.5);
+		expect(p[2]).toBe(260.5);
+	});
+
+	it('rescues a position that has no ground under it', () => {
+		const w = new World(1);
+		const c = w.ensureChunk(16, 16);
+		c.blocks.fill(AIR);
+		for (let x = 0; x < 16; x++)
+			for (let z = 0; z < 16; z++) w.setBlock(256 + x, 20, 256 + z, stone);
+
+		// Saved far outside the map, below the world — Noah's actual broken save.
+		const p = findSafeSpawn(w, [282.3, -193917.6, 512.87]);
+		expect(p[1]).toBeGreaterThan(VOID_FLOOR_Y);
+		expect(p[1]).toBeLessThanOrEqual(SKY_CEILING_Y);
+		expect(p[0]).toBeLessThanOrEqual(511.5);
+		expect(p[2]).toBeLessThanOrEqual(511.5);
+	});
+
+	it('finds ground in a neighbouring column when the exact one is empty', () => {
+		const w = new World(1);
+		const c = w.ensureChunk(16, 16);
+		c.blocks.fill(AIR);
+		// A single solid block a few columns away.
+		w.setBlock(264, 25, 264, stone);
+
+		const p = findSafeSpawn(w, [260.5, 40, 260.5]);
+		expect(p[1]).toBe(26);
+		expect(Math.abs(p[0] - 264.5)).toBeLessThan(0.01);
+		expect(Math.abs(p[2] - 264.5)).toBeLessThan(0.01);
 	});
 });

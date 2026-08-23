@@ -49,6 +49,50 @@ export type Keys = {
 	jump: boolean;
 };
 
+/**
+ * Places the player on solid ground near their saved position. A saved position
+ * with nothing under it means an immediate fall — which is how Noah's world came
+ * to be saved at y = -193917 and load as an empty sky.
+ */
+export function findSafeSpawn(
+	world: World,
+	desired: [number, number, number],
+): [number, number, number] {
+	const [dx, dy, dz] = sanitizeSpawn(desired);
+
+	const groundAt = (x: number, z: number, from: number): number | null => {
+		const bx = Math.floor(x);
+		const bz = Math.floor(z);
+		const start = Math.min(Math.max(Math.floor(from), 0), 63);
+		for (let y = start; y >= 0; y--) {
+			if (world.getBlock(bx, y, bz) !== 0) return y + 1;
+		}
+		// Nothing below the saved height — try from the top of the column.
+		for (let y = 63; y > start; y--) {
+			if (world.getBlock(bx, y, bz) !== 0) return y + 1;
+		}
+		return null;
+	};
+
+	const here = groundAt(dx, dz, dy);
+	if (here !== null) return [dx, here, dz];
+
+	// Spiral outwards for the nearest column that has any ground at all.
+	for (let r = 1; r <= 48; r++) {
+		for (let ox = -r; ox <= r; ox++) {
+			for (let oz = -r; oz <= r; oz++) {
+				if (Math.max(Math.abs(ox), Math.abs(oz)) !== r) continue;
+				const nx = Math.floor(dx) + ox;
+				const nz = Math.floor(dz) + oz;
+				if (nx < 0 || nx > 511 || nz < 0 || nz > 511) continue;
+				const g = groundAt(nx + 0.5, nz + 0.5, 63);
+				if (g !== null) return [nx + 0.5, g, nz + 0.5];
+			}
+		}
+	}
+	return [dx, Math.max(dy, 32), dz];
+}
+
 export class Player {
 	position: [number, number, number];
 	vy = 0;

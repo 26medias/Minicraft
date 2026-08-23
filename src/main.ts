@@ -4,7 +4,7 @@ import { loadAtlas } from './engine/render/atlas';
 import { Renderer } from './engine/render/renderer';
 import { FpCamera } from './engine/render/camera';
 import { setupPointerLock } from './engine/input/pointerLock';
-import { Player, sanitizeSpawn, type Keys } from './game/player';
+import { Player, findSafeSpawn, type Keys } from './game/player';
 import { GameLoop } from './game/loop';
 import { raycastVoxel } from './engine/input/raycast';
 import { placeBlock } from './game/actions';
@@ -92,6 +92,7 @@ async function main() {
 			localAdapter.adoptLegacy(seedOfLegacy, activeId);
 		}
 
+		let savedSpawn: [number, number, number] | null = null;
 		let savedSelectedBlockId: BlockId | null = null;
 		if (mode === 'continue') {
 			const save = await adapter.loadWorld(worldId);
@@ -118,8 +119,9 @@ async function main() {
 					if (c) fillChunkLights(world, c);
 				}
 				// Repairs a save written while the player was outside the world: one
-				// world came back at y = -193917, which loads as an empty sky.
-				player.position = sanitizeSpawn([save.player.x, save.player.y, save.player.z]);
+				// world came back at y = -193917, which loads as an empty sky. Set
+				// after the chunks are applied so there is terrain to stand on.
+				savedSpawn = [save.player.x, save.player.y, save.player.z];
 				cam.yaw = save.player.yaw;
 				cam.pitch = save.player.pitch;
 				savedSelectedBlockId = save.player.hotbar[save.player.selected] ?? null;
@@ -128,6 +130,10 @@ async function main() {
 				}
 			}
 		}
+
+		// Ground the player only once every saved chunk is in the world, so there is
+		// something to stand on.
+		if (savedSpawn) player.position = findSafeSpawn(world, savedSpawn);
 
 		// Hotbar is always derived from the kid-mode / full block pool — not stored per save.
 		// We preserve the previously-selected block if it's still in the pool; otherwise reset.

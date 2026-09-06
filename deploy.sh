@@ -100,14 +100,12 @@ assert c.get("numNewerVersions")==10, c
 		echo "  FAIL: function ${FUNCTION} is not deployed"
 		failures=$((failures + 1))
 	else
-		local code
-		code=$(curl -s -o /dev/null -w "%{http_code}" "${uri}/health" || true)
-		if [[ "${code}" == "200" ]]; then
-			echo "  ok: ${uri}/health -> 200"
+		local body
+		body=$(curl -s "${uri}/health" || true)
+		if echo "${body}" | grep -q '"codec":2'; then
+			echo "  ok: ${uri}/health -> codec 2"
 		else
-			# gcloud reports a deploy with no build as success, so this is the
-			# check that actually catches a function that cannot start.
-			echo "  FAIL: ${uri}/health -> ${code}"
+			echo "  FAIL: ${uri}/health -> '${body}' (expected {\"ok\":true,\"codec\":2}; old codec still deployed?)"
 			failures=$((failures + 1))
 		fi
 	fi

@@ -59,7 +59,7 @@ function bodyTooLarge(req: Request): boolean {
 
 function validateChunks(world: WorldSaveWire): string | null {
 	for (const c of world.chunks) {
-		let blocks: Uint8Array;
+		let blocks: Uint16Array;
 		try {
 			blocks = decodeChunk(c.blocks);
 		} catch {
@@ -118,7 +118,7 @@ export function createApp(bucket: BucketLike): Express {
 	app.use(express.json({ limit: '64mb' }));
 
 	app.get('/health', (_req, res) => {
-		res.json({ ok: true });
+		res.json({ ok: true, codec: 2 });
 	});
 
 	app.get('/worlds', async (_req, res) => {

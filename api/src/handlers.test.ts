@@ -186,6 +186,6 @@ describe('worlds API', () => {
 	});
 
 	it('health check responds', async () => {
-		await request(app).get('/health').expect(200, { ok: true });
+		await request(app).get('/health').expect(200, { ok: true, codec: 2 });
 	});
 });

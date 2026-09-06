@@ -9,14 +9,27 @@ import { decodeChunk, decodeFluidMeta, BLOCKS_PER_CHUNK } from './codec';
 // import. These assert the copy has not drifted.
 describe('codec parity', () => {
 	it('server decodes what the client encodes', () => {
-		const blocks = new Uint8Array(BLOCKS_PER_CHUNK);
+		const blocks = new Uint16Array(BLOCKS_PER_CHUNK);
 		for (let i = 0; i < BLOCKS_PER_CHUNK; i++) blocks[i] = i % 19;
 		expect(decodeChunk(clientEncode(blocks))).toEqual(blocks);
 	});
 
 	it('server decodes an empty chunk', () => {
-		const blocks = new Uint8Array(BLOCKS_PER_CHUNK);
+		const blocks = new Uint16Array(BLOCKS_PER_CHUNK);
 		expect(decodeChunk(clientEncode(blocks))).toEqual(blocks);
+	});
+
+	it('server decodes ids above 255 from the client', () => {
+		const blocks = new Uint16Array(BLOCKS_PER_CHUNK);
+		[200, 255, 256, 353, 65535].forEach((v, i) => { blocks[i] = v; });
+		expect(decodeChunk(clientEncode(blocks))).toEqual(blocks);
+	});
+
+	it('server decodes a legacy byte-codec chunk identically', () => {
+		const b = new Uint16Array(BLOCKS_PER_CHUNK);
+		for (let i = 0; i < 100; i++) b[i] = 5;
+		b[200] = 19;
+		expect(decodeChunk('eJxjTWFIEWZk2F4HAAf9Ahc=')).toEqual(b);
 	});
 
 	it('server decodes client fluidMeta', () => {

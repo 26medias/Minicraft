@@ -4,7 +4,7 @@ import type { WorldSaveWire } from './schema';
 export const FIXTURE_ID = '11111111-1111-4111-8111-111111111111';
 
 export function chunkBlocks(fill: number): string {
-	const b = new Uint8Array(BLOCKS_PER_CHUNK);
+	const b = new Uint16Array(BLOCKS_PER_CHUNK);
 	b.fill(fill);
 	return encodeChunk(b);
 }

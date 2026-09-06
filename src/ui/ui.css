@@ -342,3 +342,82 @@
 	margin: 0;
 	padding: 6px 12px;
 }
+
+/* Block inventory (I). Above the HUD, below the colour picker (20) and the play-time freeze (30). */
+#inventory-root {
+	position: fixed;
+	inset: 0;
+	background: rgba(0, 0, 0, 0.7);
+	display: flex;
+	align-items: center;
+	justify-content: center;
+	z-index: 15;
+}
+#inventory-root.hidden {
+	display: none;
+}
+.inventory-card {
+	background: #2a2a2a;
+	border-radius: 8px;
+	padding: 12px;
+	max-width: 92vw;
+	box-shadow: 0 4px 24px rgba(0, 0, 0, 0.6);
+	display: flex;
+	flex-direction: column;
+	gap: 8px;
+}
+.inventory-grid {
+	display: grid;
+	grid-template-columns: repeat(auto-fill, 48px);
+	gap: 4px;
+	max-height: 72vh;
+	overflow-y: auto;
+	width: min(88vw, 1300px);
+}
+.inventory-group {
+	grid-column: 1 / -1;
+	font: bold 18px system-ui, sans-serif;
+	letter-spacing: 0.06em;
+	color: #fff;
+	margin: 10px 0 2px;
+}
+.inventory-tile {
+	width: 48px;
+	height: 48px;
+	padding: 0;
+	background-color: #1b1b1b;
+	background-repeat: no-repeat;
+	image-rendering: pixelated;
+	border: 2px solid rgba(255, 255, 255, 0.15);
+	border-radius: 4px;
+	cursor: pointer;
+}
+.inventory-tile:hover {
+	border-color: #fff;
+}
+.inventory-name {
+	min-height: 20px;
+	color: #fff;
+	font: 16px system-ui, sans-serif;
+	text-align: center;
+}
+.inventory-strip {
+	display: flex;
+	gap: 4px;
+	justify-content: center;
+	background: rgba(0, 0, 0, 0.35);
+	padding: 4px;
+	border-radius: 6px;
+}
+.inventory-strip .hotbar-slot {
+	cursor: pointer;
+}
+.hotbar-slot.flash {
+	animation: slot-flash 0.3s ease-out;
+}
+/* Scale + brightness, not box-shadow: the flashed slot is always the selected one,
+   whose own box-shadow would hide a shadow-based pulse. */
+@keyframes slot-flash {
+	0% { transform: scale(1.25); filter: brightness(1.8); }
+	100% { transform: scale(1); filter: brightness(1); }
+}

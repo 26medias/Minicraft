@@ -28,7 +28,7 @@ class MemStorage {
 }
 
 function save(over: Partial<WorldSave> = {}): WorldSave {
-	const blocks = new Uint8Array(BLOCKS_PER_CHUNK);
+	const blocks = new Uint16Array(BLOCKS_PER_CHUNK);
 	blocks[0] = 3;
 	return {
 		version: 2,
@@ -218,7 +218,7 @@ describe('DualAdapter load arbitration', () => {
 	it('does not fork the same world repeatedly across loads', async () => {
 		// The exponential case: each fork was itself unstamped, so opening it forked
 		// again, producing "(copy from this device) (copy from this device)".
-		const distinctive = new Uint8Array(BLOCKS_PER_CHUNK);
+		const distinctive = new Uint16Array(BLOCKS_PER_CHUNK);
 		distinctive.fill(11);
 		await local.saveWorld(
 			save({ lastSyncedGeneration: '5', chunks: [{ cx: 0, cz: 0, blocks: distinctive }] }),
@@ -249,7 +249,7 @@ describe('DualAdapter load arbitration', () => {
 	it('keeps both copies exactly once when they genuinely diverge', async () => {
 		// The content must actually differ — a generation mismatch alone is not
 		// divergence, it is unknown ancestry.
-		const localBlocks = new Uint8Array(BLOCKS_PER_CHUNK);
+		const localBlocks = new Uint16Array(BLOCKS_PER_CHUNK);
 		localBlocks.fill(11);
 		await local.saveWorld(
 			save({
@@ -258,7 +258,7 @@ describe('DualAdapter load arbitration', () => {
 				chunks: [{ cx: 0, cz: 0, blocks: localBlocks }],
 			}),
 		);
-		const cloudBlocks = new Uint8Array(BLOCKS_PER_CHUNK);
+		const cloudBlocks = new Uint16Array(BLOCKS_PER_CHUNK);
 		cloudBlocks.fill(4);
 		const cloud = fakeCloud({
 			loadWorld: async () =>
@@ -278,7 +278,7 @@ describe('DualAdapter load arbitration', () => {
 	});
 
 	it('preserves the diverged local chunks in the fork', async () => {
-		const distinctive = new Uint8Array(BLOCKS_PER_CHUNK);
+		const distinctive = new Uint16Array(BLOCKS_PER_CHUNK);
 		distinctive.fill(11);
 		await local.saveWorld(
 			save({ lastSyncedGeneration: '5', chunks: [{ cx: 0, cz: 0, blocks: distinctive }] }),

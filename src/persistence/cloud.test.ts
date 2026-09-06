@@ -6,7 +6,7 @@ import { BLOCKS_PER_CHUNK } from '../engine/world/coords';
 const ID = '11111111-1111-4111-8111-111111111111';
 
 function save(over: Partial<WorldSave> = {}): WorldSave {
-	const blocks = new Uint8Array(BLOCKS_PER_CHUNK);
+	const blocks = new Uint16Array(BLOCKS_PER_CHUNK);
 	blocks[0] = 3;
 	return {
 		version: 2,
@@ -141,7 +141,7 @@ describe('CloudAdapter round-trip', () => {
 		stubFetch(res(200, { ...wire(), chunks: sent.chunks }, '1'));
 		const b = new CloudAdapter('https://api.test');
 		const loaded = await b.loadWorld(ID);
-		expect(loaded!.chunks[0].blocks).toBeInstanceOf(Uint8Array);
+		expect(loaded!.chunks[0].blocks).toBeInstanceOf(Uint16Array);
 		expect(loaded!.chunks[0].blocks[0]).toBe(3);
 	});
 

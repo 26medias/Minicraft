@@ -224,13 +224,17 @@ export class LocalStorageAdapter implements PersistenceAdapter {
 }
 
 function parseChunkPayload(cx: number, cz: number, data: string): RawChunk {
+	let parsed: ChunkPayload | null = null;
 	try {
-		const parsed = JSON.parse(data) as ChunkPayload;
-		const blocks = decodeChunk(parsed.blocks);
-		const fluidMeta = parsed.fluidMeta ? decodeFluidMeta(parsed.fluidMeta) : undefined;
-		return { cx, cz, blocks, fluidMeta };
+		parsed = JSON.parse(data) as ChunkPayload;
 	} catch {
-		// Pre-Task-6 saves stored the bare base64 blocks blob with no JSON envelope.
-		return { cx, cz, blocks: decodeChunk(data) };
+		parsed = null;
 	}
+	// Pre-Task-6 saves stored the bare base64 blocks blob with no JSON envelope.
+	// Only that case falls back; a decode failure inside a JSON payload must
+	// surface as itself, not as atob choking on the envelope.
+	if (!parsed) return { cx, cz, blocks: decodeChunk(data) };
+	const blocks = decodeChunk(parsed.blocks);
+	const fluidMeta = parsed.fluidMeta ? decodeFluidMeta(parsed.fluidMeta) : undefined;
+	return { cx, cz, blocks, fluidMeta };
 }

@@ -29,7 +29,7 @@ function idFor(seed: number): string {
 }
 
 function sampleSave(seed: number): WorldSave {
-	const blocks = new Uint8Array(BLOCKS_PER_CHUNK);
+	const blocks = new Uint16Array(BLOCKS_PER_CHUNK);
 	blocks[0] = 3;
 	blocks[1] = 3;
 	blocks[2] = 5;
@@ -107,7 +107,7 @@ describe('LocalStorageAdapter — fluidMeta round-trip', () => {
 	it('persists and restores per-chunk fluidMeta', async () => {
 		const storage = new MemStorage();
 		const adapter = new LocalStorageAdapter(storage as unknown as Storage);
-		const blocks = new Uint8Array(BLOCKS_PER_CHUNK);
+		const blocks = new Uint16Array(BLOCKS_PER_CHUNK);
 		const fluidMeta = new Map<number, number>([
 			[42, 0x82],
 			[777, 0x84],
@@ -135,7 +135,7 @@ describe('LocalStorageAdapter — fluidMeta round-trip', () => {
 	it('loads chunks without fluidMeta (legacy save) as undefined', async () => {
 		const storage = new MemStorage();
 		const adapter = new LocalStorageAdapter(storage as unknown as Storage);
-		const blocks = new Uint8Array(BLOCKS_PER_CHUNK);
+		const blocks = new Uint16Array(BLOCKS_PER_CHUNK);
 		const save: WorldSave = {
 			version: 2,
 			id: idFor(999),
@@ -157,7 +157,7 @@ describe('LocalStorageAdapter — fluidMeta round-trip', () => {
 		// per-chunk storage value, no JSON wrapper — and confirm it still loads.
 		const storage = new MemStorage();
 		const adapter = new LocalStorageAdapter(storage as unknown as Storage);
-		const blocks = new Uint8Array(BLOCKS_PER_CHUNK);
+		const blocks = new Uint16Array(BLOCKS_PER_CHUNK);
 		blocks[0] = 7;
 		blocks[100] = 3;
 		storage.setItem(
@@ -184,12 +184,24 @@ describe('LocalStorageAdapter — fluidMeta round-trip', () => {
 		expect(loaded!.chunks[0].blocks[100]).toBe(3);
 		expect(loaded!.chunks[0].fluidMeta).toBeUndefined();
 	});
+
+	it('surfaces the decode error, not atob, when a JSON chunk payload is corrupt', async () => {
+		const storage = new MemStorage();
+		const adapter = new LocalStorageAdapter(storage as unknown as Storage);
+		await adapter.saveWorld(sampleSave(77));
+		let key: string | null = null;
+		for (let i = 0; i < storage.length; i++) if (storage.key(i)!.includes(':chunk:')) key = storage.key(i);
+		const payload = JSON.parse(storage.getItem(key!)!);
+		payload.blocks = 'eJxjZQQAAA0ABw==';   // deflate of RLE [5, 1]: valid stream, wrong length
+		storage.setItem(key!, JSON.stringify(payload));
+		await expect(adapter.loadWorld(idFor(77))).rejects.toThrow(/wrong length/);
+	});
 });
 
 describe('LocalStorageAdapter torn saves', () => {
 	function multiChunkSave(seed: number, fill: number): WorldSave {
 		const chunks = [0, 1, 2, 3].map((i) => {
-			const blocks = new Uint8Array(BLOCKS_PER_CHUNK);
+			const blocks = new Uint16Array(BLOCKS_PER_CHUNK);
 			blocks.fill(fill);
 			return { cx: i, cz: 0, blocks };
 		});
@@ -241,7 +253,7 @@ describe('LocalStorageAdapter legacy adoption', () => {
 	const UUID = '22222222-2222-4222-8222-222222222222';
 
 	function seedV1(storage: MemStorage, seed: number, fill: number) {
-		const blocks = new Uint8Array(BLOCKS_PER_CHUNK);
+		const blocks = new Uint16Array(BLOCKS_PER_CHUNK);
 		blocks.fill(fill);
 		storage.setItem(
 			`minicraft:v1:world:${seed}:meta`,

@@ -25,7 +25,7 @@ export type WorldSummary = {
 export type RawChunk = {
 	cx: number;
 	cz: number;
-	blocks: Uint8Array;
+	blocks: Uint16Array;
 	/** Optional sparse fluid metadata (flow voxels only). Absent on legacy saves. */
 	fluidMeta?: Map<number, number>;
 };

@@ -4,7 +4,7 @@ import { BLOCKS_PER_CHUNK, indexOf } from './coords';
 export class Chunk {
 	readonly cx: number;
 	readonly cz: number;
-	readonly blocks: Uint8Array;
+	readonly blocks: Uint16Array;
 	readonly lights: Uint16Array;
 	readonly sunlit: Uint8Array;
 	readonly liquidFrontier: Set<number> = new Set();
@@ -17,7 +17,7 @@ export class Chunk {
 	constructor(cx: number, cz: number) {
 		this.cx = cx;
 		this.cz = cz;
-		this.blocks = new Uint8Array(BLOCKS_PER_CHUNK);
+		this.blocks = new Uint16Array(BLOCKS_PER_CHUNK);
 		this.lights = new Uint16Array(BLOCKS_PER_CHUNK);
 		this.sunlit = new Uint8Array(BLOCKS_PER_CHUNK);
 	}

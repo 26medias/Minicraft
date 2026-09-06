@@ -88,7 +88,7 @@ describe('generateChunk — flatter terrain', () => {
 
 const EXPECTED_HASH = 4166549171; // filled in below by running the test once
 
-function hashBytes(bytes: Uint8Array): number {
+function hashBytes(bytes: ArrayLike<number>): number {
 	let h = 2166136261 >>> 0;
 	for (let i = 0; i < bytes.length; i++) {
 		h ^= bytes[i];

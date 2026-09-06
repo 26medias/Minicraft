@@ -11,7 +11,6 @@ function choiceOrNull(value: unknown, choices: number[]): number | null {
 
 function defaults(): Options {
 	return {
-		kidMode: true,
 		keybindings: { ...DEFAULT_KEYBINDINGS },
 		currentLightColor: DEFAULT_LIGHT_COLOR,
 		playLimitMin: null,
@@ -35,7 +34,6 @@ export function loadOptions(): Options {
 				(saved as Record<string, string>)[action] ?? DEFAULT_KEYBINDINGS[action];
 		}
 		return {
-			kidMode: parsed.kidMode ?? true,
 			keybindings: filteredBindings,
 			currentLightColor: parsed.currentLightColor ?? DEFAULT_LIGHT_COLOR,
 			playLimitMin: choiceOrNull(parsed.playLimitMin, PLAY_LIMIT_CHOICES_MIN),

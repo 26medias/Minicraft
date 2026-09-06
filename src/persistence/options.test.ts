@@ -36,14 +36,12 @@ describe('loadOptions', () => {
 		const { loadOptions } = await import('./options');
 		const opts = loadOptions();
 		expect(opts.keybindings).toEqual(DEFAULT_KEYBINDINGS);
-		expect(opts.kidMode).toBe(true);
 	});
 
 	it('strips stale flyUp / flyDown keys that were removed in Task 20', async () => {
 		// Simulate a save that still has old flyUp / flyDown bindings, where
 		// flyUp was mapped to 'Space' (which would shadow the jump binding).
 		const stale = {
-			kidMode: false,
 			keybindings: {
 				...DEFAULT_KEYBINDINGS,
 				flyUp: 'Space',
@@ -65,7 +63,6 @@ describe('loadOptions', () => {
 
 	it('preserves known overrides from saved options', async () => {
 		const saved = {
-			kidMode: true,
 			keybindings: {
 				...DEFAULT_KEYBINDINGS,
 				forward: 'ArrowUp', // custom override
@@ -106,7 +103,6 @@ describe('loadOptions', () => {
 
 	it('rejects play-time values that are not in the choice lists', async () => {
 		store['minicraft:v1:options'] = JSON.stringify({
-			kidMode: true,
 			keybindings: DEFAULT_KEYBINDINGS,
 			playLimitMin: '30',
 			playBreakMin: 7,
@@ -115,5 +111,16 @@ describe('loadOptions', () => {
 		const opts = loadOptions();
 		expect(opts.playLimitMin).toBeNull();
 		expect(opts.playBreakMin).toBeNull();
+	});
+
+	it('ignores a stored kidMode', async () => {
+		store['minicraft:v1:options'] = JSON.stringify({ kidMode: false, keybindings: DEFAULT_KEYBINDINGS });
+		const { loadOptions } = await import('./options');
+		expect('kidMode' in loadOptions()).toBe(false);
+	});
+
+	it('binds inventory to KeyI by default', async () => {
+		const { loadOptions } = await import('./options');
+		expect(loadOptions().keybindings.inventory).toBe('KeyI');
 	});
 });

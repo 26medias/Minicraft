@@ -17,7 +17,8 @@ export type Action =
 	| 'flySpeedUp'
 	| 'flySpeedDown'
 	| 'ignite'
-	| 'pickLightColor';
+	| 'pickLightColor'
+	| 'inventory';
 
 export const ACTIONS: Action[] = [
 	'forward',
@@ -39,6 +40,7 @@ export const ACTIONS: Action[] = [
 	'flySpeedDown',
 	'ignite',
 	'pickLightColor',
+	'inventory',
 ];
 
 export const ACTION_LABEL: Record<Action, string> = {
@@ -61,6 +63,7 @@ export const ACTION_LABEL: Record<Action, string> = {
 	flySpeedDown: 'Fly Slower',
 	ignite: 'Ignite TNT',
 	pickLightColor: 'Pick Light Color',
+	inventory: 'Open Inventory',
 };
 
 export const DEFAULT_KEYBINDINGS: Record<Action, string> = {
@@ -83,10 +86,10 @@ export const DEFAULT_KEYBINDINGS: Record<Action, string> = {
 	flySpeedDown: 'Minus',
 	ignite: 'KeyE',
 	pickLightColor: 'KeyC',
+	inventory: 'KeyI',
 };
 
 export type Options = {
-	kidMode: boolean;
 	keybindings: Record<Action, string>;
 	currentLightColor: string;
 	/** Minutes of play per session; null = Off. */

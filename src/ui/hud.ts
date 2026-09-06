@@ -86,7 +86,7 @@ export class Hud {
 			slot.classList.toggle('selected', i === selected);
 			slot.title = def ? def.label : '';
 
-			const rect = this.atlas.tileRect(id, 'px');
+			const rect = this.atlas.tileRect(id, 'nz');
 			if (rect) {
 				slot.style.backgroundImage = `url(${this.atlas.pngUrl})`;
 				slot.style.backgroundSize = bgSize;

@@ -27,20 +27,6 @@ export class OptionsMenu {
 		card.className = 'menu-card';
 		card.innerHTML = `<h1>Options</h1>`;
 
-		const kidRow = document.createElement('div');
-		kidRow.style.margin = '12px 0';
-		const kidLabel = document.createElement('label');
-		const kidCheck = document.createElement('input');
-		kidCheck.type = 'checkbox';
-		kidCheck.checked = this.current.kidMode;
-		kidCheck.onchange = () => {
-			this.current.kidMode = kidCheck.checked;
-		};
-		kidLabel.appendChild(kidCheck);
-		kidLabel.appendChild(document.createTextNode(' Kid mode (basic blocks only)'));
-		kidRow.appendChild(kidLabel);
-		card.appendChild(kidRow);
-
 		const kb = document.createElement('div');
 		kb.innerHTML = '<h2 style="font-size: 16px; margin: 16px 0 4px;">Keybindings</h2>';
 		for (const action of ACTIONS) {

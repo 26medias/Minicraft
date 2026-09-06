@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { BLOCKS, BLOCK_BY_NAME, AIR, isSolid, isTransparent, faceTexture, isLiquid, WATER, LAVA } from './blocks.data';
+import { BLOCKS, BLOCK_BY_NAME, AIR, DEFAULT_HOTBAR, isSolid, isTransparent, faceTexture, isLiquid, WATER, LAVA } from './blocks.data';
 
 describe('block catalog', () => {
 	it('has air at id 0', () => {
@@ -47,11 +47,23 @@ describe('block catalog', () => {
 		expect(faceTexture(grass, 'px')).toBe('grass_block_side');
 	});
 
-	it('flags exactly the kid-mode set', () => {
-		const kid = BLOCKS.filter((b) => b.kidMode).map((b) => b.name);
-		expect(kid).toContain('grass_block');
-		expect(kid).toContain('dirt');
-		expect(kid).toContain('stone');
+	it('is a dense array indexed by id', () => {
+		for (let i = 0; i < BLOCKS.length; i++) expect(BLOCKS[i].id).toBe(i);
+	});
+
+	it('base rows carry group basics and are not translucent', () => {
+		for (const b of BLOCKS.slice(0, 20)) {
+			expect(b.group).toBe('basics');
+			expect(b.translucent).toBe(false);
+		}
+	});
+
+	it('DEFAULT_HOTBAR is nine live base blocks', () => {
+		expect(DEFAULT_HOTBAR).toHaveLength(9);
+		expect(DEFAULT_HOTBAR.map((id) => BLOCKS[id].name)).toEqual([
+			'grass_block', 'dirt', 'stone', 'cobblestone', 'sand',
+			'oak_planks', 'oak_log', 'glass', 'white_wool',
+		]);
 	});
 
 	it('assigns hardness per block — air 0, soft < wood < stone, glass fastest', () => {
@@ -93,9 +105,9 @@ describe('BlockDef light + liquid fields', () => {
 		expect(BLOCK_BY_NAME['lamp'].lightFilter).toBe(15);
 	});
 
-	it('all non-lamp non-glass solid blocks have filter 15 and lightLevel 0', () => {
+	it('all non-lamp non-glass base blocks have filter 15 and lightLevel 0', () => {
 		const exceptions = new Set(['air', 'glass', 'lamp', 'water', 'lava']);
-		for (const b of BLOCKS) {
+		for (const b of BLOCKS.slice(0, 20)) {
 			if (exceptions.has(b.name)) continue;
 			expect(b.lightFilter).toBe(15);
 			expect(b.lightLevel).toBe(0);
@@ -116,7 +128,6 @@ describe('water and lava', () => {
 		expect(w.id).toBe(17);
 		expect(w.solid).toBe(false);
 		expect(w.transparent).toBe(true);
-		expect(w.kidMode).toBe(true);
 		expect(w.liquid).toBe('water');
 		expect(w.lightFilter).toBe(2);
 		expect(w.lightLevel).toBe(0);
@@ -128,7 +139,6 @@ describe('water and lava', () => {
 		expect(l.id).toBe(18);
 		expect(l.solid).toBe(false);
 		expect(l.transparent).toBe(true);
-		expect(l.kidMode).toBe(true);
 		expect(l.liquid).toBe('lava');
 		expect(l.lightFilter).toBe(3);
 		expect(l.lightLevel).toBe(12);
@@ -152,7 +162,6 @@ describe('obsidian block', () => {
 		expect(obsidian).toBeDefined();
 		expect(obsidian.solid).toBe(true);
 		expect(obsidian.transparent).toBe(false);
-		expect(obsidian.kidMode).toBe(true);
 		expect(obsidian.liquid).toBe('none');
 		expect(obsidian.hardness).toBe(1.2);
 		expect(obsidian.lightLevel).toBe(0);

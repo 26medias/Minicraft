@@ -20,11 +20,11 @@ The scheduler ticks at 2 Hz (every 0.5 s), not 20 Hz like Minecraft — the disc
 In `src/data/blocks.data.ts`:
 
 ```ts
-{ id: 17, name: 'water', label: 'Water', solid: false, transparent: true, kidMode: true,
+{ id: 17, name: 'water', label: 'Water', solid: false, transparent: true,
     hardness: 0, lightLevel: 0, lightFilter: 2, liquid: 'water',
     textures: { kind: 'uniform', all: 'water_still' } }
 
-{ id: 18, name: 'lava', label: 'Lava', solid: false, transparent: true, kidMode: true,
+{ id: 18, name: 'lava', label: 'Lava', solid: false, transparent: true,
     hardness: 0, lightLevel: 12, lightFilter: 3, liquid: 'lava',
     textures: { kind: 'uniform', all: 'lava_still' } }
 ```

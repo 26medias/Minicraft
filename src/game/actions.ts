@@ -1,7 +1,7 @@
 import type { World } from '../engine/world/world';
 import type { VoxelHit } from '../engine/input/raycast';
 import type { BlockId } from '../data/blocks.data';
-import { AIR, isSolid, BLOCK_BY_NAME } from '../data/blocks.data';
+import { AIR, BLOCKS, isSolid, BLOCK_BY_NAME } from '../data/blocks.data';
 import { tntKey } from './tnt';
 
 const FACE_NORMAL: Record<string, [number, number, number]> = {
@@ -36,6 +36,18 @@ export function placeBlock(
 
 	world.setBlock(tx, ty, tz, block);
 	return true;
+}
+
+/**
+ * Shift + right click: may the block under the crosshair be overwritten by `block`?
+ * Same mineability guard as GameLoop.updateMining; a same-id replace is refused so
+ * the click is a true no-op (world.setBlock would flag the chunk modified).
+ */
+export function canReplace(world: World, hit: VoxelHit, block: BlockId): boolean {
+	const existing = world.getBlock(hit.x, hit.y, hit.z);
+	const def = BLOCKS[existing];
+	if (!def || !isSolid(existing) || def.hardness <= 0) return false;
+	return existing !== block;
 }
 
 export type PrimedEntry = { x: number; y: number; z: number; fuse: number };

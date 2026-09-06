@@ -1,7 +1,8 @@
 import { describe, it, expect } from 'vitest';
 import { World } from '../engine/world/world';
-import { BLOCK_BY_NAME } from '../data/blocks.data';
-import { igniteTnt, type PrimedEntry } from './actions';
+import { AIR, BLOCK_BY_NAME } from '../data/blocks.data';
+import { igniteTnt, canReplace, type PrimedEntry } from './actions';
+import { indexOf } from '../engine/world/coords';
 import type { VoxelHit } from '../engine/input/raycast';
 
 const tntId = BLOCK_BY_NAME['tnt'].id;
@@ -44,5 +45,38 @@ describe('igniteTnt', () => {
 		expect(ok).toBe(false);
 		expect(reg.size).toBe(1);
 		expect(first.fuse).toBe(1.0);
+	});
+});
+
+const dirtId = BLOCK_BY_NAME['dirt'].id;
+const waterId = BLOCK_BY_NAME['water'].id;
+
+describe('canReplace', () => {
+	it('allows stone to be replaced by dirt', () => {
+		const w = new World(1);
+		w.setBlock(100, 60, 100, stoneId);
+		expect(canReplace(w, hitAt(100, 60, 100), dirtId)).toBe(true);
+	});
+
+	it('refuses a same-block replace', () => {
+		const w = new World(1);
+		w.setBlock(100, 60, 100, stoneId);
+		expect(canReplace(w, hitAt(100, 60, 100), stoneId)).toBe(false);
+	});
+
+	it('refuses air and liquid cells', () => {
+		const w = new World(1);
+		w.setBlock(100, 60, 100, AIR);
+		w.setBlock(101, 60, 100, waterId);
+		expect(canReplace(w, hitAt(100, 60, 100), stoneId)).toBe(false);
+		expect(canReplace(w, hitAt(101, 60, 100), stoneId)).toBe(false);
+	});
+
+	it('refuses an unknown block id without throwing', () => {
+		const w = new World(1);
+		const c = w.ensureChunk(6, 6); // world (100, 60, 100) → chunk 6,6 local 4,60,4
+		c.blocks[indexOf(4, 60, 4)] = 0xfffe;
+		expect(() => canReplace(w, hitAt(100, 60, 100), stoneId)).not.toThrow();
+		expect(canReplace(w, hitAt(100, 60, 100), stoneId)).toBe(false);
 	});
 });

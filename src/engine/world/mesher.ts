@@ -1,5 +1,5 @@
 import type { BlockId, Face } from '../../data/blocks.data';
-import { BLOCKS, isLiquid, isSolid, isTransparent } from '../../data/blocks.data';
+import { BLOCKS, isLiquid, isSolid, isTranslucent, isTransparent } from '../../data/blocks.data';
 import type { Chunk } from './chunk';
 import { CHUNK_SIZE_X, CHUNK_SIZE_Y, CHUNK_SIZE_Z, indexOf } from './coords';
 
@@ -14,6 +14,7 @@ export type ChunkMesh = {
 export type ChunkMeshResult = {
 	opaque: ChunkMesh;
 	liquid: ChunkMesh | null;
+	translucent: ChunkMesh | null;
 };
 
 export type UvFn = (id: BlockId, face: Face) => [number, number, number, number];
@@ -391,13 +392,20 @@ function sampleCornerShadow(
 }
 
 export function meshChunk(chunk: Chunk, neighbors: Neighbors, uvFor: UvFn): ChunkMeshResult {
+	const translucent = buildSolidMesh(chunk, neighbors, uvFor, (id) => isTranslucent(id));
 	return {
-		opaque: buildOpaqueMesh(chunk, neighbors, uvFor),
+		opaque: buildSolidMesh(chunk, neighbors, uvFor, (id) => !isTranslucent(id)),
 		liquid: buildLiquidMesh(chunk, neighbors, uvFor),
+		translucent: translucent.indices.length > 0 ? translucent : null,
 	};
 }
 
-function buildOpaqueMesh(chunk: Chunk, neighbors: Neighbors, uvFor: UvFn): ChunkMesh {
+function buildSolidMesh(
+	chunk: Chunk,
+	neighbors: Neighbors,
+	uvFor: UvFn,
+	select: (id: BlockId) => boolean,
+): ChunkMesh {
 	const positions: number[] = [];
 	const normals: number[] = [];
 	const uvs: number[] = [];
@@ -409,7 +417,7 @@ function buildOpaqueMesh(chunk: Chunk, neighbors: Neighbors, uvFor: UvFn): Chunk
 		for (let z = 0; z < CHUNK_SIZE_Z; z++) {
 			for (let x = 0; x < CHUNK_SIZE_X; x++) {
 				const id = chunk.get(x, y, z);
-				if (!isSolid(id)) continue;
+				if (!isSolid(id) || !select(id)) continue;
 
 				for (const face of FACE_ORDER) {
 					const f = FACES[face];

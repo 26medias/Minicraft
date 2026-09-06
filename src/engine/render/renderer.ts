@@ -1,6 +1,6 @@
 import * as THREE from 'three';
 import type { Chunk } from '../world/chunk';
-import type { ChunkMeshResult } from '../world/mesher';
+import type { ChunkMesh, ChunkMeshResult } from '../world/mesher';
 import type { LoadedAtlas } from './atlas';
 
 export class Renderer {
@@ -10,8 +10,10 @@ export class Renderer {
 	private chunkGroup: THREE.Group;
 	private chunkMeshes = new Map<string, THREE.Mesh>();
 	private liquidMeshes = new Map<string, THREE.Mesh>();
+	private translucentMeshes = new Map<string, THREE.Mesh>();
 	readonly material: THREE.Material;
 	readonly liquidMaterial: THREE.Material;
+	readonly translucentMaterial: THREE.Material;
 	private tickFn: ((dt: number) => void) | null = null;
 	private last = performance.now();
 
@@ -50,6 +52,18 @@ export class Renderer {
 			alphaTest: 0.01,
 		});
 
+		// Full-cube translucent blocks (stained glass, ice). FrontSide + depthWrite so a
+		// cube's inner faces are not drawn through its outer ones (the liquid material
+		// is DoubleSide/no-depth-write and double-blends a closed cube).
+		this.translucentMaterial = new THREE.MeshBasicMaterial({
+			map: atlas.texture,
+			vertexColors: true,
+			transparent: true,
+			depthWrite: true,
+			side: THREE.FrontSide,
+			alphaTest: 0.01,
+		});
+
 		this.resize();
 		window.addEventListener('resize', () => this.resize());
 		requestAnimationFrame(this.frame);
@@ -70,14 +84,7 @@ export class Renderer {
 			this.chunkMeshes.delete(k);
 		}
 		if (meshResult.opaque.indices.length > 0) {
-			const g = new THREE.BufferGeometry();
-			g.setAttribute('position', new THREE.BufferAttribute(meshResult.opaque.positions, 3));
-			g.setAttribute('normal', new THREE.BufferAttribute(meshResult.opaque.normals, 3));
-			g.setAttribute('uv', new THREE.BufferAttribute(meshResult.opaque.uvs, 2));
-			g.setAttribute('color', new THREE.BufferAttribute(meshResult.opaque.colors, 3));
-			g.setIndex(new THREE.BufferAttribute(meshResult.opaque.indices, 1));
-			g.computeBoundingSphere();
-			const m = new THREE.Mesh(g, this.material);
+			const m = new THREE.Mesh(this.buildGeometry(meshResult.opaque), this.material);
 			m.position.set(chunk.cx * 16, 0, chunk.cz * 16);
 			this.chunkGroup.add(m);
 			this.chunkMeshes.set(k, m);
@@ -91,18 +98,43 @@ export class Renderer {
 			this.liquidMeshes.delete(k);
 		}
 		if (meshResult.liquid && meshResult.liquid.indices.length > 0) {
-			const g = new THREE.BufferGeometry();
-			g.setAttribute('position', new THREE.BufferAttribute(meshResult.liquid.positions, 3));
-			g.setAttribute('normal', new THREE.BufferAttribute(meshResult.liquid.normals, 3));
-			g.setAttribute('uv', new THREE.BufferAttribute(meshResult.liquid.uvs, 2));
-			g.setAttribute('color', new THREE.BufferAttribute(meshResult.liquid.colors, 3));
-			g.setIndex(new THREE.BufferAttribute(meshResult.liquid.indices, 1));
-			g.computeBoundingSphere();
-			const m = new THREE.Mesh(g, this.liquidMaterial);
+			const m = new THREE.Mesh(this.buildGeometry(meshResult.liquid), this.liquidMaterial);
 			m.position.set(chunk.cx * 16, 0, chunk.cz * 16);
+			// three sorts transparent meshes by chunk centroid, so without this a water
+			// mesh from one chunk can draw before a glass mesh from another. Glass writes
+			// depth, so drawing every glass mesh before every water mesh is correct.
+			m.renderOrder = 1;
 			this.chunkGroup.add(m);
 			this.liquidMeshes.set(k, m);
 		}
+
+		// Translucent (stained glass, ice)
+		const existingTranslucent = this.translucentMeshes.get(k);
+		if (existingTranslucent) {
+			this.chunkGroup.remove(existingTranslucent);
+			(existingTranslucent.geometry as THREE.BufferGeometry).dispose();
+			this.translucentMeshes.delete(k);
+		}
+		if (meshResult.translucent && meshResult.translucent.indices.length > 0) {
+			const m = new THREE.Mesh(
+				this.buildGeometry(meshResult.translucent),
+				this.translucentMaterial,
+			);
+			m.position.set(chunk.cx * 16, 0, chunk.cz * 16);
+			this.chunkGroup.add(m);
+			this.translucentMeshes.set(k, m);
+		}
+	}
+
+	private buildGeometry(mesh: ChunkMesh): THREE.BufferGeometry {
+		const g = new THREE.BufferGeometry();
+		g.setAttribute('position', new THREE.BufferAttribute(mesh.positions, 3));
+		g.setAttribute('normal', new THREE.BufferAttribute(mesh.normals, 3));
+		g.setAttribute('uv', new THREE.BufferAttribute(mesh.uvs, 2));
+		g.setAttribute('color', new THREE.BufferAttribute(mesh.colors, 3));
+		g.setIndex(new THREE.BufferAttribute(mesh.indices, 1));
+		g.computeBoundingSphere();
+		return g;
 	}
 
 	private resize() {

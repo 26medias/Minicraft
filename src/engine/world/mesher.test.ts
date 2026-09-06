@@ -181,3 +181,29 @@ describe('meshChunk — opaque + liquid split', () => {
 		expect(result.liquid!.positions.length).toBe(120);
 	});
 });
+
+describe('translucent pass', () => {
+	const glass = BLOCK_BY_NAME['blue_stained_glass'].id;
+	it('emits a translucent block in its own bucket, not the opaque one', () => {
+		const c = new Chunk(0, 0);
+		c.set(5, 5, 5, glass);
+		const r = meshChunk(c, {}, uvStub);
+		expect(r.opaque.indices.length).toBe(0);
+		expect(r.translucent!.indices.length).toBe(36);
+	});
+	it('an opaque neighbour still emits its face toward stained glass', () => {
+		const c = new Chunk(0, 0);
+		c.set(5, 5, 5, glass);
+		c.set(6, 5, 5, stone);
+		const r = meshChunk(c, {}, uvStub);
+		expect(r.opaque.indices.length).toBe(36);      // all six stone faces (glass is see-through)
+		expect(r.translucent!.indices.length).toBe(30); // glass hides its face against stone
+	});
+	it('two adjacent identical stained glass blocks share no face', () => {
+		const c = new Chunk(0, 0);
+		c.set(5, 5, 5, glass);
+		c.set(6, 5, 5, glass);
+		const r = meshChunk(c, {}, uvStub);
+		expect(r.translucent!.indices.length).toBe(60);
+	});
+});

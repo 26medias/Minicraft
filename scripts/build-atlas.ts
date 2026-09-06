@@ -4,12 +4,13 @@ import { dirname, join } from 'node:path';
 import { exit } from 'node:process';
 import sharp from 'sharp';
 import { BLOCKS } from '../src/data/blocks.data.js';
+import { textureNames } from '../src/data/catalog-rules.js';
 
-const ATLAS_SIZE = 512;
+const ATLAS_SIZE = 1024;
 const TILE = 16;
-const PADDING = 2;
-const CELL = TILE + PADDING * 2; // 20
-const TILES_PER_ROW = Math.floor(ATLAS_SIZE / CELL); // 25
+const PADDING = 8;                       // POT cell keeps mip 1–3 inside the tile's own padding
+const CELL = TILE + PADDING * 2;         // 32
+const TILES_PER_ROW = Math.floor(ATLAS_SIZE / CELL); // 32
 
 const ASSETS_DIR = 'src/assets/blocks';
 const OUT_PNG = 'public/atlas.png';
@@ -20,6 +21,13 @@ const OUT_JSON = 'public/atlas.json';
 const TEXTURE_TINTS: Record<string, [number, number, number]> = {
 	grass_block_top: [0x79, 0xc0, 0x5a], // plains-biome grass green
 	water_still: [0x3f, 0x76, 0xe4], // Minecraft plains-biome water blue
+	oak_leaves: [0x77, 0xab, 0x2f],
+	jungle_leaves: [0x77, 0xab, 0x2f],
+	acacia_leaves: [0x77, 0xab, 0x2f],
+	dark_oak_leaves: [0x77, 0xab, 0x2f],
+	mangrove_leaves: [0x77, 0xab, 0x2f],
+	birch_leaves: [0x80, 0xa7, 0x55],
+	spruce_leaves: [0x61, 0x99, 0x61],
 };
 
 function applyTint(raw: Uint8Array, tint: [number, number, number]): Uint8Array {
@@ -37,27 +45,8 @@ function applyTint(raw: Uint8Array, tint: [number, number, number]): Uint8Array 
 async function main() {
 	const names = new Set<string>();
 	for (const b of BLOCKS) {
-		if (!b.textures) continue;
-		const t = b.textures;
-		if (t.kind === 'uniform') names.add(t.all);
-		else if (t.kind === 'top-bottom-side') {
-			names.add(t.top);
-			names.add(t.bottom);
-			names.add(t.side);
-		} else if (t.kind === 'columnar') {
-			names.add(t.top);
-			names.add(t.bottom);
-			names.add(t.sides);
-		} else if (t.kind === 'six') {
-			names.add(t.px);
-			names.add(t.nx);
-			names.add(t.py);
-			names.add(t.ny);
-			names.add(t.pz);
-			names.add(t.nz);
-		} else {
-			throw new Error(`Unknown texture kind: ${(t as { kind: string }).kind}`);
-		}
+		if (b.textures === null) continue;
+		for (const name of textureNames(b.textures)) names.add(name);
 	}
 
 	const sorted = [...names].sort();
@@ -87,7 +76,13 @@ async function main() {
 		const tilePath = join(ASSETS_DIR, `${name}.png`);
 		// ensureAlpha() forces 4-channel RGBA regardless of the source PNG's channel count — Mojang's
 		// Phase 1 assets mix RGB and RGBA, and padEdgeReplicate's stride math assumes 4 channels.
-		const img = sharp(tilePath).resize(TILE, TILE, { kernel: 'nearest' }).ensureAlpha();
+		// Animated textures are vertical strips of frames; take frame 0 rather than
+		// squashing every frame into one tile (which is what water and lava did).
+		const meta = await sharp(tilePath).metadata();
+		const w = meta.width ?? TILE;
+		let img = sharp(tilePath);
+		if ((meta.height ?? w) > w) img = img.extract({ left: 0, top: 0, width: w, height: w });
+		img = img.resize(TILE, TILE, { kernel: 'nearest' }).ensureAlpha();
 		const raw = await img.raw().toBuffer({ resolveWithObject: true });
 		if (raw.info.width !== TILE || raw.info.height !== TILE) {
 			throw new Error(

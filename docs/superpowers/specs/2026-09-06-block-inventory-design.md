@@ -1,102 +1,125 @@
 # Block Inventory — Design
 
 **Date:** 2026-09-06
-**Status:** Draft, awaiting gate 1
+**Status:** Revised after gate 1 (four reviewers: rigour, engine, boundary/pipeline, consumer)
 **Branch:** `feat/inventory`
 
 ## Problem
 
-The hotbar is the whole block library: 18 blocks. Noah has been asking for the
+The hotbar is the whole block library: 19 blocks. Noah has been asking for the
 huge Minecraft library for a while. The textures are already extracted (1083
 PNGs from the family's own 1.21.6 install, in `src/assets/blocks/`), but only
-19 catalog rows use them.
+20 catalog rows use them.
 
 ## Goal
 
-Press **I** to open a full-screen block inventory listing every full-cube block
-that the local Minecraft 1.21.6 install has textures for. Click a block to put
-it in the currently selected hotbar slot. Press **I** or **Esc** to close. The
-hotbar becomes a fixed 9-slot bar the kid fills from the inventory, saved with
-the world.
+Press **I** to open a full-screen block inventory listing every solid cube
+block that the local Minecraft 1.21.6 install has textures for: about 340
+blocks. Click a block to put it in the currently selected hotbar slot. Press
+**I** or **Esc** to close. The hotbar becomes a fixed 9-slot bar the kid fills
+from the inventory, saved with the world.
 
-No crafting, no item counts, no search box, no categories UI beyond visual
-grouping. Personal use only; the Mojang-asset rule in `CLAUDE.md` stands (never
-commit these to a public fork).
+No crafting, no item counts, no search box. Personal use only; the
+Mojang-asset rule in `CLAUDE.md` stands (never commit these to a public fork).
 
-## Non-goals
+## Non-goals, in the words the parent will use with Noah
 
-- Non-cube blocks: stairs, slabs, fences, doors, flowers, crops, torches, rails,
-  and every other model that is not a full cube. The engine renders unit cubes
-  and nothing else. This excludes roughly 700 of the 1112 blockstates.
-- Directional or rotated placement (logs always stand upright, furnaces always
-  face one way).
-- Block states (lit furnace, open barrel, waxed copper): one row per distinct
-  *look*; 27 exact texture duplicates (waxed copper, infested stone) collapse
-  into their base block.
-- Dev/creative-only blocks: `jigsaw`, `structure_block`, `test_block`,
-  `test_instance_block`, `command_block` family, `barrier`, `light`.
-- Any change to the play-time limit, lighting, liquids, or TNT beyond what the
-  id width forces.
-- Touch / drag-and-drop. Click or tap on a tile is the whole interaction.
+- **Only whole cubes.** No stairs, slabs, fences, walls, doors, trapdoors,
+  torches, lanterns, flowers, saplings, crops, glass panes, chests, beds,
+  signs, ladders, candles, shulker boxes, rails, or buttons. The engine draws
+  unit cubes and nothing else. He gets ~340 blocks and misses ~750.
+- **Blocks always face the same way.** A furnace or a jack o'lantern shows its
+  face on one fixed side; logs always stand upright.
+- **One row per look.** Waxed copper and infested stone look exactly like the
+  plain block and are not listed. Lit/open/charged variants are not listed;
+  the first variant in the game's own file is the one shown (a small override
+  list picks the lit redstone lamp because that is the one he wants).
+- **Dev and creative-mode oddities are out:** command, structure, jigsaw and
+  test blocks, barrier, light, spawners, respawn anchor, frosted ice,
+  reinforced deepslate.
+- No drag-and-drop, no touch gestures beyond a tap on a tile.
+- **Kid mode is removed.** Every one of today's 20 rows is already `kidMode:
+  true`, so the option has done nothing for months; the inventory makes the
+  "all blocks" view the default. The Options checkbox, the `kidMode` field
+  on blocks and options, and the CLAUDE.md / README lines describing the
+  filter are retired in this change.
 
 ## The one hard decision: 16-bit block ids
 
-Counting from the jar's `blockstates/` + `models/block/` (verified by script):
+Counting from the jar's `blockstates/` and `models/block/` (verified by three
+independent scripts during review):
 
 | | count |
 |---|---|
-| blockstates whose every variant is a cube-parent model | 379 |
-| after collapsing exact texture duplicates | 352 |
-| of those already in the catalog under an existing id | 15 |
-| dev blocks removed | 4 |
-| **new catalog rows** | **~333** |
-| catalog total (20 existing + new) | **~353** |
-| unique textures the atlas needs | ~430 (512 px atlas holds 625) |
+| blockstates whose every variant resolves to one full 0..16 cube element | ~399 |
+| after collapsing exact texture duplicates and excluding `waxed_*` / `infested_*` | ~350 |
+| already in the catalog under an existing id | 14 |
+| dev / creative exclusions | ~12 |
+| **new catalog rows** | **~325** |
+| catalog total (20 existing + new) | **~345** |
+| unique textures | ~410 |
 
-Chunks store block ids in a `Uint8Array` (`src/engine/world/chunk.ts:7`), so
-the catalog is capped at 256 ids today. 353 does not fit. Options:
+Chunks store block ids in a `Uint8Array` (`src/engine/world/chunk.ts:7`), a
+256-id cap. Options:
 
 1. **Widen to `Uint16Array`.** Touches `Chunk`, both codecs (client and cloud
-   API), `RawChunk`, and tests. The RLE codec writes each run as `[value,
+   API), `RawChunk`, fixtures. The RLE codec writes each run as `[value,
    varint run]` with `value` a raw byte; it becomes `[varint value, varint
    run]`. Every id in every existing save is < 128, and a varint for a value
    < 128 is the same single byte, so **existing saves decode byte-identically
    under the new codec, and re-saved worlds that only use old ids encode
-   byte-identically too**. No migration, no version bump, no format flag.
-2. Cap the library at ~236 blocks by curation. Rejected: the ask is "every
-   block", and any cut list would be arbitrary.
+   byte-identically too**. The rigour reviewer confirmed this on 132 fixtures
+   (0 byte mismatches) and confirmed that the *old* server hard-refuses any
+   chunk with an id ≥ 128 (3000/3000 randomised chunks → "wrong length" →
+   400) rather than corrupting it.
+2. Cap the library at ~236 blocks. Rejected: the ask is "every block".
 
-Decision: option 1. Memory cost is 32 KB per loaded chunk instead of 16 KB;
-~80 loaded chunks → 2.6 MB. Nothing else in the engine cares about the width:
-`lights` is already `Uint16Array`, indices are numbers, `set()` between typed
-arrays copies values.
+Decision: option 1. Memory: 32 KB per loaded chunk, ~2.6 MB for the usual 80.
 
-**Deploy order matters.** The cloud function's `decodeChunk` must be redeployed
-*before* the site: the old server would misparse a value ≥ 128 (it reads one
-byte then a varint run), fail the length check, and refuse the save. The new
-server reads old data identically, so deploying it first is safe. `./deploy.sh`
-is pre-authorised; the site deploy is Julien's.
+**Consequences, stated plainly:**
+
+- **Deploy the API before the site.** `./deploy.sh` is pre-authorised. The
+  new server reads old data identically. `/health` gains `codec: 2` and
+  `deploy.sh --verify` asserts it, so a forgotten API deploy fails loudly.
+- **A stale client cannot open a world that contains a new block.** Once Noah
+  places a block with id ≥ 128, a browser still running the old bundle (a
+  Cloudflare-cached `/minicraft/` or a second device) cannot decode that
+  world. Today that surfaces as an opaque `InvalidCharacterError` because
+  `parseChunkPayload` in `localStorage.ts` falls back to decoding the raw JSON
+  envelope; this change tightens the fallback so the honest "Decoded chunk has
+  wrong length" surfaces instead. Nothing is lost: the save is intact and
+  loads on a fresh bundle. Documented in `docs/inventory.md` under deploy.
 
 ## User-facing behaviour
 
 ### Inventory
 
-- **Open/close:** the `inventory` action, default `I` (rebindable in Options
-  like every other key). `Esc` also closes. Opening releases pointer lock;
-  closing does not re-acquire it (the kid clicks the world, as after any Esc).
+- **Open/close:** the `inventory` action, default `I` (rebindable in Options).
+  `Esc` also closes. Opening releases pointer lock and clears any held
+  mouse button and mining progress, exactly as the play-time freeze does.
+  Closing does not re-acquire pointer lock (the kid clicks the world, as after
+  any Esc; Chrome may refuse a re-lock for ~1 s after the exit, as it already
+  does after the colour picker).
+- **Blocked** while the colour picker is open, and the colour picker is
+  blocked while the inventory is open, so at most one overlay is up and `Esc`
+  is unambiguous.
 - **What it shows:** a full-screen dark translucent overlay (above the HUD,
   below the colour picker and the play-time freeze) with a scrollable grid of
-  64 px tiles, one per catalog block except air. Each tile shows the block's
-  side face (`px`), like the hotbar does. Tiles are ordered by **group** then
-  by name; a small uppercase group header (`WOOD`, `STONE`, `WOOL`, …)
-  precedes each group, in the style of the menu's section headers.
-- **Picking:** clicking a tile puts that block in the selected hotbar slot and
-  the HUD updates at once. The inventory stays open so the kid can fill several
-  slots. A strip of the 9 hotbar slots sits at the bottom of the overlay;
-  clicking one selects it. Digit keys and Tab still change the selected slot
+  **48 px** tiles (the size of the hotbar slots he already knows), 4 px gap,
+  one per catalog block except air and retired rows. Each tile shows the
+  block's **north face** (`nz`): identical to a side for most blocks, and the
+  face for furnaces and pumpkins. Tiles are ordered by **group** then by name;
+  an uppercase group header (`BASICS`, `WOOD`, `STONE`, `WOOL`, …) at ≥ 18 px,
+  full opacity, precedes each group. `BASICS` (the 19 blocks he already
+  knows) is first. The grid keeps its scroll position across open/close.
+- **Picking:** clicking a tile puts that block in the selected hotbar slot; the
+  HUD updates at once and the slot in the overlay's own 9-slot strip flashes
+  for ~300 ms so he sees where it went. The inventory stays open. Clicking a
+  strip slot selects it. Digit keys and Tab still change the selected slot
   while the inventory is open; nothing else on the keyboard does anything.
-- **Label:** hovering a tile shows its name in a line above the hotbar strip
-  (`Oak Planks`), and as the tile's `title`.
+- **Label:** hovering a tile brightens its border (like the colour picker) and
+  shows its name in a line above the strip (`Oak Planks`); the tile's `title`
+  carries the same name.
 - **While open:** the game loop is paused the same way the play-time freeze
   pauses it (physics, mining, simulation stop; chunks keep loading). The
   world stays visible behind the overlay.
@@ -105,198 +128,249 @@ is pre-authorised; the site deploy is Julien's.
 
 - Always 9 slots. An empty slot is `AIR` (id 0), drawn as a blank cell. Placing
   with an empty slot selected does nothing.
-- **Default hotbar** for a new world: the first 9 kid-mode blocks in catalog
-  order (grass, dirt, stone, cobblestone, sand, oak planks, oak log, glass,
-  white wool).
+- **Default hotbar** for a new world is an explicit data list
+  `DEFAULT_HOTBAR` (grass, dirt, stone, cobblestone, sand, oak planks, oak
+  log, glass, white wool).
 - **Saved per world** in the existing `PlayerSave.hotbar` / `selected` fields.
-  A save whose `hotbar` is not exactly 9 entries (every save written so far
-  holds the 18-entry pool) gets the default hotbar; if the previously selected
-  block is in it, it stays selected. Unknown ids in a saved hotbar become `AIR`.
-- **Kid mode** no longer filters anything at runtime. The inventory always
-  shows the whole library (that is the request). The option's only remaining
-  effect is that the default hotbar is drawn from the kid-mode rows. The
-  Options label becomes `Kid mode (basic starter hotbar)`.
+  Resolution rules (`resolveHotbar`, pure, tested):
+  - `hotbar` missing, or not exactly 9 entries (every save written so far
+    holds the 19-entry pool) → `DEFAULT_HOTBAR`; if the previously selected
+    block is in it, it stays selected, otherwise slot 0.
+  - exactly 9 entries → kept; any id that is not a live catalog block (unknown,
+    air, or retired) → `AIR`.
+  - `selected` outside 0..8 → 0.
+  - Noah's existing worlds therefore come up with the default hotbar once;
+    the parent should warn him.
 
 ### Blocks
 
 New blocks behave like existing ones: solid, mineable (hardness by group),
-placeable. Emissive blocks (glowstone, sea lantern, shroomlight, froglights,
-jack o'lantern, magma, crying obsidian) emit white light through the existing
-`lightLevel` path (as lava does today; only the lamp is colour-pickable).
-Leaves are cutout-transparent and tinted foliage green at build time, like
-grass tops. Stained glass, tinted glass, and ice are translucent and render
-through the existing transparent material.
+placeable. Emissive blocks (glowstone via the existing lamp row, sea lantern,
+shroomlight, froglights, jack o'lantern, magma, crying obsidian, lit redstone
+lamp) emit white light through the existing `lightLevel` path (as lava does).
+Leaves are cutout-transparent and tinted foliage green at build time. Stained
+glass, tinted glass, ice, honey and slime are translucent and render through a
+new front-face translucent pass. Leaves keep `lightFilter: 0`: in this engine
+any filter ≥ 1 costs at least 2 levels per block and disables the straight-down
+skylight case, which makes the ground under a tree cave-dark; the reason is
+recorded in `docs/lighting.md`.
 
 ## Architecture
 
-### Catalog
+### Catalog files
 
-`src/data/blocks.data.ts` keeps the 20 hand-written rows with their ids
-frozen (world saves reference them). It now also spreads in
-`src/data/blocks.catalog.data.ts`, a **generated, committed** file:
-
-```ts
-export const BLOCKS: BlockDef[] = [...BASE_BLOCKS, ...CATALOG_BLOCKS];
+```
+src/data/blocks.base.data.ts       # BlockDef, BlockGroup, the 20 hand rows (ids 0–19, frozen), DEFAULT_HOTBAR
+src/data/blocks.catalog.data.ts    # GENERATED, committed: rows with ids ≥ 20, emitted in id order
+src/data/blocks.catalog.ids.json   # GENERATED, committed: { name: id } — the frozen id map
+src/data/blocks.data.ts            # composes: BLOCKS = dense(BASE_BLOCKS, CATALOG_BLOCKS); helpers unchanged
+src/data/catalog-rules.ts          # pure rules (classification, textures, dedupe, groups, ids); unit-tested
+scripts/gen-catalog.ts             # I/O only: jar → rules → files
 ```
 
-`BlockDef` gains two fields:
+`blocks.catalog.data.ts` imports `type { BlockDef }` only (type-only, so a
+broken generated file can never take the generator down with it). The
+generator imports `blocks.base.data.ts`, `catalog-rules.ts`, and the ids
+JSON, never `blocks.data.ts`.
+
+`BlockDef` changes:
 
 ```ts
 group: BlockGroup;        // inventory ordering
-translucent: boolean;     // render in the transparent pass (stained glass, ice)
+translucent: boolean;     // render in the translucent pass
+retired?: true;           // tombstone: keeps the id, hidden from the inventory
+// kidMode: removed
 ```
 
-`BlockGroup` is a string union in `blocks.data.ts`, with a display order:
+`BlockGroup`, in display order:
 
 ```
-building, wood, stone, earth, sand, ore, metal, wool, concrete, terracotta,
-glass, light, nether, end, deep, coral, other
+basics, wood, stone, earth, sand, ore, metal, wool, concrete, terracotta,
+glazed, glass, light, nether, end, deepslate, coral, utility, other
 ```
 
-Existing rows get `group` by hand and `translucent: false`.
+The 20 base rows are `basics`.
 
-### Generator: `scripts/gen-catalog.ts`
+**Dense array invariant.** `BLOCKS[i].id === i` for every `i`, asserted by
+test. `blocks.data.ts` builds `BLOCKS` from the two lists by id and fills any
+gap with a tombstone `{ id, name: 'retired_<id>', retired: true, solid: false,
+transparent: true, textures: null, … }`, so a retired id renders as nothing
+instead of shifting every later lookup. Engine helpers (`isSolid`,
+`faceTexture`, lighting, shadows, atlas cache) stay positional.
 
-Reads the jar (`~/.minecraft/versions/1.21.6/1.21.6.jar`, path overridable by
-`MINECRAFT_JAR`), writes `src/data/blocks.catalog.data.ts`. Rules, each a
-pure function with a unit test:
+### Generator rules (`catalog-rules.ts`, each a pure function with a unit test)
 
-1. **Full cube:** a blockstate all of whose variant models have a parent in
-   `{cube_all, cube_column, cube_column_horizontal, cube_bottom_top, cube,
-   cube_top, cube_directional, cube_mirrored_all, leaves, orientable,
-   orientable_with_bottom, orientable_vertical}`. Multipart blockstates are
-   excluded (none are full cubes).
-2. **Textures:** resolved from the model's `textures` map to one of the four
-   existing `BlockFaceTextures` kinds: `cube_all`/`leaves`/`cube_mirrored_all`
-   → `uniform`; `cube_column*` → `columnar` (`end`, `side`); `cube_bottom_top`
-   / `cube_top` / `orientable*` → `top-bottom-side` (`top`, `bottom`|`side`,
-   `side`|`front`); `cube` / `cube_directional` → `six`. `orientable` blocks
-   use `front` for `pz` only if the kind is `six`; otherwise they show `side`
-   all round and `front` is dropped (furnace faces are a non-goal).
-3. **Dedupe:** two blockstates with the same parent kind and the same resolved
-   texture tuple keep the alphabetically first; the loser is listed in a
-   comment. Names already present in `BASE_BLOCKS` are skipped (their existing
-   id wins).
-4. **Exclude:** the dev-block list above, plus any block whose resolved texture
-   file is missing from `src/assets/blocks/` (logged, not fatal).
-5. **Ids:** assigned in name order starting at `BASE_BLOCKS.length` (20), and
-   **frozen**: the generator reads the current generated file first and keeps
-   every existing name→id; new names take the next free id. Regenerating never
-   renumbers.
-6. **Transparency:** `sharp` reads every texture. Any alpha < 255 → `transparent:
-   true`, `lightFilter: 0`. Any alpha strictly between 0 and 255 → also
-   `translucent: true`. Otherwise `lightFilter: 15`.
-7. **Group:** first matching rule on the name, in order: `_stained_glass`/`glass`/`ice`
-   → glass; `_wool` → wool; `_concrete` → concrete; `terracotta` → terracotta;
+1. **Full cube.** Walk each variant model's `parent` chain to the first model
+   with `elements`; the block qualifies only if every variant reaches a model
+   with exactly one element spanning `from [0,0,0]` to `to [16,16,16]`.
+   Multipart blockstates are excluded. (This admits glazed terracotta, whose
+   parent is a template, and needs no parent-name list.)
+2. **Variant.** The first variant in blockstate file order, unless the block
+   is in `LOOK_OVERRIDES` (`redstone_lamp → redstone_lamp_on` with
+   `lightLevel 15`).
+3. **Faces.** From that element's `faces.{north,south,east,west,up,down}.texture`,
+   dereference `#var` through the merged texture map up the chain, strip the
+   `minecraft:block/` prefix. Map `north→nz, south→pz, east→px, west→nx,
+   up→py, down→ny`. Then derive the kind from the six names: all equal →
+   `uniform`; `py === ny` and four sides equal → `columnar`; four sides equal
+   → `top-bottom-side`; otherwise `six`. A face whose texture cannot be
+   resolved is a generator error for that block (listed, and fatal if the
+   block is in the frozen id map).
+4. **Exclude by name:** `command_block`, `chain_command_block`,
+   `repeating_command_block`, `structure_block`, `jigsaw`, `test_block`,
+   `test_instance_block`, `barrier`, `light`, `spawner`, `trial_spawner`,
+   `vault`, `respawn_anchor`, `frosted_ice`, `reinforced_deepslate`, and any
+   name starting `waxed_` or `infested_`.
+5. **Dedupe.** Key = `(kind, six resolved names)`. The set is seeded with the
+   base rows' keys, so a generated block that looks like a base row is dropped
+   (glowstone → the existing lamp). Among generated blocks, the survivor is
+   the **shortest name**, then alphabetical; losers are listed in a comment at
+   the top of the generated file.
+6. **Ids.** `GENERATED_ID_START = 20`, a constant, never `BASE_BLOCKS.length`.
+   The generator loads `blocks.catalog.ids.json`; every existing name keeps
+   its id; new names take `max(id) + 1` in name order. A name in the map that
+   no longer resolves is a **hard error** naming the block, unless the run
+   passes `--retire <name>`, in which case the name stays in the map and its
+   row is emitted as a tombstone. Ids are never reused. The generated file is
+   emitted in id order. Future hand-written blocks are added to a
+   `HAND_ROWS` list in `catalog-rules.ts` and take ids from the same map.
+7. **Transparency.** After cropping animated strips to frame 0, `sharp` scans
+   each face texture. Any alpha < 255 → `transparent: true, lightFilter: 0`;
+   any alpha strictly between 0 and 255 → also `translucent: true`; otherwise
+   `lightFilter: 15`.
+8. **Group.** First matching token in this order: `glazed` (glazed_terracotta)
+   → glazed; `stained_glass`/`glass`/`ice` → glass; `_wool` → wool;
+   `_concrete` → concrete; `terracotta` → terracotta; `coral` → coral;
+   `glowstone`/`sea_lantern`/`froglight`/`jack_o_lantern`/`redstone_lamp`
+   → light; `deepslate`/`tuff`/`sculk` → deepslate; `end_`/`purpur`/`chorus`
+   → end; `netherrack`/`nether_`/`soul_`/`basalt`/`blackstone`/`magma`/`shroomlight`/
+   `warped`/`crimson`/`ancient_debris` → nether; `_ore`/`raw_` → ore;
+   `copper`/`iron_block`/`gold_block`/`diamond_block`/`emerald_block`/`netherite`/
+   `lapis_block`/`redstone_block`/`coal_block`/`amethyst` → metal;
    `_planks`/`_log`/`_wood`/`_stem`/`_hyphae`/`_leaves`/`bookshelf`/`bamboo`
-   → wood; `_ore`/`raw_` → ore; `copper`/`iron_block`/`gold_block`/`diamond_block`/
-   `emerald_block`/`netherite`/`lapis_block`/`redstone_block`/`coal_block`/`amethyst`
-   → metal; `netherrack`/`nether_`/`soul_`/`basalt`/`blackstone`/`magma`/`shroomlight`/`warped`/`crimson`
-   → nether; `end_`/`purpur`/`chorus` → end; `deepslate`/`tuff`/`sculk` → deep;
-   `coral` → coral; `glowstone`/`sea_lantern`/`froglight`/`jack_o_lantern`/`lamp`
-   → light; `sand`/`gravel`/`clay` → sand; `dirt`/`grass`/`mud`/`moss`/`mycelium`/
-   `podzol`/`snow`/`hay`/`melon`/`pumpkin`/`sponge`/`honey`/`slime`/`dried_kelp`
-   → earth; `stone`/`brick`/`andesite`/`diorite`/`granite`/`cobble`/`prismarine`/
-   `quartz`/`calcite`/`dripstone`/`obsidian`/`bedrock`/`packed_mud` → stone;
-   else other.
-8. **Hardness by group:** wool/glass/earth/sand/wood-leaves 0.3, wood 0.8,
-   concrete/terracotta 0.8, stone/deep/nether/end 1.2, metal/ore 1.5, other 0.8.
-9. **Light:** `{glowstone: 15, sea_lantern: 15, shroomlight: 15,
-   jack_o_lantern: 15, ochre_froglight: 15, verdant_froglight: 15,
-   pearlescent_froglight: 15, magma_block: 3, crying_obsidian: 10}`; else 0.
-10. **Labels:** `Title Case` of the name with underscores as spaces
-    (`dark_oak_planks` → `Dark Oak Planks`), plus a small override map for
-    `tnt`-style names if any arise (none expected).
-11. `kidMode: false` for every generated row.
+   → wood; `furnace`/`smoker`/`_table`/`loom`/`barrel`/`jukebox`/`note_block`/
+   `target`/`bone_block`/`beehive`/`bee_nest`/`dispenser`/`dropper`/`observer`/
+   `composter`/`lodestone`/`crafter` → utility; `stone`/`brick`/`andesite`/
+   `diorite`/`granite`/`cobble`/`prismarine`/`quartz`/`calcite`/`dripstone`/
+   `obsidian`/`bedrock`/`packed_mud`/`resin` → stone; `sand`/`gravel`/`clay`
+   → sand; `dirt`/`grass`/`mud`/`moss`/`mycelium`/`podzol`/`snow`/`hay`/`melon`/
+   `pumpkin`/`sponge`/`honey`/`slime`/`dried_kelp` → earth; else other. The
+   boundary reviewer ran an earlier order over the real names; this order puts
+   `sandstone`, `mossy_cobblestone`, `packed_mud`, `resin_bricks` under stone,
+   `ancient_debris` under nether, and leaves fewer than ten names in other.
+9. **Hardness by group:** wool/glass/glazed/earth/sand/coral 0.3, leaves 0.3,
+   wood/concrete/terracotta/utility/light/other 0.8,
+   stone/deepslate/nether/end 1.2, metal/ore 1.5.
+10. **Light:** `{sea_lantern: 15, shroomlight: 15, jack_o_lantern: 15,
+    ochre_froglight: 15, verdant_froglight: 15, pearlescent_froglight: 15,
+    magma_block: 3, crying_obsidian: 10, redstone_lamp: 15}`; else 0.
+11. **Labels:** Title Case of the name with underscores as spaces.
 
-The generator is run by hand (`npm run gen-catalog`) and its output committed;
-it is **not** part of `npm run build`, because the build must not depend on a
-Minecraft install. A unit test asserts the committed catalog is internally
-consistent (unique ids, unique names, ids ≥ 20 contiguous, every texture file
-exists, every group in the union, base ids unchanged).
+`npm run gen-catalog` runs the generator by hand (`MINECRAFT_JAR` overrides
+the default path). It is **not** part of `npm run build`. It ends by
+printing counts (qualified, deduped, excluded, new, retired) and the list of
+any unresolved blocks.
 
 ### Atlas builder (`scripts/build-atlas.ts`)
 
-- **Animated textures** (PNG taller than wide: water, lava, magma, sea lantern,
-  prismarine, sculk, crimson/warped stem) are **cropped to their first frame**
-  instead of squashed by `resize`. This also fixes water and lava, which are
-  squashed today.
+- **1024 px atlas, 32 px cells** (16 px tile + 8 px edge-replicated padding),
+  1024 cells. Power-of-two cell alignment keeps mip levels 1–3 inside a
+  tile's own padding; the current 20 px cells bleed neighbouring tiles from
+  mip 3 up, which with ~410 tiles and cutout leaves scattered through the
+  grid would show as colour fringes and alpha holes at distance.
+- **Animated strips** (PNG taller than wide) are cropped to frame 0 instead of
+  squashed. This also fixes today's water and lava, which are a resized smear
+  of every frame.
 - `TEXTURE_TINTS` gains the grayscale foliage masks: `oak_leaves`,
   `jungle_leaves`, `acacia_leaves`, `dark_oak_leaves`, `mangrove_leaves` →
-  plains foliage `#77ab2f`; `birch_leaves` → `#80a755`; `spruce_leaves` →
-  `#619961`. Cherry, azalea, flowering azalea, and pale oak leaves ship
-  pre-coloured.
-- Capacity check stays; ~430 tiles in a 625-tile atlas.
+  `#77ab2f`; `birch_leaves` → `#80a755`; `spruce_leaves` → `#619961`.
+- The HUD and inventory read `size`/`tileSize` from `atlas.json`, so no UI
+  code changes for the new size.
 
-### Engine: 16-bit ids
+### Engine: 16-bit ids and the translucent pass
 
-- `Chunk.blocks: Uint16Array`.
-- `codec.ts` (client) and `api/src/codec.ts`: `encodeChunk(blocks: Uint16Array)`
-  writes `[varint value, varint run]`; `decodeChunk` returns `Uint16Array`.
-  `api/src/codec.parity.test.ts` gains a case with ids 200, 255, 256, 353,
-  65535 and a case proving a byte-for-byte match with the old encoding for ids
-  < 128 (an encoding captured from the current code, as a literal string).
-- `RawChunk.blocks: Uint16Array`; the legacy v1 reader copies its bytes into a
-  `Uint16Array`.
-- `api/src/handlers.ts` `validateChunks` additionally rejects any decoded value
-  ≥ 65536 (impossible from a `Uint16Array` but cheap) and keeps the length
-  check. It does **not** validate against the catalog: the server must keep
-  accepting worlds from a newer client.
-- Mesher: blocks with `translucent: true` are emitted in the liquid (transparent)
-  mesh bucket with plain full-cube faces, using the same face rule as glass
-  (emit against non-solid or a different transparent neighbour). Opaque bucket
-  skips them.
+- `Chunk.blocks: Uint16Array`; `RawChunk.blocks: Uint16Array`; the legacy v1
+  reader copies bytes into a `Uint16Array`.
+- Both codecs (`src/persistence/codec.ts`, `api/src/codec.ts`) write
+  `[varint value, varint run]` and decode into `Uint16Array`. Hardening in
+  both `decodeChunk`s, applied to the varint **before** the typed-array store
+  (a bound checked after the store is masked away and can never fire):
+  `value > 0xffff → throw`; `oi + run > BLOCKS_PER_CHUNK → throw` before the
+  fill (a crafted run of 0x0ffffff0 otherwise burns 240 ms per chunk on the
+  function); `readVarInt` caps `shift` at 28 and throws past it.
+- `api/src/handlers.ts` keeps its checks unchanged (the length check is now
+  redundant but harmless). It does not validate ids against the catalog.
+- `api/src/handlers.ts` `/health` returns `{ ok: true, codec: 2 }`;
+  `deploy.sh --verify` asserts `codec == 2`.
+- `localStorage.ts` `parseChunkPayload`: the bare-base64 legacy fallback runs
+  only when `JSON.parse` failed, so a decode error inside a JSON payload
+  propagates as itself.
+- **Translucent pass.** `ChunkMeshResult` gains a third bucket
+  `translucent`; the renderer gets a third material (same atlas,
+  `transparent: true`, `FrontSide`, `depthWrite: true`, `alphaTest: 0.01`)
+  and a third mesh map. The mesher routes `def.translucent` blocks there with
+  full-cube faces under the same `shouldEmitFace` rule glass uses; the opaque
+  bucket skips them. Reusing the liquid material was rejected: its
+  `DoubleSide` + `depthWrite: false` draws the far inner faces of a glass cube
+  through the near one (0.40 alpha becomes ~0.64 with ghosted seams; the
+  engine reviewer reproduced it headless).
 
 ### Player, HUD, main
 
-- `Player.hotbar` is always length 9. `src/game/hotbar.ts` gets a pure
-  `resolveHotbar(saved: BlockId[] | undefined, savedSelected: number,
-  catalog: BlockDef[]): { hotbar: BlockId[]; selected: number }` implementing
-  the rules under "Hotbar", with tests (18-entry legacy save → default, 9-entry
-  save kept, unknown id → AIR, selected block preserved when present).
-- `Hud.setHotbar` unchanged (already renders blank for a missing tile).
-- `placeBlock` path in `main.ts` returns early when the selected id is `AIR`.
+- `src/game/hotbar.ts`: `resolveHotbar(saved, savedSelected, blocks)` per the
+  rules above; `DEFAULT_HOTBAR` in `blocks.base.data.ts`.
+- `Hud.setHotbar` unchanged.
+- `main.ts` right-click path returns early when the selected id is `AIR`.
 - `keybindings.data.ts`: `Action` gains `'inventory'`, default `KeyI`, label
-  `Open Inventory`. `ACTIONS` order puts it after `pickLightColor`.
-- **Pause ownership** in `main.ts`: two booleans, `frozen` (play-time) and
-  `inventoryOpen`; `loop.paused = frozen || inventoryOpen` recomputed by a
-  single `updatePaused()` whenever either changes. The play-time `freeze`
-  callback sets `frozen = true` **and closes the inventory**; `resume` sets
-  `frozen = false`. The inventory's open/close sets `inventoryOpen`.
-- **Input gating** in `onKey` (replaces the current `if (down && loop.paused)
-  return`): if `frozen` → ignore every keydown; else if `inventoryOpen` →
-  handle only `inventory` and `slot1..9`; else handle everything. The Tab
-  listener: ignored when `frozen`, allowed when `inventoryOpen`. `mousedown`:
-  ignored when `loop.paused` (unchanged). `Escape` while `inventoryOpen` closes
-  it (a `keydown` listener in the inventory itself, not remappable).
+  `Open Inventory`, after `pickLightColor`. `Options.kidMode` removed;
+  `loadOptions` ignores a stored `kidMode`.
+- `ColorPicker` gains `readonly isOpen`.
+- **Pause ownership**, hoisted above the play-time block so it exists whether
+  or not a limit is set: `let frozen = false, inventoryOpen = false;
+  const updatePaused = () => { loop.paused = frozen || inventoryOpen; };
+  const resetKeys = …`. The play-time `freeze` sets `frozen = true`, closes
+  the inventory (`inventoryOpen = false`), then `updatePaused()`; `resume`
+  sets `frozen = false` and `updatePaused()`.
+- **Input gating** in `onKey`:
+  - keyup for `forward/back/left/right/jump` is processed in every state, so
+    `keys` stays truthful (a W held across an `I` press must not stick);
+  - keydown: if `frozen` → ignored; else if `inventoryOpen` → only `inventory`
+    and `slot1..9`; else if `colorPicker.isOpen` → `inventory` ignored (the
+    rest is already the picker's business); else everything.
+  - The Tab listener: ignored when `frozen`, allowed when `inventoryOpen`.
+  - `mousedown`: ignored when `loop.paused` (unchanged).
+  - `Escape` while `inventoryOpen` closes it (a listener inside the inventory).
+- `autosave.markDirty()` on every pick; the snapshot already carries `hotbar`
+  and `selected`.
 
 ### `src/ui/inventory.ts` (DOM only)
 
 ```ts
 export class Inventory {
 	constructor(container: HTMLElement, atlas: LoadedAtlas, blocks: BlockDef[]);
-	onPick: ((id: BlockId) => void) | null;          // tile clicked
-	onSelectSlot: ((slot: number) => void) | null;   // hotbar strip clicked
+	onPick: ((id: BlockId) => void) | null;
+	onSelectSlot: ((slot: number) => void) | null;
+	onClose: (() => void) | null;                    // Esc
 	open(): void;
 	close(): void;
 	readonly isOpen: boolean;
-	setHotbar(ids: BlockId[], selected: number): void; // mirrors Hud.setHotbar
+	setHotbar(ids: BlockId[], selected: number): void; // mirrors Hud.setHotbar; flashes the changed slot
 }
 ```
 
-Builds the grid once (≈350 tiles, `background-image` from the atlas PNG with
-`background-position` from `atlas.tileRect(id, 'px')`, exactly as
-`Hud.setHotbar` does). `#inventory-root` is `position: fixed; inset: 0;
-z-index: 15`, `pointer-events: auto`, hidden with the `.hidden` class the
-other overlays use. Grid: `display: grid; grid-template-columns:
-repeat(auto-fill, 64px); gap: 6px; max-height: 70vh; overflow-y: auto`.
-Group headers span all columns. Hotbar strip reuses `.hotbar-slot` styling.
+Builds the grid once from `blocks.filter(b => b.id !== AIR && !b.retired)`,
+tiles as `background-image` from the atlas PNG positioned by
+`atlas.tileRect(id, 'nz')`, exactly as `Hud.setHotbar` does. `#inventory-root`
+is `position: fixed; inset: 0; z-index: 15`, hidden with the shared `.hidden`
+class. Grid: `display: grid; grid-template-columns: repeat(auto-fill, 48px);
+gap: 4px; max-height: 72vh; overflow-y: auto`; headers span all columns.
 
 ### Wiring sequence
 
 ```
-kid presses I
-  main: inventoryOpen = true; updatePaused(); exitPointerLock; inventory.open()
+kid presses I (picker closed, not frozen)
+  main: inventoryOpen = true; updatePaused(); loop.setLeftMouseDown(false);
+        hud.setMiningProgress(0); exitPointerLock (if held); inventory.open()
 kid clicks "Oak Planks"
   inventory.onPick(id) → player.hotbar[player.selected] = id;
                          hud.setHotbar(...); inventory.setHotbar(...); autosave.markDirty()
@@ -305,73 +379,96 @@ kid presses 3
 kid presses I or Esc
   main: inventory.close(); inventoryOpen = false; updatePaused(); resetKeys()
 play-time freeze fires while open
-  freeze(): inventory.close(); inventoryOpen = false; frozen = true; updatePaused() …
+  freeze(): inventory.close(); inventoryOpen = false; frozen = true; updatePaused(); …
 ```
-
-`autosave.markDirty()` on every pick so the hotbar reaches the save; the
-snapshot already includes `hotbar` and `selected`.
 
 ## Error handling
 
-- A saved hotbar id that no longer exists in the catalog → `AIR`.
-- A chunk containing an id the client does not know (a save from a newer
-  build) renders as the mesher already handles unknown ids (transparent, no
-  faces) rather than crashing; `BLOCKS[id]` lookups are already `?.`-guarded.
-- Generator: missing jar → clear error naming `MINECRAFT_JAR`; missing texture
-  → block skipped and listed at the end.
+- Saved hotbar id that is unknown, air, or retired → `AIR` (see Hotbar).
+- A chunk with an id ≥ `BLOCKS.length` (a save from a newer build): the mesher
+  and lighting already treat unknown ids as non-solid/transparent via
+  `BLOCKS[id]?.`; the engine reviewer is asked at gate 2 to confirm the
+  shadows and liquid paths do the same, since a corrupt payload can now carry
+  65535.
+- Generator: missing jar → error naming `MINECRAFT_JAR`; unresolved texture on
+  a frozen name → hard error (see rule 6); on a new name → skipped and listed.
 - Atlas capacity exceeded → the existing build-time error.
 
 ## Testing
 
-Unit (vitest, node):
+Unit (vitest, node; `vitest.config.ts` include unchanged because the pure
+rules live under `src/`):
 
-- `scripts/gen-catalog.test.ts`: full-cube classification, texture-kind
-  mapping per parent, dedupe keeps the first name and skips base names, id
-  freezing across a regeneration, group rules, transparency from alpha
-  (synthetic 2×2 PNGs via `sharp`).
-- `src/data/blocks.catalog.test.ts`: invariants over the committed catalog.
-- `src/persistence/codec.test.ts` + `api/src/codec.parity.test.ts`: ids
-  ≥ 256 round-trip; literal old-format string decodes identically; encoding of
-  an all-<128 chunk equals the literal.
-- `src/game/hotbar.test.ts`: `resolveHotbar` rules.
-- `src/engine/world/mesher.test.ts`: a translucent block emits faces in the
-  liquid bucket and none in the opaque bucket; an opaque neighbour still emits
-  its face toward it.
-- Existing suites updated from `Uint8Array` to `Uint16Array` where they build
-  chunk fixtures (search list in the plan).
+- `src/data/catalog-rules.test.ts`: full-cube walk (cube_all, template
+  chain, a stairs model rejected, multipart rejected); face resolution with
+  `#` indirection (`orientable` bottom→`#top`, `cube_column` `#end`,
+  glazed `#pattern`), kind derivation for all four kinds, an unresolvable
+  face; exclusion list; dedupe seeded with base keys, shortest-name survivor;
+  id freezing (existing kept, new appended, missing name → error, `--retire`
+  → tombstone, never reused); every group rule against a fixed list of ~40
+  real names with expected groups; hardness/light/label maps. Synthetic
+  models as inline JSON; alpha classification with 2×2 PNGs via `sharp`.
+- `src/data/blocks.catalog.test.ts`: over the committed files — `BLOCKS[i].id
+  === i` for all i; unique names; base ids 0–19 unchanged (snapshot of
+  name→id); ids JSON matches the generated rows; every referenced texture
+  exists in `src/assets/blocks/`; every group is in the union; `DEFAULT_HOTBAR`
+  names all exist; a snapshot of ten known name→id pairs.
+- `src/persistence/codec.test.ts` and `api/src/codec.parity.test.ts`
+  (**named checklist item**: `api/` tests are type-checked by nothing, so
+  the fixtures must be changed to `Uint16Array` and the high-id case added
+  by hand): ids 200, 255, 256, 353, 65535 round-trip; a legacy chunk with
+  one id 256 round-trips; the **inflated RLE byte stream** of an all-<128
+  chunk equals a literal byte list captured from the current code (asserting
+  on the deflate output would couple the test to `pako`); `decodeChunk` of a
+  captured legacy base64 string equals the expected blocks; over-length run,
+  value > 0xffff, and a 5-byte varint each throw.
+- `src/persistence/localStorage.test.ts`: a JSON payload whose chunk fails to
+  decode rejects with the decode error, not `InvalidCharacterError`.
+- `src/game/hotbar.test.ts`: every `resolveHotbar` rule.
+- `src/engine/world/mesher.test.ts`: a translucent block emits in the
+  translucent bucket only; its opaque neighbour still emits a face toward it;
+  two adjacent identical stained glass blocks emit no shared face.
+- Fixture churn from `Uint8Array` → `Uint16Array`: `cloud.test.ts:144`,
+  `dual.test.ts` (5 sites), `localStorage.test.ts`, `codec.test.ts`,
+  `generation.test.ts:91` (`hashBytes` signature), `api/src/testFixtures.ts`.
+  All fail loudly (vitest distinguishes typed-array constructors).
 
-Manual, `localhost:5173` only:
+Manual, `localhost:5173` only, with the API redeployed first:
 
-- Press I: overlay with ~350 tiles, groups labelled; pointer lock released;
-  WASD does nothing; world visible behind. Click a tile: it appears in the
-  selected hotbar slot in both the HUD and the strip. Press 5, click another
-  tile: slot 5 fills. Esc closes; I reopens; the hotbar persists after reload.
-- Place ten different new blocks including glowstone (lights up), oak leaves
-  (see-through, green), blue stained glass (see-through, blue), a log
-  (bark sides, rings on top). Reload: all still there, same look. Save
-  indicator green; if the API URL is configured, the cloud leg succeeds
-  (requires the API redeployed first).
-- Open a world saved before this change: hotbar shows the 9 defaults; the
-  world is unchanged.
-- Play-time freeze while the inventory is open: inventory closes, freeze shows.
+- Press I: overlay, `BASICS` first, ~340 tiles; pointer lock released; W does
+  nothing; world visible. Click a tile: slot fills in HUD and strip, strip
+  slot flashes. Press 5, click another: slot 5 fills. Esc closes; I reopens at
+  the same scroll position. Reload: hotbar persists.
+- Place: glowstone-lamp (lights), oak leaves (see-through, green), blue
+  stained glass (see-through, blue, no double-dark inner faces when two are
+  stacked), oak log (bark, rings), jack o'lantern (face visible, lights),
+  cyan glazed terracotta (pattern), red concrete. Reload: same look. Save
+  indicator green, cloud leg ok.
+- Open a world saved before this change: default hotbar; world unchanged.
+- Press C, then I: nothing opens; close the picker, I works. Play-time freeze
+  while open: inventory closes, freeze shows.
+- `./deploy.sh --verify` prints `codec: 2`.
 
 ## Files
 
 | File | Change |
 |---|---|
-| `scripts/gen-catalog.ts` + test | new generator |
-| `src/data/blocks.catalog.data.ts` + test | generated catalog (~333 rows) |
-| `src/data/blocks.data.ts` | `group`, `translucent`, `BlockGroup`, spread catalog |
-| `src/data/keybindings.data.ts` | `inventory` action |
-| `scripts/build-atlas.ts` | frame crop, leaf tints |
+| `src/data/blocks.base.data.ts` | new: types, 20 base rows, `DEFAULT_HOTBAR`, `GENERATED_ID_START` |
+| `src/data/catalog-rules.ts` + test | new: pure generator rules |
+| `src/data/blocks.catalog.data.ts`, `blocks.catalog.ids.json` + test | generated, committed |
+| `src/data/blocks.data.ts` | composes dense `BLOCKS`; helpers unchanged |
+| `scripts/gen-catalog.ts` | new: jar I/O, `--retire` |
+| `scripts/build-atlas.ts` | 1024/32/8, frame crop, leaf tints |
+| `src/data/keybindings.data.ts` | `inventory` action; `kidMode` removed |
+| `src/persistence/options.ts` + test, `src/ui/options.ts` | kid mode removed |
 | `src/engine/world/chunk.ts` | `Uint16Array` |
-| `src/persistence/codec.ts` + test, `api/src/codec.ts` + parity test | varint value |
-| `src/persistence/adapter.ts`, `localStorage.ts`, tests | `Uint16Array` |
-| `api/src/handlers.ts` | value bound check |
-| `src/engine/world/mesher.ts` + test | translucent bucket |
+| `src/persistence/codec.ts` + test, `api/src/codec.ts` + parity test | varint value, hardening |
+| `src/persistence/adapter.ts`, `localStorage.ts` + test, `cloud.test.ts`, `dual.test.ts` | `Uint16Array`, fallback fix |
+| `api/src/handlers.ts`, `api/src/testFixtures.ts`, `deploy.sh` | `codec: 2`, verify |
+| `src/engine/world/mesher.ts` + test, `src/engine/render/renderer.ts` | translucent bucket + material |
+| `src/engine/world/generation.test.ts` | `hashBytes` signature |
 | `src/game/hotbar.ts` + test | `resolveHotbar` |
-| `src/ui/inventory.ts`, `src/ui/ui.css` | overlay |
-| `src/ui/options.ts` | kid-mode label |
+| `src/ui/inventory.ts`, `src/ui/ui.css`, `src/ui/color-picker.ts` | overlay, `isOpen` |
 | `src/main.ts` | pause ownership, gating, wiring, AIR guard |
 | `package.json` | `gen-catalog` script |
-| `docs/inventory.md`, `README.md`, `docs/specs.md`, `CLAUDE.md` | docs (hotbar-is-inventory line retired) |
+| `docs/inventory.md`, `docs/lighting.md`, `README.md`, `docs/specs.md`, `CLAUDE.md` | docs; kid-mode and hotbar-is-inventory lines retired; regen + deploy recipe |

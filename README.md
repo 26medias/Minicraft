@@ -20,7 +20,7 @@ Current catalog: 19 blocks (grass, dirt, stone, cobblestone, sand, oak planks, o
 - **Compression:** [`pako`](https://github.com/nodeca/pako).
 - **Physics:** hand-rolled swept-AABB voxel collision with sub-stepping — no physics library.
 - **Textures:** Mojang's block PNGs atlased at build time via [`sharp`](https://sharp.pixelplumbing.com/). Select textures are biome-tinted in the build step (grass top: green; water: blue).
-- **Tests:** [Vitest](https://vitest.dev/) — 268 unit tests covering the mesher, physics, world generation determinism, block catalog, player state (including fly + swim mode), TNT detonation, the light registry, voxel lighting propagation (sky + RGB block light, incremental updates, AO), and the liquid scheduler (fall rule, sideways spread, frontier decay), and persistence (v1/v2 formats, cloud + dual adapters, autosave failure handling, and the worlds API).
+- **Tests:** [Vitest](https://vitest.dev/) — 337 unit tests covering the mesher, physics, world generation determinism, block catalog, player state (including fly + swim mode), TNT detonation, the play-time timer, the light registry, voxel lighting propagation (sky + RGB block light, incremental updates, AO), and the liquid scheduler (fall rule, sideways spread, frontier decay), and persistence (v1/v2 formats, cloud + dual adapters, autosave failure handling, and the worlds API).
 - **Lint / format:** ESLint + Prettier.
 
 ## Prerequisites
@@ -112,6 +112,7 @@ In fly or swim mode: pitch the camera up to ascend, down to descend — W moves 
 - **Auto-save** every ~5s and on window blur / tab hide, to `localStorage`. Only modified chunks are persisted; untouched chunks regenerate from the seed. Lights are recomputed from blocks on load (not stored). Primed-TNT fuse state is intentionally not saved (resets to inert on reload).
 - **Kid mode** filter that shows only a curated block set in the hotbar.
 - **Rebindable keys** via the in-game Options menu. Unknown / deprecated keybindings in old save files are silently dropped at load time so stale mappings can't shadow current actions.
+- **Play-time limit** for grown-ups: on the main menu, *Play for* 15–90 minutes, optionally *Then break for* 10–60 minutes. Large `END IN 5 MINUTES` / `END IN 2 MINUTES` warnings, then `TIME'S UP` freezes the game; a break counts down to a `PLAY AGAIN` button, or without a break the game stays locked until a grown-up presses *Unlock* on the menu. Only visible play counts (a closed lid is not play time); breaks are wall-clock. There is no PIN: the Unlock button is on the same menu the kid uses, so this limits an honest kid, not a determined one. A lock always clears itself 12 hours after the game was last touched. To unlock early: reload the game's tab, press *Unlock*, pick the world. See [`docs/playtime.md`](docs/playtime.md).
 
 ## Project layout
 

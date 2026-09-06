@@ -22,8 +22,10 @@ stricter than the feature itself would otherwise need.
    `fluidMeta` is decoded before the write, and a suspicious shrink is refused.
 4. **Autosave retries.** The dirty flag survives a failed save, and an edit made
    *during* a save keeps its flag because the snapshot does not contain it.
-5. **v1 keys are read-only, forever.** Nothing in this subsystem writes or
-   deletes a `minicraft:v1:*` key.
+5. **v1 world keys are read-only, forever.** Nothing in this subsystem writes or
+   deletes a `minicraft:v1:world:*` key. (Options and the play-time limit are
+   separate subsystems with their own `minicraft:v1:options` and
+   `minicraft:v1:playtime` keys, which they do write.)
 
 ## Storage formats
 

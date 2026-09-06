@@ -141,7 +141,7 @@ export const DEFAULT_HOTBAR: BlockId[] = [1, 2, 3, 4, 5, 6, 7, 8, 9];
 - [ ] **Step 4: Rewrite `src/data/blocks.data.ts`:**
 
 ```ts
-import { AIR, BASE_BLOCKS, type BlockDef, type BlockId, type Face } from './blocks.base.data';
+import { BASE_BLOCKS, type BlockDef, type BlockId, type Face } from './blocks.base.data';
 import { CATALOG_BLOCKS } from './blocks.catalog.data';
 
 export * from './blocks.base.data';
@@ -186,9 +186,9 @@ import type { BlockDef } from './blocks.base.data';
 export const CATALOG_BLOCKS: BlockDef[] = [];
 ```
 
-and `src/data/blocks.catalog.ids.json` containing `{}`.
+and `src/data/blocks.catalog.ids.json` containing `{ "ids": {}, "retired": [] }`.
 
-- [ ] **Step 5: Kid mode and the inventory action.** In `src/data/keybindings.data.ts`: add `'inventory'` to `Action` and `ACTIONS` (after `pickLightColor`), `inventory: 'Open Inventory'` to `ACTION_LABEL`, `inventory: 'KeyI'` to `DEFAULT_KEYBINDINGS`; delete `kidMode: boolean;` from `Options`. In `src/persistence/options.ts`: delete `kidMode: true,` from `defaults()` and `kidMode: parsed.kidMode ?? true,` from `loadOptions`. In `src/ui/options.ts`: delete the `kidRow`/`kidLabel`/`kidCheck` block (lines 24–36). In `src/main.ts` replace the two lines
+- [ ] **Step 5: Kid mode and the inventory action.** In `src/data/keybindings.data.ts`: add `'inventory'` to `Action` and `ACTIONS` (after `pickLightColor`), `inventory: 'Open Inventory'` to `ACTION_LABEL`, `inventory: 'KeyI'` to `DEFAULT_KEYBINDINGS`; delete `kidMode: boolean;` from `Options`. In `src/persistence/options.ts`: delete `kidMode: true,` from `defaults()` and `kidMode: parsed.kidMode ?? true,` from `loadOptions`. In `src/ui/options.ts`: delete the `kidRow`/`kidLabel`/`kidCheck` block (lines 30–42, from `const kidRow` through `card.appendChild(kidRow);`). In `src/main.ts` replace the two lines
 
 ```ts
 		const pool = BLOCKS.filter((b) => b.id !== 0 && (opts.kidMode ? b.kidMode : true));
@@ -202,7 +202,7 @@ with
 		player.hotbar = pool.map((b) => b.id);
 ```
 
-(Task 10 replaces this whole block; this keeps the build green meanwhile.) In `docs/liquids.md` remove `kidMode: true,` from the two example rows.
+(Task 10 replaces this whole block; this keeps the build green meanwhile.) In `docs/liquids.md` remove `kidMode: true,` from the two example rows. Also in `src/ui/hud.ts` change the one `tileRect(id, 'px')` to `tileRect(id, 'nz')` so the hotbar and the inventory show the same face for furnace-type blocks.
 
 - [ ] **Step 6: Run** `npx vitest run && npx tsc -b && npm run lint` → all green.
 
@@ -221,7 +221,7 @@ export type Models = Record<string, ModelJson>;           // keyed by bare model
 export type SixFaces = { px: string; nx: string; py: string; ny: string; pz: string; nz: string };
 export function modelKey(ref: string): string;
 export function isFullCube(models: Models, model: string): boolean;
-export function firstVariantModel(bs: BlockstateJson): string | null;
+export function firstVariantModel(bs: BlockstateJson): string | null;   // prefers axis=y, then facing=north, then file order
 export function resolveFaces(models: Models, model: string): SixFaces;   // throws Error(`unresolved face …`)
 export function facesToTextures(f: SixFaces): BlockFaceTextures;
 export function textureNames(t: BlockFaceTextures): string[];
@@ -235,8 +235,9 @@ export function labelFor(name: string): string;
 export function classifyAlpha(alpha: ArrayLike<number>): { transparent: boolean; translucent: boolean };
 export type Candidate = { name: string; textures: BlockFaceTextures };
 export function selectCandidates(blockstates: Record<string, BlockstateJson>, models: Models, base: BlockDef[]): { candidates: Candidate[]; dropped: { name: string; reason: string }[] };
-export function assignIds(existing: Record<string, number>, names: string[], retire: string[]): Record<string, number>;   // throws on a frozen name that is absent and not retired
-export function makeRows(candidates: Candidate[], ids: Record<string, number>, alphaOf: (texture: string) => { transparent: boolean; translucent: boolean }): BlockDef[];  // includes tombstones for retired ids, sorted by id
+export type IdMap = { ids: Record<string, number>; retired: string[] };   // the committed blocks.catalog.ids.json
+export function assignIds(existing: IdMap, names: string[], retire: string[]): IdMap;   // throws on a frozen, non-retired name that is absent
+export function makeRows(candidates: Candidate[], map: IdMap, alphaOf: (texture: string) => { transparent: boolean; translucent: boolean }): BlockDef[];  // tombstones for retired ids, sorted by id
 ```
 
 - [ ] **Step 1: Failing tests** — create `src/data/catalog-rules.test.ts`:
@@ -310,6 +311,16 @@ describe('firstVariantModel', () => {
 		expect(firstVariantModel(bs('stone'))).toBe('stone');
 		expect(firstVariantModel({ variants: { 'lit=false': [{ model: 'minecraft:block/furnace' }], 'lit=true': { model: 'minecraft:block/furnace_on' } } })).toBe('furnace');
 		expect(firstVariantModel({ multipart: [] })).toBeNull();
+	});
+	it('prefers axis=y (upright logs) and facing=north (front on north) over file order', () => {
+		// cherry_log lists axis=x first; its x model has a sideways element.
+		expect(firstVariantModel({ variants: {
+			'axis=x': { model: 'minecraft:block/cherry_log_horizontal' },
+			'axis=y': { model: 'minecraft:block/cherry_log' },
+			'axis=z': { model: 'minecraft:block/cherry_log_horizontal' } } })).toBe('cherry_log');
+		expect(firstVariantModel({ variants: {
+			'facing=down': { model: 'minecraft:block/dispenser_vertical' },
+			'facing=north': { model: 'minecraft:block/dispenser' } } })).toBe('dispenser');
 	});
 });
 
@@ -413,25 +424,30 @@ describe('selectCandidates', () => {
 });
 
 describe('assignIds', () => {
+	const empty = { ids: {}, retired: [] };
 	it('keeps existing ids, appends new names in name order from max+1, starts at 20', () => {
-		expect(assignIds({}, ['b', 'a'], [])).toEqual({ a: 20, b: 21 });
-		expect(assignIds({ a: 20, b: 21 }, ['b', 'a', 'c'], [])).toEqual({ a: 20, b: 21, c: 22 });
+		expect(assignIds(empty, ['b', 'a'], [])).toEqual({ ids: { a: 20, b: 21 }, retired: [] });
+		expect(assignIds({ ids: { a: 20, b: 21 }, retired: [] }, ['b', 'a', 'c'], [])).toEqual({ ids: { a: 20, b: 21, c: 22 }, retired: [] });
 	});
-	it('never reuses an id after a retirement', () => {
-		const ids = assignIds({ a: 20, b: 21 }, ['a', 'c'], ['b']);
-		expect(ids).toEqual({ a: 20, b: 21, c: 22 });
+	it('records a retirement, never reuses the id, and needs no flag on later runs', () => {
+		const once = assignIds({ ids: { a: 20, b: 21 }, retired: [] }, ['a', 'c'], ['b']);
+		expect(once).toEqual({ ids: { a: 20, b: 21, c: 22 }, retired: ['b'] });
+		expect(assignIds(once, ['a', 'c'], [])).toEqual(once);
 	});
 	it('throws when a frozen name disappears without --retire', () => {
-		expect(() => assignIds({ a: 20, b: 21 }, ['a'], [])).toThrow(/b/);
+		expect(() => assignIds({ ids: { a: 20, b: 21 }, retired: [] }, ['a'], [])).toThrow(/b/);
+	});
+	it('un-retires a name that resolves again, keeping its id', () => {
+		expect(assignIds({ ids: { a: 20, b: 21 }, retired: ['b'] }, ['a', 'b'], [])).toEqual({ ids: { a: 20, b: 21 }, retired: [] });
 	});
 });
 
 describe('makeRows', () => {
 	it('emits rows in id order with tombstones for retired ids', () => {
-		const ids = { blue_stained_glass: 20, gone: 21, c: 22 };
+		const map = { ids: { blue_stained_glass: 20, gone: 21, c: 22 }, retired: ['gone'] };
 		const rows = makeRows(
 			[{ name: 'c', textures: { kind: 'uniform', all: 'c' } }, { name: 'blue_stained_glass', textures: { kind: 'uniform', all: 'blue_stained_glass' } }],
-			ids,
+			map,
 			(t) => (t === 'blue_stained_glass' ? { transparent: true, translucent: true } : { transparent: false, translucent: false }),
 		);
 		expect(rows.map((r) => r.id)).toEqual([20, 21, 22]);
@@ -441,7 +457,7 @@ describe('makeRows', () => {
 		expect(rows[2]).toMatchObject({ name: 'c', transparent: false, lightFilter: 15, group: 'other', hardness: 0.8, lightLevel: 0 });
 	});
 	it('applies LIGHT_LEVELS', () => {
-		const rows = makeRows([{ name: 'sea_lantern', textures: { kind: 'uniform', all: 'sea_lantern' } }], { sea_lantern: 20 }, () => ({ transparent: false, translucent: false }));
+		const rows = makeRows([{ name: 'sea_lantern', textures: { kind: 'uniform', all: 'sea_lantern' } }], { ids: { sea_lantern: 20 }, retired: [] }, () => ({ transparent: false, translucent: false }));
 		expect(rows[0].lightLevel).toBe(15);
 	});
 });
@@ -497,11 +513,21 @@ export function isFullCube(models: Models, model: string): boolean {
 	return els.length === 1 && isUnit(els[0].from, 0) && isUnit(els[0].to, 16);
 }
 
+/**
+ * The variant that gives the block its "resting" look: upright for logs
+ * (axis=y; the axis=x model of cherry/bamboo logs carries a sideways element),
+ * front on north for furnaces and dispensers, else the first in file order.
+ */
 export function firstVariantModel(bs: BlockstateJson): string | null {
 	if (!bs.variants) return null;
-	const first = Object.values(bs.variants)[0];
-	if (!first) return null;
-	const v = Array.isArray(first) ? first[0] : first;
+	const keys = Object.keys(bs.variants);
+	if (keys.length === 0) return null;
+	const pick =
+		keys.find((k) => k.split(',').includes('axis=y')) ??
+		keys.find((k) => k.split(',').includes('facing=north')) ??
+		keys[0];
+	const entry = bs.variants[pick];
+	const v = Array.isArray(entry) ? entry[0] : entry;
 	return v ? modelKey(v.model) : null;
 }
 
@@ -664,33 +690,34 @@ export function selectCandidates(
 	return { candidates, dropped };
 }
 
-export function assignIds(
-	existing: Record<string, number>,
-	names: string[],
-	retire: string[],
-): Record<string, number> {
-	const ids: Record<string, number> = { ...existing };
+/** The committed blocks.catalog.ids.json: frozen name→id plus which names are tombstoned. */
+export type IdMap = { ids: Record<string, number>; retired: string[] };
+
+export function assignIds(existing: IdMap, names: string[], retire: string[]): IdMap {
+	const ids: Record<string, number> = { ...existing.ids };
 	const present = new Set(names);
-	for (const name of Object.keys(existing)) {
-		if (!present.has(name) && !retire.includes(name)) {
-			throw new Error(`frozen block "${name}" (id ${existing[name]}) no longer resolves; pass --retire ${name} to tombstone it`);
+	const retired = new Set(existing.retired.filter((n) => !present.has(n)));
+	for (const n of retire) retired.add(n);
+	for (const name of Object.keys(existing.ids)) {
+		if (!present.has(name) && !retired.has(name)) {
+			throw new Error(`frozen block "${name}" (id ${existing.ids[name]}) no longer resolves; pass --retire ${name} to tombstone it`);
 		}
 	}
 	let next = Math.max(GENERATED_ID_START - 1, ...Object.values(ids)) + 1;
 	for (const name of [...names].sort()) {
 		if (ids[name] === undefined) ids[name] = next++;
 	}
-	return ids;
+	return { ids, retired: [...retired].sort() };
 }
 
 export function makeRows(
 	candidates: Candidate[],
-	ids: Record<string, number>,
+	map: IdMap,
 	alphaOf: (texture: string) => { transparent: boolean; translucent: boolean },
 ): BlockDef[] {
 	const byName = new Map(candidates.map((c) => [c.name, c]));
 	const rows: BlockDef[] = [];
-	for (const [name, id] of Object.entries(ids).sort((a, b) => a[1] - b[1])) {
+	for (const [name, id] of Object.entries(map.ids).sort((a, b) => a[1] - b[1])) {
 		const c = byName.get(name);
 		if (!c) {
 			rows.push({
@@ -739,7 +766,9 @@ import { existsSync } from 'node:fs';
 import { BLOCKS, BLOCK_BY_NAME, DEFAULT_HOTBAR, GENERATED_ID_START, GROUP_ORDER } from './blocks.data';
 import { CATALOG_BLOCKS } from './blocks.catalog.data';
 import { textureNames } from './catalog-rules';
-import ids from './blocks.catalog.ids.json';
+import idMap from './blocks.catalog.ids.json';
+
+const ids = idMap.ids as Record<string, number>;
 
 describe('generated catalog', () => {
 	it('has been generated (hundreds of rows)', () => {
@@ -788,7 +817,9 @@ describe('generated catalog', () => {
 	});
 	it('pins a few ids so a regeneration cannot renumber silently', () => {
 		// Filled in from the first generated ids.json; see Step 5.
-		expect(ids).toMatchObject({ /* FILL: e.g. acacia_leaves: 20, acacia_log: 21 */ });
+		const pinned: Record<string, number> = { /* FILL: e.g. acacia_leaves: 20, acacia_log: 21 */ };
+		expect(Object.keys(pinned).length).toBeGreaterThanOrEqual(3);
+		expect(ids).toMatchObject(pinned);
 	});
 	it('DEFAULT_HOTBAR names all exist', () => {
 		for (const id of DEFAULT_HOTBAR) expect(BLOCKS[id].retired).toBeUndefined();
@@ -811,11 +842,12 @@ import { existsSync, mkdtempSync, readFileSync, readdirSync, rmSync, writeFileSy
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { argv, env, exit } from 'node:process';
+import { format } from 'prettier';
 import sharp from 'sharp';
 import { BASE_BLOCKS } from '../src/data/blocks.base.data.js';
 import {
 	assignIds, classifyAlpha, makeRows, selectCandidates, textureNames,
-	type BlockstateJson, type Models,
+	type BlockstateJson, type IdMap, type Models,
 } from '../src/data/catalog-rules.js';
 
 const JAR = env.MINECRAFT_JAR ?? join(env.HOME ?? '', '.minecraft/versions/1.21.6/1.21.6.jar');
@@ -859,12 +891,14 @@ async function main() {
 		for (const c of missingTexture) dropped.push({ name: c.name, reason: 'texture file missing from src/assets/blocks' });
 		const usable = candidates.filter((c) => !missingTexture.includes(c));
 
-		const existing = existsSync(OUT_IDS) ? (JSON.parse(readFileSync(OUT_IDS, 'utf8')) as Record<string, number>) : {};
-		const ids = assignIds(existing, usable.map((c) => c.name), retire);
+		const existing: IdMap = existsSync(OUT_IDS)
+			? (JSON.parse(readFileSync(OUT_IDS, 'utf8')) as IdMap)
+			: { ids: {}, retired: [] };
+		const map = assignIds(existing, usable.map((c) => c.name), retire);
 
 		const alphaCache = new Map<string, { transparent: boolean; translucent: boolean }>();
 		for (const c of usable) for (const t of textureNames(c.textures)) if (!alphaCache.has(t)) alphaCache.set(t, await alphaOfTexture(t));
-		const rows = makeRows(usable, ids, (t) => alphaCache.get(t)!);
+		const rows = makeRows(usable, map, (t) => alphaCache.get(t)!);
 
 		const header = [
 			'// GENERATED by scripts/gen-catalog.ts — do not edit by hand. Regenerate with `npm run gen-catalog`.',
@@ -877,11 +911,14 @@ async function main() {
 			'export const CATALOG_BLOCKS: BlockDef[] = [',
 		];
 		const body = rows.map((r) => `\t${JSON.stringify(r)},`);
-		writeFileSync(OUT_TS, [...header, ...body, '];', ''].join('\n'));
-		writeFileSync(OUT_IDS, JSON.stringify(ids, null, '\t') + '\n');
+		// Format through the project's prettier config so the committed file is
+		// stable across runs and `npm run format` never rewrites it.
+		const src = await format([...header, ...body, '];', ''].join('\n'), { filepath: OUT_TS });
+		writeFileSync(OUT_TS, src);
+		writeFileSync(OUT_IDS, JSON.stringify(map, null, '\t') + '\n');
 
-		const newNames = usable.filter((c) => existing[c.name] === undefined).map((c) => c.name);
-		console.log(`qualified ${candidates.length + dropped.filter((d) => /duplicate/.test(d.reason)).length}, kept ${usable.length}, dropped ${dropped.length}, new ${newNames.length}, retired ${retire.length}`);
+		const newNames = usable.filter((c) => existing.ids[c.name] === undefined).map((c) => c.name);
+		console.log(`kept ${usable.length}, dropped ${dropped.length}, new ${newNames.length}, retired ${map.retired.length}`);
 		if (newNames.length) console.log(`new: ${newNames.join(' ')}`);
 	} finally {
 		rmSync(tmp, { recursive: true, force: true });
@@ -896,11 +933,11 @@ main().catch((err) => {
 
 Add to `package.json` scripts: `"gen-catalog": "tsx scripts/gen-catalog.ts"`.
 
-- [ ] **Step 4: Run the generator:** `npm run gen-catalog`. Expected: a line like `qualified ~380, kept ~325, dropped ~…, new ~325, retired 0`, and the two files written. Run `npx prettier --write src/data/blocks.catalog.data.ts` so lint passes (one row per line stays readable). Skim the dropped list in the file header: `glowstone: duplicate of lamp`, `stone: already a base block`, `waxed_*: excluded by name`, `*_stairs: not a full cube`. If any name is dropped with `unresolved`, stop and report it.
+- [ ] **Step 4: Run the generator:** `npm run gen-catalog`. Expected (the engine reviewer ran these rules over the real jar): `kept 354, dropped ~750, new 354, retired 0`; ids 20–373; the two files written and already prettier-formatted. Skim the dropped list in the file header: `glowstone: duplicate of lamp`, `stone: already a base block`, `waxed_*: excluded by name`, `*_stairs: not a full cube`. Confirm there is no `unresolved` entry and that `cherry_log`, `bamboo_block` are `columnar` (not `six`) and `dispenser`/`furnace`/`jack_o_lantern` are `six` with `nz` = their front texture. If any name is `unresolved` or a log is `six`, stop and report it.
 
 - [ ] **Step 5: Fill the pinned ids.** Open `blocks.catalog.ids.json`, take the first two entries by id (they will be the alphabetically first names, ids 20 and 21) and one from the middle, and put them in the `toMatchObject` of the pin test.
 
-- [ ] **Step 6: Run** `npx vitest run src/data && npx tsc -b && npm run lint` → all PASS. Run the generator a second time and `git diff --stat src/data/blocks.catalog.*` must be empty (ids frozen, output stable).
+- [ ] **Step 6: Run** `npx vitest run src/data && npx tsc -b && npm run lint && npx prettier --check src/data/blocks.catalog.data.ts` → all PASS. Then `md5sum src/data/blocks.catalog.*`, run the generator a second time, `md5sum` again: identical (ids frozen, output byte-stable).
 
 ---
 
@@ -988,36 +1025,46 @@ Also collect texture names with `textureNames()` from `../src/data/catalog-rules
 		expect(Array.from(inflate(bytes))).toEqual(LEGACY_RLE);
 	});
 
-	it('rejects a value above 0xffff, an over-long run, and an over-long varint', () => {
-		const b64 = (rle: number[]) => btoa(String.fromCharCode(...deflate(new Uint8Array(rle))));
+	// Each guard gets its own message-specific matcher: a bare toThrow() would be
+	// satisfied by the pre-existing "wrong length" check and could not tell a
+	// removed guard from a present one (the over-long run burns 240 ms before
+	// that check fires, which is the DoS the guard exists to prevent).
+	const b64 = (rle: number[]) => btoa(String.fromCharCode(...deflate(new Uint8Array(rle))));
+
+	it('rejects a value above 0xffff before storing it', () => {
 		// value 70000 = varint [0xf0, 0xa2, 0x04], run 16384 = [0x80, 0x80, 0x01]
-		expect(() => decodeChunk(b64([0xf0, 0xa2, 0x04, 0x80, 0x80, 0x01]))).toThrow();
-		// value 1, run 0x0ffffff0 (way past the chunk)
-		expect(() => decodeChunk(b64([1, 0xf0, 0xff, 0xff, 0x7f]))).toThrow();
-		// 5-byte varint with continuation bits set all the way
-		expect(() => decodeChunk(b64([0xff, 0xff, 0xff, 0xff, 0x7f, 1]))).toThrow();
+		expect(() => decodeChunk(b64([0xf0, 0xa2, 0x04, 0x80, 0x80, 0x01]))).toThrow(/out of range/);
+	});
+
+	it('rejects a run that overruns the chunk before filling it', () => {
+		// value 1, run 0x0ffffff0
+		expect(() => decodeChunk(b64([1, 0xf0, 0xff, 0xff, 0x7f]))).toThrow(/overruns/);
+	});
+
+	it('rejects a varint longer than four bytes', () => {
+		expect(() => decodeChunk(b64([0xff, 0xff, 0xff, 0xff, 0x7f, 1]))).toThrow(/varint too long/);
 	});
 ```
 
 with `import { deflate, inflate } from 'pako';` at the top.
 
-In `src/persistence/localStorage.test.ts` add, using that file's existing helpers for writing a v2 record:
+In `src/persistence/localStorage.test.ts` add (the file's `MemStorage` exposes only the Storage API: `key(i)`, `length`, `getItem`, `setItem`; iterate with those, and use the file's existing save-fixture helper and world id constant in place of `makeSave()` / `ID` below):
 
 ```ts
 	it('surfaces the decode error, not atob, when a JSON chunk payload is corrupt', async () => {
+		const storage = new MemStorage();
 		const adapter = new LocalStorageAdapter(storage);
-		await adapter.saveWorld(makeSave());            // whatever the file's existing helper is called
-		const key = Object.keys(store).find((k) => k.includes(':chunk:'))!;
-		const payload = JSON.parse(store[key]);
-		payload.blocks = 'AAAA';                         // valid base64, invalid RLE
-		store[key] = JSON.stringify(payload);
-		await expect(adapter.loadWorld(ID)).rejects.not.toThrow(/Invalid character/);
+		await adapter.saveWorld(makeSave());
+		let key: string | null = null;
+		for (let i = 0; i < storage.length; i++) if (storage.key(i)!.includes(':chunk:')) key = storage.key(i);
+		const payload = JSON.parse(storage.getItem(key!)!);
+		payload.blocks = 'eJxjZQQAAA0ABw==';   // deflate of RLE [5, 1]: valid stream, wrong length
+		storage.setItem(key!, JSON.stringify(payload));
+		await expect(adapter.loadWorld(ID)).rejects.toThrow(/wrong length/);
 	});
 ```
 
-(Adapt `makeSave`, `storage`, `store`, `ID` to the names the file already uses; the assertion that matters is that the rejection message does not contain `Invalid character`.)
-
-- [ ] **Step 2: Run** `npx vitest run src/persistence/codec.test.ts src/persistence/localStorage.test.ts` → the high-id round trip FAILS (values wrap to bytes), the RLE test FAILS on type (or passes only by coincidence: if it passes, fine), the rejection tests FAIL, the localStorage test FAILS with `Invalid character`.
+- [ ] **Step 2: Run** `npx vitest run src/persistence/codec.test.ts src/persistence/localStorage.test.ts` → the high-id round trip FAILS (values wrap to bytes); the legacy-decode and RLE-bytes tests FAIL on `Uint8Array` vs `Uint16Array`; all three rejection tests FAIL with `Decoded chunk has wrong length` instead of the expected message (the current codec throws from its length check, after 240 ms for the overrun case); the localStorage test FAILS with `Invalid character`. If a rejection test is green here, its matcher is too loose.
 
 - [ ] **Step 3: Implement.**
 
@@ -1211,7 +1258,7 @@ In `renderer.ts`: add `private translucentMeshes = new Map<string, THREE.Mesh>()
 		});
 ```
 
-and in `mountChunkMesh` add a third block identical to the liquid one but reading `meshResult.translucent`, using `this.translucentMeshes` and `this.translucentMaterial`. Extract the repeated geometry build into a private `buildGeometry(mesh: ChunkMesh): THREE.BufferGeometry` helper so the three blocks are three calls.
+and in `mountChunkMesh` add a third block identical to the liquid one but reading `meshResult.translucent`, using `this.translucentMeshes` and `this.translucentMaterial`. Extract the repeated geometry build into a private `buildGeometry(mesh: ChunkMesh): THREE.BufferGeometry` helper so the three blocks are three calls. Set `m.renderOrder = 1` on every **liquid** mesh (three sorts transparent meshes by chunk centroid, so without this a water mesh from one chunk can draw before a glass mesh from another; glass writes depth, so drawing it first is correct).
 
 - [ ] **Step 4: Run** `npx vitest run src/engine && npx tsc -b && npm run lint` → green.
 
@@ -1233,12 +1280,18 @@ import { AIR, BLOCKS, DEFAULT_HOTBAR, HOTBAR_SIZE } from '../data/blocks.data';
 
 describe('resolveHotbar', () => {
 	it('gives the default hotbar when nothing is saved', () => {
-		expect(resolveHotbar(undefined, 0, BLOCKS)).toEqual({ hotbar: DEFAULT_HOTBAR, selected: 0 });
+		const r = resolveHotbar(undefined, 0, BLOCKS);
+		expect(r).toEqual({ hotbar: DEFAULT_HOTBAR, selected: 0 });
+		expect(r.hotbar).toHaveLength(HOTBAR_SIZE);
+		expect(r.hotbar).not.toBe(DEFAULT_HOTBAR); // a copy, never the shared constant
 	});
-	it('replaces a legacy 19-entry pool with the default and keeps the selected block if present', () => {
-		const pool = BLOCKS.slice(1, 20).map((b) => b.id);
-		expect(resolveHotbar(pool, 2, BLOCKS)).toEqual({ hotbar: DEFAULT_HOTBAR, selected: 2 }); // stone
-		expect(resolveHotbar(pool, 18, BLOCKS).selected).toBe(0);                                 // obsidian: not in default
+	it('replaces a legacy pool with the default and keeps the selected BLOCK, not the index', () => {
+		// Deliberately not [1..19]: on that pool the block lookup is an identity map
+		// and a plain index clamp would pass. Here index 0 holds white wool (id 9),
+		// which sits at index 8 of the default bar.
+		const pool = [9, 8, 7, 6, 5, 4, 3, 2, 1, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19];
+		expect(resolveHotbar(pool, 0, BLOCKS)).toEqual({ hotbar: DEFAULT_HOTBAR, selected: 8 });
+		expect(resolveHotbar(pool, 18, BLOCKS).selected).toBe(0); // obsidian: not in the default bar
 	});
 	it('keeps a 9-entry hotbar, blanking ids that are not live blocks', () => {
 		const saved = [1, 2, 3, 99999, AIR, 6, 7, 8, 9];
@@ -1297,7 +1350,7 @@ export function resolveHotbar(
 - Create: `src/ui/inventory.ts`
 - Modify: `src/ui/ui.css` (append)
 
-**Interfaces (produces):** the `Inventory` class exactly as in the spec (`onPick`, `onSelectSlot`, `onClose`, `open`, `close`, `isOpen`, `setHotbar`).
+**Interfaces (produces):** the `Inventory` class exactly as in the spec (`onPick`, `onSelectSlot`, `onClose`, `open`, `close`, `isOpen`, `setHotbar(ids, selected, flashSlot?)`).
 
 - [ ] **Step 1: Create `src/ui/inventory.ts`:**
 
@@ -1318,7 +1371,7 @@ export class Inventory {
 	private nameEl: HTMLDivElement;
 	private strip: HTMLDivElement;
 	private slotEls: HTMLDivElement[] = [];
-	private lastHotbar: BlockId[] = [];
+	private labels = new Map<BlockId, string>();
 	onPick: ((id: BlockId) => void) | null = null;
 	onSelectSlot: ((slot: number) => void) | null = null;
 	onClose: (() => void) | null = null;
@@ -1331,10 +1384,14 @@ export class Inventory {
 		const card = document.createElement('div');
 		card.className = 'inventory-card';
 
+		for (const b of blocks) this.labels.set(b.id, b.label);
 		this.grid = document.createElement('div');
 		this.grid.className = 'inventory-grid';
 		for (const group of GROUP_ORDER) {
 			const rows = blocks.filter((b) => b.group === group && b.id !== AIR && !b.retired);
+			// BASICS keeps hand order (grass, dirt, stone…); generated groups sort by
+			// label so a regeneration that appends ids does not land new blocks at the end.
+			if (group !== 'basics') rows.sort((a, b) => a.label.localeCompare(b.label));
 			if (rows.length === 0) continue;
 			const h = document.createElement('div');
 			h.className = 'inventory-group';
@@ -1344,10 +1401,12 @@ export class Inventory {
 				const tile = document.createElement('button');
 				tile.className = 'inventory-tile';
 				tile.title = b.label;
+				tile.tabIndex = -1; // a focused tile would re-fire on Space (his jump reflex)
 				this.paintTile(tile, b.id);
 				tile.addEventListener('mouseenter', () => { this.nameEl.textContent = b.label; });
 				tile.addEventListener('click', (e) => {
 					e.stopPropagation();
+					tile.blur();
 					this.onPick?.(b.id);
 				});
 				this.grid.appendChild(tile);
@@ -1398,8 +1457,8 @@ export class Inventory {
 		this.root.classList.add('hidden');
 	}
 
-	/** Mirrors Hud.setHotbar; flashes the slot whose block changed. */
-	setHotbar(ids: BlockId[], selected: number): void {
+	/** Mirrors Hud.setHotbar; `flashSlot` pulses that slot (every pick, even a repeat). */
+	setHotbar(ids: BlockId[], selected: number, flashSlot?: number): void {
 		while (this.slotEls.length < ids.length) {
 			const i = this.slotEls.length;
 			const el = document.createElement('div');
@@ -1414,14 +1473,14 @@ export class Inventory {
 		for (let i = 0; i < ids.length; i++) {
 			const el = this.slotEls[i];
 			el.classList.toggle('selected', i === selected);
+			el.title = ids[i] === AIR ? '' : (this.labels.get(ids[i]) ?? '');
 			this.paintTile(el, ids[i]);
-			if (this.lastHotbar[i] !== undefined && this.lastHotbar[i] !== ids[i]) {
+			if (i === flashSlot) {
 				el.classList.remove('flash');
 				void el.offsetWidth; // restart the animation
 				el.classList.add('flash');
 			}
 		}
-		this.lastHotbar = [...ids];
 	}
 }
 ```
@@ -1501,9 +1560,11 @@ export class Inventory {
 .hotbar-slot.flash {
 	animation: slot-flash 0.3s ease-out;
 }
+/* Scale + brightness, not box-shadow: the flashed slot is always the selected one,
+   whose own box-shadow would hide a shadow-based pulse. */
 @keyframes slot-flash {
-	0% { box-shadow: 0 0 0 4px #fff; }
-	100% { box-shadow: 0 0 0 0 rgba(255, 255, 255, 0); }
+	0% { transform: scale(1.25); filter: brightness(1.8); }
+	100% { transform: scale(1); filter: brightness(1); }
 }
 ```
 
@@ -1511,14 +1572,73 @@ export class Inventory {
 
 ---
 
-### Task 10: Wiring in `main.ts`
+### Task 10: Input gate and wiring in `main.ts`
 
 **Files:**
+- Create: `src/game/input-gate.ts`, `src/game/input-gate.test.ts`
 - Modify: `src/main.ts`
+
+- [ ] **Step 0a: Failing gate tests** — `src/game/input-gate.test.ts`:
+
+```ts
+import { describe, it, expect } from 'vitest';
+import { shouldHandleKey } from './input-gate';
+
+const free = { frozen: false, inventoryOpen: false, pickerOpen: false };
+
+describe('shouldHandleKey', () => {
+	it('processes every keyup in every state so held keys never stick', () => {
+		for (const state of [free, { ...free, frozen: true }, { ...free, inventoryOpen: true }, { ...free, pickerOpen: true }])
+			for (const a of ['forward', 'jump', 'inventory', 'slot3', 'ignite'] as const)
+				expect(shouldHandleKey(false, a, state)).toBe(true);
+	});
+	it('drops every keydown while frozen', () => {
+		for (const a of ['forward', 'inventory', 'slot1', 'toggleFly'] as const)
+			expect(shouldHandleKey(true, a, { ...free, frozen: true })).toBe(false);
+	});
+	it('allows only inventory and slot keys while the inventory is open', () => {
+		const s = { ...free, inventoryOpen: true };
+		expect(shouldHandleKey(true, 'inventory', s)).toBe(true);
+		expect(shouldHandleKey(true, 'slot7', s)).toBe(true);
+		for (const a of ['forward', 'jump', 'ignite', 'toggleFly', 'pickLightColor'] as const)
+			expect(shouldHandleKey(true, a, s)).toBe(false);
+	});
+	it('ignores the inventory key while the colour picker is open, nothing else', () => {
+		const s = { ...free, pickerOpen: true };
+		expect(shouldHandleKey(true, 'inventory', s)).toBe(false);
+		expect(shouldHandleKey(true, 'forward', s)).toBe(true);
+	});
+	it('handles everything when free', () => {
+		for (const a of ['forward', 'inventory', 'slot1', 'ignite'] as const) expect(shouldHandleKey(true, a, free)).toBe(true);
+	});
+});
+```
+
+- [ ] **Step 0b: Run** → FAIL (module missing). **Implement `src/game/input-gate.ts`:**
+
+```ts
+import type { Action } from '../data/keybindings.data';
+
+export type GateState = { frozen: boolean; inventoryOpen: boolean; pickerOpen: boolean };
+
+/**
+ * Which key events main.ts acts on. Keyup is always processed so the held-key
+ * flags stay truthful; keydown is gated by which overlay owns the screen.
+ */
+export function shouldHandleKey(down: boolean, action: Action, s: GateState): boolean {
+	if (!down) return true;
+	if (s.frozen) return false;
+	if (s.inventoryOpen) return action === 'inventory' || action.startsWith('slot');
+	if (s.pickerOpen && action === 'inventory') return false;
+	return true;
+}
+```
+
+Run → PASS.
 
 **Interfaces (consumes):** `resolveHotbar` (8), `Inventory` (9), `isTranslucent` not needed here, `AIR`, `HOTBAR_SIZE` (1), `colorPicker.isOpen` (exists), everything from the play-time block.
 
-- [ ] **Step 1: Imports.** Add `import { Inventory } from './ui/inventory';`, `import { resolveHotbar } from './game/hotbar';`, and `AIR` to the `blocks.data` import. Remove `loadOptions`'s `opts.kidMode` use (Task 1 did).
+- [ ] **Step 1: Imports.** Add `import { Inventory } from './ui/inventory';`, `import { resolveHotbar } from './game/hotbar';`, `import { shouldHandleKey } from './game/input-gate';`, and `AIR` to the `blocks.data` import. Remove `loadOptions`'s `opts.kidMode` use (Task 1 did).
 
 - [ ] **Step 2: Hotbar resolution.** Replace the block from `// Hotbar is always derived …` through `hud.setHotbar(player.hotbar, player.selected);` with:
 
@@ -1572,7 +1692,8 @@ and, where the save is read, replace `let savedSelectedBlockId: BlockId | null =
 		inventory.onClose = closeInventory;
 		inventory.onPick = (id) => {
 			player.hotbar[player.selected] = id;
-			syncHotbar();
+			hud.setHotbar(player.hotbar, player.selected);
+			inventory.setHotbar(player.hotbar, player.selected, player.selected);
 			autosave.markDirty();
 		};
 		inventory.onSelectSlot = (slot) => {
@@ -1589,13 +1710,7 @@ and, where the save is read, replace `let savedSelectedBlockId: BlockId | null =
 		const onKey = (down: boolean) => (e: KeyboardEvent) => {
 			const a = keyToAction[e.code];
 			if (!a) return;
-			// Keyup is always processed so `keys` stays truthful (a W held across
-			// an I press must not stick). Keydown is gated by state.
-			if (down) {
-				if (frozen) return;
-				if (inventoryOpen && a !== 'inventory' && !a.startsWith('slot')) return;
-				if (colorPicker.isOpen && a === 'inventory') return;
-			}
+			if (!shouldHandleKey(down, a, { frozen, inventoryOpen, pickerOpen: colorPicker.isOpen })) return;
 			switch (a) {
 				…existing cases…
 				case 'inventory':
@@ -1660,14 +1775,19 @@ to the plain block.
 
 ## Regenerating after a Minecraft update
 
-1. Extract the new `assets/minecraft/textures/block/*.png` into
-   `src/assets/blocks/` (see CLAUDE.md; skip `.mcmeta`).
+1. Extract the new textures (skip `.mcmeta`):
+   `unzip -o -j ~/.minecraft/versions/<v>/<v>.jar 'assets/minecraft/textures/block/*.png' -d src/assets/blocks/`
 2. `MINECRAFT_JAR=~/.minecraft/versions/<v>/<v>.jar npm run gen-catalog`.
    Ids are frozen in `src/data/blocks.catalog.ids.json`; a block that no
    longer resolves is a hard error. Retire it deliberately with
    `npm run gen-catalog -- --retire <name>`; its id becomes a tombstone that
    renders as nothing and is never reused.
 3. `npm test`, then `npm run build` (the atlas is rebuilt by `prebuild`).
+4. `git add` the three generated files (`blocks.catalog.data.ts`,
+   `blocks.catalog.ids.json`, and any new textures), update the version
+   string in README/CLAUDE.md, deploy the API, then the site by hand with
+   cache-control (Cloudflare caches `/minicraft/` separately from
+   `index.html`), then reload the game once on Noah's laptop.
 
 ## 16-bit block ids and deploy order
 
@@ -1676,12 +1796,14 @@ Chunks store `Uint16Array` ids; the save codec writes each run as
 so old saves load unchanged. **Deploy the API before the site**
 (`./deploy.sh`, then `./deploy.sh --verify` must print `codec 2`): the old
 server refuses any chunk containing an id ≥ 128. A browser still running an
-old bundle cannot open a world that contains a new block until it reloads.
+old bundle cannot open a world that contains a new block: the world is intact;
+the fix is a hard refresh (Ctrl+Shift+R) so the new bundle loads.
 
 ## Rendering notes
 
-- Stained glass, tinted glass, ice, honey and slime render in a third
-  front-face translucent pass (`translucent: true`).
+- Stained glass, tinted glass and ice render in a third front-face
+  translucent pass (`translucent: true`). Honey and slime are two-element
+  models and are not listed.
 - Leaves are cutouts with `lightFilter: 0`; see `docs/lighting.md`.
 - Animated textures show frame 0.
 - The atlas is 1024 px with 32 px cells so mip levels do not bleed neighbours.
@@ -1689,9 +1811,9 @@ old bundle cannot open a world that contains a new block until it reloads.
 
 - [ ] **Step 2: `docs/lighting.md`** — add a short section "Leaves and other cutouts" stating: cutout blocks keep `lightFilter: 0` because any filter ≥ 1 attenuates by `max(2, filter)` per block and disables the straight-down skylight case, which makes the ground under a tree cave-dark; tree shadows would need `shadows.ts` to treat cutouts as casters.
 
-- [ ] **Step 3: `README.md`** — in Features: replace the "Hotbar as inventory" bullet with `- **Block inventory** (I): every solid-cube block from Minecraft 1.21.6 (~340), grouped; click to fill the selected hotbar slot. 9-slot hotbar saved per world. See [docs/inventory.md](docs/inventory.md).`; delete the "Kid mode" bullet; in "How to play" add `- **I** — open / close the block inventory.`; in Extensibility change "Adding a block is one row in `src/data/blocks.data.ts`" to "…one row in `src/data/blocks.base.data.ts` (hand rows) or a regeneration via `npm run gen-catalog` (Minecraft blocks)"; update the Tests line count from `npx vitest run`.
+- [ ] **Step 3: `README.md`** — line 9's intro (`… with a "kid mode" filter that hides …`) → `… about 350 solid-cube blocks from Minecraft 1.21.6, picked from an I-key inventory (whole cubes only — no stairs, slabs, doors or flowers)`; in Features: replace the "Hotbar as inventory" bullet with `- **Block inventory** (I): every solid-cube block from Minecraft 1.21.6 (~350), grouped; click to fill the selected hotbar slot. Whole cubes only — no stairs, slabs, doors, flowers. 9-slot hotbar saved per world. See [docs/inventory.md](docs/inventory.md).`; delete the "Kid mode" bullet; in "Textures" add leaves to the tinted list; in "Project layout" add `scripts/gen-catalog.ts` and the three catalog files; in "How to play" add `- **I** — open / close the block inventory.`; in Extensibility change "Adding a block is one row in `src/data/blocks.data.ts`" to "…one row in `src/data/blocks.base.data.ts` (hand rows) or a regeneration via `npm run gen-catalog` (Minecraft blocks)"; update the Tests line count from `npx vitest run`.
 
-- [ ] **Step 4: `CLAUDE.md`** — replace the line `Keep the "basic blocks" vs "all blocks" kid-mode toggle as a filter over the same catalog, not a parallel set.` with `The block catalog is a hand-written base (\`blocks.base.data.ts\`, ids 0–19 frozen) plus a generated, committed catalog (\`npm run gen-catalog\`) with frozen ids; never renumber.` `docs/specs.md`: in §7 Phase 1, change "**Hotbar IS the inventory** in Phase 1" to "Hotbar is filled from the I-key inventory (added 2026-09)".
+- [ ] **Step 4: `CLAUDE.md`** — replace the line `Keep the "basic blocks" vs "all blocks" kid-mode toggle as a filter over the same catalog, not a parallel set.` with `The block catalog is a hand-written base (\`blocks.base.data.ts\`, ids 0–19 frozen) plus a generated, committed catalog (\`npm run gen-catalog\`) with frozen ids; never renumber.` `docs/specs.md`: in §7 Phase 1, change "**Hotbar IS the inventory** in Phase 1" to "Hotbar is filled from the I-key inventory (added 2026-09)"; also remove the kid-mode mentions at lines 146 (`options.ts # keybinding + kid-mode UI`), 171 (`Options (kid-mode toggle, keybindings)`) and 245 (`Options: kid-mode toggle persists across reloads`).
 
 - [ ] **Step 5:** `npm run lint` (prettier on md is not enforced; just confirm nothing else changed).
 
@@ -1703,8 +1825,8 @@ old bundle cannot open a world that contains a new block until it reloads.
 
 - [ ] **Step 1:** `./deploy.sh` then `./deploy.sh --verify` → `ok: … /health -> codec 2`, `All checks passed`. (Pre-authorised. Do NOT deploy the site.)
 - [ ] **Step 2:** `npm run dev` in the background; open `http://localhost:5173` with the browser tool, foreground the tab.
-- [ ] **Step 3: Inventory.** Pick or create a world. Press I: `#inventory-root` visible, first header text `BASICS`, `document.querySelectorAll('.inventory-tile').length > 300`, `document.pointerLockElement === null`. Press W for 1 s: player position unchanged (read via the game's autosave? no — use `loop`-free check: take two screenshots 1 s apart, identical). Click the tile titled `Oak Planks`: the HUD's selected `.hotbar-slot` background-position changed, and the strip slot got class `flash`. Press `Digit5`, click `Blue Stained Glass`: slot 5 filled. Press Escape: root hidden. Press I: visible again with the same `scrollTop` after scrolling first. Reload, continue: HUD shows the same two picks.
-- [ ] **Step 4: Blocks.** Place (right-click) with slot 5 (blue stained glass) twice stacked, then Lamp, Oak Leaves, Oak Log, Jack O Lantern, Cyan Glazed Terracotta, Red Concrete from the inventory. Screenshot: glass is see-through and single-shaded where stacked, leaves green and see-through, log has bark sides and rings on top, jack o'lantern shows a face and lights the area, glazed terracotta shows a pattern. Reload: identical screenshot. `#save-status` not red; `localStorage` chunk for the player's chunk decodes (`JSON.parse(...).blocks` non-empty).
-- [ ] **Step 5: Legacy save.** In the console write a v2 meta/chunk pair from before the change (or reuse a world created before Task 5 if one exists in this browser): the world opens, the hotbar shows the 9 defaults.
+- [ ] **Step 3: Inventory.** Pick or create a world. Press I: `#inventory-root` visible, first header text `BASICS`, `document.querySelectorAll('.inventory-tile').length > 300`, `document.pointerLockElement === null`. Screenshot the `Jack O Lantern` and `Furnace` tiles: the face is visible; and assert the tile's `background-position` equals the scaled `atlas.tileRect(id,'nz')` (compute `-${u*3}px -${v*3}px` from `/atlas.json` for a 48 px tile on a 16 px texture). Click `Oak Planks`: the HUD's selected slot background changed; within 100 ms `getComputedStyle(stripSlot).animationName === 'slot-flash'`; click the same tile again after 400 ms: the animation restarts. Press `Digit5`, click `Blue Stained Glass`: slot 5 filled. **Stuck key, both ways:** hold W, press I, release W while open, press I, wait 1 s → position unchanged (two screenshots identical); then hold W, press I, press I, keep holding 1 s → the player moves, release → stops. Press Escape: root hidden. Press I: visible again with the same `scrollTop` after scrolling first. Reload, continue: HUD shows the same two picks.
+- [ ] **Step 4: Blocks.** Place (right-click) with slot 5 (blue stained glass) twice stacked, then Lamp, Oak Leaves, Oak Log, Cherry Log, Jack O Lantern, Cyan Glazed Terracotta, Red Concrete from the inventory. Screenshot: glass is see-through and single-shaded where stacked, leaves green and see-through, both logs have bark sides and rings on top, jack o'lantern shows a face and lights the area, glazed terracotta shows a pattern. Reload: identical screenshot. `#save-status` is not red (with `.env.local` pointing at the redeployed API the cloud leg must succeed; without it only the local leg is checked, say which).
+- [ ] **Step 5: Legacy save, deterministically.** Build one by hand: in the console, `localStorage.setItem` a v2 meta record and one chunk record for a fresh uuid, copying the key names and JSON shape from an existing world in this browser, with `player.hotbar` = the 19-entry pool `[1..19]`, `selected: 2`, and a chunk whose `blocks` is the legacy literal `eJxjTWFIEWZk2F4HAAf9Ahc=` (100 × id 5 = sand, then one id 19 = obsidian). Continue that world: hotbar shows the 9 defaults with slot 3 (stone) selected; the sand run and the obsidian block are present in the world. **AIR guard:** write a second world whose hotbar is `[1,2,3,0,5,6,7,8,9]`, `selected: 3`; continue; right-click a block: nothing is placed, no console error.
 - [ ] **Step 6: Overlays.** Press C (colour picker) then I: `#inventory-root` stays hidden. Escape, then I: opens. Set a play limit with `playedMs` 30 s short of the limit, open the inventory, wait: on freeze the inventory is hidden and `#playtime-freeze` shows.
 - [ ] **Step 7:** Report each step PASS/FAIL with the observed values and screenshot paths under the scratchpad. Stop the dev server.

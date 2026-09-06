@@ -113,8 +113,11 @@ Decision: option 1. Memory: 32 KB per loaded chunk, ~2.6 MB for the usual 80.
   full opacity, precedes each group. `BASICS` (the 19 blocks he already
   knows) is first. The grid keeps its scroll position across open/close.
 - **Picking:** clicking a tile puts that block in the selected hotbar slot; the
-  HUD updates at once and the slot in the overlay's own 9-slot strip flashes
-  for ~300 ms so he sees where it went. The inventory stays open. Clicking a
+  HUD updates at once and the slot in the overlay's own 9-slot strip pulses
+  (scale + brightness, ~300 ms) on **every** pick, repeats included, so he sees
+  where it went. Tiles do not keep keyboard focus (Space must not re-pick).
+  Within a group, BASICS keeps hand order; every other group is sorted by
+  label. Clicking the dark backdrop does nothing (unlike the colour picker). The inventory stays open. Clicking a
   strip slot selects it. Digit keys and Tab still change the selected slot
   while the inventory is open; nothing else on the keyboard does anything.
 - **Label:** hovering a tile brightens its border (like the colour picker) and
@@ -149,8 +152,9 @@ placeable. Emissive blocks (glowstone via the existing lamp row, sea lantern,
 shroomlight, froglights, jack o'lantern, magma, crying obsidian, lit redstone
 lamp) emit white light through the existing `lightLevel` path (as lava does).
 Leaves are cutout-transparent and tinted foliage green at build time. Stained
-glass, tinted glass, ice, honey and slime are translucent and render through a
-new front-face translucent pass. Leaves keep `lightFilter: 0`: in this engine
+glass, tinted glass and ice are translucent and render through a new
+front-face translucent pass (honey and slime are two-element models and are
+not full cubes under rule 1). Leaves keep `lightFilter: 0`: in this engine
 any filter ≥ 1 costs at least 2 levels per block and disables the straight-down
 skylight case, which makes the ground under a tree cave-dark; the reason is
 recorded in `docs/lighting.md`.
@@ -205,9 +209,11 @@ instead of shifting every later lookup. Engine helpers (`isSolid`,
    with exactly one element spanning `from [0,0,0]` to `to [16,16,16]`.
    Multipart blockstates are excluded. (This admits glazed terracotta, whose
    parent is a template, and needs no parent-name list.)
-2. **Variant.** The first variant in blockstate file order, unless the block
-   is in `LOOK_OVERRIDES` (`redstone_lamp → redstone_lamp_on` with
-   `lightLevel 15`).
+2. **Variant.** The variant whose key contains `axis=y` (upright logs: the
+   `axis=x` model of cherry and bamboo logs carries a sideways element), else
+   `facing=north` (front on north for furnaces and dispensers), else the first
+   in file order; unless the block is in `LOOK_OVERRIDES` (`redstone_lamp →
+   redstone_lamp_on` with `lightLevel 15`).
 3. **Faces.** From that element's `faces.{north,south,east,west,up,down}.texture`,
    dereference `#var` through the merged texture map up the chain, strip the
    `minecraft:block/` prefix. Map `north→nz, south→pz, east→px, west→nx,
@@ -227,13 +233,17 @@ instead of shifting every later lookup. Engine helpers (`isSolid`,
    the **shortest name**, then alphabetical; losers are listed in a comment at
    the top of the generated file.
 6. **Ids.** `GENERATED_ID_START = 20`, a constant, never `BASE_BLOCKS.length`.
-   The generator loads `blocks.catalog.ids.json`; every existing name keeps
-   its id; new names take `max(id) + 1` in name order. A name in the map that
-   no longer resolves is a **hard error** naming the block, unless the run
-   passes `--retire <name>`, in which case the name stays in the map and its
-   row is emitted as a tombstone. Ids are never reused. The generated file is
-   emitted in id order. Future hand-written blocks are added to a
-   `HAND_ROWS` list in `catalog-rules.ts` and take ids from the same map.
+   The generator loads `blocks.catalog.ids.json` (`{ ids: {name: id},
+   retired: [names] }`); every existing name keeps its id; new names take
+   `max(id) + 1` in name order. A name in the map that no longer resolves is a
+   **hard error** naming the block, unless the run passes `--retire <name>`;
+   the retirement is then **recorded in the file**, so later runs need no
+   flag, and the row is emitted as a tombstone. A retired name that resolves
+   again is un-retired with its old id. Ids are never reused. The generated
+   file is emitted in id order and formatted through prettier by the
+   generator itself, so a second run is byte-stable. Future hand-written
+   blocks are added to a `HAND_ROWS` list in `catalog-rules.ts` and take ids
+   from the same map.
 7. **Transparency.** After cropping animated strips to frame 0, `sharp` scans
    each face texture. Any alpha < 255 → `transparent: true, lightFilter: 0`;
    any alpha strictly between 0 and 255 → also `translucent: true`; otherwise
@@ -308,7 +318,8 @@ any unresolved blocks.
 - **Translucent pass.** `ChunkMeshResult` gains a third bucket
   `translucent`; the renderer gets a third material (same atlas,
   `transparent: true`, `FrontSide`, `depthWrite: true`, `alphaTest: 0.01`)
-  and a third mesh map. The mesher routes `def.translucent` blocks there with
+  and a third mesh map; liquid meshes get `renderOrder = 1` so glass (which
+  writes depth) draws before water. The mesher routes `def.translucent` blocks there with
   full-cube faces under the same `shouldEmitFace` rule glass uses; the opaque
   bucket skips them. Reusing the liquid material was rejected: its
   `DoubleSide` + `depthWrite: false` draws the far inner faces of a glass cube
@@ -319,7 +330,8 @@ any unresolved blocks.
 
 - `src/game/hotbar.ts`: `resolveHotbar(saved, savedSelected, blocks)` per the
   rules above; `DEFAULT_HOTBAR` in `blocks.base.data.ts`.
-- `Hud.setHotbar` unchanged.
+- `Hud.setHotbar` unchanged except the icon face becomes `nz` to match the
+  inventory tiles.
 - `main.ts` right-click path returns early when the selected id is `AIR`.
 - `keybindings.data.ts`: `Action` gains `'inventory'`, default `KeyI`, label
   `Open Inventory`, after `pickLightColor`. `Options.kidMode` removed;
@@ -331,7 +343,9 @@ any unresolved blocks.
   const resetKeys = …`. The play-time `freeze` sets `frozen = true`, closes
   the inventory (`inventoryOpen = false`), then `updatePaused()`; `resume`
   sets `frozen = false` and `updatePaused()`.
-- **Input gating** in `onKey`:
+- **Input gating** is a pure function `shouldHandleKey(down, action, {frozen,
+  inventoryOpen, pickerOpen})` in `src/game/input-gate.ts`, unit-tested;
+  `onKey` calls it. The table:
   - keyup for `forward/back/left/right/jump` is processed in every state, so
     `keys` stays truthful (a W held across an `I` press must not stick);
   - keydown: if `frozen` → ignored; else if `inventoryOpen` → only `inventory`
@@ -354,7 +368,7 @@ export class Inventory {
 	open(): void;
 	close(): void;
 	readonly isOpen: boolean;
-	setHotbar(ids: BlockId[], selected: number): void; // mirrors Hud.setHotbar; flashes the changed slot
+	setHotbar(ids: BlockId[], selected: number, flashSlot?: number): void; // mirrors Hud.setHotbar; pulses flashSlot
 }
 ```
 

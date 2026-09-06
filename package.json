@@ -9,6 +9,7 @@
 		"build": "tsc -b && vite build",
 		"preview": "vite preview",
 		"build-atlas": "tsx scripts/build-atlas.ts",
+		"gen-catalog": "tsx scripts/gen-catalog.ts",
 		"test": "vitest run",
 		"test:watch": "vitest",
 		"lint": "eslint .",

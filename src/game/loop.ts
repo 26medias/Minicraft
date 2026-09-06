@@ -46,6 +46,13 @@ export class GameLoop {
 	onMiningProgress: ((progress: number) => void) | null = null;
 	onFlyStateChange: ((tier: number | null) => void) | null = null;
 
+	/**
+	 * Set by the play-time limit. While true, tick() only syncs the camera and
+	 * keeps loading/meshing chunks: no physics, mining, particles, or simulation.
+	 * Chunks keep loading so a world opened straight into a break is not empty sky.
+	 */
+	paused = false;
+
 	constructor(
 		private world: World,
 		private renderer: Renderer,
@@ -109,6 +116,9 @@ export class GameLoop {
 	}
 
 	setLeftMouseDown(down: boolean) {
+		// A press is ignored while paused; a release is always honoured so a
+		// freeze can clear in-progress mining.
+		if (down && this.paused) return;
 		this.leftMouseDown = down;
 		if (!down) this.mining = null;
 	}
@@ -130,6 +140,12 @@ export class GameLoop {
 	}
 
 	private tick(dt: number) {
+		if (this.paused) {
+			this.cam.sync(this.renderer.camera);
+			this.loadNearbyChunks();
+			this.flushDirtyChunks();
+			return;
+		}
 		// Use getLookDir() (full 3D, includes pitch) so that cursor-directed fly/swim
 		// movement contributes a Y component. On-ground walking still only reads x/z
 		// from this vector, so there's no horizontal-speed regression.

@@ -14,7 +14,8 @@ const stone = BLOCK_BY_NAME['stone'].id;
 const water = BLOCK_BY_NAME['water'].id;
 
 // GameLoop's constructor only builds the LiquidScheduler; it never dereferences
-// the renderer, so a stub keeps this test out of WebGL and off the DOM.
+// the renderer, so a stub keeps this test out of WebGL and off the DOM. The stub
+// captures the tick callback so tests can drive a full tick() headlessly.
 function makeLoop() {
 	const world = new World(1);
 	const chunk = world.ensureChunk(16, 16);
@@ -22,23 +23,25 @@ function makeLoop() {
 	chunk.lights.fill(0);
 	chunk.liquidFrontier.clear();
 
+	let tickFn: ((dt: number) => void) | null = null;
+	let mounts = 0;
 	const renderer = {
 		camera: new THREE.PerspectiveCamera(),
-		mountChunkMesh: () => {},
-		onTick: () => {},
+		mountChunkMesh: () => {
+			mounts++;
+		},
+		onTick: (fn: (dt: number) => void) => {
+			tickFn = fn;
+		},
 	} as unknown as Renderer;
 
-	const keys = { isDown: () => false, consumePressed: () => false } as unknown as Keys;
+	const keys: Keys = { forward: false, back: false, left: false, right: false, jump: false };
+	const player = new Player([260, 40, 260]);
 
-	const loop = new GameLoop(
-		world,
-		renderer,
-		new FpCamera(),
-		new Player([260, 40, 260]),
-		keys,
-		() => [0, 0, 1, 1],
-	);
-	return { loop, world };
+	const loop = new GameLoop(world, renderer, new FpCamera(), player, keys, () => [0, 0, 1, 1]);
+	loop.start();
+	const tick = (dt: number) => tickFn!(dt);
+	return { loop, world, player, keys, tick, mounts: () => mounts };
 }
 
 describe('GameLoop.onWorldMutated', () => {
@@ -85,4 +88,34 @@ describe('GameLoop.onWorldMutated', () => {
 
 		expect(mutations).toBe(0);
 	});
+});
+
+describe('GameLoop.paused', () => {
+	it('stops physics and simulation but keeps loading chunks', () => {
+		const { loop, world, player, keys, tick, mounts } = makeLoop();
+		world.setBlock(260, 30, 260, tnt);
+		world.setBlock(261, 30, 260, stone);
+		let mutations = 0;
+		loop.onWorldMutated = () => {
+			mutations++;
+		};
+		expect(loop.ignite({ x: 260, y: 30, z: 260 } as never)).toBe(true);
+
+		keys.forward = true;
+		loop.paused = true;
+		const before = [...player.position];
+		// Each tick loads/meshes chunks (~50 ms), so use few, long ticks:
+		// Player.update sub-steps internally and 3 × 1 s > TNT_PRIME_FUSE (2.5 s).
+		for (let i = 0; i < 3; i++) tick(1.0);
+		expect(player.position).toEqual(before);
+		expect(mutations).toBe(0);
+		expect(world.getBlock(261, 30, 260)).toBe(stone);
+		expect(mounts()).toBeGreaterThan(0);
+
+		loop.paused = false;
+		for (let i = 0; i < 3; i++) tick(1.0);
+		expect(player.position).not.toEqual(before);
+		expect(mutations).toBeGreaterThan(0);
+		expect(world.getBlock(261, 30, 260)).toBe(AIR);
+	}, 30_000);
 });

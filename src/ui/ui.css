@@ -229,6 +229,7 @@
 	font: 12px system-ui, sans-serif;
 	pointer-events: none;
 	transition: opacity 0.3s;
+	z-index: 40;
 }
 
 #save-status.saved {
@@ -243,4 +244,101 @@
 #save-status.error {
 	color: #f08080;
 	opacity: 1;
+}
+
+/* Play-time limit. Warning: upper third, click-through. Freeze: covers all. */
+#playtime-warning {
+	position: fixed;
+	top: 18vh;
+	left: 50%;
+	transform: translateX(-50%);
+	max-width: 92vw;
+	box-sizing: border-box;
+	padding: 2vh 4vw;
+	background: rgba(0, 0, 0, 0.6);
+	color: #fff;
+	font: bold 6vw/1.1 system-ui, sans-serif;
+	white-space: nowrap;
+	letter-spacing: 0.04em;
+	text-align: center;
+	text-transform: uppercase;
+	border-radius: 12px;
+	pointer-events: none;
+	opacity: 0;
+	transition: opacity 0.4s;
+	z-index: 25;
+}
+#playtime-warning.visible {
+	opacity: 1;
+}
+#playtime-freeze {
+	position: fixed;
+	inset: 0;
+	background: rgba(0, 0, 0, 0.75);
+	color: #fff;
+	display: flex;
+	flex-direction: column;
+	align-items: center;
+	justify-content: center;
+	gap: 4vh;
+	text-align: center;
+	text-transform: uppercase;
+	pointer-events: auto;
+	z-index: 30;
+}
+#playtime-freeze.hidden {
+	display: none;
+}
+.playtime-title {
+	font: bold 12vw/1.05 system-ui, sans-serif;
+	max-width: 92vw;
+	letter-spacing: 0.04em;
+}
+.playtime-line {
+	font: bold 5vw/1.2 system-ui, sans-serif;
+	max-width: 92vw;
+	opacity: 0.9;
+}
+.playtime-button {
+	font: bold 6vw/1 system-ui, sans-serif;
+	padding: 3vh 8vw;
+	background: #3c9a3c;
+	color: #fff;
+	border: none;
+	border-radius: 16px;
+	cursor: pointer;
+	text-transform: uppercase;
+}
+.playtime-button:hover {
+	background: #4cb54c;
+}
+.menu-card select {
+	width: 100%;
+	padding: 8px;
+	font-size: 14px;
+	background: #1b1b1b;
+	border: 1px solid #4a4a4a;
+	color: #fff;
+	border-radius: 4px;
+	box-sizing: border-box;
+}
+.playtime-row {
+	margin: 8px 0;
+}
+.playtime-status {
+	display: flex;
+	justify-content: space-between;
+	align-items: center;
+	gap: 8px;
+	margin: 8px 0;
+	padding: 8px;
+	background: #1b1b1b;
+	border-radius: 4px;
+	color: #f0c070;
+	font-size: 13px;
+}
+.playtime-status button {
+	width: auto;
+	margin: 0;
+	padding: 6px 12px;
 }

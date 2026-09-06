@@ -2,7 +2,7 @@ import { describe, it, expect } from 'vitest';
 import {
 	assignIds, classifyAlpha, facesToTextures, firstVariantModel, groupOf,
 	hardnessFor, isExcluded, isFullCube, labelFor, makeRows, modelKey, resolveFaces,
-	selectCandidates, type Models, type BlockstateJson,
+	selectCandidates, HAND_CANDIDATES, type Models, type BlockstateJson,
 } from './catalog-rules';
 import { BASE_BLOCKS } from './blocks.base.data';
 
@@ -124,6 +124,7 @@ describe('isExcluded / groupOf / hardnessFor / labelFor', () => {
 		['coarse_dirt', 'earth'], ['moss_block', 'earth'], ['mycelium', 'earth'], ['snow_block', 'earth'], ['hay_block', 'earth'],
 		['pumpkin', 'earth'], ['honey_block', 'earth'], ['slime_block', 'earth'], ['dried_kelp_block', 'earth'],
 		['target', 'utility'], ['budding_amethyst', 'metal'], ['creaking_heart', 'other'],
+		['iron_bars', 'metal'],
 	])('groups %s as %s', (name, group) => {
 		expect(groupOf(name)).toBe(group);
 	});
@@ -165,7 +166,7 @@ describe('selectCandidates', () => {
 	it('keeps full cubes, applies exclusions, dedupes against base and shortest name, applies overrides', () => {
 		const { candidates, dropped } = selectCandidates(blockstates, models, BASE_BLOCKS);
 		const names = candidates.map((c) => c.name);
-		expect(names).toEqual(['cyan_glazed_terracotta', 'dispenser', 'furnace', 'redstone_lamp', 'stone_bricks']);
+		expect(names).toEqual(['cyan_glazed_terracotta', 'dispenser', 'furnace', 'iron_bars', 'redstone_lamp', 'stone_bricks']);
 		expect(candidates.find((c) => c.name === 'redstone_lamp')!.textures).toEqual({ kind: 'uniform', all: 'redstone_lamp_on' });
 		expect(candidates.find((c) => c.name === 'furnace')!.textures.kind).toBe('six');
 		const reasons = Object.fromEntries(dropped.map((d) => [d.name, d.reason]));
@@ -175,6 +176,18 @@ describe('selectCandidates', () => {
 		expect(reasons.stone_stairs).toMatch(/not a full cube/);
 		expect(reasons.oak_fence).toMatch(/multipart|not a full cube/);
 		expect(reasons.broken).toMatch(/unresolved/);
+	});
+	it('includes hand-written candidates and dedupes them like the rest', () => {
+		const hand = [
+			{ name: 'prison_bars', textures: { kind: 'uniform' as const, all: 'iron_bars' } },
+			{ name: 'stone_again', textures: { kind: 'uniform' as const, all: 'stone' } },
+		];
+		const { candidates, dropped } = selectCandidates(blockstates, models, BASE_BLOCKS, hand);
+		expect(candidates.map((c) => c.name)).toContain('prison_bars');
+		expect(dropped.find((d) => d.name === 'stone_again')?.reason).toMatch(/duplicate of stone/);
+	});
+	it('ships iron_bars as the one hand-written block', () => {
+		expect(HAND_CANDIDATES).toEqual([{ name: 'iron_bars', textures: { kind: 'uniform', all: 'iron_bars' } }]);
 	});
 });
 

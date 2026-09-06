@@ -143,7 +143,7 @@ const GROUP_RULES: Array<[BlockGroup, string[]]> = [
 	['end', ['end_', 'purpur', 'chorus']],
 	['nether', ['netherrack', 'nether_', 'soul_', 'basalt', 'blackstone', 'magma', 'shroomlight', 'warped', 'crimson', 'ancient_debris']],
 	['ore', ['_ore', 'raw_']],
-	['metal', ['copper', 'iron_block', 'gold_block', 'diamond_block', 'emerald_block', 'netherite', 'lapis_block', 'redstone_block', 'coal_block', 'amethyst']],
+	['metal', ['copper', 'iron_bars', 'iron_block', 'gold_block', 'diamond_block', 'emerald_block', 'netherite', 'lapis_block', 'redstone_block', 'coal_block', 'amethyst']],
 	['wood', ['_planks', '_log', '_wood', '_stem', '_hyphae', '_leaves', 'bookshelf', 'bamboo']],
 	['utility', ['furnace', 'smoker', '_table', 'loom', 'barrel', 'jukebox', 'note_block', 'target', 'bone_block', 'beehive', 'bee_nest', 'dispenser', 'dropper', 'observer', 'composter', 'lodestone', 'crafter']],
 	['stone', ['stone', 'brick', 'andesite', 'diorite', 'granite', 'cobble', 'prismarine', 'quartz', 'calcite', 'dripstone', 'obsidian', 'bedrock', 'packed_mud', 'resin']],
@@ -181,10 +181,21 @@ export function classifyAlpha(alpha: ArrayLike<number>): { transparent: boolean;
 
 export type Candidate = { name: string; textures: BlockFaceTextures };
 
+/**
+ * Blocks that are not full cubes in Minecraft but that we ship as cubes anyway,
+ * using an existing texture. They go through the same dedupe and id freezing as
+ * generated blocks. iron_bars: Minecraft's pane, here a see-through cube
+ * (cutout like glass) because Noah wanted prison bars.
+ */
+export const HAND_CANDIDATES: Candidate[] = [
+	{ name: 'iron_bars', textures: { kind: 'uniform', all: 'iron_bars' } },
+];
+
 export function selectCandidates(
 	blockstates: Record<string, BlockstateJson>,
 	models: Models,
 	base: BlockDef[],
+	hand: Candidate[] = HAND_CANDIDATES,
 ): { candidates: Candidate[]; dropped: { name: string; reason: string }[] } {
 	const dropped: { name: string; reason: string }[] = [];
 	const baseNames = new Set(base.map((b) => b.name));
@@ -206,6 +217,7 @@ export function selectCandidates(
 			dropped.push({ name, reason: String((e as Error).message) });
 		}
 	}
+	for (const h of hand) resolved.push({ name: h.name, textures: h.textures });
 	// Shortest name wins, then alphabetical.
 	resolved.sort((a, b) => a.name.length - b.name.length || a.name.localeCompare(b.name));
 	const candidates: Candidate[] = [];

@@ -51,6 +51,11 @@ describe('generated catalog', () => {
 		expect(BLOCK_BY_NAME['glowstone']).toBeUndefined(); // same look as lamp
 		expect(BLOCK_BY_NAME['redstone_lamp'].textures).toEqual({ kind: 'uniform', all: 'redstone_lamp_on' });
 		expect(BLOCK_BY_NAME['dropper']).toBeDefined();
+		// Hand-written: Minecraft's iron bars are a pane, ours are a see-through cube (Noah's prison bars).
+		expect(BLOCK_BY_NAME['iron_bars']).toMatchObject({
+			transparent: true, translucent: false, lightFilter: 0, group: 'metal', solid: true,
+			textures: { kind: 'uniform', all: 'iron_bars' },
+		});
 	});
 	it('pins a few ids so a regeneration cannot renumber silently', () => {
 		// Filled in from the first generated ids.json; see Step 5.

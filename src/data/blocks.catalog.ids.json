@@ -353,7 +353,8 @@
 		"yellow_concrete_powder": 370,
 		"yellow_glazed_terracotta": 371,
 		"yellow_stained_glass": 372,
-		"yellow_terracotta": 373
+		"yellow_terracotta": 373,
+		"iron_bars": 374
 	},
 	"retired": []
 }

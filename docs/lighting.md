@@ -106,6 +106,14 @@ vertexRGB = clamp(vertexRGB, 0, 1) * aoFactor
 
 **Ambient occlusion.** At each corner, the mesher inspects the same 4 outward-side voxels and counts how many of the "edge-adjacent" voxels are opaque (`lightFilter >= 15` AND `liquid === 'none'`). AO factors by tier: 0 edge-adjacent opaque → 1.0; 1 → 0.85; 2 without diag → 0.7; 2 with diag → 0.5. Classic Minecraft corner-inset look, with single-edge adjacency now producing visible darkening.
 
+## Leaves and other cutouts
+
+Cutout blocks (leaves) keep `lightFilter: 0`. Any filter >= 1 attenuates
+skylight by `max(2, filter)` per block and disables the straight-down
+"no decrement" skylight case, so even a filter of 1 makes the ground under a
+tree as dark as a cave. The trade-off is that leaves cast no shadow of their
+own; tree shadows would need `shadows.ts` to treat cutouts as casters.
+
 ## Cast shadows
 
 Directional shadows via per-voxel ray-cast toward a fixed sun direction (`[-0.5, 1.0, -0.3]` normalized — upper-NW). Each non-opaque voxel traces a DDA ray up to 32 blocks; if the ray hits an opaque block, the voxel is in shadow.

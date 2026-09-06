@@ -143,7 +143,7 @@ src/
     ui/
         hud.ts                # hotbar overlay
         menu.ts               # main menu (New / Continue / Options)
-        options.ts            # keybinding + kid-mode UI
+        options.ts            # keybinding UI
     main.ts                   # entry point
 scripts/
     build-atlas.ts            # offline atlas builder (node-canvas or sharp)
@@ -166,9 +166,9 @@ docs/
 - ~15 blocks: grass, dirt, stone, cobblestone, sand, oak planks, oak log, glass, 6 wool colors.
 - First-person camera, WASD + mouse, space to jump. No sprint, no crouch.
 - Left-click mines (instant, no tool tiers). Right-click places. DDA raycast.
-- 9-slot hotbar, 1–9 to select. **Hotbar IS the inventory** in Phase 1. Infinite stacks.
+- 9-slot hotbar, 1–9 to select. Hotbar is filled from the I-key inventory (added 2026-09). Infinite stacks.
 - Auto-save every 5 s + on tab blur → `localStorage`.
-- Main menu: New World / Continue / Options (kid-mode toggle, keybindings).
+- Main menu: New World / Continue / Options (keybindings).
 - No sound, no music, no crafting UI.
 
 ### Phase 2
@@ -242,7 +242,7 @@ Before handing the laptop to Noah:
 - [ ] Mining works on left click; placing on right click; crosshair aligned with hit
 - [ ] Hotbar 1–9 keys select correct slot; placed block matches selection
 - [ ] Save survives reload: close tab, reopen, Continue restores world + position
-- [ ] Options: kid-mode toggle persists across reloads; keybinding rebinding persists
+- [ ] Options: keybinding rebinding persists
 - [ ] No console errors in Chrome devtools during 5 minutes of play
 - [ ] World edges: player is blocked at x=0 and x=512 (and z same) — no infinite fall
 

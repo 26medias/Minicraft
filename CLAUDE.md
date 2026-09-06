@@ -48,7 +48,7 @@ The README commits to "easy to extend." In practice this means new work should:
 - Treat the block catalog as data, not hardcoded enums — adding a block should be adding a row, not editing ten files.
 - Keep crafting recipes as data too (no crafting table UI; recipes resolve from inventory).
 - Keep persistence behind a narrow interface so the Phase 1 (`localStorage`) → Phase 2 (remote API) swap is local.
-- Keep the "basic blocks" vs "all blocks" kid-mode toggle as a filter over the same catalog, not a parallel set.
+- The block catalog is a hand-written base (`blocks.base.data.ts`, ids 0–19 frozen) plus a generated, committed catalog (`npm run gen-catalog`) with frozen ids; never renumber.
 
 ## Deployment Target
 

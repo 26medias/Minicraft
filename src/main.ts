@@ -18,7 +18,7 @@ import { isLegacyId, newWorldId, seedFromLegacyId } from './persistence/uuid';
 import { AutoSave } from './persistence/autosave';
 import { ParticleSystem } from './engine/render/particles';
 import { PrimedOverlay } from './engine/render/primed-overlay';
-import { BLOCKS, BLOCK_BY_NAME, type BlockId } from './data/blocks.data';
+import { AIR, BLOCKS, BLOCK_BY_NAME, type BlockId } from './data/blocks.data';
 import { loadOptions, saveOptions } from './persistence/options';
 import { LightRegistry } from './engine/render/light-registry';
 import { ColorPicker } from './ui/color-picker';
@@ -29,6 +29,9 @@ import { PlaytimeController, resolveSession } from './game/playtime-controller';
 import { loadSession, saveSession } from './persistence/playtime';
 import { PlaytimeOverlay } from './ui/playtime-overlay';
 import { TICK_MS } from './data/playtime.data';
+import { Inventory } from './ui/inventory';
+import { resolveHotbar } from './game/hotbar';
+import { shouldHandleKey } from './game/input-gate';
 
 const REACH = 6;
 
@@ -97,7 +100,8 @@ async function main() {
 		}
 
 		let savedSpawn: [number, number, number] | null = null;
-		let savedSelectedBlockId: BlockId | null = null;
+		let savedHotbar: BlockId[] | undefined;
+		let savedSelected = 0;
 		if (mode === 'continue') {
 			const save = await adapter.loadWorld(worldId);
 			if (!save) {
@@ -128,7 +132,8 @@ async function main() {
 				savedSpawn = [save.player.x, save.player.y, save.player.z];
 				cam.yaw = save.player.yaw;
 				cam.pitch = save.player.pitch;
-				savedSelectedBlockId = save.player.hotbar[save.player.selected] ?? null;
+				savedHotbar = save.player.hotbar;
+				savedSelected = save.player.selected;
 				if (save?.lights) {
 					for (const l of save.lights) lights.add(l.x, l.y, l.z, l.color);
 				}
@@ -139,17 +144,12 @@ async function main() {
 		// something to stand on.
 		if (savedSpawn) player.position = findSafeSpawn(world, savedSpawn);
 
-		// Hotbar is always derived from the kid-mode / full block pool — not stored per save.
-		// We preserve the previously-selected block if it's still in the pool; otherwise reset.
+		// Nine slots, saved per world. Saves from before the inventory hold the
+		// whole block pool and get the default bar (see resolveHotbar).
 		const opts = loadOptions();
-		const pool = BLOCKS.filter((b) => b.id !== 0 && (opts.kidMode ? b.kidMode : true));
-		player.hotbar = pool.map((b) => b.id);
-		if (savedSelectedBlockId !== null) {
-			const idx = player.hotbar.indexOf(savedSelectedBlockId);
-			player.selected = idx >= 0 ? idx : 0;
-		} else {
-			player.selected = 0;
-		}
+		const resolved = resolveHotbar(savedHotbar, savedSelected, BLOCKS);
+		player.hotbar = resolved.hotbar;
+		player.selected = resolved.selected;
 		hud.setHotbar(player.hotbar, player.selected);
 
 		const keys: Keys = {
@@ -159,16 +159,57 @@ async function main() {
 			right: false,
 			jump: false,
 		};
+		// One `paused` with two owners. `loop` is declared below; these closures
+		// run only after it exists (same pattern as the ignite handler).
+		let frozen = false;
+		let inventoryOpen = false;
+		const updatePaused = () => {
+			loop.paused = frozen || inventoryOpen;
+		};
+		const resetKeys = () => {
+			keys.forward = keys.back = keys.left = keys.right = keys.jump = false;
+		};
+		const inventory = new Inventory(app, atlas, BLOCKS);
+		const syncHotbar = () => {
+			hud.setHotbar(player.hotbar, player.selected);
+			inventory.setHotbar(player.hotbar, player.selected);
+		};
+		const openInventory = () => {
+			if (inventoryOpen || frozen || colorPicker.isOpen) return;
+			inventoryOpen = true;
+			updatePaused();
+			loop.setLeftMouseDown(false);
+			hud.setMiningProgress(0);
+			if (document.pointerLockElement) document.exitPointerLock();
+			syncHotbar();
+			inventory.open();
+		};
+		const closeInventory = () => {
+			if (!inventoryOpen) return;
+			inventory.close();
+			inventoryOpen = false;
+			updatePaused();
+			resetKeys();
+		};
+		inventory.onClose = closeInventory;
+		inventory.onPick = (id) => {
+			player.hotbar[player.selected] = id;
+			hud.setHotbar(player.hotbar, player.selected);
+			inventory.setHotbar(player.hotbar, player.selected, player.selected);
+			autosave.markDirty();
+		};
+		inventory.onSelectSlot = (slot) => {
+			player.selected = slot;
+			syncHotbar();
+		};
 		const keyToAction: Record<string, Action> = {};
 		for (const [action, code] of Object.entries(opts.keybindings))
 			keyToAction[code] = action as Action;
 
 		const onKey = (down: boolean) => (e: KeyboardEvent) => {
-			// While frozen, no keydown reaches the player, hotbar, TNT, or colour
-			// picker. Keyup still runs so `keys` stays truthful.
-			if (down && loop.paused) return;
 			const a = keyToAction[e.code];
 			if (!a) return;
+			if (!shouldHandleKey(down, a, { frozen, inventoryOpen, pickerOpen: colorPicker.isOpen })) return;
 			switch (a) {
 				case 'forward':
 					keys.forward = down;
@@ -222,12 +263,18 @@ async function main() {
 						colorPicker.show();
 					}
 					break;
+				case 'inventory':
+					if (down && !e.repeat) {
+						if (inventoryOpen) closeInventory();
+						else openInventory();
+					}
+					break;
 				default: {
 					if (down && a.startsWith('slot')) {
 						const n = Number(a.slice(4)) - 1;
 						if (n >= 0 && n < player.hotbar.length) {
 							player.selected = n;
-							hud.setHotbar(player.hotbar, player.selected);
+							syncHotbar();
 						}
 					}
 				}
@@ -240,13 +287,13 @@ async function main() {
 		// because the keybinding system captures only e.code (no modifier combos).
 		window.addEventListener('keydown', (e) => {
 			if (e.code !== 'Tab') return;
-			if (loop.paused) return;
+			if (frozen) return;
 			e.preventDefault();
 			if (player.hotbar.length === 0) return;
 			const delta = e.shiftKey ? -1 : 1;
 			player.selected =
 				(player.selected + delta + player.hotbar.length) % player.hotbar.length;
-			hud.setHotbar(player.hotbar, player.selected);
+			syncHotbar();
 		});
 
 		const autosave = new AutoSave(
@@ -303,16 +350,15 @@ async function main() {
 		// listeners above. The first tick runs before loop.start() on purpose:
 		// a session already in its break must freeze before the first frame.
 		if (opts.playLimitMin !== null) {
-			const resetKeys = () => {
-				keys.forward = keys.back = keys.left = keys.right = keys.jump = false;
-			};
 			const session = resolveSession(loadSession(), opts.playLimitMin, opts.playBreakMin, Date.now());
 			saveSession(session);
 			const playtime = new PlaytimeController(session, {
 				overlay: new PlaytimeOverlay(app),
 				freeze: () => {
+					closeInventory();
 					loop.setLeftMouseDown(false);
-					loop.paused = true;
+					frozen = true;
+					updatePaused();
 					resetKeys();
 					hud.setMiningProgress(0);
 					if (document.pointerLockElement) document.exitPointerLock();
@@ -320,7 +366,8 @@ async function main() {
 				},
 				resume: () => {
 					resetKeys();
-					loop.paused = false;
+					frozen = false;
+					updatePaused();
 					// Called from the PLAY AGAIN click, a user gesture, so the kid
 					// does not need a second click on the canvas. Chrome returns a
 					// promise that can reject; that is not an error worth surfacing.
@@ -351,7 +398,7 @@ async function main() {
 				const hit = raycastVoxel(world, eye, [dir.x, dir.y, dir.z], REACH);
 				if (!hit) return;
 				const id = player.hotbar[player.selected];
-				if (id === undefined) return;
+				if (id === undefined || id === AIR) return;
 				const placed = placeBlock(world, hit, id, {
 					position: player.position,
 					size: [0.6, 1.8, 0.6],

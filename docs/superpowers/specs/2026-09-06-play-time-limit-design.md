@@ -1,7 +1,7 @@
 # Play-Time Limit — Design
 
 **Date:** 2026-09-06
-**Status:** Revised after gate 1 (four reviewers: rigour, engine, boundary/sequencing, consumer)
+**Status:** Revised after gates 1 and 2 (four reviewers: rigour, engine, boundary/sequencing, consumer)
 **Branch:** `feat/time-limit`
 
 ## Problem
@@ -25,9 +25,10 @@ predictability and reload-resistance over cleverness.
 
 ## Non-goals
 
-- No PIN or password. A kid who learns to reload and change the dropdown can
-  turn the limit off. Accepted for a seven-year-old; a PIN can be added later
-  without changing anything below. The README says so plainly.
+- No PIN or password. The Unlock / Start fresh buttons sit on the same menu
+  the kid uses; a kid who reloads and presses one is through. This limits an
+  honest seven-year-old, not a determined one. A PIN can be added later without
+  changing anything below. The README and `docs/playtime.md` say so plainly.
 - No daily quota, no schedule, no accumulated totals. One session, one limit.
 - No cloud sync of the setting. It lives in this browser's `localStorage`, like
   the other options.
@@ -177,9 +178,10 @@ Rules:
   stored session. Saving the Options screen (kid mode, keybindings) does not.
 - The stored session's own `limitMs`/`breakMs` win over the options while it is
   in force. Options are read only when a *new* session is created.
-- The session is written after every tick that changed `playedMs` (once a
-  second while playing and visible; ~100 bytes), at freeze, and on
-  `visibilitychange` → hidden. A reload loses at most one second of play.
+- The session is written after every tick that changed `playedMs` or
+  `frozenAt` (once a second while playing and visible; ~100 bytes). A hidden
+  tick changes nothing and writes nothing; the last visible tick already
+  wrote. A reload loses at most one second of play.
 
 Options gain two fields, persisted alongside the existing ones in
 `minicraft:v1:options`:
@@ -256,16 +258,21 @@ export function isStale(session: PlaytimeSession, now: number): boolean;
 Behavioural rules, each covered by a unit test:
 
 1. Play time accrues only on visible ticks, by `min(now - lastNow,
-   MAX_TICK_CREDIT_MS)`. A tick with `now < lastNow` (clock set back) adds
-   nothing and never un-fires anything. `lastNow` is monotonic: break-phase
-   comparisons use `max(now, lastNow)`, so a clock set back during a break
-   cannot strand the timer in a paused loop with a stopped countdown.
+   MAX_TICK_CREDIT_MS)`. A tick with `now < lastNow` (clock set back by Δ)
+   adds nothing and never un-fires anything; if the session is frozen,
+   `frozenAt` is shifted back by Δ so the break's remaining time is unchanged
+   and keeps counting down honestly. (A monotonic `max(now, lastNow)` was
+   considered and rejected: it freezes the countdown for as long as the clock
+   was set back, which after an NTP correction can be hours.) `lastNow` is
+   then set to `now`.
 2. Warnings: on any tick, if `remainingMs ≤ t` for some unfired threshold `t`,
    exactly one `warn` fires, for the **lowest** such threshold, and every
    threshold ≥ remaining is marked fired. `minutesLeft = max(1,
    ceil(remainingMs / 60 000))`. So a first tick with 90 s left yields one
-   `warn(2)`; a throttled tick that jumps from 6 min to 1 min yields one
-   `warn(1)`.
+   `warn(2)`, and a resume with 3 min 20 s left says `4`, not `3`. (Because
+   each tick credits at most MAX_TICK_CREDIT_MS, crossing both thresholds in
+   one tick is reachable only on the first tick after a resume; the collapse
+   rule is stated generally as defence.)
 3. `freeze` fires exactly once, on the first tick at which `remainingMs === 0`
    **or** the session was constructed already frozen (`frozenAt !== null`).
    The tick that fires `freeze` fires no `warn`. `frozenAt` is set to `now` if
@@ -342,6 +349,55 @@ break). When paused, `tick()` does only: `cam.sync()`, `loadNearbyChunks()`,
 frame, so unpausing after 20 minutes produces a normal ~16 ms step; no extra
 clamp is needed and none should be added.
 
+### `src/game/playtime-controller.ts` (pure orchestration, no DOM, no storage)
+
+The wiring rules are the ones that regress silently, so they live in a unit
+that node tests can drive with fake dependencies. `main.ts` supplies the DOM
+and loop callbacks and nothing else.
+
+```ts
+export function resolveSession(
+	stored: PlaytimeSession | null,
+	limitMin: number,
+	breakMin: number | null,
+	now: number,
+): PlaytimeSession;   // stored if usable (not stale, not 'over'), else a fresh one
+
+export type PlaytimeOverlayLike = Pick<PlaytimeOverlay, 'warn' | 'freeze' | 'setBreakRemaining' | 'offerPlayAgain' | 'unfreeze'>;
+
+export type PlaytimeDeps = {
+	overlay: PlaytimeOverlayLike;
+	freeze(): void;        // main.ts: pause loop, reset keys, HUD ring, pointer lock, autosave
+	resume(): void;        // main.ts: unpause loop, reset keys, request pointer lock
+	save(s: PlaytimeSession): void;
+	now(): number;
+	visible(): boolean;
+};
+
+export class PlaytimeController {
+	constructor(session: PlaytimeSession, deps: PlaytimeDeps);
+	/** One tick: advance the timer, persist if dirty, dispatch events in order,
+	 *  refresh the break countdown when a break is running. Never throws:
+	 *  an exception here would kill the interval and the whole limit. */
+	tick(): void;
+	/** PLAY AGAIN: fresh session with the same limit/break, save, unfreeze, resume. */
+	playAgain(): void;
+}
+```
+
+Rules, each unit-tested with fake deps:
+
+- `warn` → `overlay.warn('END IN n MINUTE[S]', WARNING_SHOW_MS)`.
+- `freeze` → `deps.freeze()` then `overlay.freeze(breakEndsAt)`, in that order.
+- `break-over` → `overlay.offerPlayAgain(playAgain)`. When one tick yields
+  `[freeze, break-over]`, `overlay.freeze` runs before `offerPlayAgain`.
+- `setBreakRemaining` is called only while phase is `'break'` **and**
+  `breakMs !== null`; a no-break freeze never calls it.
+- `save` is called exactly on ticks where the timer is dirty, and by `playAgain`.
+- `playAgain` → `save(fresh)`, `overlay.unfreeze()`, `deps.resume()`; later
+  ticks accrue play time from zero.
+- `tick` catches and logs; it never propagates.
+
 ### Input gating (in `main.ts`)
 
 - `onKey(true)` returns early when `loop.paused`. `onKey(false)` is always
@@ -363,44 +419,23 @@ never-torn-down pattern of the other `startGame` listeners.
 In `startGame`, immediately **before** `loop.start()`:
 
 1. `opts.playLimitMin === null` → nothing.
-2. `loadSession()`; discard if `null`, `isStale`, or `phaseOf === 'over'`;
-   otherwise resume. Create a new one from options if needed. `saveSession`.
-3. Construct `PlayTimer(session, Date.now())` and `PlaytimeOverlay`.
-4. Define `tickPlaytime()`:
-   - `events = timer.tick(Date.now(), document.visibilityState === 'visible')`
-   - if `timer.dirty` → `saveSession(timer.session)`
-   - for each event, in order:
-     - `warn` → `overlay.warn(\`END IN ${n} MINUTE${n === 1 ? '' : 'S'}\`, WARNING_SHOW_MS)`
-     - `freeze` → `freezeGame(breakEndsAt)`
-     - `break-over` → `overlay.offerPlayAgain(playAgain)`
-   - if phase is `'break'` **and** `session.breakMs !== null` →
-     `overlay.setBreakRemaining(timer.breakRemainingMs())`
-5. Call `tickPlaytime()` **synchronously now**, so a session already in
+2. `session = resolveSession(loadSession(), opts.playLimitMin, opts.playBreakMin, Date.now())`;
+   `saveSession(session)`.
+3. Construct `PlaytimeOverlay` and `PlaytimeController(session, deps)` with:
+   - `freeze`: `loop.setLeftMouseDown(false); loop.paused = true; reset keys;
+     hud.setMiningProgress(0); if (document.pointerLockElement)
+     document.exitPointerLock(); void autosave.flush();`
+   - `resume`: `reset keys; loop.paused = false;
+     void renderer.gl.domElement.requestPointerLock()?.catch?.(() => {})`
+     (a user gesture from the button click; the promise may reject in Chrome).
+   - `save: saveSession`, `now: Date.now`,
+     `visible: () => document.visibilityState === 'visible'`.
+4. Call `controller.tick()` **synchronously now**, so a session already in
    `'break'` freezes before the first frame and there is never a playable
    frame on reload-into-break.
-6. `setInterval(tickPlaytime, TICK_MS)`; `visibilitychange` → `tickPlaytime()`
-   (both visible and hidden: visible refreshes the countdown at once after a
-   throttled stretch, hidden persists `playedMs`).
-
-`freezeGame(breakEndsAt)`:
-
-```
-loop.setLeftMouseDown(false);
-loop.paused = true;
-reset keys; hud.setMiningProgress(0);
-if (document.pointerLockElement) document.exitPointerLock();
-void autosave.flush();
-overlay.freeze(breakEndsAt);
-```
-
-`playAgain()` (from the PLAY AGAIN click):
-
-```
-session = { limitMs, breakMs, playedMs: 0, frozenAt: null, updatedAt: now }
-saveSession(session); timer = new PlayTimer(session, now);
-overlay.unfreeze(); reset keys; loop.paused = false;
-renderer.gl.domElement.requestPointerLock();
-```
+5. `setInterval(() => controller.tick(), TICK_MS)`; `visibilitychange` →
+   `controller.tick()` (a visible tick refreshes the countdown at once after a
+   throttled stretch).
 
 The interval runs on the wall clock and credits play time only on visible
 ticks, so a hidden tab (interval throttled to once a minute by Chrome after
@@ -468,8 +503,13 @@ makes it green exists.
 
 - `src/game/playtime.test.ts`: rules 1–6 under "Behavioural rules", the
   sequence above driven by fake `now` values, the `[freeze, break-over]`
-  single-call case, and the "6 min → 1 min in one tick yields only `warn(1)`"
-  case.
+  single-call case, the "both thresholds crossed at once yields only the
+  lowest" case, the `ceil` case (3 min 20 s → `4`), and the backward clock
+  jump during a break (countdown unchanged, `break-over` still fires on time).
+- `src/game/playtime-controller.test.ts`: every rule under the controller
+  section, with a fake overlay and fake deps recording call order.
+- `src/persistence/playtime.test.ts` also pins that `saveOptions` alone does
+  **not** remove the session key (the Options screen must not unlock).
 - `src/persistence/playtime.test.ts`: round-trip, missing, garbage JSON, each
   wrong-shape field → `null`; `applyPlaytimeSetting` saves options and removes
   the session key; `clearSession` removes it.
@@ -514,6 +554,7 @@ picking a world:
 |---|---|
 | `src/data/playtime.data.ts` | new |
 | `src/game/playtime.ts` + test | new |
+| `src/game/playtime-controller.ts` + test | new |
 | `src/persistence/playtime.ts` + test | new |
 | `src/ui/playtime-overlay.ts` | new |
 | `src/ui/ui.css` | warning, freeze, `<select>`, `#save-status` z-index |

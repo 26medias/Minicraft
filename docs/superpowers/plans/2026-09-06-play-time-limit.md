@@ -38,11 +38,12 @@
 | `src/game/loop.ts` (+test) | `paused` | 4 |
 | `src/ui/playtime-overlay.ts`, `src/ui/ui.css` | warning band, freeze overlay, `<select>` style | 5 |
 | `src/ui/menu.ts` | Play time section + status row | 6 |
-| `src/main.ts` | wiring, input gating, freeze/play-again | 7 |
-| `docs/playtime.md`, `docs/persistence.md`, `README.md` | docs | 8 |
-| (none) | manual browser verification | 9 |
+| `src/game/playtime-controller.ts` (+test) | `resolveSession`, `PlaytimeController` (event dispatch, save, play-again) | 7 |
+| `src/main.ts` | DOM/loop callbacks, input gating | 8 |
+| `docs/playtime.md`, `docs/persistence.md`, `README.md` | docs | 9 |
+| (none) | manual browser verification | 10 |
 
-Tasks 1–5 touch disjoint files and can run in parallel. Task 6 depends on 1–3. Task 7 depends on 1–6. Task 8 and 9 depend on 7.
+Dependency order: **Task 1 → Task 2 → Task 3** (Task 2 imports Task 1's data file; Task 3 imports Task 2's type and Task 1's `Options` fields and `loadOptions` behaviour, so neither can reach its green step without its predecessor). Tasks 4 and 5 are independent of everything and of each other. Task 6 depends on 1–3. Task 7 (controller) depends on 1–2 and 5's interface. Task 8 (wiring) depends on 1–7. Tasks 9 and 10 depend on 8.
 
 ---
 
@@ -263,13 +264,14 @@ describe('PlayTimer play phase', () => {
 		expect(timer.session.playedMs).toBe(MAX_TICK_CREDIT_MS);
 	});
 
-	it('adds nothing when the clock goes backwards and keeps lastNow monotonic', () => {
+	it('adds nothing when the clock goes backwards', () => {
 		const timer = new PlayTimer(session(), T0);
 		timer.tick(T0 + 1000, true);
 		timer.tick(T0 - 5 * MIN, true);
 		expect(timer.session.playedMs).toBe(1000);
-		timer.tick(T0 + 1500, true);
-		expect(timer.session.playedMs).toBe(1500);
+		// Ticks resume from the new clock; the next second credits one second.
+		timer.tick(T0 - 5 * MIN + 1000, true);
+		expect(timer.session.playedMs).toBe(2000);
 	});
 
 	it('sets dirty and updatedAt only on ticks that changed something', () => {
@@ -305,11 +307,18 @@ describe('PlayTimer warnings', () => {
 		expect(play(timer, T0 + 1000, T0 + 60_000)).toEqual([]);
 	});
 
-	it('fires only the lowest newly crossed threshold when one tick jumps 6 min to 1 min', () => {
+	it('announces once when both thresholds are crossed by the same tick', () => {
+		// Reachable only on a resume (each tick credits at most 2 s); the session is
+		// mutated directly to reach the state, which is what a resume looks like.
 		const timer = new PlayTimer(session({ playedMs: 24 * MIN }), T0);
-		// Force playedMs forward as a throttled interval with hidden ticks would.
 		timer.session.playedMs = 29 * MIN;
 		expect(timer.tick(T0 + 1000, false)).toEqual([{ type: 'warn', minutesLeft: 1 }]);
+		expect(play(timer, T0 + 2000, T0 + 30_000)).toEqual([]);
+	});
+
+	it('rounds up: 3 min 20 s left says 4', () => {
+		const timer = new PlayTimer(session({ playedMs: 30 * MIN - 200_000 }), T0);
+		expect(timer.tick(T0, true)).toEqual([{ type: 'warn', minutesLeft: 4 }]);
 	});
 
 	it('reports at least 1 minute', () => {
@@ -367,14 +376,19 @@ describe('PlayTimer freeze and break', () => {
 		expect(timer.session.playedMs).toBe(30 * MIN);
 	});
 
-	it('uses the monotonic clock for the break when the clock is set back', () => {
+	it('re-anchors the break when the clock is set back so the countdown stays honest', () => {
 		const timer = new PlayTimer(session({ playedMs: 30 * MIN, frozenAt: T0 }), T0);
 		timer.tick(T0, true);
 		timer.tick(T0 + 19 * MIN, true);
 		expect(timer.breakRemainingMs()).toBe(1 * MIN);
 		timer.tick(T0 + 5 * MIN, true); // clock set back 14 minutes
 		expect(timer.breakRemainingMs()).toBe(1 * MIN);
+		expect(timer.session.frozenAt).toBe(T0 - 14 * MIN);
+		expect(timer.dirty).toBe(true);
 		expect(timer.phase()).toBe('break');
+		// One more minute on the new clock and the break is over, not 15 minutes later.
+		expect(play(timer, T0 + 5 * MIN + 1000, T0 + 6 * MIN)).toEqual([]);
+		expect(timer.tick(T0 + 6 * MIN, true)).toEqual([{ type: 'break-over' }]);
 	});
 });
 
@@ -461,26 +475,35 @@ export class PlayTimer {
 
 	/**
 	 * Advance to `now`. Play time accrues only when `visible`, by at most
-	 * MAX_TICK_CREDIT_MS per call. A `now` earlier than the previous one adds
-	 * nothing and never un-fires anything. Returns the events that fired, in order.
+	 * MAX_TICK_CREDIT_MS per call. A `now` earlier than the previous one (clock
+	 * set back by Δ) adds nothing and never un-fires anything; a running break
+	 * is re-anchored by Δ so its remaining time is unchanged and keeps counting
+	 * down. Returns the events that fired, in order.
 	 */
 	tick(now: number, visible: boolean): PlaytimeEvent[] {
 		const events: PlaytimeEvent[] = [];
 		this.dirty = false;
 		const s = this.session;
-		const delta = Math.max(0, Math.min(now - this.lastNow, MAX_TICK_CREDIT_MS));
-		const effNow = Math.max(now, this.lastNow);
-		this.lastNow = effNow;
+		const raw = now - this.lastNow;
+		const delta = Math.max(0, Math.min(raw, MAX_TICK_CREDIT_MS));
+		if (raw < 0 && s.frozenAt !== null) {
+			// Clock went back: shift the break anchor with it. A monotonic clamp
+			// would instead freeze the countdown for as long as the jump.
+			s.frozenAt += raw;
+			s.updatedAt = now;
+			this.dirty = true;
+		}
+		this.lastNow = now;
 
 		if (s.frozenAt === null) {
 			if (visible && delta > 0) {
 				s.playedMs = Math.min(s.limitMs, s.playedMs + delta);
-				s.updatedAt = effNow;
+				s.updatedAt = now;
 				this.dirty = true;
 			}
 			if (s.playedMs >= s.limitMs) {
-				s.frozenAt = effNow;
-				s.updatedAt = effNow;
+				s.frozenAt = now;
+				s.updatedAt = now;
 				this.dirty = true;
 			}
 		}
@@ -493,23 +516,23 @@ export class PlayTimer {
 					breakEndsAt: s.breakMs === null ? null : s.frozenAt + s.breakMs,
 				});
 			}
-			if (s.breakMs !== null && !this.breakOverFired && effNow >= s.frozenAt + s.breakMs) {
+			if (s.breakMs !== null && !this.breakOverFired && now >= s.frozenAt + s.breakMs) {
 				this.breakOverFired = true;
 				events.push({ type: 'break-over' });
 			}
 			return events;
 		}
 
-		// Warnings: mark every crossed threshold fired, announce only the lowest new one.
+		// Warnings: mark every crossed threshold fired, announce once if any was new.
 		const remaining = this.remainingMs();
-		let lowestNew = -1;
+		let fired = false;
 		for (let i = 0; i < WARNING_THRESHOLDS_MS.length; i++) {
 			if (remaining <= WARNING_THRESHOLDS_MS[i] && !this.firedThreshold[i]) {
 				this.firedThreshold[i] = true;
-				lowestNew = i;
+				fired = true;
 			}
 		}
-		if (lowestNew >= 0) {
+		if (fired) {
 			events.push({ type: 'warn', minutesLeft: Math.max(1, Math.ceil(remaining / 60_000)) });
 		}
 		return events;
@@ -535,7 +558,7 @@ export class PlayTimer {
 - [ ] **Step 4: Run tests**
 
 Run: `npx vitest run src/game/playtime.test.ts`
-Expected: all PASS. If "fires only the lowest newly crossed threshold …" fails because the 5-minute threshold was already fired on construction, note that the constructor does not tick: the first `tick` in that test is the one that crosses both, and only `warn(1)` must come out.
+Expected: all PASS. The constructor does not tick, so in "announces once when both thresholds are crossed" the first `tick` crosses both and exactly one `warn(1)` must come out.
 
 - [ ] **Step 5: Commit**
 
@@ -627,11 +650,11 @@ describe('playtime session storage', () => {
 		['limitMs zero', { limitMs: 0 }],
 		['limitMs string', { limitMs: '1800000' }],
 		['breakMs zero', { breakMs: 0 }],
-		['breakMs undefined', { breakMs: undefined }],
+		['breakMs absent (JSON drops undefined)', { breakMs: undefined }],
 		['playedMs negative', { playedMs: -1 }],
-		['playedMs NaN', { playedMs: NaN }],
+		['playedMs null (what JSON makes of NaN)', { playedMs: null }],
 		['frozenAt string', { frozenAt: 'now' }],
-		['updatedAt missing', { updatedAt: undefined }],
+		['updatedAt absent (JSON drops undefined)', { updatedAt: undefined }],
 	])('returns null for wrong shape: %s', async (_name, over) => {
 		store[KEY] = JSON.stringify({ ...valid(), ...over });
 		const { loadSession } = await import('./playtime');
@@ -647,10 +670,25 @@ describe('playtime session storage', () => {
 
 	it('saveSession swallows storage errors', async () => {
 		const { saveSession } = await import('./playtime');
+		// Restore in `finally`: the mock object is shared across tests and
+		// vi.unstubAllGlobals() does not undo a mutation of it.
+		const real = localStorageMock.setItem;
 		localStorageMock.setItem = () => {
 			throw new Error('quota');
 		};
-		expect(() => saveSession(valid())).not.toThrow();
+		try {
+			expect(() => saveSession(valid())).not.toThrow();
+		} finally {
+			localStorageMock.setItem = real;
+		}
+	});
+
+	it('saving the Options screen does not remove the session', async () => {
+		const { saveSession } = await import('./playtime');
+		const { loadOptions, saveOptions } = await import('./options');
+		saveSession(valid());
+		saveOptions(loadOptions());
+		expect(store[KEY]).toBeDefined();
 	});
 });
 
@@ -835,18 +873,20 @@ describe('GameLoop.paused', () => {
 		keys.forward = true;
 		loop.paused = true;
 		const before = [...player.position];
-		for (let i = 0; i < 30; i++) tick(0.1); // 3 s > TNT_PRIME_FUSE
+		// Each tick loads/meshes chunks (~50 ms), so use few, long ticks:
+		// Player.update sub-steps internally and 3 × 1 s > TNT_PRIME_FUSE (2.5 s).
+		for (let i = 0; i < 3; i++) tick(1.0);
 		expect(player.position).toEqual(before);
 		expect(mutations).toBe(0);
 		expect(world.getBlock(261, 30, 260)).toBe(stone);
 		expect(mounts()).toBeGreaterThan(0);
 
 		loop.paused = false;
-		for (let i = 0; i < 30; i++) tick(0.1);
+		for (let i = 0; i < 3; i++) tick(1.0);
 		expect(player.position).not.toEqual(before);
 		expect(mutations).toBeGreaterThan(0);
 		expect(world.getBlock(261, 30, 260)).toBe(AIR);
-	});
+	}, 30_000);
 });
 ```
 
@@ -859,7 +899,7 @@ without a tick: it passes with or without the gate.)
 - [ ] **Step 2: Run to verify it fails**
 
 Run: `npx vitest run src/game/loop.test.ts`
-Expected: the new first test FAILS at `expect(player.position).toEqual(before)` (gravity moved the player) or at `expect(mutations).toBe(0)`; TypeScript may also complain that `paused` does not exist. The three existing tests still PASS.
+Expected: the new test FAILS at `expect(player.position).toEqual(before)` (gravity moved the player to about y = -24) in well under 5 s; TypeScript may also complain that `paused` does not exist. The three existing tests still PASS. If instead you see "Test timed out", the tick count or dt was changed; 3 ticks of 1.0 s were measured at 0.6 s red / 1.0 s green.
 
 - [ ] **Step 3: Implement**
 
@@ -1030,6 +1070,7 @@ export class PlaytimeOverlay {
 	left: 50%;
 	transform: translateX(-50%);
 	max-width: 92vw;
+	box-sizing: border-box;
 	padding: 2vh 4vw;
 	background: rgba(0, 0, 0, 0.6);
 	color: #fff;
@@ -1295,24 +1336,324 @@ git commit -m "feat(menu): play-time section with unlock"
 
 ---
 
-### Task 7: Wiring in `main.ts`
+### Task 7: `PlaytimeController` (testable wiring)
+
+**Files:**
+- Create: `src/game/playtime-controller.ts`
+- Test: `src/game/playtime-controller.test.ts`
+
+**Interfaces:**
+- Consumes: `PlayTimer`, `PlaytimeSession`, `phaseOf`, `isStale` (Task 2); `WARNING_SHOW_MS` (Task 1); the five-method shape of `PlaytimeOverlay` (Task 5, type-only).
+- Produces:
+  ```ts
+  export function resolveSession(stored: PlaytimeSession | null, limitMin: number, breakMin: number | null, now: number): PlaytimeSession;
+  export type PlaytimeOverlayLike = { warn(text: string, ms: number): void; freeze(breakEndsAt: number | null): void; setBreakRemaining(ms: number): void; offerPlayAgain(onClick: () => void): void; unfreeze(): void };
+  export type PlaytimeDeps = { overlay: PlaytimeOverlayLike; freeze(): void; resume(): void; save(s: PlaytimeSession): void; now(): number; visible(): boolean };
+  export class PlaytimeController { constructor(session: PlaytimeSession, deps: PlaytimeDeps); tick(): void; playAgain(): void; }
+  ```
+
+- [ ] **Step 1: Write the failing tests** — create `src/game/playtime-controller.test.ts`:
+
+```ts
+import { describe, it, expect, vi } from 'vitest';
+import { PlaytimeController, resolveSession, type PlaytimeDeps } from './playtime-controller';
+import type { PlaytimeSession } from './playtime';
+import { STALE_SESSION_MS, WARNING_SHOW_MS } from '../data/playtime.data';
+
+const MIN = 60_000;
+const T0 = 1_700_000_000_000;
+
+function session(over: Partial<PlaytimeSession> = {}): PlaytimeSession {
+	return { limitMs: 30 * MIN, breakMs: 20 * MIN, playedMs: 0, frozenAt: null, updatedAt: T0, ...over };
+}
+
+describe('resolveSession', () => {
+	it('creates a fresh session from the options when nothing is stored', () => {
+		expect(resolveSession(null, 30, 20, T0)).toEqual(session());
+	});
+	it('creates a fresh no-break session when breakMin is null', () => {
+		expect(resolveSession(null, 15, null, T0)).toEqual({
+			limitMs: 15 * MIN, breakMs: null, playedMs: 0, frozenAt: null, updatedAt: T0,
+		});
+	});
+	it('resumes a playing session unchanged, ignoring the current options', () => {
+		const stored = session({ playedMs: 10 * MIN });
+		expect(resolveSession(stored, 15, null, T0 + MIN)).toEqual(stored);
+	});
+	it('keeps a session in its break', () => {
+		const stored = session({ playedMs: 30 * MIN, frozenAt: T0 });
+		expect(resolveSession(stored, 30, 20, T0 + 5 * MIN)).toEqual(stored);
+	});
+	it('replaces a session that is over', () => {
+		const stored = session({ playedMs: 30 * MIN, frozenAt: T0 });
+		const now = T0 + 25 * MIN;
+		expect(resolveSession(stored, 30, 20, now)).toEqual(session({ updatedAt: now }));
+	});
+	it('replaces a stale session', () => {
+		const stored = session({ playedMs: 5 * MIN });
+		const now = T0 + STALE_SESSION_MS + 1;
+		expect(resolveSession(stored, 30, 20, now)).toEqual(session({ updatedAt: now }));
+	});
+});
+
+type Harness = {
+	ctl: PlaytimeController;
+	calls: string[];
+	saved: PlaytimeSession[];
+	clock: { now: number; visible: boolean };
+	offered: (() => void) | null;
+};
+
+function harness(s: PlaytimeSession, now = T0): Harness {
+	const calls: string[] = [];
+	const saved: PlaytimeSession[] = [];
+	const clock = { now, visible: true };
+	const h: Partial<Harness> = { calls, saved, clock, offered: null };
+	const deps: PlaytimeDeps = {
+		overlay: {
+			warn: (text, ms) => calls.push(`warn:${text}:${ms}`),
+			freeze: (b) => calls.push(`overlay.freeze:${b}`),
+			setBreakRemaining: (ms) => calls.push(`remaining:${ms}`),
+			offerPlayAgain: (cb) => {
+				h.offered = cb;
+				calls.push('offer');
+			},
+			unfreeze: () => calls.push('unfreeze'),
+		},
+		freeze: () => calls.push('deps.freeze'),
+		resume: () => calls.push('deps.resume'),
+		save: (x) => saved.push({ ...x }),
+		now: () => clock.now,
+		visible: () => clock.visible,
+	};
+	h.ctl = new PlaytimeController(s, deps);
+	return h as Harness;
+}
+
+function advance(h: Harness, ms: number) {
+	for (let t = 1000; t <= ms; t += 1000) {
+		h.clock.now += 1000;
+		h.ctl.tick();
+	}
+}
+
+describe('PlaytimeController.tick', () => {
+	it('shows the warning text with the display duration', () => {
+		const h = harness(session({ playedMs: 30 * MIN - 90_000 }));
+		h.ctl.tick();
+		expect(h.calls).toEqual([`warn:END IN 2 MINUTES:${WARNING_SHOW_MS}`]);
+		const h1 = harness(session({ playedMs: 30 * MIN - 30_000 }));
+		h1.ctl.tick();
+		expect(h1.calls).toEqual([`warn:END IN 1 MINUTE:${WARNING_SHOW_MS}`]);
+	});
+
+	it('on freeze calls deps.freeze, then overlay.freeze, then starts the countdown', () => {
+		const h = harness(session({ playedMs: 30 * MIN - 1000 }));
+		h.ctl.tick();
+		h.calls.length = 0;
+		advance(h, 1000);
+		expect(h.calls).toEqual([
+			'deps.freeze',
+			`overlay.freeze:${T0 + 1000 + 20 * MIN}`,
+			`remaining:${20 * MIN}`,
+		]);
+	});
+
+	it('never calls setBreakRemaining for a no-break freeze', () => {
+		const h = harness(session({ breakMs: null, playedMs: 30 * MIN }));
+		h.ctl.tick();
+		advance(h, 5000);
+		expect(h.calls).toEqual(['deps.freeze', 'overlay.freeze:null']);
+	});
+
+	it('runs overlay.freeze before offerPlayAgain when both fire in one tick', () => {
+		const h = harness(session({ playedMs: 30 * MIN, frozenAt: T0 - 25 * MIN }));
+		h.ctl.tick();
+		expect(h.calls).toEqual(['deps.freeze', `overlay.freeze:${T0 - 5 * MIN}`, 'offer']);
+	});
+
+	it('saves exactly on dirty ticks', () => {
+		const h = harness(session());
+		h.ctl.tick(); // first tick, nothing changed
+		expect(h.saved).toEqual([]);
+		advance(h, 2000);
+		expect(h.saved.map((x) => x.playedMs)).toEqual([1000, 2000]);
+		h.clock.visible = false;
+		advance(h, 2000);
+		expect(h.saved.length).toBe(2);
+	});
+
+	it('does not propagate an overlay exception', () => {
+		const h = harness(session({ playedMs: 30 * MIN - 60_000 }));
+		const err = vi.spyOn(console, 'error').mockImplementation(() => {});
+		(h.ctl as unknown as { deps: PlaytimeDeps }).deps.overlay.warn = () => {
+			throw new Error('boom');
+		};
+		expect(() => h.ctl.tick()).not.toThrow();
+		expect(err).toHaveBeenCalled();
+		err.mockRestore();
+	});
+});
+
+describe('PlaytimeController.playAgain', () => {
+	it('saves a fresh session, unfreezes, resumes, and accrues from zero', () => {
+		const h = harness(session({ playedMs: 30 * MIN, frozenAt: T0 - 20 * MIN }));
+		h.ctl.tick();
+		expect(h.offered).not.toBeNull();
+		h.calls.length = 0;
+		h.clock.now += 1000;
+		h.offered!();
+		expect(h.calls).toEqual(['unfreeze', 'deps.resume']);
+		expect(h.saved.at(-1)).toEqual({
+			limitMs: 30 * MIN, breakMs: 20 * MIN, playedMs: 0, frozenAt: null, updatedAt: h.clock.now,
+		});
+		advance(h, 3000);
+		expect(h.saved.at(-1)!.playedMs).toBe(3000);
+		expect(h.calls.filter((c) => c.startsWith('deps.freeze'))).toEqual([]);
+	});
+});
+```
+
+- [ ] **Step 2: Run to verify it fails**
+
+Run: `npx vitest run src/game/playtime-controller.test.ts`
+Expected: FAIL, "Failed to resolve import './playtime-controller'".
+
+- [ ] **Step 3: Implement `src/game/playtime-controller.ts`**
+
+```ts
+import { WARNING_SHOW_MS } from '../data/playtime.data';
+import { PlayTimer, isStale, phaseOf, type PlaytimeSession } from './playtime';
+
+/** The stored session if it is still in force, otherwise a fresh one from the options. */
+export function resolveSession(
+	stored: PlaytimeSession | null,
+	limitMin: number,
+	breakMin: number | null,
+	now: number,
+): PlaytimeSession {
+	if (stored && !isStale(stored, now) && phaseOf(stored, now) !== 'over') return stored;
+	return {
+		limitMs: limitMin * 60_000,
+		breakMs: breakMin === null ? null : breakMin * 60_000,
+		playedMs: 0,
+		frozenAt: null,
+		updatedAt: now,
+	};
+}
+
+export type PlaytimeOverlayLike = {
+	warn(text: string, ms: number): void;
+	freeze(breakEndsAt: number | null): void;
+	setBreakRemaining(ms: number): void;
+	offerPlayAgain(onClick: () => void): void;
+	unfreeze(): void;
+};
+
+export type PlaytimeDeps = {
+	overlay: PlaytimeOverlayLike;
+	/** Pause the loop, clear input, release pointer lock, flush autosave. */
+	freeze(): void;
+	/** Unpause the loop, clear input, request pointer lock. */
+	resume(): void;
+	save(s: PlaytimeSession): void;
+	now(): number;
+	visible(): boolean;
+};
+
+/**
+ * Drives a PlayTimer from a 1 s interval and turns its events into overlay
+ * and game calls. Pure orchestration: no DOM, no storage, so the dispatch
+ * rules can be unit-tested with fake deps.
+ */
+export class PlaytimeController {
+	private timer: PlayTimer;
+
+	constructor(
+		session: PlaytimeSession,
+		private deps: PlaytimeDeps,
+	) {
+		this.timer = new PlayTimer(session, deps.now());
+	}
+
+	/** Never throws: an exception would kill the interval and the whole limit. */
+	tick(): void {
+		try {
+			this.tickUnsafe();
+		} catch (e) {
+			console.error('playtime tick failed', e);
+		}
+	}
+
+	private tickUnsafe(): void {
+		const { overlay } = this.deps;
+		const events = this.timer.tick(this.deps.now(), this.deps.visible());
+		if (this.timer.dirty) this.deps.save(this.timer.session);
+		for (const ev of events) {
+			if (ev.type === 'warn') {
+				overlay.warn(`END IN ${ev.minutesLeft} MINUTE${ev.minutesLeft === 1 ? '' : 'S'}`, WARNING_SHOW_MS);
+			} else if (ev.type === 'freeze') {
+				this.deps.freeze();
+				overlay.freeze(ev.breakEndsAt);
+			} else {
+				overlay.offerPlayAgain(() => this.playAgain());
+			}
+		}
+		// Only a real break has a countdown; a no-break freeze shows ASK A GROWN-UP.
+		if (this.timer.phase() === 'break' && this.timer.session.breakMs !== null) {
+			overlay.setBreakRemaining(this.timer.breakRemainingMs());
+		}
+	}
+
+	playAgain(): void {
+		const now = this.deps.now();
+		const fresh: PlaytimeSession = {
+			limitMs: this.timer.session.limitMs,
+			breakMs: this.timer.session.breakMs,
+			playedMs: 0,
+			frozenAt: null,
+			updatedAt: now,
+		};
+		this.deps.save(fresh);
+		this.timer = new PlayTimer(fresh, now);
+		this.deps.overlay.unfreeze();
+		this.deps.resume();
+	}
+}
+```
+
+- [ ] **Step 4: Run tests and type-check**
+
+Run: `npx vitest run src/game/playtime-controller.test.ts && npx tsc -b`
+Expected: all PASS; tsc clean.
+
+- [ ] **Step 5: Commit**
+
+```bash
+git add src/game/playtime-controller.ts src/game/playtime-controller.test.ts
+git commit -m "feat(playtime): controller for event dispatch and play-again"
+```
+
+---
+
+### Task 8: Wiring in `main.ts`
 
 **Files:**
 - Modify: `src/main.ts`
 
 **Interfaces:**
-- Consumes: everything from Tasks 1–6. Specifically `PlayTimer`, `phaseOf`, `isStale`, `PlaytimeSession` (Task 2); `loadSession`, `saveSession` (Task 3); `PlaytimeOverlay` (Task 5); `loop.paused` (Task 4); `TICK_MS`, `WARNING_SHOW_MS` (Task 1); existing `hud.setMiningProgress`, `autosave.flush`, `renderer.gl.domElement`.
+- Consumes: `resolveSession`, `PlaytimeController` (Task 7); `loadSession`, `saveSession` (Task 3); `PlaytimeOverlay` (Task 5); `loop.paused` (Task 4); `TICK_MS` (Task 1); existing `hud.setMiningProgress`, `autosave.flush`, `renderer.gl.domElement`.
 
 - [ ] **Step 1: Imports** — add to the import block at the top of `src/main.ts`:
 
 ```ts
-import { PlayTimer, isStale, phaseOf, type PlaytimeSession } from './game/playtime';
+import { PlaytimeController, resolveSession } from './game/playtime-controller';
 import { loadSession, saveSession } from './persistence/playtime';
 import { PlaytimeOverlay } from './ui/playtime-overlay';
-import { TICK_MS, WARNING_SHOW_MS } from './data/playtime.data';
+import { TICK_MS } from './data/playtime.data';
 ```
 
-- [ ] **Step 2: Gate the window-level input handlers.** These reference `loop`, which is declared later in `startGame` with `const`; the handlers only run after `loop.start()`, so a forward reference inside a closure is fine (the existing `ignite` case already does this).
+- [ ] **Step 2: Gate the window-level input handlers.** These reference `loop`, which is declared later in `startGame` with `const`; the handlers only run after `loop` exists (no `await` sits between the listener registration and the `const loop`), and the existing `ignite` case already relies on this.
 
 In `onKey`, make the first line of the returned handler:
 
@@ -1344,104 +1685,63 @@ In the `mousedown` listener, make the first line:
 		// --- Play-time limit -------------------------------------------------
 		// startGame runs at most once per page load (the menu is only reachable
 		// at boot and from Options before a game starts; unlock is by reload),
-		// so the interval and listeners below need no owner, like the window
-		// listeners above.
-		const resetKeys = () => {
-			keys.forward = keys.back = keys.left = keys.right = keys.jump = false;
-		};
+		// so the interval and listener below need no owner, like the window
+		// listeners above. The first tick runs before loop.start() on purpose:
+		// a session already in its break must freeze before the first frame.
 		if (opts.playLimitMin !== null) {
-			const now = Date.now();
-			let session: PlaytimeSession | null = loadSession();
-			if (session && (isStale(session, now) || phaseOf(session, now) === 'over')) session = null;
-			if (!session) {
-				session = {
-					limitMs: opts.playLimitMin * 60_000,
-					breakMs: opts.playBreakMin === null ? null : opts.playBreakMin * 60_000,
-					playedMs: 0,
-					frozenAt: null,
-					updatedAt: now,
-				};
-				saveSession(session);
-			}
-			let timer = new PlayTimer(session, now);
-			const playtimeOverlay = new PlaytimeOverlay(app);
-
-			const freezeGame = (breakEndsAt: number | null) => {
-				loop.setLeftMouseDown(false);
-				loop.paused = true;
-				resetKeys();
-				hud.setMiningProgress(0);
-				if (document.pointerLockElement) document.exitPointerLock();
-				void autosave.flush();
-				playtimeOverlay.freeze(breakEndsAt);
+			const resetKeys = () => {
+				keys.forward = keys.back = keys.left = keys.right = keys.jump = false;
 			};
-
-			const playAgain = () => {
-				const t = Date.now();
-				const fresh: PlaytimeSession = {
-					limitMs: timer.session.limitMs,
-					breakMs: timer.session.breakMs,
-					playedMs: 0,
-					frozenAt: null,
-					updatedAt: t,
-				};
-				saveSession(fresh);
-				timer = new PlayTimer(fresh, t);
-				playtimeOverlay.unfreeze();
-				resetKeys();
-				loop.paused = false;
-				// The click is a user gesture, so the kid does not need a second click on the canvas.
-				renderer.gl.domElement.requestPointerLock();
-			};
-
-			const tickPlaytime = () => {
-				const t = Date.now();
-				const events = timer.tick(t, document.visibilityState === 'visible');
-				if (timer.dirty) saveSession(timer.session);
-				for (const ev of events) {
-					if (ev.type === 'warn') {
-						playtimeOverlay.warn(
-							`END IN ${ev.minutesLeft} MINUTE${ev.minutesLeft === 1 ? '' : 'S'}`,
-							WARNING_SHOW_MS,
-						);
-					} else if (ev.type === 'freeze') {
-						freezeGame(ev.breakEndsAt);
-					} else {
-						playtimeOverlay.offerPlayAgain(playAgain);
-					}
-				}
-				if (timer.phase() === 'break' && timer.session.breakMs !== null) {
-					playtimeOverlay.setBreakRemaining(timer.breakRemainingMs());
-				}
-			};
-
-			// Synchronous first tick: a session already in its break freezes
-			// before the first frame, so there is never a playable frame.
-			tickPlaytime();
-			setInterval(tickPlaytime, TICK_MS);
-			document.addEventListener('visibilitychange', tickPlaytime);
+			const session = resolveSession(loadSession(), opts.playLimitMin, opts.playBreakMin, Date.now());
+			saveSession(session);
+			const playtime = new PlaytimeController(session, {
+				overlay: new PlaytimeOverlay(app),
+				freeze: () => {
+					loop.setLeftMouseDown(false);
+					loop.paused = true;
+					resetKeys();
+					hud.setMiningProgress(0);
+					if (document.pointerLockElement) document.exitPointerLock();
+					void autosave.flush();
+				},
+				resume: () => {
+					resetKeys();
+					loop.paused = false;
+					// Called from the PLAY AGAIN click, a user gesture, so the kid
+					// does not need a second click on the canvas. Chrome returns a
+					// promise that can reject; that is not an error worth surfacing.
+					const p = renderer.gl.domElement.requestPointerLock() as unknown;
+					if (p instanceof Promise) p.catch(() => {});
+				},
+				save: saveSession,
+				now: () => Date.now(),
+				visible: () => document.visibilityState === 'visible',
+			});
+			playtime.tick();
+			setInterval(() => playtime.tick(), TICK_MS);
+			document.addEventListener('visibilitychange', () => playtime.tick());
 		}
 		// ----------------------------------------------------------------------
 		loop.start();
 ```
 
-Note: `keys` and `hud` are already in scope; `autosave` is declared above `loop` in the existing code, so `freezeGame` can reference it.
+`keys`, `hud`, `app`, and `autosave` are already in scope; `autosave` is declared above `loop` in the existing code.
 
 - [ ] **Step 4: Type-check, lint, full suite**
 
 Run: `npx tsc -b && npx eslint src && npx vitest run`
-Expected: all clean and green. If eslint flags `loop` used before definition in `onKey`, it is the same pattern as the existing `ignite` case; keep it.
+Expected: all clean and green. If `tsc` rejects `requestPointerLock() as unknown` because the lib types it as `void`, keep the cast; it exists precisely because the DOM lib lags Chrome here.
 
 - [ ] **Step 5: Commit**
 
 ```bash
 git add src/main.ts
-git commit -m "feat(playtime): wire timer, freeze, play-again, and input gating"
+git commit -m "feat(playtime): wire controller, overlay, and input gating"
 ```
 
 ---
 
-### Task 8: Docs
+### Task 9: Docs
 
 **Files:**
 - Create: `docs/playtime.md`
@@ -1469,7 +1769,15 @@ presses **Unlock** on the menu.
 - **Break time** is wall clock, so closing the tab does not shorten it.
 - The session is **per browser**, not per world.
 - A lock always clears itself 12 hours after the game was last touched.
-- No PIN. A kid who learns to reload and change the dropdown can turn it off.
+- **No PIN.** The Unlock and Start fresh buttons sit on the same menu the kid
+  uses, so a kid who reloads and presses one is through. This limits an honest
+  seven-year-old, not a determined one.
+
+## How to unlock
+
+Reload the game's own tab (F5), press **Unlock** (or **Start fresh**) in the
+Play time section, then pick the world. Pressing Unlock in a different tab
+clears the stored session but does not wake the frozen tab.
 
 ## Pieces
 
@@ -1477,10 +1785,11 @@ presses **Unlock** on the menu.
 |---|---|
 | `src/data/playtime.data.ts` | choices, thresholds, durations |
 | `src/game/playtime.ts` | `PlayTimer` state machine; `phaseOf`, `isStale` |
+| `src/game/playtime-controller.ts` | `resolveSession`; `PlaytimeController` turns timer events into overlay/game calls |
 | `src/persistence/playtime.ts` | `minicraft:v1:playtime` load/save/clear; `applyPlaytimeSetting` |
 | `src/ui/playtime-overlay.ts` | warning band and freeze overlay |
 | `src/ui/menu.ts` | Play time section with the status row and Unlock / Start fresh |
-| `src/main.ts` | 1 s `setInterval` + `visibilitychange` → `tickPlaytime`; `freezeGame`; `playAgain`; input gating on `loop.paused` |
+| `src/main.ts` | 1 s `setInterval` + `visibilitychange` → `controller.tick()`; the freeze/resume callbacks; input gating on `loop.paused` |
 
 Stored record: `{ limitMs, breakMs | null, playedMs, frozenAt | null, updatedAt }`.
 Phase is derived: not frozen → playing; frozen with no break → break; before
@@ -1519,7 +1828,7 @@ visible play. Never do this on the production site.
 - [ ] **Step 3: README** — add to the "Features" list after the "Rebindable keys" bullet:
 
 ```markdown
-- **Play-time limit** for grown-ups: on the main menu, *Play for* 15–90 minutes, optionally *Then break for* 10–60 minutes. Large `END IN 5 MINUTES` / `END IN 2 MINUTES` warnings, then `TIME'S UP` freezes the game; a break counts down to a `PLAY AGAIN` button, or without a break the game stays locked until a grown-up presses *Unlock* on the menu. Only visible play counts (a closed lid is not play time); breaks are wall-clock. No PIN, and a lock always clears itself after 12 hours. See [`docs/playtime.md`](docs/playtime.md).
+- **Play-time limit** for grown-ups: on the main menu, *Play for* 15–90 minutes, optionally *Then break for* 10–60 minutes. Large `END IN 5 MINUTES` / `END IN 2 MINUTES` warnings, then `TIME'S UP` freezes the game; a break counts down to a `PLAY AGAIN` button, or without a break the game stays locked until a grown-up presses *Unlock* on the menu. Only visible play counts (a closed lid is not play time); breaks are wall-clock. There is no PIN: the Unlock button is on the same menu the kid uses, so this limits an honest kid, not a determined one. A lock always clears itself 12 hours after the game was last touched. To unlock early: reload the game's tab, press *Unlock*, pick the world. See [`docs/playtime.md`](docs/playtime.md).
 ```
 
 Also update the test count in the "Tests:" line of "Tech Stack" to the number printed by `npx vitest run`, and add "the play-time timer" to its list.
@@ -1533,13 +1842,15 @@ git commit -m "docs(playtime): subsystem doc, README, persistence note"
 
 ---
 
-### Task 9: Manual browser verification
+### Task 10: Manual browser verification
 
 **Files:** none. Uses the dev server and a browser automation tool (Playwright MCP or Chrome DevTools MCP), against `http://localhost:5173` only.
 
 - [ ] **Step 1: Start the dev server** in the background: `npm run dev` and wait for `Local: http://localhost:5173/`.
 
-- [ ] **Step 2: Menu.** Open the page. Confirm the "Play time" section shows a "Play for" select with Off selected and no "Then break for" row. Select 15 minutes: the "Then break for" row appears with "Until a grown-up unlocks". Reload: both selections persist.
+- [ ] **Step 2: Menu.** Open the page. Confirm the "Play time" section shows a "Play for" select with Off selected and no "Then break for" row. Select 15 minutes: the "Then break for" row appears with "Until a grown-up unlocks". Set it to 20 minutes, set "Play for" back to Off (row disappears), then to 15 again: the row comes back still showing 20 minutes. Reload: both selections persist.
+
+Keep the automated tab in the **foreground** for every step below; play time accrues only while `document.visibilityState === 'visible'`, so a backgrounded tab never freezes and looks like a timer bug.
 
 - [ ] **Step 3: No-break freeze.** In the page console:
 
@@ -1547,7 +1858,11 @@ git commit -m "docs(playtime): subsystem doc, README, persistence note"
 localStorage.setItem('minicraft:v1:playtime', JSON.stringify({ limitMs: 900000, breakMs: null, playedMs: 870000, frozenAt: null, updatedAt: Date.now() }));
 ```
 
-Reload. The menu shows `1 minute left [Start fresh]`. Pick a world. Within a second `END IN 1 MINUTE` appears in the upper third and the game keeps running behind it (chunks visible, the band fades after ~10 s). After ~30 s of the tab being visible, `TIME'S UP / ASK A GROWN-UP` covers the screen. Verify with the tool:
+Reload. The menu shows `1 minute left [Start fresh]`. Press **Start fresh**: the row disappears and the key is gone. Re-run the `setItem` above and reload. Pick a world. Within a second `END IN 1 MINUTE` appears and the game keeps running behind it. While the band is visible, assert:
+- `document.querySelector('#playtime-warning').getBoundingClientRect().bottom < innerHeight * 0.45` (clear of the crosshair),
+- click the canvas: `document.pointerLockElement` is set and stays set while the band is up,
+- hold left-click on a block for its hardness: the block breaks (mining works under the warning).
+The band fades after ~10 s. After ~30 s of the tab being visible, `TIME'S UP / ASK A GROWN-UP` covers the screen. Verify with the tool:
 - `document.querySelector('#playtime-freeze').classList.contains('hidden') === false`
 - pressing W / F / C / 1 / Tab changes nothing (`#color-picker-root` stays hidden; the hotbar selection is unchanged).
 - clicking the centre of the screen does not set `document.pointerLockElement`.
@@ -1561,7 +1876,9 @@ Reload. The menu shows `Locked — ask a grown-up [Unlock]`. Pick the world **wi
 localStorage.setItem('minicraft:v1:playtime', JSON.stringify({ limitMs: 900000, breakMs: 600000, playedMs: 900000, frozenAt: Date.now() - 595000, updatedAt: Date.now() }));
 ```
 
-Reload, pick the world: `TIME'S UP / PLAY AGAIN IN 1 MINUTE` immediately, world visible behind. Within ~6 s the line becomes a `PLAY AGAIN` button. Click it: overlay gone, `loop` running (the player can move), `playedMs` in storage restarts from 0 and climbs by ~1000 per second while the tab is visible.
+Reload, pick the world: `TIME'S UP / PLAY AGAIN IN 1 MINUTE` immediately, world visible behind. Within ~6 s the line becomes a `PLAY AGAIN` button. Click it: overlay gone, **`document.pointerLockElement` is the canvas immediately after the click** (no second click; if the automation tool cannot grant pointer lock, a human does this one click and reports), the player can move, `playedMs` in storage restarts from 0 and climbs by ~1000 per second while the tab is visible.
+
+- [ ] **Step 4b: A real threshold at game speed.** Set `playedMs: 900000 - 5*60000 - 5000` (15-minute limit, 5 min 5 s left) with `frozenAt: null`, reload, pick the world: after ~5 s of visible play `END IN 5 MINUTES` appears, fades after 10 s, and the game keeps running.
 
 - [ ] **Step 5: Hidden tab does not count.** With a session playing, note `playedMs`, switch to another tab for 20 s, come back: `playedMs` advanced by at most ~2 s.
 

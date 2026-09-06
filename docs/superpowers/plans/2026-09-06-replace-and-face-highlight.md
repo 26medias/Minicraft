@@ -69,6 +69,8 @@ describe('canReplace', () => {
 });
 ```
 
+`hitAt` and `stoneId` already exist at the top of this file. The unknown-id test asserts behaviour (false, no throw); `isSolid` already returns false for an unknown id before `def` is read, so the `!def` guard is belt-and-braces and this test does not isolate it.
+
 - [ ] **Step 2: Run to verify it fails** — `npx vitest run src/game/actions.test.ts`. Expected: FAIL, `canReplace` is not exported.
 
 - [ ] **Step 3: Implement** — append to `src/game/actions.ts` (add `BLOCKS` to the import from `../data/blocks.data`):
@@ -180,15 +182,25 @@ describe('GameLoop.replaceBlock', () => {
 		expect(world.getBlock(260, 40, 260)).toBe(dirt);
 	});
 
-	it('registers a replaced-in lamp and lights the chunk', () => {
-		const lights = new LightRegistry(new THREE.Scene());
-		const { loop, world } = makeLoop(lights);
-		world.setBlock(260, 40, 260, stone);
-		const chunk = world.ensureChunk(16, 16);
-		chunk.lights.fill(0);
-		expect(loop.replaceBlock(hit(260, 40, 260), lamp, '#ff8800')).toBe(true);
-		expect(lights.getColor(260, 40, 260)).toBe('#ff8800');
-		expect(chunk.lights[indexOf(4, 40, 4)]).not.toBe(0);
+	it('registers a replaced-in lamp and lights the chunk in its colour', () => {
+		// updateLightsForBlockChange reads the colour through lights.getColor and
+		// packs it into chunk.lights, so a lamp registered *after* the light
+		// update would be lit white. Compare a red lamp against a white one.
+		const lit = (color: string) => {
+			const lights = new LightRegistry(new THREE.Scene());
+			const { loop, world } = makeLoop(lights);
+			world.setBlock(260, 40, 260, stone);
+			const chunk = world.ensureChunk(16, 16);
+			chunk.lights.fill(0);
+			expect(loop.replaceBlock(hit(260, 40, 260), lamp, color)).toBe(true);
+			expect(lights.getColor(260, 40, 260)).toBe(color);
+			return chunk.lights[indexOf(4, 40, 4)];
+		};
+		const red = lit('#ff0000');
+		const white = lit('#ffffff');
+		expect(red).not.toBe(0);
+		expect(white).not.toBe(0);
+		expect(red).not.toBe(white);
 	});
 
 	it('unregisters a lamp replaced by stone', () => {
@@ -279,7 +291,7 @@ and add, after `ignite`:
 	}
 ```
 
-- [ ] **Step 5: Run to verify it passes** — `npx vitest run src/game`. Expected: PASS. Mutation checks, each restored afterwards: (a) delete the `this.mining = null` line → the mining test fails; (b) swap `lights.add` after `applyLightUpdate` → the lamp-lights-chunk test fails; (c) remove the `canReplace` guard → the no-op test fails.
+- [ ] **Step 5: Run to verify it passes** — `npx vitest run src/game`. Expected: PASS. Mutation checks, each restored afterwards: (a) delete the `this.mining = null` line → the mining test fails; (b) swap `lights.add` after `applyLightUpdate` → the lamp-colour test fails (both runs come out white); (c) remove the `canReplace` guard → the no-op test fails. Not covered by any test, manual only (Task 5): `markChunkDirtyAround` (a missing call shows as the swapped block not re-meshing), and `clearBlockEffects` running before vs after `setBlock` (no observable difference today; the order is convention).
 
 - [ ] **Step 6: Commit**
 
@@ -412,7 +424,8 @@ export class FaceHighlight {
 
 		const border = material(0xffffff, BORDER_OPACITY, 3);
 		const horizontal = new THREE.PlaneGeometry(side, BORDER);
-		const vertical = new THREE.PlaneGeometry(BORDER, side);
+		// Verticals stop short of the horizontals so corners are not painted twice.
+		const vertical = new THREE.PlaneGeometry(BORDER, side - 2 * BORDER);
 		const edge = side / 2 - BORDER / 2;
 		for (const [geo, x, y] of [
 			[horizontal, 0, edge],
@@ -465,7 +478,7 @@ git commit -m "feat(render): FaceHighlight outline for the aimed face"
 **Interfaces:**
 - Consumes: `FaceHighlight` (Task 3), `replaceBlock` (Task 2).
 
-- [ ] **Step 1: Write the failing test** — append to `src/game/loop.test.ts`. Extend `makeLoop` once more with a second optional parameter `highlight: FaceHighlight | null = null` passed as the 10th constructor argument (after `lights`), and add `import { FaceHighlight } from '../engine/render/face-highlight';`.
+- [ ] **Step 1: Write the failing test** — append to `src/game/loop.test.ts`. Extend `makeLoop` once more with a second optional parameter `highlight: FaceHighlight | null = null` passed as the 10th constructor argument (after `lights`), and add `import { FaceHighlight, HIGHLIGHT_EPS } from '../engine/render/face-highlight';`.
 
 ```ts
 describe('GameLoop face highlight', () => {
@@ -484,7 +497,7 @@ describe('GameLoop face highlight', () => {
 		world.setBlock(260, 41, 257, stone);
 		tick(0.05);
 		expect(group.visible).toBe(true);
-		expect(group.position.z).toBeCloseTo(258 + 0.004, 6); // pz face of the block at z=257
+		expect(group.position.z).toBeCloseTo(258 + HIGHLIGHT_EPS, 6); // pz face of the block at z=257
 
 		loop.paused = true;
 		tick(0.05);
@@ -492,7 +505,9 @@ describe('GameLoop face highlight', () => {
 		loop.paused = false;
 
 		world.setBlock(260, 41, 257, AIR);
-		world.setBlock(260, 41, 253, stone); // 7 blocks away: out of reach
+		// Reach is inclusive (raycastVoxel loops while t <= 6): a block whose near
+		// face is 6.0 away is still hit. z=251 puts the face at 9.0, clearly out.
+		world.setBlock(260, 41, 251, stone);
 		tick(0.05);
 		expect(group.visible).toBe(false);
 	});
@@ -512,9 +527,9 @@ In `tick`, on the paused early-return add `this.highlight?.hide();` before `retu
 
 ```ts
 		// One raycast per tick, shared by the highlight and mining. Must run after
-		// the camera sync so it sees this frame's eye position.
-		const dir = this.cam.getLookDir();
-		this.aim = raycastVoxel(this.world, eye, [dir.x, dir.y, dir.z], REACH);
+		// the camera sync so it sees this frame's eye position. `fwd` is this
+		// tick's look direction (yaw/pitch do not change inside a tick).
+		this.aim = raycastVoxel(this.world, eye, [fwd.x, fwd.y, fwd.z], REACH);
 		if (this.aim) this.highlight?.show(this.aim.x, this.aim.y, this.aim.z, this.aim.face);
 		else this.highlight?.hide();
 ```
@@ -541,7 +556,11 @@ In `updateMining`, replace the three lines computing `eye`, `dir`, `hit` with `c
 - **Shift + Right click** — replace the block you're aiming at with the selected one (instead of building next to it).
 ```
 
-and after the Left click bullet's sentence add: "The face you're aiming at is outlined when it's close enough to reach."
+and, as its own bullet directly after the Shift + Right click bullet (so it reads as applying to mining, placing and replacing):
+
+```md
+- The face you're aiming at is highlighted when it's close enough to reach.
+```
 
 - [ ] **Step 7: Full check** — `npx vitest run` and `npm run build`. Expected: both green.
 
@@ -558,7 +577,7 @@ git commit -m "feat(game): shift-to-replace and aimed-face highlight wired"
 
 Run `npm run dev`, open `http://localhost:5173`, create a throwaway world.
 
-- [ ] Highlight legible on white wool, snow, obsidian, glass at up to 6 blocks; gone past reach; hidden while the inventory (I) is open.
-- [ ] Shift + right click: stone → dirt swaps in place; stone → stone does nothing; primed TNT (E) then Shift + right click cancels the fuse; lamp swapped in glows.
-- [ ] No browser context menu, pointer lock kept.
+- [ ] Highlight legible on white wool, snow, obsidian, glass at up to 6 blocks; gone past reach; hidden while the inventory (I) is open (inventory sets `loop.paused`); still shown while the colour picker (C) is open (the picker does not pause). Border corners not noticeably brighter.
+- [ ] Shift + right click: stone → dirt swaps in place and re-meshes immediately; stone → stone does nothing; primed TNT (E) then Shift + right click cancels the fuse; lamp swapped in glows in the picked colour; replacing the block under your own feet does not trap or fling the player; replacing it with water drops you into swim mode.
+- [ ] Shift + right click on a block opens no browser context menu and keeps pointer lock, in Chrome **and Firefox**. Firefox lets Shift + right click bypass `contextmenu` `preventDefault` by default; the only suppression today is that listener. Fallback if red: also call `preventDefault()` on the `mousedown` for button 2 and, if the menu still shows, additionally accept `Ctrl + right click` as the replace modifier and document both.
 - [ ] Delete the throwaway world (local and cloud).

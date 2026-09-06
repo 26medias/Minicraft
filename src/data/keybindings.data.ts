@@ -89,4 +89,8 @@ export type Options = {
 	kidMode: boolean;
 	keybindings: Record<Action, string>;
 	currentLightColor: string;
+	/** Minutes of play per session; null = Off. */
+	playLimitMin: number | null;
+	/** Minutes of break after the limit; null = until a grown-up unlocks. */
+	playBreakMin: number | null;
 };

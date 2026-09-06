@@ -85,4 +85,35 @@ describe('loadOptions', () => {
 		const opts = loadOptions();
 		expect(opts.keybindings).toEqual(DEFAULT_KEYBINDINGS);
 	});
+
+	it('defaults play-time fields to null when absent', async () => {
+		const { loadOptions } = await import('./options');
+		const opts = loadOptions();
+		expect(opts.playLimitMin).toBeNull();
+		expect(opts.playBreakMin).toBeNull();
+	});
+
+	it('round-trips play-time fields', async () => {
+		const { loadOptions, saveOptions } = await import('./options');
+		const opts = loadOptions();
+		opts.playLimitMin = 30;
+		opts.playBreakMin = 20;
+		saveOptions(opts);
+		const back = loadOptions();
+		expect(back.playLimitMin).toBe(30);
+		expect(back.playBreakMin).toBe(20);
+	});
+
+	it('rejects play-time values that are not in the choice lists', async () => {
+		store['minicraft:v1:options'] = JSON.stringify({
+			kidMode: true,
+			keybindings: DEFAULT_KEYBINDINGS,
+			playLimitMin: '30',
+			playBreakMin: 7,
+		});
+		const { loadOptions } = await import('./options');
+		const opts = loadOptions();
+		expect(opts.playLimitMin).toBeNull();
+		expect(opts.playBreakMin).toBeNull();
+	});
 });

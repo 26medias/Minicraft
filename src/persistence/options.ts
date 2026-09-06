@@ -1,13 +1,21 @@
 import { ACTIONS, DEFAULT_KEYBINDINGS, type Action, type Options } from '../data/keybindings.data';
+import { PLAY_BREAK_CHOICES_MIN, PLAY_LIMIT_CHOICES_MIN } from '../data/playtime.data';
 
 const KEY = 'minicraft:v1:options';
 const DEFAULT_LIGHT_COLOR = '#FFF5E0'; // warm white
+
+/** Only a member of the choice list gets through; a string "30" must not reach the timer arithmetic. */
+function choiceOrNull(value: unknown, choices: number[]): number | null {
+	return typeof value === 'number' && choices.includes(value) ? value : null;
+}
 
 function defaults(): Options {
 	return {
 		kidMode: true,
 		keybindings: { ...DEFAULT_KEYBINDINGS },
 		currentLightColor: DEFAULT_LIGHT_COLOR,
+		playLimitMin: null,
+		playBreakMin: null,
 	};
 }
 
@@ -30,6 +38,8 @@ export function loadOptions(): Options {
 			kidMode: parsed.kidMode ?? true,
 			keybindings: filteredBindings,
 			currentLightColor: parsed.currentLightColor ?? DEFAULT_LIGHT_COLOR,
+			playLimitMin: choiceOrNull(parsed.playLimitMin, PLAY_LIMIT_CHOICES_MIN),
+			playBreakMin: choiceOrNull(parsed.playBreakMin, PLAY_BREAK_CHOICES_MIN),
 		};
 	} catch {
 		return defaults();

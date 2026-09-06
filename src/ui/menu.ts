@@ -1,5 +1,9 @@
 import type { PersistenceAdapter, WorldSummary } from '../persistence/adapter';
 import { newWorldId } from '../persistence/uuid';
+import { loadOptions } from '../persistence/options';
+import { PLAY_BREAK_CHOICES_MIN, PLAY_LIMIT_CHOICES_MIN } from '../data/playtime.data';
+import { applyPlaytimeSetting, clearSession, loadSession } from '../persistence/playtime';
+import { isStale, phaseOf } from '../game/playtime';
 
 export type MenuAction =
 	| { type: 'new'; id: string; seed: number; name: string }
@@ -35,6 +39,7 @@ export class MainMenu {
 		card.className = 'menu-card';
 		card.innerHTML = `<h1>Minicraft</h1><div class="menu-loading">Loading worlds…</div>`;
 		this.root.appendChild(card);
+		this.renderPlaytime(card);
 
 		let worlds: WorldSummary[] = [];
 		let offline = false;
@@ -68,6 +73,7 @@ export class MainMenu {
 
 		this.renderSection(card, 'Worlds', cloud);
 		this.renderSection(card, 'On this device', local);
+		this.renderPlaytime(card);
 
 		const btnOptions = document.createElement('button');
 		btnOptions.textContent = 'Options';
@@ -117,6 +123,120 @@ export class MainMenu {
 			row.appendChild(del);
 			card.appendChild(row);
 		}
+	}
+
+	/**
+	 * Parent controls. Every change and both buttons clear the stored session,
+	 * which is the unlock path: re-selecting a dropdown at its current value
+	 * fires no change event, so the buttons must exist for that case.
+	 */
+	private renderPlaytime(card: HTMLElement) {
+		const opts = loadOptions();
+		const section = document.createElement('div');
+		section.className = 'playtime-section';
+
+		const h = document.createElement('div');
+		h.className = 'menu-section';
+		h.textContent = 'Play time';
+		section.appendChild(h);
+
+		const limitRow = document.createElement('div');
+		limitRow.className = 'playtime-row';
+		const limitLabel = document.createElement('label');
+		limitLabel.textContent = 'Play for';
+		const limit = document.createElement('select');
+		limit.id = 'playtime-limit';
+		const off = document.createElement('option');
+		off.value = '';
+		off.textContent = 'Off';
+		limit.appendChild(off);
+		for (const m of PLAY_LIMIT_CHOICES_MIN) {
+			const o = document.createElement('option');
+			o.value = String(m);
+			o.textContent = `${m} minutes`;
+			limit.appendChild(o);
+		}
+		limit.value = opts.playLimitMin === null ? '' : String(opts.playLimitMin);
+		limit.onchange = () => {
+			applyPlaytimeSetting({ playLimitMin: limit.value === '' ? null : Number(limit.value) });
+			this.rerenderPlaytime(card, section);
+		};
+		limitLabel.appendChild(document.createElement('br'));
+		limitLabel.appendChild(limit);
+		limitRow.appendChild(limitLabel);
+		section.appendChild(limitRow);
+
+		if (opts.playLimitMin !== null) {
+			const breakRow = document.createElement('div');
+			breakRow.className = 'playtime-row';
+			const breakLabel = document.createElement('label');
+			breakLabel.textContent = 'Then break for';
+			const brk = document.createElement('select');
+			brk.id = 'playtime-break';
+			const untilUnlock = document.createElement('option');
+			untilUnlock.value = '';
+			untilUnlock.textContent = 'Until a grown-up unlocks';
+			brk.appendChild(untilUnlock);
+			for (const m of PLAY_BREAK_CHOICES_MIN) {
+				const o = document.createElement('option');
+				o.value = String(m);
+				o.textContent = `${m} minutes`;
+				brk.appendChild(o);
+			}
+			brk.value = opts.playBreakMin === null ? '' : String(opts.playBreakMin);
+			brk.onchange = () => {
+				applyPlaytimeSetting({ playBreakMin: brk.value === '' ? null : Number(brk.value) });
+				this.rerenderPlaytime(card, section);
+			};
+			breakLabel.appendChild(document.createElement('br'));
+			breakLabel.appendChild(brk);
+			breakRow.appendChild(breakLabel);
+			section.appendChild(breakRow);
+		}
+
+		const now = Date.now();
+		const session = loadSession();
+		if (session && !isStale(session, now)) {
+			const phase = phaseOf(session, now);
+			if (phase !== 'over') {
+				const status = document.createElement('div');
+				status.className = 'playtime-status';
+				const text = document.createElement('span');
+				const btn = document.createElement('button');
+				if (phase === 'playing') {
+					const left = Math.max(1, Math.ceil((session.limitMs - session.playedMs) / 60_000));
+					text.textContent = `${left} minute${left === 1 ? '' : 's'} left`;
+					btn.textContent = 'Start fresh';
+				} else if (session.breakMs === null) {
+					text.textContent = 'Locked — ask a grown-up';
+					btn.textContent = 'Unlock';
+				} else {
+					const left = Math.max(
+						1,
+						Math.ceil((session.frozenAt! + session.breakMs - now) / 60_000),
+					);
+					text.textContent = `Break, ${left} minute${left === 1 ? '' : 's'} left`;
+					btn.textContent = 'Unlock';
+				}
+				btn.onclick = () => {
+					clearSession();
+					this.rerenderPlaytime(card, section);
+				};
+				status.appendChild(text);
+				status.appendChild(btn);
+				section.appendChild(status);
+			}
+		}
+
+		card.appendChild(section);
+	}
+
+	private rerenderPlaytime(card: HTMLElement, old: HTMLElement) {
+		const marker = document.createElement('div');
+		old.replaceWith(marker);
+		this.renderPlaytime(card);
+		// renderPlaytime appended at the end; move the fresh section to where the old one was.
+		marker.replaceWith(card.lastElementChild!);
 	}
 
 	private renderNew() {

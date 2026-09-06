@@ -18,6 +18,7 @@ import { isLegacyId, newWorldId, seedFromLegacyId } from './persistence/uuid';
 import { AutoSave } from './persistence/autosave';
 import { ParticleSystem } from './engine/render/particles';
 import { PrimedOverlay } from './engine/render/primed-overlay';
+import { FaceHighlight } from './engine/render/face-highlight';
 import { AIR, BLOCKS, BLOCK_BY_NAME, type BlockId } from './data/blocks.data';
 import { loadOptions, saveOptions } from './persistence/options';
 import { LightRegistry } from './engine/render/light-registry';
@@ -328,6 +329,7 @@ async function main() {
 
 		const particles = new ParticleSystem(renderer.scene, renderer.material, atlas);
 		const overlay = new PrimedOverlay(renderer.scene);
+		const highlight = new FaceHighlight(renderer.scene);
 		const loop = new GameLoop(
 			world,
 			renderer,
@@ -338,6 +340,7 @@ async function main() {
 			particles,
 			overlay,
 			lights,
+			highlight,
 		);
 		loop.onBlockBroken = () => autosave.markDirty();
 		loop.onWorldMutated = () => autosave.markDirty();
@@ -399,6 +402,13 @@ async function main() {
 				if (!hit) return;
 				const id = player.hotbar[player.selected];
 				if (id === undefined || id === AIR) return;
+				if (e.shiftKey) {
+					// Replace the aimed block instead of building next to it. All the
+					// shared guards above (paused, pointer lock, hit, non-empty slot)
+					// have already run; replaceBlock marks autosave dirty itself.
+					loop.replaceBlock(hit, id, opts.currentLightColor);
+					return;
+				}
 				const placed = placeBlock(world, hit, id, {
 					position: player.position,
 					size: [0.6, 1.8, 0.6],

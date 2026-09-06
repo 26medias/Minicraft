@@ -9,7 +9,8 @@ import { AIR, BLOCKS, BLOCK_BY_NAME, isSolid, isLiquid, type BlockId } from '../
 import type { ParticleSystem } from '../engine/render/particles';
 import type { PrimedOverlay } from '../engine/render/primed-overlay';
 import type { LightRegistry } from '../engine/render/light-registry';
-import { igniteTnt, type PrimedEntry } from './actions';
+import type { FaceHighlight } from '../engine/render/face-highlight';
+import { canReplace, igniteTnt, type PrimedEntry } from './actions';
 import { detonate, tntKey, TNT_CHAIN_FUSE, TNT_PRIME_FUSE } from './tnt';
 import { updateLightsForBlockChange } from '../engine/world/lighting';
 import { LiquidScheduler } from './liquid-scheduler';
@@ -37,6 +38,7 @@ export class GameLoop {
 	private dirtyChunks = new Set<string>();
 	private mountedChunks = new Set<string>();
 	private mining: MiningState | null = null;
+	private aim: VoxelHit | null = null;
 	private leftMouseDown = false;
 	private primedTnt = new Map<string, PrimedEntry>();
 	private scheduler: LiquidScheduler;
@@ -63,6 +65,7 @@ export class GameLoop {
 		private particles: ParticleSystem | null = null,
 		private overlay: PrimedOverlay | null = null,
 		private lights: LightRegistry | null = null,
+		private highlight: FaceHighlight | null = null,
 	) {
 		this.scheduler = new LiquidScheduler(
 			this.world,
@@ -135,6 +138,40 @@ export class GameLoop {
 		return ok;
 	}
 
+	/**
+	 * Everything that must happen when the block at (x,y,z) stops existing:
+	 * a primed TNT loses its fuse, a lamp loses its light, and break particles
+	 * spawn. Shared by mining completion and shift-to-replace. Call before the
+	 * world write.
+	 */
+	private clearBlockEffects(x: number, y: number, z: number, oldId: BlockId): void {
+		const k = tntKey(x, y, z);
+		if (this.primedTnt.delete(k)) this.overlay?.remove(x, y, z);
+		if (oldId === LAMP_ID) this.lights?.remove(x, y, z);
+		this.particles?.spawnBreak(x, y, z, oldId);
+	}
+
+	/**
+	 * Shift + right click: overwrite the aimed block with `newId`. Returns false
+	 * (and touches nothing) when canReplace refuses. Fires onWorldMutated, not
+	 * onBlockBroken: nothing was mined.
+	 */
+	replaceBlock(hit: VoxelHit, newId: BlockId, lampColor: string): boolean {
+		if (!canReplace(this.world, hit, newId)) return false;
+		const { x, y, z } = hit;
+		const oldId = this.world.getBlock(x, y, z);
+		const m = this.mining;
+		if (m && m.target.x === x && m.target.y === y && m.target.z === z) this.mining = null;
+		this.clearBlockEffects(x, y, z, oldId);
+		this.world.setBlock(x, y, z, newId);
+		// lights.add must precede applyLightUpdate, which reads the colour back.
+		if (newId === LAMP_ID) this.lights?.add(x, y, z, lampColor);
+		this.markChunkDirtyAround(x, z);
+		this.applyLightUpdate(x, y, z);
+		this.onWorldMutated?.();
+		return true;
+	}
+
 	start() {
 		this.renderer.onTick((dt) => this.tick(dt));
 	}
@@ -144,6 +181,7 @@ export class GameLoop {
 			this.cam.sync(this.renderer.camera);
 			this.loadNearbyChunks();
 			this.flushDirtyChunks();
+			this.highlight?.hide();
 			return;
 		}
 		// Use getLookDir() (full 3D, includes pitch) so that cursor-directed fly/swim
@@ -155,6 +193,13 @@ export class GameLoop {
 		const eye = this.player.eyePosition();
 		this.cam.position.set(eye[0], eye[1], eye[2]);
 		this.cam.sync(this.renderer.camera);
+
+		// One raycast per tick, shared by the highlight and mining. Must run after
+		// the camera sync so it sees this frame's eye position. `fwd` is this
+		// tick's look direction (yaw/pitch do not change inside a tick).
+		this.aim = raycastVoxel(this.world, eye, [fwd.x, fwd.y, fwd.z], REACH);
+		if (this.aim) this.highlight?.show(this.aim.x, this.aim.y, this.aim.z, this.aim.face);
+		else this.highlight?.hide();
 
 		this.updateMining(dt);
 		this.onMiningProgress?.(this.miningProgress());
@@ -172,9 +217,7 @@ export class GameLoop {
 			return;
 		}
 
-		const eye = this.player.eyePosition();
-		const dir = this.cam.getLookDir();
-		const hit = raycastVoxel(this.world, eye, [dir.x, dir.y, dir.z], REACH);
+		const hit = this.aim;
 		if (!hit) {
 			this.mining = null;
 			return;
@@ -207,14 +250,10 @@ export class GameLoop {
 		if (this.mining.elapsed >= this.mining.duration) {
 			const { target, blockId } = this.mining;
 			this.mining = null;
-			// If the block was a primed TNT, cancel its fuse.
-			const k = tntKey(target.x, target.y, target.z);
-			if (this.primedTnt.delete(k)) this.overlay?.remove(target.x, target.y, target.z);
-			if (blockId === LAMP_ID) this.lights?.remove(target.x, target.y, target.z);
+			this.clearBlockEffects(target.x, target.y, target.z, blockId);
 			this.world.setBlock(target.x, target.y, target.z, AIR);
 			this.markChunkDirtyAround(target.x, target.z);
 			this.applyLightUpdate(target.x, target.y, target.z);
-			this.particles?.spawnBreak(target.x, target.y, target.z, blockId);
 			this.onBlockBroken?.({ x: target.x, y: target.y, z: target.z, blockId });
 		}
 	}

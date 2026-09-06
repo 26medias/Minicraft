@@ -79,11 +79,13 @@ Click the canvas first to capture the mouse pointer.
 - **F** — toggle fly mode.
 - **=** / **-** — increase / decrease fly speed (5 tiers; 5 pips above the hotbar show current speed).
 
-In fly or swim mode: pitch the camera up to ascend, down to descend — W moves in the full 3D look direction. Strafe stays horizontal. Space and Shift have no effect during fly/swim. Swim mode engages automatically when the eye is inside a liquid voxel; gravity resumes as soon as the head breaks the surface.
+In fly or swim mode: pitch the camera up to ascend, down to descend — W moves in the full 3D look direction. Strafe stays horizontal. Space has no effect during fly/swim. Swim mode engages automatically when the eye is inside a liquid voxel; gravity resumes as soon as the head breaks the surface.
 
 ### Interaction
 - **Left click (hold)** — mine the block in the crosshair. Each block has its own hardness; a progress ring around the crosshair shows the mine time. Mining a liquid block (hardness 0) is instant.
 - **Right click** — place the currently selected block on the face you're aiming at. Placing a liquid mid-air lets it fall to the ground; placing it on a surface lets it spread.
+- **Shift + Right click** — replace the block you're aiming at with the selected one (instead of building next to it).
+- The face you're aiming at is highlighted when it's close enough to reach.
 - **1..9** — select a hotbar slot directly.
 - **Tab** / **Shift+Tab** — cycle through hotbar slots.
 - **I** — open / close the block inventory.

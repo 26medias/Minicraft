@@ -25,6 +25,10 @@ import { ColorPicker } from './ui/color-picker';
 import { LIGHT_PALETTE } from './data/light-palette.data';
 import type { Action } from './data/keybindings.data';
 import { fillChunkLights } from './engine/world/lighting';
+import { PlaytimeController, resolveSession } from './game/playtime-controller';
+import { loadSession, saveSession } from './persistence/playtime';
+import { PlaytimeOverlay } from './ui/playtime-overlay';
+import { TICK_MS } from './data/playtime.data';
 
 const REACH = 6;
 
@@ -160,6 +164,9 @@ async function main() {
 			keyToAction[code] = action as Action;
 
 		const onKey = (down: boolean) => (e: KeyboardEvent) => {
+			// While frozen, no keydown reaches the player, hotbar, TNT, or colour
+			// picker. Keyup still runs so `keys` stays truthful.
+			if (down && loop.paused) return;
 			const a = keyToAction[e.code];
 			if (!a) return;
 			switch (a) {
@@ -233,6 +240,7 @@ async function main() {
 		// because the keybinding system captures only e.code (no modifier combos).
 		window.addEventListener('keydown', (e) => {
 			if (e.code !== 'Tab') return;
+			if (loop.paused) return;
 			e.preventDefault();
 			if (player.hotbar.length === 0) return;
 			const delta = e.shiftKey ? -1 : 1;
@@ -288,9 +296,50 @@ async function main() {
 		loop.onWorldMutated = () => autosave.markDirty();
 		loop.onMiningProgress = (p) => hud.setMiningProgress(p);
 		loop.onFlyStateChange = (tier) => hud.setFlySpeed(tier);
+		// --- Play-time limit -------------------------------------------------
+		// startGame runs at most once per page load (the menu is only reachable
+		// at boot and from Options before a game starts; unlock is by reload),
+		// so the interval and listener below need no owner, like the window
+		// listeners above. The first tick runs before loop.start() on purpose:
+		// a session already in its break must freeze before the first frame.
+		if (opts.playLimitMin !== null) {
+			const resetKeys = () => {
+				keys.forward = keys.back = keys.left = keys.right = keys.jump = false;
+			};
+			const session = resolveSession(loadSession(), opts.playLimitMin, opts.playBreakMin, Date.now());
+			saveSession(session);
+			const playtime = new PlaytimeController(session, {
+				overlay: new PlaytimeOverlay(app),
+				freeze: () => {
+					loop.setLeftMouseDown(false);
+					loop.paused = true;
+					resetKeys();
+					hud.setMiningProgress(0);
+					if (document.pointerLockElement) document.exitPointerLock();
+					void autosave.flush();
+				},
+				resume: () => {
+					resetKeys();
+					loop.paused = false;
+					// Called from the PLAY AGAIN click, a user gesture, so the kid
+					// does not need a second click on the canvas. Chrome returns a
+					// promise that can reject; that is not an error worth surfacing.
+					const p = renderer.gl.domElement.requestPointerLock() as unknown;
+					if (p instanceof Promise) p.catch(() => {});
+				},
+				save: saveSession,
+				now: () => Date.now(),
+				visible: () => document.visibilityState === 'visible',
+			});
+			playtime.tick();
+			setInterval(() => playtime.tick(), TICK_MS);
+			document.addEventListener('visibilitychange', () => playtime.tick());
+		}
+		// ----------------------------------------------------------------------
 		loop.start();
 
 		window.addEventListener('mousedown', (e) => {
+			if (loop.paused) return;
 			if (document.pointerLockElement !== renderer.gl.domElement) return;
 			if (e.button === 0) {
 				loop.setLeftMouseDown(true);

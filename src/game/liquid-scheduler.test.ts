@@ -532,4 +532,22 @@ describe('LiquidScheduler — sponge', () => {
 			expect(w.getBlock(x, 30, z), `${x},${z}`).toBe(AIR);
 		}
 	});
+
+	it('14. a sponge hole next to an orphan puddle settles to dry', () => {
+		const w = freshWorld();
+		floor(w, 255, 268, 255, 265);
+		w.setBlock(260, 30, 260, water);
+		const s = new LiquidScheduler(w, () => {});
+		for (let i = 0; i < 4; i++) s.tick(0.6);      // 4-hop puddle, 41 cells
+		w.setBlock(265, 30, 260, sponge);             // touches the distance-4 rim
+		w.setBlock(260, 30, 260, AIR);                // puddle is now orphan
+		const liquidCount = () => {
+			let n = 0;
+			for (let x = 255; x <= 268; x++) for (let z = 255; z <= 265; z++) if (w.getBlock(x, 30, z) === water) n++;
+			return n;
+		};
+		for (let i = 0; i < 12; i++) s.tick(0.6);
+		expect(w.getBlock(265, 30, 260)).toBe(wetSponge);
+		expect(liquidCount()).toBe(0);
+	});
 });

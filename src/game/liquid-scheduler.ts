@@ -42,6 +42,7 @@ type PendingWrite = { x: number; y: number; z: number; id: number; flowDistance:
 export class LiquidScheduler {
 	private accumulator = 0;
 	private changed = false;
+	private orphansThisTick = new Set<string>();
 
 	constructor(
 		private world: World,
@@ -152,6 +153,9 @@ export class LiquidScheduler {
 		for (const { x, y, z } of snapshot) {
 			const here = this.world.getBlock(x, y, z);
 			if (!isLiquid(here)) continue;
+			// Orphan flow (no source reachable) is being peeled by drain; it must not
+			// spread into holes — e.g. a sponge's — or the puddle never settles.
+			if (this.orphansThisTick.has(`${x},${y},${z}`)) continue;
 
 			const isSource = !this.isFlowAt(x, y, z);
 			const distance = isSource ? 0 : this.flowDistanceAt(x, y, z);
@@ -245,6 +249,7 @@ export class LiquidScheduler {
 	// -----------------------------------------------------------------------------------------
 
 	private applyDrainStep(): Set<string> {
+		this.orphansThisTick.clear();
 		const drainedThisTick = new Set<string>();
 		// Collect all candidate flow cells (across all chunks), grouped by liquid type.
 		// A flow cell is orphan iff BFS from a same-type source never reaches it via
@@ -370,6 +375,8 @@ export class LiquidScheduler {
 			if (!arr) { arr = []; orphansByType.set(eo.id, arr); }
 			arr.push(eo);
 		}
+
+		for (const [, arr] of orphansByType) for (const o of arr) this.orphansThisTick.add(`${o.x},${o.y},${o.z}`);
 
 		// 5. For each type, find max distance among orphans and IMMEDIATELY drain only
 		// those at that distance (writes AIR now). Result: one ring per tick, peeling

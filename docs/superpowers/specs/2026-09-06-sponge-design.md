@@ -1,7 +1,7 @@
 # Sponge — design
 
 **Date:** 2026-09-06
-**Status:** revised after gate 1
+**Status:** revised after gate 2
 
 ## Goal
 
@@ -88,7 +88,7 @@ whatever the light flood happens to touch). A liquid face in the −x or −z ne
 chunk that now looks into an absorbed hole is not remeshed, leaving a see-through wall
 until that chunk remeshes for another reason. Drain and the obsidian reaction have this
 defect already; radius-7 absorption makes it likely. Fix it once in the scheduler: a
-private `reportDirty(x, z)` that calls `onChunkDirty` for the cell's chunk and, when the
+private `markDirty(touched, x, z)` + `flushDirty(touched)` that calls `onChunkDirty` for the cell's chunk and, when the
 cell sits at local x or z of 0 or 15, for the adjacent chunk on that side too. All four
 scheduler write sites (sponge, drain, spread commit, reaction) use it.
 
@@ -101,7 +101,11 @@ bothers, batch the light flood, do not cap the radius.
 
 1. Sponge absorption (this feature), on the pre-mutation snapshot. Writes happen
    immediately.
-2. Drain, spread, obsidian reaction, decay: unchanged except for the decay rule above.
+2. Drain, spread, obsidian reaction, decay: unchanged except for the decay rule above
+   and one new rule in spread: **a cell that drain classified as orphan this tick never
+   spreads.** Without it, a sponge hole beside an orphan puddle flickers forever (inner
+   orphan cells refill the hole while drain peels the rim; measured at gate 2). Drain
+   records its orphan set; spread skips those cells.
    Spread re-reads the world, so it does not re-spread from cells that were just
    absorbed, and the obsidian scan finds no lava/water pairs where the sponge ate them.
 
@@ -133,11 +137,14 @@ neighbour chunks. Accepted; the world is finite and pre-generated in play.
 - `src/data/blocks.data.ts`: export `SPONGE` and `WET_SPONGE` ids, resolved by name
   through `BLOCK_BY_NAME` so the generated catalog stays the source of truth.
 - `src/game/liquid-scheduler.ts`: `SPONGE_RADIUS`; private `applySpongeStep(snapshot)`
-  called first in `tick`; the decay exception; `reportDirty(x, z)` used by every write
+  called first in `tick`; the decay exception; `markDirty(touched, x, z)` + `flushDirty(touched)` used by every write
   site.
 - `src/game/liquid-scheduler.test.ts`: tests below.
+- `src/main.ts`: DEV-only `window.__mc = { world, player, loop }` after `loop.start()`,
+  tree-shaken from the build, so the manual check can read `world.getBlock` instead of
+  eyeballing a 16 px texture.
 - `docs/liquids.md`: new "Sponge" section, the new tick phase, the decay exception,
-  and `reportDirty`.
+  and `markDirty`.
 - `README.md`: one bullet, e.g. "Sponge soaks up water and lava within 7 blocks and
   turns into a wet sponge; place a fresh one to soak again. The middle of a big pool
   stays dry."
@@ -204,7 +211,7 @@ boundary with flow meta, not just block id.
     (16,16). Floor under x 256..258. Sponge at (256,30,260) (local x 0), water at
     (257,30,260). `onChunkDirty` spy. One tick. Spy called with (15,16). Nothing else
     writes into chunk 15 (the BFS finds AIR at x=255), so this can only come from
-    `reportDirty`.
+    `markDirty`.
 
 Each test is run red first. Test 2 must be shown red at radius 6 and radius 8; test 3
 red with a taxicab metric; test 8 red without the decay exception; test 9 red with the

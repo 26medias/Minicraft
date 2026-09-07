@@ -421,7 +421,15 @@ export class LiquidScheduler {
 					this.world.getBlock(x, y, z - 1),
 				];
 				const hasAir = neighbours.some((n) => n === AIR);
-				if (!hasAir) toRemove.push(idx);
+				if (hasAir) continue;
+				// A liquid cell touching a dry sponge must stay in the frontier so the
+				// sponge phase can see it next tick. Five sides are already in
+				// `neighbours`; only the cell above needs an extra read (a sponge
+				// resting on water is a legitimate trigger).
+				const touchesSponge =
+					neighbours.some((n) => n === SPONGE) ||
+					this.world.getBlock(x, y + 1, z) === SPONGE;
+				if (!touchesSponge) toRemove.push(idx);
 			}
 			for (const i of toRemove) c.liquidFrontier.delete(i);
 		}

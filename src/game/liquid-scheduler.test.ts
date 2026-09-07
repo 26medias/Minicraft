@@ -550,4 +550,31 @@ describe('LiquidScheduler — sponge', () => {
 		expect(w.getBlock(265, 30, 260)).toBe(wetSponge);
 		expect(liquidCount()).toBe(0);
 	});
+
+	it('8. fires at the end of a 1-wide trench (decay exception)', () => {
+		const w = freshWorld();
+		floor(w, 258, 266, 259, 261);
+		for (let x = 259; x <= 263; x++) { w.setBlock(x, 30, 259, stone); w.setBlock(x, 30, 261, stone); }
+		w.setBlock(263, 30, 260, sponge);
+		w.setBlock(260, 30, 260, water);
+		const s = new LiquidScheduler(w, () => {});
+		let ticks = 0;
+		while (w.getBlock(263, 30, 260) !== wetSponge && ticks < 6) { s.tick(0.6); ticks++; }
+		expect(w.getBlock(263, 30, 260)).toBe(wetSponge);
+		expect(w.getBlock(262, 30, 260)).toBe(AIR);
+	});
+
+	it('8b. a sponge sitting on top of the trench end still fires', () => {
+		const w = freshWorld();
+		floor(w, 258, 263, 259, 261);
+		for (let x = 259; x <= 262; x++) { w.setBlock(x, 30, 259, stone); w.setBlock(x, 30, 261, stone); }
+		w.setBlock(263, 30, 260, stone);        // trench dead-ends here
+		w.setBlock(262, 31, 260, sponge);       // sponge on top of the last trench cell
+		w.setBlock(260, 30, 260, water);
+		const s = new LiquidScheduler(w, () => {});
+		let ticks = 0;
+		while (w.getBlock(262, 31, 260) !== wetSponge && ticks < 6) { s.tick(0.6); ticks++; }
+		expect(w.getBlock(262, 31, 260)).toBe(wetSponge);
+		expect(w.getBlock(262, 30, 260)).toBe(AIR);
+	});
 });

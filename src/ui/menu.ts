@@ -2,8 +2,13 @@ import type { PersistenceAdapter, WorldSummary } from '../persistence/adapter';
 import { newWorldId } from '../persistence/uuid';
 import { loadOptions } from '../persistence/options';
 import { PLAY_BREAK_CHOICES_MIN, PLAY_LIMIT_CHOICES_MIN } from '../data/playtime.data';
-import { applyPlaytimeSetting, clearSession, loadSession } from '../persistence/playtime';
-import { isStale, phaseOf } from '../game/playtime';
+import { applyPlaytimeSetting, clearSession, loadSession, saveSession } from '../persistence/playtime';
+import { phaseOf } from '../game/playtime';
+import { menuModel, planSave, type CardModel, type Staged } from './menu-model';
+import {
+	clearPin, clearSchedule, loadPin, loadSchedule, savePin, saveSchedule,
+} from '../persistence/schedule';
+import { formatStartTime, resolveWorld, sessionInForce } from '../game/schedule';
 
 export type MenuAction =
 	| { type: 'new'; id: string; seed: number; name: string }
@@ -13,6 +18,12 @@ export type MenuAction =
 export class MainMenu {
 	private root: HTMLDivElement;
 	private onAction: ((a: MenuAction) => void) | null = null;
+	private refresh: ReturnType<typeof setInterval> | null = null;
+	private grownUpsOpen = false;
+	/** Staged Grown-ups edits; written only by Save. */
+	private staged: Staged | null = null;
+	/** Bumped per renderHome so an older, slower world-list fetch cannot paint over a newer render. */
+	private renderGen = 0;
 
 	constructor(
 		container: HTMLElement,
@@ -25,21 +36,34 @@ export class MainMenu {
 
 	show(onAction: (a: MenuAction) => void) {
 		this.onAction = onAction;
+		this.grownUpsOpen = false;
+		this.staged = null;
 		this.root.classList.remove('hidden');
 		void this.renderHome();
 	}
 
 	hide() {
+		this.stopRefresh();
 		this.root.classList.add('hidden');
 	}
 
+	private stopRefresh(): void {
+		if (this.refresh !== null) clearInterval(this.refresh);
+		this.refresh = null;
+	}
+
+	private model(worlds: WorldSummary[] | null, offline: boolean) {
+		return menuModel({ schedule: loadSchedule(), session: loadSession(), worlds, offline, now: Date.now() });
+	}
+
 	private async renderHome() {
+		this.stopRefresh();
+		const gen = ++this.renderGen;
 		this.root.innerHTML = '';
 		const card = document.createElement('div');
 		card.className = 'menu-card';
 		card.innerHTML = `<h1>Minicraft</h1><div class="menu-loading">Loading worlds…</div>`;
 		this.root.appendChild(card);
-		this.renderPlaytime(card);
 
 		let worlds: WorldSummary[] = [];
 		let offline = false;
@@ -52,33 +76,69 @@ export class MainMenu {
 		} catch {
 			offline = true;
 		}
+		if (gen !== this.renderGen) return;
 
 		card.innerHTML = `<h1>Minicraft</h1>`;
+		const model = this.model(worlds, offline);
+		if (model.mode === 'card') {
+			this.renderCard(card, model, worlds, offline);
+		} else {
+			const btnNew = document.createElement('button');
+			btnNew.textContent = 'New World';
+			btnNew.onclick = () => this.renderNew();
+			card.appendChild(btnNew);
 
-		const btnNew = document.createElement('button');
-		btnNew.textContent = 'New World';
-		btnNew.onclick = () => this.renderNew();
-		card.appendChild(btnNew);
+			if (offline) {
+				const warn = document.createElement('div');
+				warn.className = 'menu-warning';
+				warn.textContent =
+					"Can't reach cloud saves right now — your worlds are safe, they just can't be listed. Worlds on this device still work.";
+				card.appendChild(warn);
+			}
 
-		if (offline) {
-			const warn = document.createElement('div');
-			warn.className = 'menu-warning';
-			warn.textContent =
-				"Can't reach cloud saves right now — your worlds are safe, they just can't be listed. Worlds on this device still work.";
-			card.appendChild(warn);
+			const cloud = worlds.filter((w) => w.origin === 'cloud');
+			const local = worlds.filter((w) => w.origin !== 'cloud');
+
+			this.renderSection(card, 'Worlds', cloud);
+			this.renderSection(card, 'On this device', local);
 		}
-
-		const cloud = worlds.filter((w) => w.origin === 'cloud');
-		const local = worlds.filter((w) => w.origin !== 'cloud');
-
-		this.renderSection(card, 'Worlds', cloud);
-		this.renderSection(card, 'On this device', local);
-		this.renderPlaytime(card);
+		this.renderGrownUps(card, worlds);
 
 		const btnOptions = document.createElement('button');
 		btnOptions.textContent = 'Options';
 		btnOptions.onclick = () => this.onAction?.({ type: 'options' });
 		card.appendChild(btnOptions);
+	}
+
+	private renderCard(card: HTMLElement, first: CardModel, worlds: WorldSummary[], offline: boolean): void {
+		let current = first;
+		const title = document.createElement('div');
+		title.className = 'card-world';
+		title.textContent = current.title;
+		const line = document.createElement('div');
+		line.className = 'play-line';
+		line.id = 'play-line';
+		line.textContent = current.line;
+		const play = document.createElement('button');
+		play.id = 'play-button';
+		play.textContent = '▶ Play';
+		play.disabled = !current.playEnabled;
+		play.onclick = () => {
+			if (current.playEnabled && current.world) {
+				this.onAction?.({ type: 'continue', id: current.world.id, seed: current.world.seed });
+			}
+		};
+		card.append(title, line, play);
+		// Only the line and the button change; a full re-render would wipe a PIN
+		// being typed in the Grown-ups section below.
+		this.stopRefresh();
+		this.refresh = setInterval(() => {
+			const m = this.model(worlds, offline);
+			if (m.mode !== 'card') return;
+			current = m;
+			line.textContent = m.line;
+			play.disabled = !m.playEnabled;
+		}, 30_000);
 	}
 
 	private renderSection(card: HTMLElement, title: string, worlds: WorldSummary[]) {
@@ -125,121 +185,291 @@ export class MainMenu {
 		}
 	}
 
-	/**
-	 * Parent controls. Every change and both buttons clear the stored session,
-	 * which is the unlock path: re-selecting a dropdown at its current value
-	 * fires no change event, so the buttons must exist for that case.
-	 */
-	private renderPlaytime(card: HTMLElement) {
-		const opts = loadOptions();
+	private renderGrownUps(card: HTMLElement, worlds: WorldSummary[]): void {
 		const section = document.createElement('div');
 		section.className = 'playtime-section';
+		const body = document.createElement('div');
+		section.appendChild(body);
+		card.appendChild(section);
 
-		const h = document.createElement('div');
-		h.className = 'menu-section';
-		h.textContent = 'Play time';
-		section.appendChild(h);
+		if (this.grownUpsOpen) {
+			const h = document.createElement('div');
+			h.className = 'menu-section';
+			h.textContent = 'Grown-ups';
+			section.insertBefore(h, body);
+			this.renderGrownUpsBody(body, worlds);
+			return;
+		}
+		const pin = loadPin();
+		const open = document.createElement('button');
+		open.id = 'grownups-open';
+		open.textContent = 'Grown-ups';
+		open.onclick = () => {
+			open.remove();
+			if (pin === null) {
+				this.grownUpsOpen = true;
+				this.renderGrownUpsBody(body, worlds);
+				return;
+			}
+			const row = document.createElement('div');
+			row.className = 'pin-row';
+			const label = document.createElement('label');
+			label.textContent = 'Grown-ups PIN ';
+			const input = document.createElement('input');
+			input.type = 'password';
+			input.inputMode = 'numeric';
+			input.maxLength = 4;
+			input.autocomplete = 'off';
+			input.id = 'pin-input';
+			const go = document.createElement('button');
+			go.textContent = 'Open';
+			const err = document.createElement('div');
+			err.className = 'menu-error';
+			err.id = 'pin-error';
+			go.onclick = () => {
+				if (input.value === loadPin()) {
+					this.grownUpsOpen = true;
+					row.remove();
+					this.renderGrownUpsBody(body, worlds);
+				} else {
+					err.textContent = 'Wrong PIN';
+					input.value = '';
+					input.focus();
+				}
+			};
+			input.onkeydown = (e) => { if (e.key === 'Enter') go.onclick!(e as unknown as MouseEvent); };
+			label.appendChild(input);
+			row.append(label, go, err);
+			body.appendChild(row);
+			input.focus();
+		};
+		body.appendChild(open);
+	}
 
-		const limitRow = document.createElement('div');
-		limitRow.className = 'playtime-row';
-		const limitLabel = document.createElement('label');
-		limitLabel.textContent = 'Play for';
+	/**
+	 * Staged form: the PIN row is last so the parent lands on the schedule, and
+	 * only the World change re-renders the form because only it changes the
+	 * form's shape; the break and time rows are toggled with `hidden`.
+	 */
+	private renderGrownUpsBody(body: HTMLElement, worlds: WorldSummary[]): void {
+		body.innerHTML = '';
+		const pin = loadPin();
+		const loaded = loadSchedule();
+		const opts = loadOptions();
+		const armed = loaded.kind === 'armed' ? loaded.schedule : null;
+		if (this.staged === null) {
+			const pad = (n: number) => String(n).padStart(2, '0');
+			const startMin = armed?.startMin ?? 420;
+			this.staged = {
+				// A legacy world is re-listed under its adopted uuid after first play.
+				worldId: armed ? (resolveWorld(armed, worlds)?.id ?? armed.worldId) : '',
+				limitMin: armed ? armed.limitMin : opts.playLimitMin,
+				breakMin: opts.playBreakMin,
+				startRaw: `${pad(Math.floor(startMin / 60))}:${pad(startMin % 60)}`,
+			};
+		}
+		const st = this.staged;
+		const rerender = () => this.renderGrownUpsBody(body, worlds);
+		const error = document.createElement('div');
+		error.className = 'menu-error';
+		error.id = 'grownups-error';
+		const fail = (msg: string) => { error.textContent = msg; };
+
+		// Rows that are shown or hidden by the world/limit choice are built first so
+		// the change handlers below can reference them.
+		const brk = document.createElement('select');
+		brk.id = 'playtime-break';
+		const untilUnlock = document.createElement('option');
+		untilUnlock.value = '';
+		untilUnlock.textContent = 'Until a grown-up unlocks';
+		brk.appendChild(untilUnlock);
+		for (const m of PLAY_BREAK_CHOICES_MIN) {
+			const o = document.createElement('option');
+			o.value = String(m);
+			o.textContent = `${m} minutes`;
+			brk.appendChild(o);
+		}
+		brk.value = st.breakMin === null ? '' : String(st.breakMin);
+		brk.onchange = () => { st.breakMin = brk.value === '' ? null : Number(brk.value); };
+		const breakRow = this.labelled('Then break for', brk);
+
+		const time = document.createElement('input');
+		time.type = 'time';
+		time.id = 'sched-start';
+		time.value = st.startRaw;
+		time.onchange = () => { st.startRaw = time.value; };
+		const timeRow = this.labelled('Not before', time);
+
+		// 1. World
+		const worldSel = document.createElement('select');
+		worldSel.id = 'sched-world';
+		const none = document.createElement('option');
+		none.value = '';
+		none.textContent = 'No schedule';
+		worldSel.appendChild(none);
+		for (const w of worlds) {
+			if (w.degraded) continue;
+			const o = document.createElement('option');
+			o.value = w.id;
+			o.textContent = `${w.name} (${w.seed})`;
+			worldSel.appendChild(o);
+		}
+		worldSel.value = worlds.some((w) => w.id === st.worldId) ? st.worldId : '';
+		worldSel.disabled = pin === null;
+		worldSel.onchange = () => {
+			st.worldId = worldSel.value;
+			if (st.worldId !== '' && st.limitMin === null) st.limitMin = 45;
+			rerender();
+		};
+		body.appendChild(this.labelled('Lock to world', worldSel));
+		if (pin === null) {
+			const hint = document.createElement('div');
+			hint.className = 'menu-hint';
+			hint.textContent = 'Set a PIN (below) to lock to a world';
+			body.appendChild(hint);
+		}
+
+		// 2. Play for
 		const limit = document.createElement('select');
 		limit.id = 'playtime-limit';
-		const off = document.createElement('option');
-		off.value = '';
-		off.textContent = 'Off';
-		limit.appendChild(off);
+		if (st.worldId === '') {
+			const off = document.createElement('option');
+			off.value = '';
+			off.textContent = 'Off';
+			limit.appendChild(off);
+		}
 		for (const m of PLAY_LIMIT_CHOICES_MIN) {
 			const o = document.createElement('option');
 			o.value = String(m);
 			o.textContent = `${m} minutes`;
 			limit.appendChild(o);
 		}
-		limit.value = opts.playLimitMin === null ? '' : String(opts.playLimitMin);
+		limit.value = st.limitMin === null ? '' : String(st.limitMin);
 		limit.onchange = () => {
-			applyPlaytimeSetting({ playLimitMin: limit.value === '' ? null : Number(limit.value) });
-			this.rerenderPlaytime(card, section);
+			st.limitMin = limit.value === '' ? null : Number(limit.value);
+			breakRow.hidden = !(st.worldId === '' && st.limitMin !== null);
 		};
-		limitLabel.appendChild(document.createElement('br'));
-		limitLabel.appendChild(limit);
-		limitRow.appendChild(limitLabel);
-		section.appendChild(limitRow);
+		body.appendChild(this.labelled('Play for', limit));
 
-		if (opts.playLimitMin !== null) {
-			const breakRow = document.createElement('div');
-			breakRow.className = 'playtime-row';
-			const breakLabel = document.createElement('label');
-			breakLabel.textContent = 'Then break for';
-			const brk = document.createElement('select');
-			brk.id = 'playtime-break';
-			const untilUnlock = document.createElement('option');
-			untilUnlock.value = '';
-			untilUnlock.textContent = 'Until a grown-up unlocks';
-			brk.appendChild(untilUnlock);
-			for (const m of PLAY_BREAK_CHOICES_MIN) {
-				const o = document.createElement('option');
-				o.value = String(m);
-				o.textContent = `${m} minutes`;
-				brk.appendChild(o);
+		// 3. Then break for (no-schedule mode only); 4. Not before (schedule only)
+		breakRow.hidden = !(st.worldId === '' && st.limitMin !== null);
+		body.appendChild(breakRow);
+		timeRow.hidden = st.worldId === '';
+		body.appendChild(timeRow);
+
+		// 5. Save / Turn off — writes in fail-closed order: the schedule first,
+		// the session only once the schedule write is proven.
+		const save = document.createElement('button');
+		save.id = 'sched-save';
+		save.textContent = 'Save';
+		save.onclick = () => {
+			st.startRaw = time.value;
+			const plan = planSave(st, worlds, Date.now());
+			if (plan.kind === 'error') { fail(plan.message); return; }
+			if (plan.kind === 'none') {
+				if (!clearSchedule()) { fail("Couldn't save — try again"); return; }
+				applyPlaytimeSetting({ playLimitMin: plan.limitMin, playBreakMin: plan.breakMin });
+			} else {
+				if (!saveSchedule(plan.schedule)) { fail("Couldn't save — try again"); return; }
+				if (plan.session) saveSession(plan.session); else clearSession();
 			}
-			brk.value = opts.playBreakMin === null ? '' : String(opts.playBreakMin);
-			brk.onchange = () => {
-				applyPlaytimeSetting({ playBreakMin: brk.value === '' ? null : Number(brk.value) });
-				this.rerenderPlaytime(card, section);
+			this.staged = null;
+			void this.renderHome();
+		};
+		body.appendChild(save);
+		if (loaded.kind !== 'none') {
+			const off = document.createElement('button');
+			off.id = 'sched-off';
+			off.textContent = 'Turn off';
+			off.onclick = () => {
+				if (!clearSchedule()) { fail("Couldn't save — try again"); return; }
+				clearSession();
+				this.staged = null;
+				void this.renderHome();
 			};
-			breakLabel.appendChild(document.createElement('br'));
-			breakLabel.appendChild(brk);
-			breakRow.appendChild(breakLabel);
-			section.appendChild(breakRow);
+			body.appendChild(off);
 		}
 
+		// 6. Status row + Unlock / Start fresh
 		const now = Date.now();
 		const session = loadSession();
-		if (session && !isStale(session, now)) {
+		if (session && sessionInForce(session, armed, now)) {
 			const phase = phaseOf(session, now);
-			if (phase !== 'over') {
-				const status = document.createElement('div');
-				status.className = 'playtime-status';
-				const text = document.createElement('span');
-				const btn = document.createElement('button');
-				if (phase === 'playing') {
-					const left = Math.max(1, Math.ceil((session.limitMs - session.playedMs) / 60_000));
-					text.textContent = `${left} minute${left === 1 ? '' : 's'} left`;
-					btn.textContent = 'Start fresh';
-				} else if (session.breakMs === null) {
-					text.textContent = 'Locked — ask a grown-up';
-					btn.textContent = 'Unlock';
-				} else {
-					const left = Math.max(
-						1,
-						Math.ceil((session.frozenAt! + session.breakMs - now) / 60_000),
-					);
-					text.textContent = `Break, ${left} minute${left === 1 ? '' : 's'} left`;
-					btn.textContent = 'Unlock';
-				}
-				btn.onclick = () => {
-					clearSession();
-					this.rerenderPlaytime(card, section);
-				};
-				status.appendChild(text);
-				status.appendChild(btn);
-				section.appendChild(status);
+			const status = document.createElement('div');
+			status.className = 'playtime-status';
+			const text = document.createElement('span');
+			const btn = document.createElement('button');
+			btn.id = 'playtime-unlock';
+			let show = true;
+			if (phase === 'playing') {
+				const left = Math.max(1, Math.ceil((session.limitMs - session.playedMs) / 60_000));
+				text.textContent = `${left} minute${left === 1 ? '' : 's'} left`;
+				btn.textContent = 'Start fresh';
+			} else if (armed) {
+				// Any non-playing in-force session under a schedule is "done for today".
+				text.textContent = `Locked until ${formatStartTime(armed.startMin, now)} tomorrow`;
+				btn.textContent = 'Unlock · play today';
+			} else if (phase === 'over') {
+				show = false;
+			} else if (session.breakMs === null) {
+				text.textContent = 'Locked — ask a grown-up';
+				btn.textContent = 'Unlock';
+			} else {
+				const left = Math.max(1, Math.ceil((session.frozenAt! + session.breakMs - now) / 60_000));
+				text.textContent = `Break, ${left} minute${left === 1 ? '' : 's'} left`;
+				btn.textContent = 'Unlock';
+			}
+			if (show) {
+				btn.onclick = () => { clearSession(); void this.renderHome(); };
+				status.append(text, btn);
+				body.appendChild(status);
 			}
 		}
 
-		card.appendChild(section);
+		// 7. PIN row, last: the parent came for the schedule.
+		const pinRow = document.createElement('div');
+		pinRow.className = 'pin-row';
+		const pinLabel = document.createElement('div');
+		pinLabel.className = 'menu-hint';
+		pinLabel.textContent = pin === null ? 'Set a PIN so only grown-ups can change this' : 'New PIN';
+		pinRow.appendChild(pinLabel);
+		const pinInput = document.createElement('input');
+		pinInput.type = 'password';
+		pinInput.inputMode = 'numeric';
+		pinInput.maxLength = 4;
+		pinInput.autocomplete = 'off';
+		pinInput.id = 'pin-set-input';
+		const setPin = document.createElement('button');
+		setPin.textContent = 'Set PIN';
+		setPin.onclick = () => {
+			if (!/^\d{4}$/.test(pinInput.value)) { fail('PIN must be 4 digits'); return; }
+			if (!savePin(pinInput.value)) { fail("Couldn't save — try again"); return; }
+			rerender();
+		};
+		pinRow.append(pinInput, setPin);
+		if (pin !== null) {
+			const remove = document.createElement('button');
+			remove.textContent = 'Remove PIN';
+			remove.onclick = () => { if (!clearPin()) { fail("Couldn't save — try again"); return; } rerender(); };
+			pinRow.appendChild(remove);
+		}
+		body.appendChild(pinRow);
+		body.appendChild(error);
 	}
 
-	private rerenderPlaytime(card: HTMLElement, old: HTMLElement) {
-		const marker = document.createElement('div');
-		old.replaceWith(marker);
-		this.renderPlaytime(card);
-		// renderPlaytime appended at the end; move the fresh section to where the old one was.
-		marker.replaceWith(card.lastElementChild!);
+	private labelled(text: string, control: HTMLElement): HTMLElement {
+		const row = document.createElement('div');
+		row.className = 'playtime-row';
+		const label = document.createElement('label');
+		label.textContent = text;
+		label.appendChild(document.createElement('br'));
+		label.appendChild(control);
+		row.appendChild(label);
+		return row;
 	}
 
 	private renderNew() {
+		this.stopRefresh();
 		this.root.innerHTML = '';
 		const card = document.createElement('div');
 		card.className = 'menu-card';

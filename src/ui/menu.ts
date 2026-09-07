@@ -426,12 +426,13 @@ export class MainMenu {
 			}
 		}
 
-		// 7. PIN row, last: the parent came for the schedule.
+		// 7. PIN row, last: the parent came for the schedule. With a PIN set, the
+		// input is hidden behind "Change PIN" so it does not read as "PIN not saved".
 		const pinRow = document.createElement('div');
 		pinRow.className = 'pin-row';
 		const pinLabel = document.createElement('div');
 		pinLabel.className = 'menu-hint';
-		pinLabel.textContent = pin === null ? 'Set a PIN so only grown-ups can change this' : 'New PIN';
+		pinLabel.textContent = pin === null ? 'Set a PIN so only grown-ups can change this' : 'PIN is set';
 		pinRow.appendChild(pinLabel);
 		const pinInput = document.createElement('input');
 		pinInput.type = 'password';
@@ -440,18 +441,26 @@ export class MainMenu {
 		pinInput.autocomplete = 'off';
 		pinInput.id = 'pin-set-input';
 		const setPin = document.createElement('button');
-		setPin.textContent = 'Set PIN';
+		setPin.textContent = pin === null ? 'Set PIN' : 'Save new PIN';
 		setPin.onclick = () => {
 			if (!/^\d{4}$/.test(pinInput.value)) { fail('PIN must be 4 digits'); return; }
 			if (!savePin(pinInput.value)) { fail("Couldn't save — try again"); return; }
 			rerender();
 		};
-		pinRow.append(pinInput, setPin);
-		if (pin !== null) {
+		if (pin === null) {
+			pinRow.append(pinInput, setPin);
+		} else {
+			const change = document.createElement('button');
+			change.id = 'pin-change';
+			change.textContent = 'Change PIN';
+			change.onclick = () => {
+				change.replaceWith(pinInput, setPin);
+				pinInput.focus();
+			};
 			const remove = document.createElement('button');
 			remove.textContent = 'Remove PIN';
 			remove.onclick = () => { if (!clearPin()) { fail("Couldn't save — try again"); return; } rerender(); };
-			pinRow.appendChild(remove);
+			pinRow.append(change, remove);
 		}
 		body.appendChild(pinRow);
 		body.appendChild(error);

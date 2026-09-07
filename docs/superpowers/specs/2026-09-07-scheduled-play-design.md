@@ -233,9 +233,11 @@ until Save. This replaces today's save-on-change for the play-time dropdowns.
    Under a schedule any non-playing in-force session reads `Locked until 7:00
    tomorrow` with **Unlock · play today** (clears the session; the schedule
    stays).
-8. PIN row, last: a 4-digit input labelled `Set a PIN so only grown-ups can
-   change this` (no PIN) or `New PIN` (PIN set), **Set PIN**, and **Remove PIN**
-   when one exists.
+8. PIN row, last. No PIN: a 4-digit input labelled `Set a PIN so only
+   grown-ups can change this` and **Set PIN**. PIN set: `PIN is set` with
+   **Change PIN** (reveals the input and **Save new PIN**) and **Remove PIN**.
+   The input is not shown by default once a PIN exists: an empty PIN box next
+   to a saved PIN read as "it didn't take" (Julien, 2026-09-07).
 9. A red `Couldn't save — try again` line appears under the buttons when a
    storage write fails read-back.
 

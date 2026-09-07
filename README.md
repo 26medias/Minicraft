@@ -6,7 +6,7 @@ A deliberately minimal, kid-friendly Minecraft-style voxel sandbox for the brows
 
 Minicraft is a single-player, creative-only voxel sandbox. The whole point is what it *doesn't* do. There are no enemies, no health, no hunger, no day/night mechanics, no networking, no crafting tables, no mods. The entire loop is: walk around, mine blocks, place blocks. The game ships as a static web bundle.
 
-Current catalog: 19 hand-written blocks (grass, dirt, stone, cobblestone, sand, oak planks, oak log, glass, 6 wool colors, TNT, lamp, water, lava) plus about 350 solid-cube blocks from Minecraft 1.21.6, picked from an I-key inventory (whole cubes only — no stairs, slabs, doors or flowers). Gameplay toys on top of place/mine: TNT with chain-reaction explosions, coloured lamps that emit point-light illumination, and water/lava with simple block-by-block flow.
+Current catalog: 19 hand-written blocks (grass, dirt, stone, cobblestone, sand, oak planks, oak log, glass, 6 wool colors, TNT, lamp, water, lava) plus about 350 solid-cube blocks from Minecraft 1.21.6, picked from an I-key inventory (whole cubes only — no stairs, slabs, doors or flowers). Gameplay toys on top of place/mine: TNT with chain-reaction explosions, coloured lamps that emit point-light illumination, and water/lava with simple block-by-block flow, and a sponge that soaks them back up.
 
 ## Tech Stack
 
@@ -20,7 +20,7 @@ Current catalog: 19 hand-written blocks (grass, dirt, stone, cobblestone, sand, 
 - **Compression:** [`pako`](https://github.com/nodeca/pako).
 - **Physics:** hand-rolled swept-AABB voxel collision with sub-stepping — no physics library.
 - **Textures:** Mojang's block PNGs atlased at build time via [`sharp`](https://sharp.pixelplumbing.com/). Select textures are biome-tinted in the build step (grass top: green; leaves: green; water: blue).
-- **Tests:** [Vitest](https://vitest.dev/) — 450 unit tests covering the mesher, physics, world generation determinism, block catalog, player state (including fly + swim mode), TNT detonation, the play-time timer, the light registry, voxel lighting propagation (sky + RGB block light, incremental updates, AO), and the liquid scheduler (fall rule, sideways spread, frontier decay), and persistence (v1/v2 formats, cloud + dual adapters, autosave failure handling, and the worlds API).
+- **Tests:** [Vitest](https://vitest.dev/) — unit tests covering the mesher, physics, world generation determinism, block catalog, player state (including fly + swim mode), TNT detonation, the play-time timer, the light registry, voxel lighting propagation (sky + RGB block light, incremental updates, AO), and the liquid scheduler (fall rule, sideways spread, frontier decay, sponge absorption), and persistence (v1/v2 formats, cloud + dual adapters, autosave failure handling, and the worlds API).
 - **Lint / format:** ESLint + Prettier.
 
 ## Prerequisites
@@ -105,6 +105,7 @@ In fly or swim mode: pitch the camera up to ascend, down to descend — W moves 
 - **Voxel light propagation.** Per-voxel `skyLight` + RGB `blockLight`, packed into a 16-bit per-voxel nibble array. BFS flood-fill attenuates by each block's `lightFilter` value. Sunlight streams down open shafts unattenuated; lamps and lava seed coloured light outward. On every mine/place/TNT edit, an incremental update re-floods only the affected region. Caves go genuinely dark; overlapping lamps of different colours blend per-channel. See [`docs/lighting.md`](docs/lighting.md).
 - **Smooth lighting + ambient occlusion.** Each vertex samples 4 surrounding voxels; corners next to solid neighbours darken (0.75, or 0.6 with a diagonal block) for the classic Minecraft corner-inset look.
 - **Water and lava.** Both are placeable from the hotbar, both are translucent non-solid blocks. Water tints the world blue underneath it; lava emits an orange-red glow (level 12) and is slightly more opaque (lightFilter 3 vs water's 2). Flow rule: every 0.5s, each liquid voxel falls if the space below is air, otherwise spreads sideways to adjacent air. See [`docs/liquids.md`](docs/liquids.md).
+- **Sponge.** Place a sponge next to water or lava and it soaks up everything connected within 7 blocks, then turns into a wet sponge. Mine it and the hole stays dry; place a fresh one to soak more. The middle of a big pool stays empty because water only creeps back 4 blocks from its edges.
 - **Swim mode.** Engages automatically when the player's eye is inside a liquid voxel. Gravity is disabled; WASD moves in the full 3D look direction at 60% walk speed. Space is redundant while fully submerged but re-enables at the surface for a "jump out of the water" moment. See [`docs/movement.md`](docs/movement.md).
 - **Cursor-directed flight.** Same 3D motion model as swim, at the fly-speed tier's multiplier. `=` / `-` step through 5 speed tiers.
 - **Mining state machine:** hardness-driven duration, crosshair progress ring, cancels when you look away.

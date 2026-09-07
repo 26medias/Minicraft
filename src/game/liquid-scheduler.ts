@@ -1,12 +1,19 @@
-// Three-phase liquid scheduler.
+// Four-phase liquid scheduler.
 //
 // Per tick (every TICK_INTERVAL seconds):
+//   0. Sponge — every snapshot cell and its 6-axis neighbours are checked for a dry
+//      SPONGE. Each one BFSes through connected liquid (water and lava alike) for up to
+//      SPONGE_RADIUS hops, writes every reached cell to AIR, and becomes WET_SPONGE if it
+//      absorbed anything. Runs before drain so a sponge against orphan flow still gets it.
 //   1. Drain — BFS from every in-world source along same-type liquid; any flow cell
 //      the BFS can't reach is "orphan". Of the orphans, only those at the *maximum*
 //      current distance are written to AIR this tick — producing a visible ring-by-ring
 //      "water flows back" cascade (outermost ring peels first, next tick reveals the
 //      new outermost, etc.). Drains commit immediately and are remembered so Phase 2
-//      spread can't regenerate what we just decided to drain.
+//      spread can't regenerate what we just decided to drain. Every orphan (not only the
+//      peeled ring) is recorded in `orphansThisTick`, and Phase 2 skips them as sources
+//      of spread — otherwise inner orphans beside a hole (a sponge's, TNT's) refill it
+//      while drain peels the rim and the puddle never settles.
 //   2. Spread — from every liquid cell in the tick snapshot: fall vertically if the cell
 //      below is AIR (falls never consume budget; sources never vacate; flows only vacate
 //      when not fed by a same-type column above). Otherwise spread sideways if the cell's
@@ -15,7 +22,11 @@
 //      water, lava becomes OBSIDIAN and all touching water becomes AIR. Single pass,
 //      no chaining.
 // Finally, decay the frontier of any voxel whose horizontal neighbours are all non-AIR
-// (so fully-enclosed pool interiors cost zero per-tick work).
+// (so fully-enclosed pool interiors cost zero per-tick work), except cells with a dry
+// sponge on any side, which stay active so a trench reaching a sponge still triggers it.
+//
+// Every write site reports dirty chunks through markDirty/flushDirty, which also dirties
+// the neighbouring chunk when the cell sits on a chunk edge.
 //
 // Sources carry no `fluidMeta` entry — the default rule is the storage win, so the
 // world-gen ocean creates zero entries and costs zero drain-BFS work per tick.

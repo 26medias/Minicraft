@@ -80,7 +80,7 @@ new THREE.MeshBasicMaterial({
 
 ## Flow scheduler
 
-Lives in `src/game/liquid-scheduler.ts`. Instantiated by `GameLoop` and ticked each frame with `dt`. Each tick runs three phases — drain, spread, reaction — on a snapshot of the current frontier, then decays the frontier.
+Lives in `src/game/liquid-scheduler.ts`. Instantiated by `GameLoop` and ticked each frame with `dt`. Each tick runs a sponge phase, then drain, spread, reaction — on a snapshot of the current frontier, then decays the frontier.
 
 ### Tick accumulator
 
@@ -98,7 +98,21 @@ Each `Chunk` owns a `liquidFrontier: Set<number>` of local voxel indices whose l
 
 On first mount of a chunk, `GameLoop.flushDirtyChunks` seeds the frontier with every liquid voxel in the chunk (a one-time scan). Most of these drop back out immediately at the end of their first tick because they're fully enclosed by same-type liquid on all relevant sides.
 
-**Frontier decay.** At the end of every tick, the scheduler scans each chunk's frontier and removes entries whose 5 neighbours (±x, ±z, −y) are all non-air. Fully-enclosed pool interiors drop out of the active set within one tick of being enclosed, so a 10,000-voxel ocean costs near-zero to tick, not O(volume).
+**Frontier decay.** At the end of every tick, the scheduler scans each chunk's frontier and removes entries whose 5 neighbours (±x, ±z, −y) are all non-air. Fully-enclosed pool interiors drop out of the active set within one tick of being enclosed, so a 10,000-voxel ocean costs near-zero to tick, not O(volume). A liquid cell with a dry sponge on any of its 6 sides is never decayed, so water arriving at a sponge down a 1-wide trench still triggers it.
+
+### Phase 0 — sponge
+
+Before drain, every snapshot cell and its 6-axis neighbours are checked for a dry
+`SPONGE`. Each one found runs a BFS through connected liquid (water and lava mixed,
+`isLiquid`) for up to `SPONGE_RADIUS = 7` hops, writes every reached cell to `AIR`
+through `world.setBlock`, and, if it absorbed at least one cell, becomes `WET_SPONGE`.
+A wet sponge is inert. Running before drain matters: a sponge placed against orphan
+flow would otherwise see it peeled away first.
+
+Each absorbed cell and the sponge cell call `onBlockChanged` (lighting) and are
+reported dirty. Writes at a chunk edge also dirty the neighbouring chunk (`markDirty`),
+which every scheduler write site now shares, so a liquid face across the boundary is
+remeshed when it suddenly looks into a hole.
 
 ### Phase 1 — drain
 
@@ -121,6 +135,8 @@ For every liquid voxel in the snapshot:
 
 Budgets: **water = 4 hops, lava = 2 hops**. Falls never consume budget.
 
+Cells that drain classified as orphan this tick never spread; otherwise inner orphan cells next to a hole (a sponge's, or TNT's) refill it while drain peels the rim, and the puddle never settles.
+
 Writes go through `world.setBlockFlow` (for flow) or `world.setBlock` (for AIR), which keep `fluidMeta` and chunk dirtiness in sync. Writes are buffered and committed after the snapshot is processed; the commit phase dedupes concurrent writes with "liquid beats AIR; lower distance wins."
 
 ### Phase 3 — reaction
@@ -141,14 +157,15 @@ A lava block dropped on flat ground creates at most ~13 voxels of total spread.
 - **Mining a source:** instant delete. Downstream flow drains outside-in, one ring per 0.5 s tick. A 4-radius water puddle drains in ~4 ticks (~2 s).
 - **Placement:** right-click places a liquid block from the hotbar — always as a **source** (`setBlock` clears any stale `fluidMeta` entry on the target cell). Placed in mid-air, it starts its falling column next tick. Placed on flat ground, it spreads up to its budget horizontally.
 - **TNT:** `detonate` clears blocks via `setBlock(AIR)`. Adjacent liquids re-enter the frontier; sources fill the crater over subsequent ticks, flow refills only as far as its remaining budget allows.
+- **Sponge:** a dry sponge next to liquid empties everything connected within 7 hops next tick and turns wet. Sources beyond the radius refill at one hop per tick but only up to their sideways budget (water 4, lava 2), so the middle of a wide pool stays dry; under the ocean surface the hole refills from above. Mining the wet sponge leaves the hole as it is.
 - **Lighting:** every liquid write invokes `applyLightUpdate`. A flowing waterfall re-floods a small region of the lightmap ~2× per second — cheap.
 - **Autosave:** liquids persist through the existing modified-chunk save path. `fluidMeta` rides alongside `blocks` in each chunk payload, encoded via `encodeFluidMeta` + deflate. Legacy saves (pre-this-feature) load with `fluidMeta === undefined`, correctly interpreted as "every liquid was a source."
 
 ## Code map
 
-- `src/data/blocks.data.ts` — water + lava + obsidian rows; `WATER` / `LAVA` / `OBSIDIAN` id exports.
-- `src/game/liquid-scheduler.ts` — three-phase tick (drain / spread / reaction), BFS-based orphan detector, commit + frontier decay.
-- `src/game/liquid-scheduler.test.ts` — covers accumulator, fall, spread budget bounding, reaction, source-removal cascade, two-source redundancy, ocean-is-free, frontier decay.
+- `src/data/blocks.data.ts` — water + lava + obsidian rows; `WATER` / `LAVA` / `OBSIDIAN` / `SPONGE` / `WET_SPONGE` id exports.
+- `src/game/liquid-scheduler.ts` — four-phase tick (sponge / drain / spread / reaction), sponge BFS absorption (`SPONGE_RADIUS = 7`), BFS-based orphan detector with `orphansThisTick` (orphans found by drain never spread the same tick), commit + frontier decay (sponge-adjacent liquid exempt), `markDirty` / `flushDirty` for chunk-edge dirty reporting.
+- `src/game/liquid-scheduler.test.ts` — covers accumulator, fall, spread budget bounding, reaction, source-removal cascade, two-source redundancy, ocean-is-free, frontier decay, sponge absorption (radius, mixed liquids, wet sponge inert, chunk-edge dirtying, orphan no-respread, decay exception).
 - `src/engine/world/chunk.ts` — `liquidFrontier: Set<number>`, `fluidMeta: Map<number, number>`, plus `isFlow` / `getFlowDistance` / `setFluidMeta` / `clearFluidMeta` accessors.
 - `src/engine/world/world.ts` — `setBlock` (public, clears `fluidMeta` — any write-through-this-API produces a source), `setBlockFlow` (scheduler-only, writes flow with distance), `markLiquidFrontier` called on every write's 7-cell neighbourhood.
 - `src/engine/world/mesher.ts` — `buildLiquidMesh`, emission rule, lower-id-wins boundary (unchanged by this feature — source/flow look identical).

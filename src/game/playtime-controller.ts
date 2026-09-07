@@ -1,5 +1,6 @@
 import { WARNING_SHOW_MS } from '../data/playtime.data';
-import { PlayTimer, isStale, phaseOf, type PlaytimeSession } from './playtime';
+import { PlayTimer, phaseOf, type PlaytimeSession } from './playtime';
+import { sessionInForce, type Schedule } from './schedule';
 
 /** The stored session if it is still in force, otherwise a fresh one from the options. */
 export function resolveSession(
@@ -7,8 +8,14 @@ export function resolveSession(
 	limitMin: number,
 	breakMin: number | null,
 	now: number,
+	schedule: Schedule | null = null,
 ): PlaytimeSession {
-	if (stored && !isStale(stored, now) && phaseOf(stored, now) !== 'over') return stored;
+	if (stored && sessionInForce(stored, schedule, now)) {
+		// Under a schedule any in-force session belongs to today, break or not: a
+		// break written by a stale unscheduled tab must not reopen the day.
+		if (schedule) return { ...stored, breakMs: null };
+		if (phaseOf(stored, now) !== 'over') return stored;
+	}
 	return {
 		limitMs: limitMin * 60_000,
 		breakMs: breakMin === null ? null : breakMin * 60_000,
@@ -21,7 +28,7 @@ export function resolveSession(
 
 export type PlaytimeOverlayLike = {
 	warn(text: string, ms: number): void;
-	freeze(breakEndsAt: number | null): void;
+	freeze(breakEndsAt: number | null, lockedText?: string): void;
 	setBreakRemaining(ms: number): void;
 	offerPlayAgain(onClick: () => void): void;
 	unfreeze(): void;
@@ -36,6 +43,8 @@ export type PlaytimeDeps = {
 	save(s: PlaytimeSession): void;
 	now(): number;
 	visible(): boolean;
+	/** Shown instead of ASK A GROWN-UP on a no-break freeze (schedule mode). */
+	lockedText?: string;
 };
 
 /**
@@ -71,7 +80,7 @@ export class PlaytimeController {
 				overlay.warn(`END IN ${ev.minutesLeft} MINUTE${ev.minutesLeft === 1 ? '' : 'S'}`, WARNING_SHOW_MS);
 			} else if (ev.type === 'freeze') {
 				this.deps.freeze();
-				overlay.freeze(ev.breakEndsAt);
+				overlay.freeze(ev.breakEndsAt, this.deps.lockedText);
 			} else {
 				overlay.offerPlayAgain(() => this.playAgain());
 			}

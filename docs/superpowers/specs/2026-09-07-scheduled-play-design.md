@@ -1,7 +1,7 @@
 # Scheduled play with a grown-ups PIN — design
 
 **Date:** 2026-09-07
-**Status:** revised after gate 1
+**Status:** revised after gate 2
 **Builds on:** `docs/superpowers/specs/2026-09-06-play-time-limit-design.md`, `docs/playtime.md`
 
 ## Problem
@@ -105,20 +105,32 @@ All in `src/game/schedule.ts`, pure, no DOM, no storage; every function takes
 - `gateOpen(startMin, now)`: `minutesSinceMidnight(now) >= startMin`.
 - `sameLocalDay(a, b)`: equal local year, month, and date.
 - `sessionInForce(session, schedule | null, now)`:
-  - clock-set-back guard first, both modes: `session.updatedAt > now + MAX_TICK_CREDIT_MS` → false;
-  - no schedule → `!isStale(session, now)` (unchanged behaviour);
-  - schedule → `sameLocalDay(session.startedAt, now)`. The 12-hour stale rule
-    does not apply: a lock reached at 07:45 must hold until tomorrow, which is
-    exactly the 5 a.m. hole.
+  - no schedule → `!isStale(session, now)` and the clock-set-back guard
+    (`session.updatedAt <= now + MAX_TICK_CREDIT_MS`), unchanged behaviour;
+  - schedule → `sameLocalDay(session.startedAt, now)` alone. The 12-hour stale
+    rule does not apply (a lock reached at 07:45 must hold until tomorrow, the
+    5 a.m. hole), and neither does the future-`updatedAt` guard: with the clock
+    set back and the tab closed it would hand out a fresh session before the
+    old record's time (gate 2). A record dated today holds today.
+- `doneForToday(limitMin, now)`: a frozen, no-break session stamped `now`
+  (`playedMs = limitMs`). Save writes it when today's start time has already
+  passed, so a bedtime save locks tonight instead of leaving Play enabled until
+  midnight (gate 2).
+- `resolveSession` under a schedule returns any in-force stored session with
+  `breakMs` forced to `null`, whatever phase it is in. A stale unscheduled tab
+  can re-save a session with a break after the parent's Save; without this it
+  would reach PLAY AGAIN and unlimited cycles (gate 2).
 - `activeLimits(schedule | null, options)`: schedule → `{ limitMin: schedule.limitMin, breakMin: null }`;
   else `{ limitMin: options.playLimitMin, breakMin: options.playBreakMin }`.
-- `formatStartTime(startMin)`: the browser locale's short time for today at
-  that minute (`toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' })`).
+- `formatStartTime(startMin, now)`: the browser locale's short time for that
+  minute on the day of `now` (`toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' })`).
 
 DST: the gate compares local wall-clock minutes, so on the spring-forward day
 07:00 still means 07:00. A start time inside the missing hour (02:30) simply
 opens at 03:00 that day. On the fall-back day the repeated hour opens the gate
-on its first pass. Written down here so nobody "fixes" it.
+on its first pass, closes again during the second pass, and reopens. A start
+time inside the spring-forward gap also renders an hour late on the card that
+day; cosmetic. Written down here so nobody "fixes" it.
 
 **Timezone in tests.** `vitest.config.ts` pins `TZ` to `America/Toronto`
 (via `test.env`). Without that, a build using UTC getters passes every
@@ -163,9 +175,11 @@ Options
 | session in force, frozen | `All done for today · play again at 7:00 tomorrow` | disabled |
 | otherwise | `45 minutes today` | **Play** (fresh session) |
 
-`phase over` cannot occur under a schedule (no break). The title is the
-schedule's `name`. A kid who quits after 20 minutes and comes back the same day
-gets the remaining 25, not a fresh 45.
+Any in-force session that is not `playing` counts as frozen (a leftover
+break-mode session from a stale tab included). The title is the schedule's
+`name`. A kid who quits after 20 minutes and comes back the same day gets the
+remaining 25, not a fresh 45. A session running at midnight keeps running; the
+next day still gets a fresh one at the start time (no end-of-day time).
 
 Pressing Play fires `{ type: 'continue', id, seed }` with the **resolved**
 world's id and seed, not the stored ones.
@@ -206,10 +220,9 @@ Collapsed by default as a single **Grown-ups** button.
 Open section, top to bottom. All controls are **staged**; nothing is written
 until Save. This replaces today's save-on-change for the play-time dropdowns.
 
-1. PIN row: **Remove PIN**, and a 4-digit input + **Set PIN** (which also
-   serves as change).
-2. **World**: `No schedule` (first option) or each world as `name (seed)`.
-   Default: the saved world, else `No schedule`.
+1. **Lock to world**: `No schedule` (first option) or each world as
+   `name (seed)`. Default: the saved world (resolved by seed for a legacy id),
+   else `No schedule`.
 3. **Play for**: Off, 15…90 as today. With a world chosen, `Off` is not
    offered and a stored Off shows as 45.
 4. **Then break for**: only with `No schedule`, as today.
@@ -217,25 +230,38 @@ until Save. This replaces today's save-on-change for the play-time dropdowns.
    Only with a world chosen. Default: the saved `startMin`, else `07:00`.
 6. Buttons: **Save**, and **Turn off** when a schedule is saved.
 7. Status row and **Unlock** / **Start fresh**: as today, inside the section.
-   Unlock reads `Unlock · fresh 45 minutes now` under a schedule, because that
-   is what it does (clears the session; the schedule stays).
-8. A red `Couldn't save — try again` line appears under the buttons when a
+   Under a schedule any non-playing in-force session reads `Locked until 7:00
+   tomorrow` with **Unlock · play today** (clears the session; the schedule
+   stays).
+8. PIN row, last: a 4-digit input labelled `Set a PIN so only grown-ups can
+   change this` (no PIN) or `New PIN` (PIN set), **Set PIN**, and **Remove PIN**
+   when one exists.
+9. A red `Couldn't save — try again` line appears under the buttons when a
    storage write fails read-back.
 
-**Save** with a world: writes the schedule, clears the session, re-renders.
-Does not touch `playLimitMin` / `playBreakMin`. **Save** with `No schedule`:
-writes `playLimitMin` / `playBreakMin` via `applyPlaytimeSetting` (which clears
-the session) and clears the schedule. **Turn off**: clears the schedule and
-the session. PIN changes never touch the schedule or session.
+Only the World change re-renders the form (its shape changes); other controls
+update the staged state in place so a half-typed PIN survives.
+
+The Save decision is a pure, tested `planSave(staged, worlds, now)` in
+`menu-model.ts`. **Save** with a world: writes the schedule, then, only if that
+write is proven, writes `doneForToday` when the gate is already open today or
+clears the session otherwise; re-renders. Does not touch `playLimitMin` /
+`playBreakMin`. **Save** with `No schedule`: clears the schedule, then, only if
+proven, writes `playLimitMin` / `playBreakMin` via `applyPlaytimeSetting`
+(which clears the session). **Turn off**: clears the schedule, then the
+session. Order matters: a failed write must never lift a lock while telling
+the parent nothing was saved (gate 2). PIN changes never touch the schedule
+or session.
 
 The section does not re-lock on a timer. Turning the schedule off to play a
 grown-up's own world is the expected path; `docs/playtime.md` says so.
 
 ## Game start
 
-In `showMenu`'s action callback, **before** `startGame` is entered: if the
-schedule is `armed` or `broken` and `menuModel(...).playEnabled` is false, the
-menu re-renders and returns. `startGame` has already hidden the menu, built the
+In `showMenu`'s action callback, **before** `startGame` is entered, for every
+action except Options: if `canStartNow(loadSchedule(), loadSession(), now)`
+is false, the menu re-renders and returns. The callback also hides the menu
+before showing Options so the card's refresh stops. `startGame` has already hidden the menu, built the
 world, and registered window listeners by the time its play-time block runs,
 so the guard cannot live there (gate 1).
 
@@ -302,11 +328,11 @@ local constructor `new Date(y, m, d, h, mi)` under the pinned TZ.
 1. `gateOpen(420, 06:59)` false; `gateOpen(420, 07:00)` true (boundary).
 2. `gateOpen(420, 20:30)` true. A UTC-getter build reads 00:30 and says false.
 3. `sameLocalDay(19:30, 20:30 same date)` true. A UTC build sees two dates.
-4. `sameLocalDay(23:59 on 7 Sep, 00:01 on 8 Sep)` false.
+4. `sameLocalDay(23:59 on 7 Sep, 00:01 on 8 Sep)` false; same date a month apart false (or `getDate()` alone passes).
 5. `sessionInForce`, no schedule: in force at 11 h 59 since `updatedAt`, not at 12 h 01.
 6. `sessionInForce`, schedule: started 07:10 today, `updatedAt` 07:55, now 20:00 (13 h later) → in force. Red without the schedule branch.
-7. `sessionInForce`, schedule: started yesterday 07:10, now 05:00 → not in force.
-8. `sessionInForce`, either mode: `updatedAt` 10 s in the future → not in force.
+7. `sessionInForce`, schedule: started yesterday 23:50 (5 h old, not stale), now 05:00 → not in force.
+8. `sessionInForce`: `updatedAt` 10 s in the future → not in force without a schedule; in force with one (day rule alone).
 9. `activeLimits`: schedule wins and yields `breakMin: null` even when options have a break; no schedule + Off → `limitMin: null`.
 10. `resolveWorld`: exact id match; legacy id + local seed match; legacy id + cloud seed no match; nothing → null.
 11. Spring-forward day (8 Mar 2026): `gateOpen(420, new Date(2026, 2, 8, 7, 0))` true and `gateOpen(420, new Date(2026, 2, 8, 6, 59))` false; `minutesSinceMidnight(new Date(2026, 2, 8, 3, 0))` is 180.

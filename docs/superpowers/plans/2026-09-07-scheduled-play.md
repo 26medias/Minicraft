@@ -4,7 +4,7 @@
 
 **Goal:** A PIN-guarded daily schedule: one world, N minutes per local day, not before a start time; a locked single-button menu for the kid.
 
-**Architecture:** Pure time rules in `src/game/schedule.ts`; a three-valued fail-closed loader in `src/persistence/schedule.ts` (schedule + PIN keys); a pure `menuModel` that maps storage + clock to what the menu shows; `menu.ts` renders the locked card and a staged Grown-ups section; `main.ts` gates `startGame` in the menu callback and feeds schedule limits into the existing play-time controller. Sessions gain `startedAt`; under a schedule a session is in force only on the local day it started.
+**Architecture:** Save in schedule mode also writes a "done for today" session when the start time has already passed, so a 22:00 save locks tonight and the parent has an explicit *Unlock · play today*. Pure time rules in `src/game/schedule.ts`; a three-valued fail-closed loader in `src/persistence/schedule.ts` (schedule + PIN keys); a pure `menuModel` that maps storage + clock to what the menu shows; `menu.ts` renders the locked card and a staged Grown-ups section; `main.ts` gates `startGame` in the menu callback and feeds schedule limits into the existing play-time controller. Sessions gain `startedAt`; under a schedule a session is in force only on the local day it started.
 
 **Tech Stack:** TypeScript, vitest (node, `TZ` pinned to `America/Toronto`).
 
@@ -51,7 +51,7 @@ export default defineConfig({
 });
 ```
 
-Confirm: `npx vitest run src/persistence/uuid.test.ts` still passes and `node -e "process.env.TZ='America/Toronto'; console.log(new Date(2026,8,7,20,30).getUTCDate())"` prints 8.
+Confirm the pin is load-bearing (the host machine is already in Toronto, so a Toronto check proves nothing): temporarily set `TZ: 'Asia/Kolkata'`, run a one-line throwaway test asserting `new Date(2026, 8, 7, 20, 30).getUTCDate() === 7`, see it pass, then set `America/Toronto` and see the same assertion fail. Delete the throwaway.
 
 - [ ] **Step 2: Write the failing tests.** In `src/persistence/playtime.test.ts`, change `valid()` to include `startedAt: 1` and add:
 
@@ -89,7 +89,7 @@ and in the controller block (near the existing PLAY AGAIN test; reuse its harnes
 	});
 ```
 
-- [ ] **Step 3: Run red** — `npx vitest run src/persistence/playtime.test.ts src/game/playtime-controller.test.ts`. Expected: the legacy-default test fails (no `startedAt` key in the result), the fresh/playAgain tests fail (`undefined`), the `'x'` test passes trivially now (it is a regression guard).
+- [ ] **Step 3: Run red** — `npx vitest run src/persistence/playtime.test.ts src/game/playtime-controller.test.ts`. Expected: 8 red — the legacy-default test (no `startedAt` in the result), the `'x'` test (the current loader ignores the field and returns a session), `round-trips a session` (its `valid()` now carries `startedAt`, which the loader strips), the fresh/playAgain tests, and the controller literals named in Step 5.
 
 - [ ] **Step 4: Implement.**
 
@@ -103,7 +103,7 @@ and in the controller block (near the existing PLAY AGAIN test; reuse its harnes
 
 `src/game/playtime-controller.ts`: in `resolveSession`'s fresh object and in `playAgain`'s `fresh`, add `startedAt: now,`.
 
-- [ ] **Step 5: Fix every other literal.** `npm run build` will list each test file that builds a `PlaytimeSession` without `startedAt` (e.g. `src/game/playtime.test.ts`, any `toEqual` with a literal in the controller test). Add `startedAt` to each helper/literal so the type checks; for `toEqual` expectations of fresh sessions, expect `startedAt: now`. Do not weaken assertions to `toMatchObject`.
+- [ ] **Step 5: Fix every other literal** (verified list at gate 2): tsc complains only about `src/game/playtime.test.ts` (its `session()` helper). Runtime failures are all in `src/game/playtime-controller.test.ts`: `creates a fresh no-break session` (literal → add `startedAt: T0`), `replaces a session that is over` and `replaces a stale session` (`session({ updatedAt: now })` → add `startedAt: now`), and `saves a fresh session, unfreezes, resumes` (the playAgain literal). Do not weaken assertions to `toMatchObject`.
 
 - [ ] **Step 6: Green** — `npx vitest run && npm run build`.
 
@@ -132,8 +132,9 @@ git commit -m "feat(playtime): sessions record startedAt; tests run in America/T
   export function gateOpen(startMin: number, now: number): boolean;
   export function sameLocalDay(a: number, b: number): boolean;
   export function sessionInForce(session: PlaytimeSession, schedule: Schedule | null, now: number): boolean;
+  export function doneForToday(limitMin: number, now: number): PlaytimeSession;
   export function activeLimits(schedule: Schedule | null, opts: { playLimitMin: number | null; playBreakMin: number | null }): { limitMin: number | null; breakMin: number | null };
-  export function formatStartTime(startMin: number): string;
+  export function formatStartTime(startMin: number, now: number): string;
   export function resolveWorld(schedule: Schedule, worlds: WorldSummary[]): WorldSummary | null;
   export function canStartNow(loaded: LoadedSchedule, session: PlaytimeSession | null, now: number): boolean;
   ```
@@ -143,7 +144,7 @@ git commit -m "feat(playtime): sessions record startedAt; tests run in America/T
 ```ts
 import { describe, it, expect } from 'vitest';
 import {
-	activeLimits, canStartNow, gateOpen, minutesSinceMidnight, resolveWorld, sameLocalDay, sessionInForce,
+	activeLimits, canStartNow, doneForToday, formatStartTime, gateOpen, minutesSinceMidnight, resolveWorld, sameLocalDay, sessionInForce,
 	type Schedule,
 } from './schedule';
 import type { PlaytimeSession } from './playtime';
@@ -183,8 +184,10 @@ describe('sameLocalDay', () => {
 	it('3. 19:30 and 20:30 Toronto are one local day (two UTC dates)', () => {
 		expect(sameLocalDay(at(7, 19, 30), at(7, 20, 30))).toBe(true);
 	});
-	it('4. 23:59 and 00:01 are different days', () => {
+	it('4. 23:59 and 00:01 are different days; so are the same date a month apart', () => {
 		expect(sameLocalDay(at(7, 23, 59), at(8, 0, 1))).toBe(false);
+		expect(sameLocalDay(new Date(2026, 7, 7, 12, 0).getTime(), new Date(2026, 8, 7, 12, 0).getTime())).toBe(false);
+		expect(sameLocalDay(new Date(2025, 8, 7, 12, 0).getTime(), new Date(2026, 8, 7, 12, 0).getTime())).toBe(false);
 	});
 });
 
@@ -198,14 +201,24 @@ describe('sessionInForce', () => {
 		const s = sess({ playedMs: 45 * MIN, frozenAt: at(7, 7, 55), updatedAt: at(7, 7, 55) });
 		expect(sessionInForce(s, sched(), at(7, 20, 55))).toBe(true);
 	});
-	it("7. with a schedule, yesterday's session is not in force", () => {
-		const s = sess();
+	it("7. with a schedule, a 5-hour-old session from yesterday is not in force (not stale, other day)", () => {
+		const s = sess({ startedAt: at(7, 23, 50), updatedAt: at(7, 23, 59) });
 		expect(sessionInForce(s, sched(), at(8, 5, 0))).toBe(false);
 	});
-	it('8. a record written in the future is never in force', () => {
+	it('8. without a schedule, a record written in the future is not in force; with one, the day rule alone decides', () => {
 		const s = sess({ updatedAt: at(7, 7, 10) + 10_000 });
-		expect(sessionInForce(s, sched(), at(7, 7, 10))).toBe(false);
 		expect(sessionInForce(s, null, at(7, 7, 10))).toBe(false);
+		expect(sessionInForce(s, sched(), at(7, 7, 10))).toBe(true);
+	});
+	it('doneForToday is a frozen, no-break session stamped now', () => {
+		const d = doneForToday(45, at(7, 22, 0));
+		expect(d).toEqual({ limitMs: 45 * MIN, breakMs: null, playedMs: 45 * MIN, frozenAt: at(7, 22, 0), startedAt: at(7, 22, 0), updatedAt: at(7, 22, 0) });
+		expect(sessionInForce(d, sched(), at(7, 23, 0))).toBe(true);
+		expect(sessionInForce(d, sched(), at(8, 7, 0))).toBe(false);
+	});
+	it('formatStartTime renders the minute of the given day', () => {
+		expect(formatStartTime(420, at(7, 12, 0))).toMatch(/7:00/);
+		expect(formatStartTime(0, at(7, 12, 0))).toMatch(/12:00/);
 	});
 });
 
@@ -235,6 +248,9 @@ describe('canStartNow', () => {
 		expect(canStartNow(armed, null, at(7, 7, 0))).toBe(true);
 		const frozen = sess({ playedMs: 45 * MIN, frozenAt: at(7, 7, 55), updatedAt: at(7, 7, 55) });
 		expect(canStartNow(armed, frozen, at(7, 9, 0))).toBe(false);
+		// A leftover break-mode session whose break is over is still "done" under a schedule.
+		const over = sess({ breakMs: 20 * MIN, playedMs: 45 * MIN, frozenAt: at(7, 7, 55), updatedAt: at(7, 7, 55) });
+		expect(canStartNow(armed, over, at(7, 9, 0))).toBe(false);
 		expect(canStartNow(armed, frozen, at(8, 7, 0))).toBe(true);
 		expect(canStartNow({ kind: 'none' }, frozen, at(7, 9, 0))).toBe(true);
 	});
@@ -288,9 +304,16 @@ export function sameLocalDay(a: number, b: number): boolean {
  * reached at 07:45 holds until tomorrow's start time.
  */
 export function sessionInForce(session: PlaytimeSession, schedule: Schedule | null, now: number): boolean {
-	if (session.updatedAt > now + MAX_TICK_CREDIT_MS) return false;
-	if (schedule === null) return !isStale(session, now);
+	if (schedule === null) return !isStale(session, now) && session.updatedAt <= now + MAX_TICK_CREDIT_MS;
+	// The day rule alone: a record dated today holds today even if the clock was
+	// set back (the future-updatedAt guard would otherwise hand out a fresh session).
 	return sameLocalDay(session.startedAt, now);
+}
+
+/** The session Save writes when the start time has already passed today, so the schedule bites tonight. */
+export function doneForToday(limitMin: number, now: number): PlaytimeSession {
+	const limitMs = limitMin * 60_000;
+	return { limitMs, breakMs: null, playedMs: limitMs, frozenAt: now, startedAt: now, updatedAt: now };
 }
 
 export function activeLimits(
@@ -301,8 +324,9 @@ export function activeLimits(
 	return { limitMin: opts.playLimitMin, breakMin: opts.playBreakMin };
 }
 
-export function formatStartTime(startMin: number): string {
-	const d = new Date();
+/** Locale short time for `startMin` on the day of `now`. On a spring-forward day a time inside the missing hour renders an hour late; cosmetic. */
+export function formatStartTime(startMin: number, now: number): string {
+	const d = new Date(now);
 	d.setHours(Math.floor(startMin / 60), startMin % 60, 0, 0);
 	return d.toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' });
 }
@@ -322,12 +346,14 @@ export function canStartNow(loaded: LoadedSchedule, session: PlaytimeSession | n
 	if (loaded.kind === 'broken') return false;
 	const s = loaded.schedule;
 	if (!gateOpen(s.startMin, now)) return false;
+	// Any in-force session that is not playing is "done for today" (a break, if a
+	// stale unscheduled tab wrote one, does not reopen the day).
 	if (session && sessionInForce(session, s, now) && phaseOf(session, now) !== 'playing') return false;
 	return true;
 }
 ```
 
-- [ ] **Step 4: Green**, then prove the instruments: (a) change `getHours`/`getMinutes` to `getUTCHours`/`getUTCMinutes` → tests 2 and 11 red; restore. (b) change `sameLocalDay` to compare `getUTCDate` etc. → test 3 red; restore. (c) delete the `schedule === null` branch's `!isStale` (return true) → test 5 red. (d) make the schedule branch `return !isStale(session, now)` → test 6 red. (e) drop the future-`updatedAt` guard → test 8 red. Record each one-line red in the commit body.
+- [ ] **Step 4: Green**, then prove the instruments: (a) change `getHours`/`getMinutes` to `getUTCHours`/`getUTCMinutes` → tests 2 and 11 red; restore. (b) change `sameLocalDay` to compare `getUTCDate` etc. → test 3 red; restore. (c) delete the `schedule === null` branch's `!isStale` (return true) → test 5 red. (d) make the schedule branch `return !isStale(session, now)` → test 6 red. (e) drop the future-`updatedAt` guard in the no-schedule branch → test 8 red; (f) reduce `sameLocalDay` to `getDate()` only → test 4 red. Record each one-line red in the commit body.
 
 - [ ] **Step 5: Suite + build** — `npx vitest run && npm run build`.
 
@@ -414,7 +440,7 @@ describe('pin storage', () => {
 });
 ```
 
-Note the mock's `setItem` is a plain property; `vi.spyOn(localStorage, 'setItem')` works on the stubbed object. `import { vi } from 'vitest'` is needed.
+Note the mock's `setItem` is a plain property; `vi.spyOn(localStorage, 'setItem')` works on the stubbed object and, because the mock object is module-scoped, the spy SURVIVES `vi.unstubAllGlobals()`. The `afterEach` in this file must be `vi.unstubAllGlobals(); vi.restoreAllMocks();` or six later tests die with `quota` (verified at gate 2). `import { vi } from 'vitest'` is needed.
 
 - [ ] **Step 2: Run red** — module not found.
 
@@ -534,6 +560,16 @@ git commit -m "feat(persistence): fail-closed schedule record and grown-ups PIN"
 		const s = { worldId: 'w', seed: 1, name: 'n', limitMin: 45, startMin: 420 };
 		expect(resolveSession(stored, 45, null, day + 13 * 60 * MIN, s)).toEqual(stored);
 	});
+	it('with a schedule, a stored break is switched off and an over session stays locked', () => {
+		const day = new Date(2026, 8, 7, 7, 10).getTime();
+		const s = { worldId: 'w', seed: 1, name: 'n', limitMin: 45, startMin: 420 };
+		const playing = session({ startedAt: day, updatedAt: day, breakMs: 20 * MIN, playedMs: 5 * MIN });
+		expect(resolveSession(playing, 45, null, day + MIN, s)).toEqual({ ...playing, breakMs: null });
+		const over = session({ startedAt: day, updatedAt: day + 45 * MIN, breakMs: 20 * MIN, playedMs: 45 * MIN, frozenAt: day + 45 * MIN });
+		const got = resolveSession(over, 45, null, day + 2 * 60 * MIN, s);
+		expect(got.frozenAt).toBe(day + 45 * MIN);
+		expect(got.breakMs).toBeNull();
+	});
 	it("with a schedule, discards yesterday's session", () => {
 		const yday = new Date(2026, 8, 6, 7, 10).getTime();
 		const now = new Date(2026, 8, 7, 7, 0).getTime();
@@ -559,7 +595,16 @@ and in the controller block (extend `harness` to accept `lockedText` and record 
 
 - [ ] **Step 3: Implement.** In `playtime-controller.ts`:
   - `import { sessionInForce, type Schedule } from './schedule';`
-  - `resolveSession(stored, limitMin, breakMin, now, schedule: Schedule | null = null)`; replace the `isStale` check with `if (stored && sessionInForce(stored, schedule, now) && phaseOf(stored, now) !== 'over') return stored;` and drop the now-unused `isStale` import.
+  - `resolveSession(stored, limitMin, breakMin, now, schedule: Schedule | null = null)`; replace the `isStale` check with:
+    ```ts
+	if (stored && sessionInForce(stored, schedule, now)) {
+		// Under a schedule any in-force session belongs to today, break or not: a
+		// break written by a stale unscheduled tab must not reopen the day.
+		if (schedule) return { ...stored, breakMs: null };
+		if (phaseOf(stored, now) !== 'over') return stored;
+	}
+    ```
+    and drop the now-unused `isStale` import.
   - `PlaytimeOverlayLike.freeze(breakEndsAt: number | null, lockedText?: string): void;`
   - `PlaytimeDeps` gains `/** Shown instead of ASK A GROWN-UP on a no-break freeze (schedule mode). */ lockedText?: string;`
   - In `tickUnsafe`: `overlay.freeze(ev.breakEndsAt, this.deps.lockedText);`
@@ -587,13 +632,20 @@ git commit -m "feat(playtime): resolveSession honours the schedule; lockedText o
   export type CardModel = { mode: 'card'; title: string; line: string; playEnabled: boolean; world: { id: string; seed: number } | null };
   export type MenuModel = { mode: 'full' } | CardModel;
   export function menuModel(i: MenuInput): MenuModel;
+  export type Staged = { worldId: string; limitMin: number | null; breakMin: number | null; startRaw: string };
+  export type SavePlan =
+  	| { kind: 'schedule'; schedule: Schedule; session: PlaytimeSession | null }
+  	| { kind: 'none'; limitMin: number | null; breakMin: number | null }
+  	| { kind: 'error'; message: string };
+  export function planSave(staged: Staged, worlds: WorldSummary[], now: number): SavePlan;
   ```
+  `planSave` is the whole Save decision, pure and tested; `menu.ts` only executes its writes in fail-closed order.
 
 - [ ] **Step 1: Write the failing tests** — `src/ui/menu-model.test.ts`:
 
 ```ts
 import { describe, it, expect } from 'vitest';
-import { menuModel, type MenuInput } from './menu-model';
+import { menuModel, planSave, type MenuInput } from './menu-model';
 import type { Schedule } from '../game/schedule';
 import type { PlaytimeSession } from '../game/playtime';
 import type { WorldSummary } from '../persistence/adapter';
@@ -638,6 +690,9 @@ describe('menuModel', () => {
 		expect(m.line).toBe('World not found · ask a grown-up');
 		expect(m.playEnabled).toBe(false);
 	});
+	it('row order: loading beats a closed gate', () => {
+		expect(card(base({ worlds: null, now: at(7, 6, 0) })).line).toBe('Loading…');
+	});
 	it('gate closed: Play at <time>, disabled; opens exactly at startMin', () => {
 		const closed = card(base({ now: at(7, 6, 59) }));
 		expect(closed.line.startsWith('Play at ')).toBe(true);
@@ -652,14 +707,47 @@ describe('menuModel', () => {
 	});
 	it('frozen today: all done, disabled', () => {
 		const m = card(base({ session: sess({ playedMs: 45 * MIN, frozenAt: at(7, 7, 55), updatedAt: at(7, 7, 55) }) }));
+		expect(m.line.startsWith('All done for today · play again at ')).toBe(true);
+		expect(m.line.endsWith(' tomorrow')).toBe(true);
+		expect(m.playEnabled).toBe(false);
+	});
+	it('a leftover break-mode session that is over still reads all done', () => {
+		const over = sess({ breakMs: 20 * MIN, playedMs: 45 * MIN, frozenAt: at(7, 7, 55), updatedAt: at(7, 7, 55) });
+		const m = card(base({ session: over, now: at(7, 9, 0) }));
 		expect(m.line.startsWith('All done for today')).toBe(true);
 		expect(m.playEnabled).toBe(false);
+	});
+	it('canStartNow agrees with playEnabled across the day matrix', async () => {
+		const { canStartNow } = await import('../game/schedule');
+		const sessions = [null, sess(), sess({ playedMs: 45 * MIN, frozenAt: at(7, 7, 55), updatedAt: at(7, 7, 55) }),
+			sess({ startedAt: at(6, 7, 10), playedMs: 45 * MIN, frozenAt: at(6, 7, 55), updatedAt: at(6, 7, 55) })];
+		for (const session of sessions) for (const now of [at(7, 5, 0), at(7, 7, 0), at(7, 20, 0), at(8, 5, 0), at(8, 7, 0)]) {
+			const i = base({ session, now });
+			expect(card(i).playEnabled, `${session?.startedAt} @ ${now}`).toBe(canStartNow(i.schedule, session, now));
+		}
 	});
 	it("frozen yesterday, today at 07:00: fresh day", () => {
 		const y = sess({ startedAt: at(6, 7, 10), playedMs: 45 * MIN, frozenAt: at(6, 7, 55), updatedAt: at(6, 7, 55) });
 		const m = card(base({ session: y, now: at(7, 7, 0) }));
 		expect(m.line).toBe('45 minutes today');
 		expect(m.playEnabled).toBe(true);
+	});
+	it('planSave: schedule after the start time writes a done-for-today session', () => {
+		const p = planSave({ worldId: 'w1', limitMin: 45, breakMin: null, startRaw: '07:00' }, [w1], at(7, 22, 0));
+		expect(p.kind).toBe('schedule');
+		if (p.kind !== 'schedule') return;
+		expect(p.schedule).toEqual({ worldId: 'w1', seed: 42, name: "Noah's World", limitMin: 45, startMin: 420 });
+		expect(p.session?.frozenAt).toBe(at(7, 22, 0));
+	});
+	it('planSave: schedule before the start time writes no session', () => {
+		const p = planSave({ worldId: 'w1', limitMin: 45, breakMin: null, startRaw: '07:00' }, [w1], at(7, 6, 0));
+		expect(p.kind === 'schedule' && p.session).toBeNull();
+	});
+	it('planSave: no schedule passes the limits through; bad inputs are errors', () => {
+		expect(planSave({ worldId: '', limitMin: 30, breakMin: 20, startRaw: '' }, [w1], at(7, 6, 0))).toEqual({ kind: 'none', limitMin: 30, breakMin: 20 });
+		expect(planSave({ worldId: 'nope', limitMin: 30, breakMin: null, startRaw: '07:00' }, [w1], at(7, 6, 0))).toEqual({ kind: 'error', message: 'Pick a world' });
+		expect(planSave({ worldId: 'w1', limitMin: 30, breakMin: null, startRaw: '' }, [w1], at(7, 6, 0))).toEqual({ kind: 'error', message: 'Pick a start time' });
+		expect(planSave({ worldId: 'w1', limitMin: null, breakMin: null, startRaw: '07:00' }, [w1], at(7, 6, 0))).toEqual({ kind: 'error', message: 'Pick a play time' });
 	});
 	it('legacy id resolves to the adopted uuid and Play carries it', () => {
 		const leg = { ...schedule, worldId: 'legacy:42' };
@@ -717,7 +805,7 @@ export function menuModel(i: MenuInput): MenuModel {
 		return card(s.name, i.offline ? "Can't reach cloud saves · try again later" : 'World not found · ask a grown-up', false, null);
 	}
 	const world = { id: found.id, seed: found.seed };
-	const time = formatStartTime(s.startMin);
+	const time = formatStartTime(s.startMin, i.now);
 	if (!gateOpen(s.startMin, i.now)) return card(s.name, `Play at ${time}`, false, world);
 	const live = i.session && sessionInForce(i.session, s, i.now) ? i.session : null;
 	if (live && phaseOf(live, i.now) === 'playing') {
@@ -727,9 +815,36 @@ export function menuModel(i: MenuInput): MenuModel {
 	if (live) return card(s.name, `All done for today · play again at ${time} tomorrow`, false, world);
 	return card(s.name, `${s.limitMin} minutes today`, true, world);
 }
+
+export type Staged = { worldId: string; limitMin: number | null; breakMin: number | null; startRaw: string };
+
+export type SavePlan =
+	| { kind: 'schedule'; schedule: Schedule; session: PlaytimeSession | null }
+	| { kind: 'none'; limitMin: number | null; breakMin: number | null }
+	| { kind: 'error'; message: string };
+
+/**
+ * The Save decision. In schedule mode, when today's start time has already
+ * passed, Save also produces a done-for-today session so a bedtime save locks
+ * tonight; the parent has Unlock for "play today".
+ */
+export function planSave(staged: Staged, worlds: WorldSummary[], now: number): SavePlan {
+	if (staged.worldId === '') return { kind: 'none', limitMin: staged.limitMin, breakMin: staged.breakMin };
+	const w = worlds.find((x) => x.id === staged.worldId);
+	if (!w) return { kind: 'error', message: 'Pick a world' };
+	if (staged.limitMin === null) return { kind: 'error', message: 'Pick a play time' };
+	const m = /^(\d{2}):(\d{2})$/.exec(staged.startRaw);
+	if (!m) return { kind: 'error', message: 'Pick a start time' };
+	const startMin = Number(m[1]) * 60 + Number(m[2]);
+	const schedule: Schedule = { worldId: w.id, seed: w.seed, name: w.name, limitMin: staged.limitMin, startMin };
+	const session = gateOpen(startMin, now) ? doneForToday(staged.limitMin, now) : null;
+	return { kind: 'schedule', schedule, session };
+}
 ```
 
-- [ ] **Step 4: Green; prove**: (a) swap the `broken` check below the `worlds === null` check → the broken test still passes (both disabled) — so instead mutate `broken` to return `{ mode: 'full' }` → broken test red. (b) change `gateOpen` call to `>` semantics by passing `i.now - 60_000` → the "opens exactly at startMin" assertion red. (c) drop `sessionInForce` (use `i.session` directly) → the "frozen yesterday" test red. Restore each.
+Add `doneForToday`, `type Schedule` to the `../game/schedule` import.
+
+- [ ] **Step 4: Green; prove**: (a) mutate `broken` to return `{ mode: 'full' }` → broken test red; (a2) move the gate check above `worlds === null` → the row-order test red; (a3) in `planSave` always return `session: null` → the done-for-today test red. (b) change `gateOpen` call to `>` semantics by passing `i.now - 60_000` → the "opens exactly at startMin" assertion red. (c) drop `sessionInForce` (use `i.session` directly) → the "frozen yesterday" test red. Restore each.
 
 - [ ] **Step 5: Suite + build; commit**
 
@@ -788,6 +903,12 @@ No unit tests (DOM). Verified in Task 10.
 	text-align: center;
 	margin-right: 8px;
 }
+.pin-row button {
+	display: inline-block;
+	width: auto;
+	margin: 0 8px 0 0;
+	padding: 6px 12px;
+}
 .menu-hint {
 	opacity: 0.6;
 	font-size: 13px;
@@ -823,14 +944,16 @@ git commit -m "feat(ui): MENU button and lockedText on the freeze overlay; scrol
 	private refresh: ReturnType<typeof setInterval> | null = null;
 	private grownUpsOpen = false;
 	/** Staged Grown-ups edits; written only by Save. */
-	private staged: { worldId: string; limitMin: number | null; breakMin: number | null; startMin: number } | null = null;
+	private staged: Staged | null = null;
+	/** Bumped per renderHome so an older, slower world-list fetch cannot paint over a newer render. */
+	private renderGen = 0;
 
 	private stopRefresh(): void {
 		if (this.refresh !== null) clearInterval(this.refresh);
 		this.refresh = null;
 	}
 ```
-`show()`: set `this.grownUpsOpen = false; this.staged = null;` before rendering. `hide()`: call `this.stopRefresh()`. First line of `renderHome` and `renderNew`: `this.stopRefresh();`.
+`show()`: set `this.grownUpsOpen = false; this.staged = null;` before rendering. `hide()`: call `this.stopRefresh()`. First lines of `renderHome`: `this.stopRefresh(); const gen = ++this.renderGen;` and after the `await` of the world list: `if (gen !== this.renderGen) return;`. First line of `renderNew`: `this.stopRefresh();`.
 
 - [ ] **Step 2: `renderHome`.** Keep the loading render (without the old `renderPlaytime` call). After the world list resolves, replace the body from `card.innerHTML = '<h1>Minicraft</h1>'` onward with:
 
@@ -894,15 +1017,15 @@ with
 	private renderGrownUps(card: HTMLElement, worlds: WorldSummary[]): void {
 		const section = document.createElement('div');
 		section.className = 'playtime-section';
-		const h = document.createElement('div');
-		h.className = 'menu-section';
-		h.textContent = 'Grown-ups';
-		section.appendChild(h);
 		const body = document.createElement('div');
 		section.appendChild(body);
 		card.appendChild(section);
 
 		if (this.grownUpsOpen) {
+			const h = document.createElement('div');
+			h.className = 'menu-section';
+			h.textContent = 'Grown-ups';
+			section.insertBefore(h, body);
 			this.renderGrownUpsBody(body, worlds);
 			return;
 		}
@@ -931,6 +1054,7 @@ with
 			go.textContent = 'Open';
 			const err = document.createElement('div');
 			err.className = 'menu-error';
+			err.id = 'pin-error';
 			go.onclick = () => {
 				if (input.value === loadPin()) {
 					this.grownUpsOpen = true;
@@ -952,7 +1076,7 @@ with
 	}
 ```
 
-- [ ] **Step 5: `renderGrownUpsBody`** (staged form; re-renders itself from `this.staged` on every change):
+- [ ] **Step 5: `renderGrownUpsBody`** (staged form; the PIN row is LAST so the parent lands on the schedule, and only the World change re-renders the form because only it changes the form's shape; the break and time rows are toggled with `hidden`):
 
 ```ts
 	private renderGrownUpsBody(body: HTMLElement, worlds: WorldSummary[]): void {
@@ -960,13 +1084,16 @@ with
 		const pin = loadPin();
 		const loaded = loadSchedule();
 		const opts = loadOptions();
+		const armed = loaded.kind === 'armed' ? loaded.schedule : null;
 		if (this.staged === null) {
-			const armed = loaded.kind === 'armed' ? loaded.schedule : null;
+			const pad = (n: number) => String(n).padStart(2, '0');
+			const startMin = armed?.startMin ?? 420;
 			this.staged = {
-				worldId: armed?.worldId ?? '',
+				// A legacy world is re-listed under its adopted uuid after first play.
+				worldId: armed ? (resolveWorld(armed, worlds)?.id ?? armed.worldId) : '',
 				limitMin: armed ? armed.limitMin : opts.playLimitMin,
 				breakMin: opts.playBreakMin,
-				startMin: armed?.startMin ?? 420,
+				startRaw: `${pad(Math.floor(startMin / 60))}:${pad(startMin % 60)}`,
 			};
 		}
 		const st = this.staged;
@@ -974,39 +1101,34 @@ with
 		const error = document.createElement('div');
 		error.className = 'menu-error';
 		error.id = 'grownups-error';
+		const fail = (msg: string) => { error.textContent = msg; };
 
-		// 1. PIN row
-		const pinRow = document.createElement('div');
-		pinRow.className = 'pin-row';
-		if (pin === null) {
-			const hint = document.createElement('div');
-			hint.className = 'menu-hint';
-			hint.textContent = 'Set a PIN so only grown-ups can change this';
-			pinRow.appendChild(hint);
+		// Rows that are shown or hidden by the world/limit choice are built first so
+		// the change handlers below can reference them.
+		const brk = document.createElement('select');
+		brk.id = 'playtime-break';
+		const untilUnlock = document.createElement('option');
+		untilUnlock.value = '';
+		untilUnlock.textContent = 'Until a grown-up unlocks';
+		brk.appendChild(untilUnlock);
+		for (const m of PLAY_BREAK_CHOICES_MIN) {
+			const o = document.createElement('option');
+			o.value = String(m);
+			o.textContent = `${m} minutes`;
+			brk.appendChild(o);
 		}
-		const pinInput = document.createElement('input');
-		pinInput.type = 'password';
-		pinInput.inputMode = 'numeric';
-		pinInput.maxLength = 4;
-		pinInput.autocomplete = 'off';
-		pinInput.id = 'pin-set-input';
-		const setPin = document.createElement('button');
-		setPin.textContent = 'Set PIN';
-		setPin.onclick = () => {
-			if (!/^\d{4}$/.test(pinInput.value)) { error.textContent = 'PIN must be 4 digits'; return; }
-			if (!savePin(pinInput.value)) { error.textContent = "Couldn't save — try again"; return; }
-			rerender();
-		};
-		pinRow.append(pinInput, setPin);
-		if (pin !== null) {
-			const remove = document.createElement('button');
-			remove.textContent = 'Remove PIN';
-			remove.onclick = () => { if (!clearPin()) { error.textContent = "Couldn't save — try again"; return; } rerender(); };
-			pinRow.appendChild(remove);
-		}
-		body.appendChild(pinRow);
+		brk.value = st.breakMin === null ? '' : String(st.breakMin);
+		brk.onchange = () => { st.breakMin = brk.value === '' ? null : Number(brk.value); };
+		const breakRow = this.labelled('Then break for', brk);
 
-		// 2. World
+		const time = document.createElement('input');
+		time.type = 'time';
+		time.id = 'sched-start';
+		time.value = st.startRaw;
+		time.onchange = () => { st.startRaw = time.value; };
+		const timeRow = this.labelled('Not before', time);
+
+		// 1. World
 		const worldSel = document.createElement('select');
 		worldSel.id = 'sched-world';
 		const none = document.createElement('option');
@@ -1031,11 +1153,11 @@ with
 		if (pin === null) {
 			const hint = document.createElement('div');
 			hint.className = 'menu-hint';
-			hint.textContent = 'Set a PIN to lock to a world';
+			hint.textContent = 'Set a PIN (below) to lock to a world';
 			body.appendChild(hint);
 		}
 
-		// 3. Play for
+		// 2. Play for
 		const limit = document.createElement('select');
 		limit.id = 'playtime-limit';
 		if (st.worldId === '') {
@@ -1051,57 +1173,34 @@ with
 			limit.appendChild(o);
 		}
 		limit.value = st.limitMin === null ? '' : String(st.limitMin);
-		limit.onchange = () => { st.limitMin = limit.value === '' ? null : Number(limit.value); rerender(); };
+		limit.onchange = () => {
+			st.limitMin = limit.value === '' ? null : Number(limit.value);
+			breakRow.hidden = !(st.worldId === '' && st.limitMin !== null);
+		};
 		body.appendChild(this.labelled('Play for', limit));
 
-		// 4. Then break for (no-schedule mode only)
-		if (st.worldId === '' && st.limitMin !== null) {
-			const brk = document.createElement('select');
-			brk.id = 'playtime-break';
-			const untilUnlock = document.createElement('option');
-			untilUnlock.value = '';
-			untilUnlock.textContent = 'Until a grown-up unlocks';
-			brk.appendChild(untilUnlock);
-			for (const m of PLAY_BREAK_CHOICES_MIN) {
-				const o = document.createElement('option');
-				o.value = String(m);
-				o.textContent = `${m} minutes`;
-				brk.appendChild(o);
-			}
-			brk.value = st.breakMin === null ? '' : String(st.breakMin);
-			brk.onchange = () => { st.breakMin = brk.value === '' ? null : Number(brk.value); };
-			body.appendChild(this.labelled('Then break for', brk));
-		}
+		// 3. Then break for (no-schedule mode only); 4. Not before (schedule only)
+		breakRow.hidden = !(st.worldId === '' && st.limitMin !== null);
+		body.appendChild(breakRow);
+		timeRow.hidden = st.worldId === '';
+		body.appendChild(timeRow);
 
-		// 5. Not before (schedule mode only)
-		if (st.worldId !== '') {
-			const time = document.createElement('input');
-			time.type = 'time';
-			time.id = 'sched-start';
-			time.value = `${String(Math.floor(st.startMin / 60)).padStart(2, '0')}:${String(st.startMin % 60).padStart(2, '0')}`;
-			time.onchange = () => {
-				const m = /^(\d{2}):(\d{2})$/.exec(time.value);
-				if (m) st.startMin = Number(m[1]) * 60 + Number(m[2]);
-			};
-			body.appendChild(this.labelled('Not before', time));
-		}
-
-		// 6. Save / Turn off
+		// 5. Save / Turn off — writes in fail-closed order: the schedule first,
+		// the session only once the schedule write is proven.
 		const save = document.createElement('button');
 		save.id = 'sched-save';
 		save.textContent = 'Save';
 		save.onclick = () => {
-			let ok: boolean;
-			if (st.worldId === '') {
-				applyPlaytimeSetting({ playLimitMin: st.limitMin, playBreakMin: st.breakMin });
-				ok = clearSchedule();
+			st.startRaw = time.value;
+			const plan = planSave(st, worlds, Date.now());
+			if (plan.kind === 'error') { fail(plan.message); return; }
+			if (plan.kind === 'none') {
+				if (!clearSchedule()) { fail("Couldn't save — try again"); return; }
+				applyPlaytimeSetting({ playLimitMin: plan.limitMin, playBreakMin: plan.breakMin });
 			} else {
-				const w = worlds.find((x) => x.id === st.worldId);
-				if (!w) { error.textContent = 'Pick a world'; return; }
-				ok = saveSchedule({ worldId: w.id, seed: w.seed, name: w.name, limitMin: st.limitMin ?? 45, startMin: st.startMin });
-				clearSession();
+				if (!saveSchedule(plan.schedule)) { fail("Couldn't save — try again"); return; }
+				if (plan.session) saveSession(plan.session); else clearSession();
 			}
-			if (!ok) { error.textContent = "Couldn't save — try again"; return; }
 			this.staged = null;
 			void this.renderHome();
 		};
@@ -1111,42 +1210,78 @@ with
 			off.id = 'sched-off';
 			off.textContent = 'Turn off';
 			off.onclick = () => {
+				if (!clearSchedule()) { fail("Couldn't save — try again"); return; }
 				clearSession();
-				if (!clearSchedule()) { error.textContent = "Couldn't save — try again"; return; }
 				this.staged = null;
 				void this.renderHome();
 			};
 			body.appendChild(off);
 		}
 
-		// 7. Status row + Unlock / Start fresh (existing logic, moved here)
+		// 6. Status row + Unlock / Start fresh
 		const now = Date.now();
 		const session = loadSession();
-		const sched = loaded.kind === 'armed' ? loaded.schedule : null;
-		if (session && sessionInForce(session, sched, now)) {
+		if (session && sessionInForce(session, armed, now)) {
 			const phase = phaseOf(session, now);
-			if (phase !== 'over') {
-				const status = document.createElement('div');
-				status.className = 'playtime-status';
-				const text = document.createElement('span');
-				const btn = document.createElement('button');
-				if (phase === 'playing') {
-					const left = Math.max(1, Math.ceil((session.limitMs - session.playedMs) / 60_000));
-					text.textContent = `${left} minute${left === 1 ? '' : 's'} left`;
-					btn.textContent = 'Start fresh';
-				} else if (session.breakMs === null) {
-					text.textContent = sched ? 'All done for today' : 'Locked — ask a grown-up';
-					btn.textContent = sched ? `Unlock · fresh ${sched.limitMin} minutes now` : 'Unlock';
-				} else {
-					const left = Math.max(1, Math.ceil((session.frozenAt! + session.breakMs - now) / 60_000));
-					text.textContent = `Break, ${left} minute${left === 1 ? '' : 's'} left`;
-					btn.textContent = 'Unlock';
-				}
+			const status = document.createElement('div');
+			status.className = 'playtime-status';
+			const text = document.createElement('span');
+			const btn = document.createElement('button');
+			btn.id = 'playtime-unlock';
+			let show = true;
+			if (phase === 'playing') {
+				const left = Math.max(1, Math.ceil((session.limitMs - session.playedMs) / 60_000));
+				text.textContent = `${left} minute${left === 1 ? '' : 's'} left`;
+				btn.textContent = 'Start fresh';
+			} else if (armed) {
+				// Any non-playing in-force session under a schedule is "done for today".
+				text.textContent = `Locked until ${formatStartTime(armed.startMin, now)} tomorrow`;
+				btn.textContent = 'Unlock · play today';
+			} else if (phase === 'over') {
+				show = false;
+			} else if (session.breakMs === null) {
+				text.textContent = 'Locked — ask a grown-up';
+				btn.textContent = 'Unlock';
+			} else {
+				const left = Math.max(1, Math.ceil((session.frozenAt! + session.breakMs - now) / 60_000));
+				text.textContent = `Break, ${left} minute${left === 1 ? '' : 's'} left`;
+				btn.textContent = 'Unlock';
+			}
+			if (show) {
 				btn.onclick = () => { clearSession(); void this.renderHome(); };
 				status.append(text, btn);
 				body.appendChild(status);
 			}
 		}
+
+		// 7. PIN row, last: the parent came for the schedule.
+		const pinRow = document.createElement('div');
+		pinRow.className = 'pin-row';
+		const pinLabel = document.createElement('div');
+		pinLabel.className = 'menu-hint';
+		pinLabel.textContent = pin === null ? 'Set a PIN so only grown-ups can change this' : 'New PIN';
+		pinRow.appendChild(pinLabel);
+		const pinInput = document.createElement('input');
+		pinInput.type = 'password';
+		pinInput.inputMode = 'numeric';
+		pinInput.maxLength = 4;
+		pinInput.autocomplete = 'off';
+		pinInput.id = 'pin-set-input';
+		const setPin = document.createElement('button');
+		setPin.textContent = 'Set PIN';
+		setPin.onclick = () => {
+			if (!/^\d{4}$/.test(pinInput.value)) { fail('PIN must be 4 digits'); return; }
+			if (!savePin(pinInput.value)) { fail("Couldn't save — try again"); return; }
+			rerender();
+		};
+		pinRow.append(pinInput, setPin);
+		if (pin !== null) {
+			const remove = document.createElement('button');
+			remove.textContent = 'Remove PIN';
+			remove.onclick = () => { if (!clearPin()) { fail("Couldn't save — try again"); return; } rerender(); };
+			pinRow.appendChild(remove);
+		}
+		body.appendChild(pinRow);
 		body.appendChild(error);
 	}
 
@@ -1162,7 +1297,7 @@ with
 	}
 ```
 
-Imports to add: `menuModel, type CardModel` from `./menu-model`; `loadSchedule, saveSchedule, clearSchedule, loadPin, savePin, clearPin` from `../persistence/schedule`; `sessionInForce` from `../game/schedule`; `type WorldSummary` is already imported. Remove `isStale` if no longer used.
+Imports to add: `menuModel, planSave, type CardModel, type Staged` from `./menu-model`; `loadSchedule, saveSchedule, clearSchedule, loadPin, savePin, clearPin` from `../persistence/schedule`; `saveSession` alongside the existing `../persistence/playtime` imports; `sessionInForce, resolveWorld, formatStartTime` from `../game/schedule`. Remove `isStale` (unused). The `offline` warning stays only in the full-menu branch.
 
 - [ ] **Step 6: Build and a smoke run.** `npx vitest run && npm run build`. Then `npm run dev` (if not running) and, with Playwright, load `localhost:5173`: the normal menu renders with a Grown-ups button; open it (no PIN) and confirm the form renders with the world dropdown disabled and the hint. Do not go further; Task 10 does the full check.
 
@@ -1183,17 +1318,20 @@ git commit -m "feat(menu): locked card, PIN-guarded grown-ups section, staged sa
 - [ ] **Step 1: Guard in the menu callback** (`showMenu`), before either `startGame` call:
 
 ```ts
-			if (action.type === 'continue') {
-				// Belt and braces under the menu model: never enter startGame (which
-				// hides the menu and registers listeners) when the schedule says no.
-				const loaded = loadSchedule();
-				if (!canStartNow(loaded, loadSession(), Date.now())) {
-					showMenu();
-					return;
-				}
+			if (action.type === 'options') {
+				menu.hide();   // stops the card's refresh interval while Options is up
+				options.show(() => showMenu());
+				return;
+			}
+			// Belt and braces under the menu model: never enter startGame (which
+			// hides the menu and registers listeners) when the schedule says no.
+			// Applies to 'new' too, so a re-added New World button cannot bypass it.
+			if (!canStartNow(loadSchedule(), loadSession(), Date.now())) {
+				showMenu();
+				return;
 			}
 ```
-Imports: `loadSchedule` from `./persistence/schedule`; `canStartNow, activeLimits, formatStartTime` from `./game/schedule`.
+(replacing the existing `options` branch). Imports: `loadSchedule` from `./persistence/schedule`; `canStartNow, activeLimits, formatStartTime` from `./game/schedule`.
 
 - [ ] **Step 2: Play-time block.** Replace `if (opts.playLimitMin !== null) { const session = resolveSession(loadSession(), opts.playLimitMin, opts.playBreakMin, Date.now());` with:
 
@@ -1204,7 +1342,7 @@ Imports: `loadSchedule` from `./persistence/schedule`; `canStartNow, activeLimit
 		if (limits.limitMin !== null) {
 			const session = resolveSession(loadSession(), limits.limitMin, limits.breakMin, Date.now(), schedule);
 ```
-and add to the controller deps: `lockedText: schedule ? \`PLAY AGAIN AT ${formatStartTime(schedule.startMin).toUpperCase()} TOMORROW\` : undefined,`.
+and add to the controller deps: `lockedText: schedule ? \`PLAY AGAIN AT ${formatStartTime(schedule.startMin, Date.now()).toUpperCase()} TOMORROW\` : undefined,`.
 
 - [ ] **Step 3: Build; commit**
 
@@ -1229,14 +1367,22 @@ In Grown-ups, *Lock to world* picks Noah's world, *Play for* the daily
 minutes, *Not before* the earliest start (local time). Save. From then on the
 menu shows only that world with a Play button: disabled with `Play at 7:00`
 before the start time, `45 minutes today` after it, `N minutes left` if he
-quit early, and `All done for today` once the limit is reached. There is no
-break under a schedule; the limit ends play for the day and the freeze screen
-says `PLAY AGAIN AT 7:00 AM TOMORROW` with a MENU button. A session belongs to
-the local day it started on; tomorrow is a fresh one.
+quit early, and `All done for today · play again at 7:00 tomorrow` once the
+limit is reached. There is no break under a schedule; the limit ends play for
+the day and the freeze screen says `PLAY AGAIN AT 7:00 AM TOMORROW` with a MENU
+button. A session belongs to the local day it started on; tomorrow is a fresh
+one. A session running at midnight keeps going; the next day's session is
+still a fresh one at the start time.
 
-Ten more minutes today: Grown-ups → PIN → *Unlock*, which clears the session
-(a fresh full limit, not ten minutes). To play a grown-up's own world: *Turn
-off*, play, then set it up again.
+Saving after today's start time has passed also marks today as done, so a
+bedtime save locks tonight. Grown-ups then shows `Locked until 7:00 tomorrow`
+with *Unlock · play today*, which clears that and gives a fresh full limit
+now. To play a grown-up's own world: *Turn off*, play, then set it up again.
+
+DST: the gate is local wall-clock minutes. A start time inside the
+spring-forward gap opens when the clock reaches the next real minute; a start
+time inside the fall-back repeated hour opens on the first pass, closes again
+during the second pass, and reopens.
 
 A game already running does not notice a Save or Turn off made in another
 tab; it keeps its old session until it reloads. The schedule record is
@@ -1244,12 +1390,12 @@ tab; it keeps its old session until it reloads. The schedule record is
 (`Something's wrong · ask a grown-up`) rather than opening it.
 ```
 
-Update the Pieces table with `src/game/schedule.ts`, `src/persistence/schedule.ts`, `src/ui/menu-model.ts` rows and the stored record line (`startedAt`). In "How to unlock", add "or press MENU on the freeze screen".
+Update the Pieces table with `src/game/schedule.ts`, `src/persistence/schedule.ts`, `src/ui/menu-model.ts` rows and the stored record line (`startedAt`). In the intro, qualify "stays frozen until a grown-up reloads and presses Unlock" with "without a schedule". In "How to unlock", replace "in the Play time section" with "in the Grown-ups section (PIN)" and add "or press MENU on the freeze screen". In "Testing a freeze", note that `startedAt` defaults to `updatedAt` when absent.
 
 - [ ] **Step 2: README.** Rewrite the play-time bullet (line ~118):
 
 ```markdown
-- **Play-time limit and schedule** for grown-ups, behind a 4-digit PIN in the menu's *Grown-ups* section. Either *Play for* 15–90 minutes with an optional *Then break for*, or lock the menu to one world with a daily *Play for* and *Not before* time: before that time the kid sees only `Play at 7:00` and a disabled button; after it, one session per day. Large `END IN 5 MINUTES` / `END IN 2 MINUTES` warnings, then `TIME'S UP`. Only visible play counts. Forgot the PIN: `localStorage.removeItem('minicraft:v1:pin')` in the browser console on the game's tab. See [`docs/playtime.md`](docs/playtime.md).
+- **Play-time limit and schedule** for grown-ups, in the menu's *Grown-ups* section, behind a 4-digit PIN once one is set. Either *Play for* 15–90 minutes with an optional *Then break for*, or lock the menu to one world with a daily *Play for* and *Not before* time: before that time the kid sees only `Play at 7:00` and a disabled button; after it, one session per day. Large `END IN 5 MINUTES` / `END IN 2 MINUTES` warnings, then `TIME'S UP`. Only visible play counts. Forgot the PIN: `localStorage.removeItem('minicraft:v1:pin')` in the browser console on the game's tab, then reload. See [`docs/playtime.md`](docs/playtime.md).
 ```
 
 - [ ] **Step 3: Commit**
@@ -1265,12 +1411,13 @@ git commit -m "docs: schedule and grown-ups PIN"
 
 No files. Use a local-only world at `localhost:5173`, never production. Playwright MCP tools; the pointer-lock stub from `docs/superpowers/plans/2026-09-06-sponge.md` Task 6 when in game. Read storage with `localStorage.getItem(...)` on the menu and `window.__mc` in game. Screenshots to the scratchpad.
 
-1. No PIN: Grown-ups opens at once; `#sched-world` is disabled with the hint. Set PIN 1234. Reload: Grown-ups asks for the PIN; 0000 → `Wrong PIN`; 1234 opens.
-2. Viewport 1280×800 with the real world list: open Grown-ups, pick the local world, Play for 15, Not before = two minutes from now (type into `#sched-start`), scroll to Save (the page must scroll), Save. The locked card shows `Play at H:MM`, `#play-button` disabled, no world list. Wait ≤ 2.5 min without reloading: the button enables (30 s refresh).
-3. Play: world loads; `minicraft:v1:playtime` has `startedAt` and `limitMs: 900000`.
-4. Set the stored session to 14.5 minutes played with today's `startedAt`, reload, Play: `END IN 1 MINUTE`, freeze, `PLAY AGAIN AT H:MM TOMORROW`, MENU button. Press MENU: card says `All done for today`, Play disabled. Set `updatedAt` to 13 h ago (same day), reload: still locked. Set `startedAt` to yesterday, reload: Play enabled, `15 minutes today`.
-5. Grown-ups → PIN → `Unlock · fresh 15 minutes now`: card shows `15 minutes today`, Play enabled.
-6. Grown-ups → Turn off: normal menu with world lists and New World.
-7. `localStorage.setItem('minicraft:v1:schedule', '{}')`, reload: `Something's wrong · ask a grown-up`, Play disabled, Grown-ups opens, Turn off recovers.
-8. `npm run build`; `grep -c "minicraft:v1:pin" dist/assets/*.js` ≥ 1; `grep -c __mc dist/assets/*.js` is 0.
-9. Report pass/fail per step with the storage readings and screenshots. Leave the local storage clean (Turn off, Remove PIN) at the end.
+1. No PIN: Grown-ups opens at once; `#sched-world` is disabled and the hint text is present. Type 1234 into `#pin-set-input`, Set PIN. Reload: Grown-ups shows `#pin-input`; 0000 → `#pin-error` reads `Wrong PIN`; 1234 opens the section.
+2. Viewport 1280×800 with the real world list: open Grown-ups, pick the local world in `#sched-world`, Play for 15, type a `#sched-start` value two minutes ahead, assert `document.getElementById('menu-root').scrollHeight > innerHeight`, `#sched-save.scrollIntoView()`, click. The card shows `#play-line` starting with `Play at`, `#play-button` disabled, no `.world-row`. Wait up to 150 s without reloading (`browser_wait_for` on the text `minutes today`): the button enables.
+3. Play: world loads; `JSON.parse(localStorage.getItem('minicraft:v1:playtime'))` has `startedAt` and `limitMs: 900000`.
+4. On the menu, set `localStorage['minicraft:v1:playtime']` to `{"limitMs":900000,"breakMs":null,"playedMs":870000,"frozenAt":null,"startedAt":<now>,"updatedAt":<now>}`, reload, Play: `#playtime-warning` shows `END IN 1 MINUTE`; after ~30 s of visible play `#playtime-freeze` contains `PLAY AGAIN AT` and `TOMORROW` and a MENU button. Click MENU (reloads): `#play-line` starts with `All done for today`, `#play-button` disabled. Set the record's `updatedAt` to 13 h ago (keep `startedAt` today), reload: still `All done`. Set `startedAt` and `updatedAt` to yesterday, reload: `#play-line` is `15 minutes today`, button enabled.
+5. Restore the record to today's frozen state, reload. Grown-ups → PIN: the status row reads `Locked until … tomorrow` and `#playtime-unlock` reads `Unlock · play today`. Click it: `#play-line` is `15 minutes today`, enabled.
+6. Bedtime save: in Grown-ups set `#sched-start` to one minute in the past, Save: `#play-line` starts with `All done for today` (the done marker) and Grown-ups shows `Unlock · play today`. Unlock.
+7. Grown-ups → `#sched-off`: normal menu with `.world-row`s and New World.
+8. `localStorage.setItem('minicraft:v1:schedule', '{}')`, reload: `#play-line` is `Something's wrong · ask a grown-up`, button disabled, Grown-ups opens, `#sched-off` recovers.
+9. `npm run build`; `grep -c "minicraft:v1:pin" dist/assets/*.js` ≥ 1; `grep -c __mc dist/assets/*.js` is 0.
+10. Report pass/fail per step with the storage readings and screenshots. Leave storage clean at the end: Turn off, Remove PIN, and `localStorage.removeItem('minicraft:v1:playtime')`.

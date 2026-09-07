@@ -22,12 +22,13 @@
 
 import type { World } from '../engine/world/world';
 import type { Chunk } from '../engine/world/chunk';
-import { AIR, OBSIDIAN, WATER, LAVA, isLiquid } from '../data/blocks.data';
+import { AIR, OBSIDIAN, WATER, LAVA, SPONGE, WET_SPONGE, isLiquid } from '../data/blocks.data';
 import { CHUNK_SIZE_X, CHUNK_SIZE_Z } from '../engine/world/coords';
 
 const TICK_INTERVAL = 0.5;
 const WATER_BUDGET = 4;
 const LAVA_BUDGET = 2;
+const SPONGE_RADIUS = 7;   // BFS hops through liquid from the sponge cell
 
 function budgetFor(id: number): number {
 	return id === LAVA ? LAVA_BUDGET : WATER_BUDGET;
@@ -57,6 +58,10 @@ export class LiquidScheduler {
 		// Snapshot the frontier BEFORE any mutation.
 		const snapshot = this.takeSnapshot();
 
+		// Phase 0: sponges. Runs on the pre-mutation snapshot so a sponge touching a
+		// flow cell that drain is about to peel still gets to absorb it.
+		this.applySpongeStep(snapshot);
+
 		// Phase 3 first, on snapshot state: identify orphan flow cells (no source
 		// reachable via same-type liquid BFS) and IMMEDIATELY drain the outermost ring.
 		// Cells drained this way are remembered so Phase 1 doesn't refill them.
@@ -78,6 +83,66 @@ export class LiquidScheduler {
 		const out: Coord[] = [];
 		for (const c of this.world.allChunks()) this.collectFrontier(c, out);
 		return out;
+	}
+
+	// -----------------------------------------------------------------------------------------
+
+	private applySpongeStep(snapshot: Coord[]): void {
+		if (snapshot.length === 0) return;
+		const offsets: [number, number, number][] = [
+			[0, 0, 0],
+			[1, 0, 0], [-1, 0, 0],
+			[0, 1, 0], [0, -1, 0],
+			[0, 0, 1], [0, 0, -1],
+		];
+		const visited = new Set<string>();
+		for (const t of snapshot) {
+			for (const [dx, dy, dz] of offsets) {
+				const x = t.x + dx, y = t.y + dy, z = t.z + dz;
+				const k = `${x},${y},${z}`;
+				if (visited.has(k)) continue;
+				visited.add(k);
+				if (this.world.getBlock(x, y, z) !== SPONGE) continue;
+				this.absorbFrom(x, y, z);
+			}
+		}
+	}
+
+	/** BFS from a dry sponge through connected liquid, up to SPONGE_RADIUS hops; every
+	 *  liquid cell reached becomes AIR. The sponge turns wet only if it absorbed something. */
+	private absorbFrom(sx: number, sy: number, sz: number): void {
+		const dirs: [number, number, number][] = [
+			[1, 0, 0], [-1, 0, 0], [0, 1, 0], [0, -1, 0], [0, 0, 1], [0, 0, -1],
+		];
+		const seen = new Set<string>([`${sx},${sy},${sz}`]);
+		const queue: { x: number; y: number; z: number; hops: number }[] = [{ x: sx, y: sy, z: sz, hops: 0 }];
+		const absorbed: Coord[] = [];
+		for (let h = 0; h < queue.length; h++) {
+			const n = queue[h];
+			if (n.hops >= SPONGE_RADIUS) continue;
+			for (const [dx, dy, dz] of dirs) {
+				const nx = n.x + dx, ny = n.y + dy, nz = n.z + dz;
+				const k = `${nx},${ny},${nz}`;
+				if (seen.has(k)) continue;
+				seen.add(k);
+				if (!isLiquid(this.world.getBlock(nx, ny, nz))) continue;
+				absorbed.push({ x: nx, y: ny, z: nz });
+				queue.push({ x: nx, y: ny, z: nz, hops: n.hops + 1 });
+			}
+		}
+		if (absorbed.length === 0) return;
+
+		const touched = new Set<string>();
+		for (const c of absorbed) {
+			this.world.setBlock(c.x, c.y, c.z, AIR);
+			this.onBlockChanged(c.x, c.y, c.z);
+			this.markDirty(touched, c.x, c.z);
+		}
+		this.world.setBlock(sx, sy, sz, WET_SPONGE);
+		this.onBlockChanged(sx, sy, sz);
+		this.markDirty(touched, sx, sz);
+		this.changed = true;
+		this.flushDirty(touched);
 	}
 
 	// -----------------------------------------------------------------------------------------

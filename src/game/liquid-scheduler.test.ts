@@ -360,3 +360,176 @@ describe('LiquidScheduler — chunk-edge dirty reporting', () => {
 		expect(dirty).toContainEqual([-1, 16]);
 	});
 });
+
+describe('LiquidScheduler — sponge', () => {
+	it('1. dry sponge absorbs an adjacent source and turns wet', () => {
+		const w = freshWorld();
+		floor(w, 259, 262, 259, 261);
+		w.setBlock(260, 30, 260, water);
+		w.setBlock(261, 30, 260, sponge);
+		// Note: tick()'s return value is not asserted — on the pristine scheduler it is
+		// already true every tick (pre-existing, out of scope), so it cannot go red.
+		new LiquidScheduler(w, () => {}).tick(0.6);
+		expect(w.getBlock(260, 30, 260)).toBe(AIR);
+		expect(w.getBlock(261, 30, 260)).toBe(wetSponge);
+	});
+
+	it('2. absorbs exactly 7 hops along a line', () => {
+		const w = freshWorld();
+		floor(w, 258, 271, 259, 261);
+		for (let x = 260; x <= 270; x++) w.setBlock(x, 30, 260, water);
+		w.setBlock(259, 30, 260, sponge);
+		new LiquidScheduler(w, () => {}).tick(0.6);
+		expect(w.getBlock(259, 30, 260)).toBe(wetSponge);
+		for (let x = 260; x <= 265; x++) expect(w.getBlock(x, 30, 260), `x=${x}`).toBe(AIR);
+		// 266 (hop 7) may already be refilled as flow from 267 this same tick.
+		expect(w.getBlock(267, 30, 260)).toBe(water);
+		expect(isSourceAt(w, 267, 30, 260)).toBe(true);
+	});
+
+	it('3. distance is BFS hops through liquid, not taxicab', () => {
+		const w = freshWorld();
+		floor(w, 259, 268, 258, 265);
+		// Fill the slab with stone at y=30, then carve a serpentine so every carved
+		// cell stays inside the taxicab-7 ball of the sponge while hop count exceeds 7.
+		for (let x = 259; x <= 268; x++) for (let z = 258; z <= 265; z++) w.setBlock(x, 30, z, stone);
+		const carve = (x: number, z: number) => w.setBlock(x, 30, z, water);
+		for (let x = 262; x <= 265; x++) carve(x, 260);   // hops 1..4
+		carve(265, 261);                                   // hop 5
+		carve(265, 262);                                   // hop 6
+		carve(264, 262);                                   // hop 7
+		carve(263, 262);                                   // hop 8, taxicab 4
+		carve(262, 262);                                   // hop 9, taxicab 3
+		w.setBlock(261, 30, 260, sponge);
+		new LiquidScheduler(w, () => {}).tick(0.6);
+		expect(w.getBlock(261, 30, 260)).toBe(wetSponge);
+		for (let x = 262; x <= 265; x++) expect(w.getBlock(x, 30, 260), `x=${x}`).toBe(AIR);
+		// (264,262) is hop 7: absorbed, then refilled as flow from (263,262) this tick — not asserted.
+		expect(w.getBlock(263, 30, 262)).toBe(water);
+		expect(isSourceAt(w, 263, 30, 262)).toBe(true);
+		expect(w.getBlock(262, 30, 262)).toBe(water);
+		expect(isSourceAt(w, 262, 30, 262)).toBe(true);
+	});
+
+	it('3b. walls stop the search (U-channel)', () => {
+		const w = freshWorld();
+		floor(w, 260, 270, 258, 265);
+		for (let x = 260; x <= 270; x++) for (let z = 258; z <= 265; z++) w.setBlock(x, 30, z, stone);
+		const carve = (x: number, z: number) => w.setBlock(x, 30, z, water);
+		for (let x = 262; x <= 268; x++) carve(x, 260);          // hops 1..7
+		for (let z = 261; z <= 263; z++) carve(268, z);          // hops 8..10
+		for (let x = 267; x >= 262; x--) carve(x, 263);          // hops 11..16
+		w.setBlock(261, 30, 260, sponge);
+		new LiquidScheduler(w, () => {}).tick(0.6);
+		for (let x = 262; x <= 267; x++) expect(w.getBlock(x, 30, 260), `x=${x}`).toBe(AIR);
+		expect(w.getBlock(262, 30, 263)).toBe(water);
+		expect(isSourceAt(w, 262, 30, 263)).toBe(true);
+	});
+
+	it('4. search does not jump a non-liquid gap', () => {
+		const w = freshWorld();
+		floor(w, 258, 263, 259, 261);
+		w.setBlock(260, 30, 260, water);
+		w.setBlock(261, 30, 260, stone);
+		w.setBlock(262, 30, 260, water);
+		w.setBlock(259, 30, 260, sponge);
+		new LiquidScheduler(w, () => {}).tick(0.6);
+		expect(w.getBlock(260, 30, 260)).toBe(AIR);
+		expect(w.getBlock(262, 30, 260)).toBe(water);
+	});
+
+	it('5. lava and water are one component; no obsidian forms', () => {
+		const w = freshWorld();
+		floor(w, 259, 263, 259, 261);
+		w.setBlock(260, 30, 260, LAVA);
+		w.setBlock(261, 30, 260, water);
+		w.setBlock(262, 30, 260, sponge);
+		new LiquidScheduler(w, () => {}).tick(0.6);
+		expect(w.getBlock(260, 30, 260)).toBe(AIR);
+		expect(w.getBlock(261, 30, 260)).toBe(AIR);
+		expect(w.getBlock(262, 30, 260)).toBe(wetSponge);
+		for (let x = 260; x <= 262; x++) for (let z = 259; z <= 261; z++) {
+			expect(w.getBlock(x, 30, z), `${x},${z}`).not.toBe(OBSIDIAN);
+		}
+	});
+
+	it('6. wet sponge does nothing', () => {
+		const w = freshWorld();
+		floor(w, 259, 262, 259, 261);
+		w.setBlock(260, 30, 260, water);
+		w.setBlock(261, 30, 260, wetSponge);
+		new LiquidScheduler(w, () => {}).tick(0.6);
+		expect(w.getBlock(260, 30, 260)).toBe(water);
+		expect(w.getBlock(261, 30, 260)).toBe(wetSponge);
+	});
+
+	it('7. fires when liquid arrives later (open floor)', () => {
+		const w = freshWorld();
+		floor(w, 258, 266, 259, 261);
+		w.setBlock(263, 30, 260, sponge);
+		w.setBlock(260, 30, 260, water);
+		const s = new LiquidScheduler(w, () => {});
+		let ticks = 0;
+		while (w.getBlock(263, 30, 260) !== wetSponge && ticks < 5) { s.tick(0.6); ticks++; }
+		expect(w.getBlock(263, 30, 260)).toBe(wetSponge);
+		for (let x = 260; x <= 262; x++) expect(w.getBlock(x, 30, 260), `x=${x}`).toBe(AIR);
+	});
+
+	it('9. sponge placed against draining flow still absorbs', () => {
+		const w = freshWorld();
+		floor(w, 258, 267, 259, 261);
+		w.setBlock(260, 30, 260, water);
+		const s = new LiquidScheduler(w, () => {});
+		for (let i = 0; i < 4; i++) s.tick(0.6);
+		expect(w.getBlock(264, 30, 260)).toBe(water);
+		w.setBlock(260, 30, 260, AIR);           // remove the source: puddle is orphan
+		w.setBlock(265, 30, 260, sponge);
+		s.tick(0.6);
+		expect(w.getBlock(265, 30, 260)).toBe(wetSponge);
+		expect(w.getBlock(264, 30, 260)).toBe(AIR);
+	});
+
+	it('10. zero absorb keeps the sponge dry', () => {
+		const w = freshWorld();
+		floor(w, 259, 262, 259, 261);
+		w.setBlock(261, 30, 260, sponge);
+		w.getChunk(16, 16)!.liquidFrontier.add(indexOf(4, 30, 4));   // stale entry at (260,30,260)
+		new LiquidScheduler(w, () => {}).tick(0.6);
+		expect(w.getBlock(261, 30, 260)).toBe(sponge);
+	});
+
+	it('11. onBlockChanged fires for the absorbed lava cell and the sponge cell', () => {
+		const w = freshWorld();
+		floor(w, 259, 262, 259, 261);
+		w.setBlock(260, 30, 260, LAVA);
+		w.setBlock(261, 30, 260, sponge);
+		const changed: [number, number, number][] = [];
+		new LiquidScheduler(w, () => {}, (x, y, z) => changed.push([x, y, z])).tick(0.6);
+		expect(changed).toContainEqual([260, 30, 260]);
+		expect(changed).toContainEqual([261, 30, 260]);
+	});
+
+	it('12. a sponge on a chunk edge dirties the neighbour chunk', () => {
+		const w = freshWorldWide();
+		floor(w, 255, 258, 259, 261);
+		w.setBlock(256, 30, 260, sponge);       // chunk 16, local x 0
+		w.setBlock(257, 30, 260, water);
+		const dirty: [number, number][] = [];
+		new LiquidScheduler(w, (cx, cz) => dirty.push([cx, cz])).tick(0.6);
+		expect(w.getBlock(256, 30, 260)).toBe(wetSponge);
+		expect(dirty).toContainEqual([15, 16]);
+	});
+
+	it('13. a sponge placed INTO a liquid cell absorbs its neighbours', () => {
+		const w = freshWorld();
+		floor(w, 258, 262, 258, 262);
+		for (let x = 259; x <= 261; x++) for (let z = 259; z <= 261; z++) w.setBlock(x, 30, z, water);
+		w.setBlock(260, 30, 260, sponge);      // overwrites the centre source, as placeBlock does
+		new LiquidScheduler(w, () => {}).tick(0.6);
+		expect(w.getBlock(260, 30, 260)).toBe(wetSponge);
+		for (let x = 259; x <= 261; x++) for (let z = 259; z <= 261; z++) {
+			if (x === 260 && z === 260) continue;
+			expect(w.getBlock(x, 30, z), `${x},${z}`).toBe(AIR);
+		}
+	});
+});

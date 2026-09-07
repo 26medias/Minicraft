@@ -27,7 +27,7 @@ afterEach(() => {
 const KEY = 'minicraft:v1:playtime';
 
 function valid(over: Partial<PlaytimeSession> = {}): PlaytimeSession {
-	return { limitMs: 1_800_000, breakMs: 1_200_000, playedMs: 0, frozenAt: null, updatedAt: 1, ...over };
+	return { limitMs: 1_800_000, breakMs: 1_200_000, playedMs: 0, frozenAt: null, updatedAt: 1, startedAt: 1, ...over };
 }
 
 describe('playtime session storage', () => {
@@ -47,6 +47,19 @@ describe('playtime session storage', () => {
 		const { loadSession, saveSession } = await import('./playtime');
 		saveSession(valid({ breakMs: null }));
 		expect(loadSession()?.breakMs).toBeNull();
+	});
+
+	it('defaults startedAt to updatedAt for a legacy record', async () => {
+		const { loadSession } = await import('./playtime');
+		const legacy = { limitMs: 1_800_000, breakMs: null, playedMs: 5, frozenAt: null, updatedAt: 77 };
+		localStorage.setItem(KEY, JSON.stringify(legacy));
+		expect(loadSession()).toEqual({ ...legacy, startedAt: 77 });
+	});
+
+	it('rejects a record whose startedAt is not a finite number', async () => {
+		const { loadSession } = await import('./playtime');
+		localStorage.setItem(KEY, JSON.stringify(valid({ startedAt: 'x' as unknown as number })));
+		expect(loadSession()).toBeNull();
 	});
 
 	it('returns null for garbage JSON', async () => {

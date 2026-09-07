@@ -6,7 +6,7 @@ const MIN = 60_000;
 const T0 = 1_700_000_000_000;
 
 function session(over: Partial<PlaytimeSession> = {}): PlaytimeSession {
-	return { limitMs: 30 * MIN, breakMs: 20 * MIN, playedMs: 0, frozenAt: null, updatedAt: T0, ...over };
+	return { limitMs: 30 * MIN, breakMs: 20 * MIN, playedMs: 0, frozenAt: null, startedAt: T0, updatedAt: T0, ...over };
 }
 
 /** Drive one visible tick per second from `from` to `to` (exclusive), collecting events. */

@@ -14,6 +14,7 @@ export function resolveSession(
 		breakMs: breakMin === null ? null : breakMin * 60_000,
 		playedMs: 0,
 		frozenAt: null,
+		startedAt: now,
 		updatedAt: now,
 	};
 }
@@ -88,6 +89,7 @@ export class PlaytimeController {
 			breakMs: this.timer.session.breakMs,
 			playedMs: 0,
 			frozenAt: null,
+			startedAt: now,
 			updatedAt: now,
 		};
 		this.deps.save(fresh);

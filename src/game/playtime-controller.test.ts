@@ -7,7 +7,7 @@ const MIN = 60_000;
 const T0 = 1_700_000_000_000;
 
 function session(over: Partial<PlaytimeSession> = {}): PlaytimeSession {
-	return { limitMs: 30 * MIN, breakMs: 20 * MIN, playedMs: 0, frozenAt: null, updatedAt: T0, ...over };
+	return { limitMs: 30 * MIN, breakMs: 20 * MIN, playedMs: 0, frozenAt: null, updatedAt: T0, startedAt: T0, ...over };
 }
 
 describe('resolveSession', () => {
@@ -16,7 +16,7 @@ describe('resolveSession', () => {
 	});
 	it('creates a fresh no-break session when breakMin is null', () => {
 		expect(resolveSession(null, 15, null, T0)).toEqual({
-			limitMs: 15 * MIN, breakMs: null, playedMs: 0, frozenAt: null, updatedAt: T0,
+			limitMs: 15 * MIN, breakMs: null, playedMs: 0, frozenAt: null, startedAt: T0, updatedAt: T0,
 		});
 	});
 	it('resumes a playing session unchanged, ignoring the current options', () => {
@@ -30,12 +30,15 @@ describe('resolveSession', () => {
 	it('replaces a session that is over', () => {
 		const stored = session({ playedMs: 30 * MIN, frozenAt: T0 });
 		const now = T0 + 25 * MIN;
-		expect(resolveSession(stored, 30, 20, now)).toEqual(session({ updatedAt: now }));
+		expect(resolveSession(stored, 30, 20, now)).toEqual(session({ updatedAt: now, startedAt: now }));
 	});
 	it('replaces a stale session', () => {
 		const stored = session({ playedMs: 5 * MIN });
 		const now = T0 + STALE_SESSION_MS + 1;
-		expect(resolveSession(stored, 30, 20, now)).toEqual(session({ updatedAt: now }));
+		expect(resolveSession(stored, 30, 20, now)).toEqual(session({ updatedAt: now, startedAt: now }));
+	});
+	it('stamps startedAt = now on a fresh session', () => {
+		expect(resolveSession(null, 30, 20, T0 + 5).startedAt).toBe(T0 + 5);
 	});
 });
 
@@ -148,10 +151,17 @@ describe('PlaytimeController.playAgain', () => {
 		h.offered!();
 		expect(h.calls).toEqual(['unfreeze', 'deps.resume']);
 		expect(h.saved.at(-1)).toEqual({
-			limitMs: 30 * MIN, breakMs: 20 * MIN, playedMs: 0, frozenAt: null, updatedAt: h.clock.now,
+			limitMs: 30 * MIN, breakMs: 20 * MIN, playedMs: 0, frozenAt: null, startedAt: h.clock.now, updatedAt: h.clock.now,
 		});
 		advance(h, 3000);
 		expect(h.saved.at(-1)!.playedMs).toBe(3000);
 		expect(h.calls.filter((c) => c.startsWith('deps.freeze'))).toEqual([]);
+	});
+
+	it('playAgain stamps startedAt = now', () => {
+		const h = harness(session({ playedMs: 30 * MIN, frozenAt: T0 }), T0 + 21 * MIN);
+		h.ctl.tick();
+		h.offered!();
+		expect(h.saved.at(-1)!.startedAt).toBe(T0 + 21 * MIN);
 	});
 });

@@ -387,6 +387,10 @@ async function main() {
 		}
 		// ----------------------------------------------------------------------
 		loop.start();
+		if (import.meta.env.DEV) {
+			// Debug oracle for manual checks at localhost only; tree-shaken from the build.
+			(window as unknown as { __mc: unknown }).__mc = { world, player, loop };
+		}
 
 		window.addEventListener('mousedown', (e) => {
 			if (loop.paused) return;

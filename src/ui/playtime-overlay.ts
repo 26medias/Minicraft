@@ -37,7 +37,7 @@ export class PlaytimeOverlay {
 		this.warning.classList.remove('visible');
 	}
 
-	freeze(breakEndsAt: number | null): void {
+	freeze(breakEndsAt: number | null, lockedText?: string): void {
 		this.hideWarning();
 		this.freezeEl.innerHTML = '';
 		const title = document.createElement('div');
@@ -48,11 +48,19 @@ export class PlaytimeOverlay {
 		const line = document.createElement('div');
 		line.className = 'playtime-line';
 		if (breakEndsAt === null) {
-			line.textContent = 'ASK A GROWN-UP';
+			line.textContent = lockedText ?? 'ASK A GROWN-UP';
 			this.countdown = null;
-		} else {
-			this.countdown = line;
+			const menuBtn = document.createElement('button');
+			menuBtn.className = 'playtime-button';
+			menuBtn.textContent = 'MENU';
+			// A frozen tab left open overnight has no other way back to the Play button.
+			menuBtn.onclick = () => location.reload();
+			this.freezeEl.appendChild(line);
+			this.freezeEl.appendChild(menuBtn);
+			this.freezeEl.classList.remove('hidden');
+			return;
 		}
+		this.countdown = line;
 		this.freezeEl.appendChild(line);
 		this.freezeEl.classList.remove('hidden');
 	}

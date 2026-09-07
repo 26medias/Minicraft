@@ -1,6 +1,6 @@
 import { describe, it, expect } from 'vitest';
 import { World } from '../engine/world/world';
-import { BLOCK_BY_NAME, AIR, LAVA, OBSIDIAN } from '../data/blocks.data';
+import { BLOCK_BY_NAME, AIR, LAVA, OBSIDIAN, WATER } from '../data/blocks.data';
 import { LiquidScheduler } from './liquid-scheduler';
 
 const water = BLOCK_BY_NAME['water'].id;
@@ -15,6 +15,35 @@ function freshWorld(): World {
 	c.liquidFrontier.clear();
 	return w;
 }
+
+const sponge = BLOCK_BY_NAME['sponge'].id;
+const wetSponge = BLOCK_BY_NAME['wet_sponge'].id;
+
+/** Like freshWorld() but also clears chunks (15,16) and (17,16), for tests near x=256 / x=271. */
+function freshWorldWide(): World {
+	const w = new World(1);
+	for (const cx of [15, 16, 17]) {
+		const c = w.ensureChunk(cx, 16);
+		c.blocks.fill(AIR);
+		c.lights.fill(0);
+		c.liquidFrontier.clear();
+	}
+	return w;
+}
+
+/** Stone slab at y (default 29) covering x0..x1 × z0..z1 inclusive. */
+function floor(w: World, x0: number, x1: number, z0: number, z1: number, y = 29): void {
+	for (let x = x0; x <= x1; x++) for (let z = z0; z <= z1; z++) w.setBlock(x, y, z, stone);
+}
+
+/** Whether the voxel is a liquid source (liquid present, no flow meta). */
+function isSourceAt(w: World, x: number, y: number, z: number): boolean {
+	const c = w.getChunk(Math.floor(x / 16), Math.floor(z / 16))!;
+	return !c.isFlow(((x % 16) + 16) % 16, y, ((z % 16) + 16) % 16);
+}
+
+// Task 2 (sponge tests) is the first consumer of these; keep noUnusedLocals quiet until then.
+void [WATER, sponge, wetSponge, isSourceAt];
 
 describe('LiquidScheduler — tick accumulator', () => {
 	it('tick(0.4) does not fire', () => {
@@ -291,5 +320,43 @@ describe('LiquidScheduler — generation ocean is free', () => {
 		expect(w.getBlock(258, 30, 258)).toBe(water);
 		expect(c.isFlow(0, 30, 0)).toBe(false);
 		expect(c.isFlow(4, 30, 4)).toBe(false);
+	});
+});
+
+describe('block id exports', () => {
+	it('SPONGE and WET_SPONGE resolve to the catalog rows', async () => {
+		const mod = await import('../data/blocks.data');
+		expect(mod.SPONGE).toBe(315);
+		expect(mod.WET_SPONGE).toBe(363);
+	});
+});
+
+describe('LiquidScheduler — chunk-edge dirty reporting', () => {
+	it('an obsidian reaction at local x=0 also dirties the -x neighbour chunk', () => {
+		const w = freshWorldWide();
+		floor(w, 255, 258, 259, 261);
+		// Walls so nothing spreads sideways: only the reaction writes.
+		for (const z of [259, 261]) for (let x = 255; x <= 258; x++) w.setBlock(x, 30, z, stone);
+		w.setBlock(255, 30, 260, stone);
+		w.setBlock(258, 30, 260, stone);
+		w.setBlock(256, 30, 260, LAVA);   // chunk 16, lx = 0
+		w.setBlock(257, 30, 260, water);
+		const dirty: [number, number][] = [];
+		const s = new LiquidScheduler(w, (cx, cz) => dirty.push([cx, cz]));
+		s.tick(0.6);
+		expect(w.getBlock(256, 30, 260)).toBe(OBSIDIAN);
+		expect(dirty).toContainEqual([15, 16]);
+	});
+
+	it('markDirty at world x=0 emits the out-of-world neighbour key without throwing', () => {
+		const w = new World(1);
+		const c = w.ensureChunk(0, 16);
+		c.blocks.fill(AIR); c.lights.fill(0); c.liquidFrontier.clear();
+		floor(w, 0, 3, 259, 261);
+		w.setBlock(0, 30, 260, LAVA);
+		w.setBlock(1, 30, 260, water);
+		const dirty: [number, number][] = [];
+		expect(() => new LiquidScheduler(w, (cx, cz) => dirty.push([cx, cz])).tick(0.6)).not.toThrow();
+		expect(dirty).toContainEqual([-1, 16]);
 	});
 });

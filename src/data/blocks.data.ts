@@ -72,3 +72,8 @@ export function isLiquid(id: BlockId): boolean {
 export const WATER: BlockId = 17;
 export const LAVA: BlockId = 18;
 export const OBSIDIAN: BlockId = 19;
+
+// Sponge ids come from the generated catalog; resolve by name so renumbering the
+// hand-written base never touches them.
+export const SPONGE: BlockId = BLOCK_BY_NAME['sponge'].id;
+export const WET_SPONGE: BlockId = BLOCK_BY_NAME['wet_sponge'].id;

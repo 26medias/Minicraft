@@ -170,16 +170,11 @@ export class LiquidScheduler {
 		for (const w of reactionWrites) {
 			if (this.world.getBlock(w.x, w.y, w.z) === w.id) continue;
 			this.world.setBlock(w.x, w.y, w.z, w.id);
-		this.changed = true;
+			this.changed = true;
 			this.onBlockChanged(w.x, w.y, w.z);
-			const cx = Math.floor(w.x / CHUNK_SIZE_X);
-			const cz = Math.floor(w.z / CHUNK_SIZE_Z);
-			touchedChunks.add(`${cx},${cz}`);
+			this.markDirty(touchedChunks, w.x, w.z);
 		}
-		for (const ck of touchedChunks) {
-			const [cxs, czs] = ck.split(',');
-			this.onChunkDirty(Number(cxs), Number(czs));
-		}
+		this.flushDirty(touchedChunks);
 	}
 
 	// -----------------------------------------------------------------------------------------
@@ -322,16 +317,13 @@ export class LiquidScheduler {
 			for (const o of arr) {
 				if (o.distance !== maxDist) continue;
 				this.world.setBlock(o.x, o.y, o.z, AIR);
-			this.changed = true;
+				this.changed = true;
 				this.onBlockChanged(o.x, o.y, o.z);
 				drainedThisTick.add(`${o.x},${o.y},${o.z}`);
-				touchedChunks.add(`${o.chunk.cx},${o.chunk.cz}`);
+				this.markDirty(touchedChunks, o.x, o.z);
 			}
 		}
-		for (const ck of touchedChunks) {
-			const [cxs, czs] = ck.split(',');
-			this.onChunkDirty(Number(cxs), Number(czs));
-		}
+		this.flushDirty(touchedChunks);
 		return drainedThisTick;
 	}
 
@@ -388,17 +380,34 @@ export class LiquidScheduler {
 			if (current === w.id && !isLiquid(w.id)) continue;
 			if (w.flowDistance === null) {
 				this.world.setBlock(x, y, z, w.id);
-			this.changed = true;
+				this.changed = true;
 			} else {
 				this.world.setBlockFlow(x, y, z, w.id, w.flowDistance);
-			this.changed = true;
+				this.changed = true;
 			}
 			this.onBlockChanged(x, y, z);
-			const cx = Math.floor(x / CHUNK_SIZE_X);
-			const cz = Math.floor(z / CHUNK_SIZE_Z);
-			touchedChunks.add(`${cx},${cz}`);
+			this.markDirty(touchedChunks, x, z);
 		}
-		for (const ck of touchedChunks) {
+		this.flushDirty(touchedChunks);
+	}
+
+	/** Record the chunk containing (x, z) as dirty, plus the adjacent chunk on any side
+	 *  where the cell sits on the chunk edge — a liquid face in that neighbour may now
+	 *  look into a hole and needs remeshing. */
+	private markDirty(touched: Set<string>, x: number, z: number): void {
+		const cx = Math.floor(x / CHUNK_SIZE_X);
+		const cz = Math.floor(z / CHUNK_SIZE_Z);
+		const lx = x - cx * CHUNK_SIZE_X;
+		const lz = z - cz * CHUNK_SIZE_Z;
+		touched.add(`${cx},${cz}`);
+		if (lx === 0) touched.add(`${cx - 1},${cz}`);
+		else if (lx === CHUNK_SIZE_X - 1) touched.add(`${cx + 1},${cz}`);
+		if (lz === 0) touched.add(`${cx},${cz - 1}`);
+		else if (lz === CHUNK_SIZE_Z - 1) touched.add(`${cx},${cz + 1}`);
+	}
+
+	private flushDirty(touched: Set<string>): void {
+		for (const ck of touched) {
 			const [cxs, czs] = ck.split(',');
 			this.onChunkDirty(Number(cxs), Number(czs));
 		}

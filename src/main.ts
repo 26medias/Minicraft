@@ -28,6 +28,8 @@ import type { Action } from './data/keybindings.data';
 import { fillChunkLights } from './engine/world/lighting';
 import { PlaytimeController, resolveSession } from './game/playtime-controller';
 import { loadSession, saveSession } from './persistence/playtime';
+import { loadSchedule } from './persistence/schedule';
+import { activeLimits, canStartNow, formatStartTime } from './game/schedule';
 import { PlaytimeOverlay } from './ui/playtime-overlay';
 import { TICK_MS } from './data/playtime.data';
 import { Inventory } from './ui/inventory';
@@ -64,7 +66,15 @@ async function main() {
 	function showMenu() {
 		menu.show((action) => {
 			if (action.type === 'options') {
+				menu.hide();   // stops the card's refresh interval while Options is up
 				options.show(() => showMenu());
+				return;
+			}
+			// Belt and braces under the menu model: never enter startGame (which
+			// hides the menu and registers listeners) when the schedule says no.
+			// Applies to 'new' too, so a re-added New World button cannot bypass it.
+			if (!canStartNow(loadSchedule(), loadSession(), Date.now())) {
+				showMenu();
 				return;
 			}
 			if (action.type === 'new') startGame(action.id, action.seed, action.name, null);
@@ -352,11 +362,15 @@ async function main() {
 		// so the interval and listener below need no owner, like the window
 		// listeners above. The first tick runs before loop.start() on purpose:
 		// a session already in its break must freeze before the first frame.
-		if (opts.playLimitMin !== null) {
-			const session = resolveSession(loadSession(), opts.playLimitMin, opts.playBreakMin, Date.now());
+		const loadedSchedule = loadSchedule();
+		const schedule = loadedSchedule.kind === 'armed' ? loadedSchedule.schedule : null;
+		const limits = activeLimits(schedule, opts);
+		if (limits.limitMin !== null) {
+			const session = resolveSession(loadSession(), limits.limitMin, limits.breakMin, Date.now(), schedule);
 			saveSession(session);
 			const playtime = new PlaytimeController(session, {
 				overlay: new PlaytimeOverlay(app),
+				lockedText: schedule ? `PLAY AGAIN AT ${formatStartTime(schedule.startMin, Date.now()).toUpperCase()} TOMORROW` : undefined,
 				freeze: () => {
 					closeInventory();
 					loop.setLeftMouseDown(false);

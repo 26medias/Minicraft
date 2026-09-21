@@ -1,5 +1,5 @@
 import type { World } from '../engine/world/world';
-import { BLOCK_BY_NAME, isSolid } from '../data/blocks.data';
+import { BLOCK_BY_NAME, BLOCKS, isSolid } from '../data/blocks.data';
 
 export const TNT_RADIUS = 3;
 export const TNT_PRIME_FUSE = 2.5;  // seconds — kid-ignited fuse
@@ -50,7 +50,7 @@ export function detonate(
 				const id = world.getBlock(x, y, z);
 				if (id === tntId) {
 					if (!alreadyPrimed(x, y, z)) primed.push({ x, y, z });
-				} else if (isSolid(id)) {
+				} else if (isSolid(id) && (BLOCKS[id]?.hardness ?? 0) > 0) {
 					destroyed.push({ x, y, z });
 				}
 			}

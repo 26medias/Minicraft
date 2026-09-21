@@ -37,4 +37,12 @@ describe('raycastVoxel', () => {
 		const hit = raycastVoxel(w, [5, 50.5, 10.5], [1, 0, 0], 20);
 		expect(hit!.x).toBe(8);
 	});
+
+	it('hits the v2 surface (y >= 64) looking straight down from y=140', () => {
+		const w = World.create(5);
+		const hit = raycastVoxel(w, [200.5, 140, 200.5], [0, -1, 0], 40);
+		expect(hit).not.toBeNull();
+		expect(hit!.y).toBeGreaterThanOrEqual(64);
+		expect(hit!.y).toBeLessThanOrEqual(130);
+	});
 });

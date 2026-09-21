@@ -972,7 +972,7 @@ export const CATALOG_BLOCKS: BlockDef[] = [
 		solid: true,
 		transparent: false,
 		translucent: false,
-		hardness: 1.2,
+		hardness: 0,
 		lightLevel: 0,
 		lightFilter: 15,
 		liquid: 'none',

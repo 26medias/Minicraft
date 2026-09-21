@@ -15,14 +15,15 @@ const FLY_TIER_MAX = 5;
 const FLY_TIER_DEFAULT = 2;
 
 /**
- * The world is 64 blocks tall (y 0..63). These bounds let Noah drop into the void
- * and fly well above the terrain — both of which he likes — without ever losing
- * sight of the world. Before they existed, walking off the edge of the map meant
- * an unbounded fall, and autosave persisted it: one world was recovered at
- * y = -193917, which loads as an empty blue screen.
+ * Vertical bounds scale with the world: the void floor is fixed (Noah likes to
+ * drop into it), the ceiling sits 56 blocks above the top of the column so a
+ * 64-high world keeps today's 120. Before these existed one world was saved at
+ * y = -193917 and loaded as an empty blue screen.
  */
 export const VOID_FLOOR_Y = -24;
-export const SKY_CEILING_Y = 120;
+export function skyCeilingY(height: number): number {
+	return height + 56;
+}
 
 const WORLD_MIN_XZ = 0.5;
 const WORLD_MAX_XZ = 511.5;
@@ -33,10 +34,10 @@ function clamp(v: number, lo: number, hi: number): number {
 }
 
 /** Brings a saved spawn back into the world, repairing already-broken saves. */
-export function sanitizeSpawn(pos: [number, number, number]): [number, number, number] {
+export function sanitizeSpawn(pos: [number, number, number], height = 64): [number, number, number] {
 	return [
 		clamp(pos[0], WORLD_MIN_XZ, WORLD_MAX_XZ),
-		clamp(pos[1], VOID_FLOOR_Y, SKY_CEILING_Y),
+		clamp(pos[1], VOID_FLOOR_Y, skyCeilingY(height)),
 		clamp(pos[2], WORLD_MIN_XZ, WORLD_MAX_XZ),
 	];
 }
@@ -58,17 +59,18 @@ export function findSafeSpawn(
 	world: World,
 	desired: [number, number, number],
 ): [number, number, number] {
-	const [dx, dy, dz] = sanitizeSpawn(desired);
+	const top = world.height - 1;
+	const [dx, dy, dz] = sanitizeSpawn(desired, world.height);
 
 	const groundAt = (x: number, z: number, from: number): number | null => {
 		const bx = Math.floor(x);
 		const bz = Math.floor(z);
-		const start = Math.min(Math.max(Math.floor(from), 0), 63);
+		const start = Math.min(Math.max(Math.floor(from), 0), top);
 		for (let y = start; y >= 0; y--) {
 			if (world.getBlock(bx, y, bz) !== 0) return y + 1;
 		}
 		// Nothing below the saved height — try from the top of the column.
-		for (let y = 63; y > start; y--) {
+		for (let y = top; y > start; y--) {
 			if (world.getBlock(bx, y, bz) !== 0) return y + 1;
 		}
 		return null;
@@ -85,12 +87,12 @@ export function findSafeSpawn(
 				const nx = Math.floor(dx) + ox;
 				const nz = Math.floor(dz) + oz;
 				if (nx < 0 || nx > 511 || nz < 0 || nz > 511) continue;
-				const g = groundAt(nx + 0.5, nz + 0.5, 63);
+				const g = groundAt(nx + 0.5, nz + 0.5, top);
 				if (g !== null) return [nx + 0.5, g, nz + 0.5];
 			}
 		}
 	}
-	return [dx, Math.max(dy, 32), dz];
+	return [dx, Math.max(dy, world.height / 2), dz];
 }
 
 export class Player {
@@ -102,9 +104,11 @@ export class Player {
 	flying = false;
 	flySpeedTier = FLY_TIER_DEFAULT;
 	swimming = false;
+	readonly height: number;
 
-	constructor(spawn: [number, number, number]) {
-		this.position = sanitizeSpawn(spawn);
+	constructor(spawn: [number, number, number], height = 64) {
+		this.height = height;
+		this.position = sanitizeSpawn(spawn, height);
 	}
 
 	eyePosition(): [number, number, number] {
@@ -221,7 +225,7 @@ export class Player {
 
 		// Keep the player inside the world. Leaving it horizontally means there is no
 		// ground to land on, which is how an endless fall starts.
-		const [cx, cy, cz] = sanitizeSpawn(this.position);
+		const [cx, cy, cz] = sanitizeSpawn(this.position, world.height);
 		if (cy !== this.position[1]) {
 			// Landing on the void floor or bumping the ceiling cancels vertical speed,
 			// so the player rests there rather than accumulating velocity.

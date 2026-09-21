@@ -93,7 +93,7 @@ export class LocalStorageAdapter implements PersistenceAdapter {
 
 	encode(save: WorldSave): EncodedChunk[] {
 		return save.chunks.map((c) => {
-			const out: EncodedChunk = { cx: c.cx, cz: c.cz, blocks: encodeChunk(c.blocks) };
+			const out: EncodedChunk = { cx: c.cx, cz: c.cz, blocks: encodeChunk(c.blocks, 16 * 64 * 16) };
 			if (c.fluidMeta && c.fluidMeta.size > 0) out.fluidMeta = encodeFluidMeta(c.fluidMeta);
 			return out;
 		});
@@ -233,8 +233,8 @@ function parseChunkPayload(cx: number, cz: number, data: string): RawChunk {
 	// Pre-Task-6 saves stored the bare base64 blocks blob with no JSON envelope.
 	// Only that case falls back; a decode failure inside a JSON payload must
 	// surface as itself, not as atob choking on the envelope.
-	if (!parsed) return { cx, cz, blocks: decodeChunk(data) };
-	const blocks = decodeChunk(parsed.blocks);
+	if (!parsed) return { cx, cz, blocks: decodeChunk(data, 16 * 64 * 16) };
+	const blocks = decodeChunk(parsed.blocks, 16 * 64 * 16);
 	const fluidMeta = parsed.fluidMeta ? decodeFluidMeta(parsed.fluidMeta) : undefined;
 	return { cx, cz, blocks, fluidMeta };
 }

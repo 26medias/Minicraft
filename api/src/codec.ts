@@ -1,10 +1,16 @@
 import { deflate, inflate } from 'pako';
-// Copied constant: the function deploys from api/ alone, so this file cannot
-// import from the game source. api/src/codec.parity.test.ts asserts it matches.
-export const BLOCKS_PER_CHUNK = 16 * 64 * 16;
+// Copied from src/persistence/codec.ts: the function deploys from api/ alone, so
+// this file cannot import from the game source. api/src/codec.parity.test.ts
+// asserts the copy has not drifted. The v2 route's chunks are always 64 tall.
+export const LEGACY_BLOCKS_PER_CHUNK = 16 * 64 * 16;
 
-export function encodeChunk(blocks: Uint16Array): string {
-	if (blocks.length !== BLOCKS_PER_CHUNK) throw new Error('Unexpected chunk length');
+function checkLength(n: number): void {
+	if (!Number.isInteger(n) || n <= 0) throw new Error(`Unexpected chunk length: ${String(n)}`);
+}
+
+export function encodeChunk(blocks: Uint16Array, expectedLength: number): string {
+	checkLength(expectedLength);
+	if (blocks.length !== expectedLength) throw new Error('Unexpected chunk length');
 	const rle: number[] = [];
 	let i = 0;
 	while (i < blocks.length) {
@@ -20,12 +26,13 @@ export function encodeChunk(blocks: Uint16Array): string {
 	return btoa(String.fromCharCode(...deflated));
 }
 
-export function decodeChunk(encoded: string): Uint16Array {
+export function decodeChunk(encoded: string, expectedLength: number): Uint16Array {
+	checkLength(expectedLength);
 	const bin = atob(encoded);
 	const bytes = new Uint8Array(bin.length);
 	for (let i = 0; i < bin.length; i++) bytes[i] = bin.charCodeAt(i);
 	const rle = inflate(bytes);
-	const out = new Uint16Array(BLOCKS_PER_CHUNK);
+	const out = new Uint16Array(expectedLength);
 	let oi = 0,
 		ri = 0;
 	while (ri < rle.length) {
@@ -35,10 +42,10 @@ export function decodeChunk(encoded: string): Uint16Array {
 		if (v.value > 0xffff) throw new Error(`Block id ${v.value} out of range`);
 		const r = readVarInt(rle, ri);
 		ri = r.next;
-		if (oi + r.value > BLOCKS_PER_CHUNK) throw new Error('Decoded chunk overruns its length');
+		if (oi + r.value > expectedLength) throw new Error('Decoded chunk overruns its length');
 		for (let k = 0; k < r.value; k++) out[oi++] = v.value;
 	}
-	if (oi !== BLOCKS_PER_CHUNK) throw new Error(`Decoded chunk has wrong length: ${oi}`);
+	if (oi !== expectedLength) throw new Error(`Decoded chunk has wrong length: ${oi}`);
 	return out;
 }
 

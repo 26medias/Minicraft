@@ -71,7 +71,7 @@ export class CloudAdapter implements PersistenceAdapter {
 
 	encode(save: WorldSave): EncodedChunk[] {
 		return save.chunks.map((c) => {
-			const out: EncodedChunk = { cx: c.cx, cz: c.cz, blocks: encodeChunk(c.blocks) };
+			const out: EncodedChunk = { cx: c.cx, cz: c.cz, blocks: encodeChunk(c.blocks, 16 * 64 * 16) };
 			if (c.fluidMeta && c.fluidMeta.size > 0) out.fluidMeta = encodeFluidMeta(c.fluidMeta);
 			return out;
 		});
@@ -81,7 +81,7 @@ export class CloudAdapter implements PersistenceAdapter {
 		const chunks: RawChunk[] = wire.chunks.map((c) => ({
 			cx: c.cx,
 			cz: c.cz,
-			blocks: decodeChunk(c.blocks),
+			blocks: decodeChunk(c.blocks, 16 * 64 * 16),
 			fluidMeta: c.fluidMeta ? decodeFluidMeta(c.fluidMeta) : undefined,
 		}));
 		return {

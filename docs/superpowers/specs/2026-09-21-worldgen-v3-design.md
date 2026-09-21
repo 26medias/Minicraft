@@ -1,487 +1,494 @@
 # Worldgen v3 — "rich world"
 
-Status: design, 2026-09-21. Branch `worldgen`. Targets generator version 3
-(`genVersion 3`, height 256); v1 and v2 worlds are untouched forever.
-Evidence in §12 comes from a throwaway prototype (not committed) that
-implements every rule below and was run on seeds 1, 2, 3 (1024 chunks each)
-and on 100 seeds for the spawn rule.
+Status: design, gate 1 repaired 2026-09-21 (see §14). Branch `worldgen`.
+Targets generator version 3 (`genVersion 3`, height 256); v1 and v2 worlds
+are untouched forever. Evidence in §12 comes from a throwaway prototype (not
+committed; scratchpad `wg3/proto.ts`) that implements every rule below and
+was run on 12 full maps (seeds 1–12, 1024 chunks each) and on 100 seeds
+(1000–1099) for the spawn and kid-distance rules.
 
 Constraints honoured: finite 512 × 512, 32 × 32 chunks, hard walls; 256 tall,
 `bedrock` at y = 0; `generateChunkV3(chunk, seed)` runs on the main thread and
 is a pure function of `(seed, cx, cz)` — it never reads another chunk. Frozen
 block catalog: every block named here exists in `blocks.catalog.data.ts` or
-`blocks.base.data.ts`. Hard cap 3 ms / chunk, target 2 ms.
+`blocks.base.data.ts` (60 names, none retired). Hard cap 3 ms / chunk
+generation, target 2 ms.
+
+Conventions used throughout: `h` = top solid y of a column in a flat cell
+(§3.2); `hRaw` = the real-valued height before that rounding; "p50/p90" =
+percentile over the stated seed set; **E** = exact assertion, **S** =
+statistical assertion. Every numeric bound appears once, in §11; §1 states
+the targets and points at the assertion that guards each.
 
 ## 1. Goals and player-experience targets
 
-All measured from the spawn column, unless stated. "p50/p90" are over 100
-seeds (§12).
-
-| Target | Value | Measured (prototype) |
-|---|---|---|
-| Sea level | fixed **y = 120** | — |
-| Surface height (land + sea floor), full map | min ≥ 50, median 122–132, p90 160–176, max 205–240 | min 54–68, median 123–129, p90 163–173, max 222–238 |
-| Water columns (ocean + lakes + rivers) | 20–40 % of map | 27–37 % |
-| River-channel columns | 4–8 % of map | 5.0–6.6 % |
-| Flat-ish land (|Δh| ≤ 2 over ±2 blocks) | ≥ 50 % of land | 54–58 % |
-| Distinct biomes per seed | all 8 land biomes present | 8/8 on 3 seeds |
-| Biome changes walking one 512-block row through spawn | 8–25 | 15–21 |
-| Nearest tree from spawn | p50 ≤ 12, p90 ≤ 32, max ≤ 64 | p50 6, p90 18, max 48 |
-| Nearest cave mouth (open pit ≥ 4 deep) from spawn | p50 ≤ 30, p90 ≤ 64 | p50 22, p90 47 |
-| First ore inside a 3 × 3 shaft dug straight down from spawn | p50 ≤ 30 blocks, p90 ≤ 64 | p50 20, p90 58 |
-| Nearest different biome from spawn | p90 ≤ 40 | p90 14 |
-| Spawn column | never water, cave, tree, ravine, cliff, snow; flat ±2 | 0 failures / 100 seeds |
-| Ore voxels per chunk (world average, §7) | coal ≈ 110, iron ≈ 85, copper ≈ 70, redstone ≈ 40, gold ≈ 27, lapis ≈ 19, diamond ≈ 13, emerald ≈ 6 (mountain-only) | table in §12 |
-| Cave air fraction of rock by y band | 1–23: 14–20 %, 24–47: 13–19 %, 48–79: 8–12 %, 80–119: 4–7 % | 17.8 / 16.0 / 10.3 / 4.2 (seed 1) |
-| Unstable water (air beside or below a generated water/lava voxel) | exactly 0 | 0 on 3 seeds |
-| Trees cut at chunk borders (leaf with no log within 3) | exactly 0 | 0 on 3 seeds |
-| Generation time | mean ≤ 2 ms, p95 ≤ 3 ms per chunk (Node/V8, this machine) | mean 1.45–1.60, p95 1.75–2.29 |
+| Target (what the kid gets) | Guarded by |
+|---|---|
+| A view from a hill at spawn: spawn column at h ≥ 130 whenever such a column exists within 96 blocks of the centre, else ≥ 122 | 11.11 |
+| Room to build: ≥ 40 % of columns within Chebyshev 24 of spawn dry, river-free and within ±3 of spawn height | 11.11, 11.12 |
+| No cliff or pit ambush near spawn: open-sky single-step drop within 32 blocks p90 ≤ 20 | 11.12 |
+| A tree within ~10 blocks, a cave mouth within ~50, first ore within ~30 blocks of digging | 11.12 |
+| Mountains to 220–238, cliffs and overhangs on real mountains only, no floating islands | 11.4, 11.15 |
+| 8 land biomes on every seed, each with its own top blocks and trees | 11.10 |
+| 25–47 % water (sea, lakes, rivers), all at one level so the liquid scheduler never runs at load | 11.4, 11.5 |
+| Caves everywhere below the surface, denser with depth, lava sea at the bottom, nothing drains a lake | 11.5, 11.6 |
+| Eight ore families in vanilla-shaped bands, veins continuous across chunk planes | 11.7, 11.2 |
+| A dig shaft that meets something new (ore, pocket, blob, cave) at least every ~40 blocks | 11.12 |
+| Generation ≤ 3 ms per chunk on this machine; downstream mount cost owned by the perf project | 11.13, §2.1 |
 
 ## 2. Pipeline
 
-Every stage is a pure function of `(seed, cx, cz)` and the arrays produced by
-earlier stages of the *same* chunk. No stage reads another `Chunk`. Stages 5–6
-read *neighbouring chunks' feature lists*, which are recomputed from the seed
-(padded-origin scheme, §10), not read from memory.
+Every stage is a pure function of `(seed, cx, cz)` and the arrays produced
+by earlier stages of the *same* chunk. No stage reads another `Chunk`.
+Stages 5–6 replay *feature instance lists* of the 3 × 3 chunk neighbourhood;
+those lists are pure functions of `(seed, originChunk)` (§10) and may be
+memoised.
 
-| # | Stage | Resolution | What it produces | Cost (ms, measured) |
+| # | Stage | Resolution | Produces | ms (12-seed mean) |
 |---|---|---|---|---|
-| 1 | Column stack | 2-D, 20 × 20 columns (chunk + 2 pad) | height `hRaw`, biome, shape amplitude `amp`, entrance mask, river weight, ravine width, `caveCeil`, `waterNear` | 0.30 |
-| 2 | Lattice | 3-D, 5 × (yTop/4+1) × 5 nodes, cell 4 × 4 × 4 | `S` (3-D shape term, blocks), `Dc` (cave carve, blocks) | 0.24 |
-| 3 | Fill | per voxel, y < yTop | `kind`: 0 terrain-air, 1 solid, 2 cave-air, 3 water; ravines | 0.4–1.0 |
-| 4 | Surface | per column top-down sweep | block ids: biome top/filler, beaches, sea floor, snow, deepslate, lava sea, ice | 0.31 |
-| 5 | Underground features | per feature, 3 × 3 chunk origins | ores, stone blobs, gravel/clay/dirt pockets, geodes, pools; then moss/dripstone | 0.39 + 0.19 |
-| 6 | Trees | per feature, 3 × 3 chunk origins | trunks and canopies clipped to this chunk | 0.08 |
+| 1 | Column stack | 2-D, 24 × 24 columns (chunk + pad 4) | `hRaw`, `h`, biome, `amp`, `ampCell`, entrance mask, river, ravine, `caveCeil`, `waterNear` | 0.32 |
+| 2 | Lattice | 3-D, 5 × (yTop/4+1) × 5 nodes, cell 4 × 4 × 4 | `S` (shape, blocks), `Dch` (cheese carve), `Dtn` (tunnel carve) | 0.21 |
+| 3 | Fill | per voxel, y < yTop | `kind`: 0 terrain-air, 1 solid, 2 cave-air, 3 water; ravines | 0.34 |
+| 4 | Surface | per column, top-down | block ids: biome top/filler, beaches, sea floor, snow, deepslate, lava sea, ice | 0.17 |
+| 5 | Underground features | per instance, 3 × 3 origins | ores, stone blobs, pockets, geodes, pools; then moss/dripstone | 0.42 + 0.10 |
+| 6 | Trees | per instance, 3 × 3 origins | trunks and canopies clipped to this chunk | 0.01 |
 
-`yTop = min(252, ceil((maxH_padded + 28) / 4) · 4)`; everything above is air
-and never visited. Sum 1.9–2.5 ms in mountain/cave-dense regions, 1.5 ms mean
-over a full map (§12). Stage 3 is the only stage whose cost varies with
-content (cave-dense chunks interpolate `Dc` in more cells).
+`yTop = min(252, ceil((max h over the padded columns + 28) / 4) · 4)`;
+everything above is air and never visited. The chunk array is assumed
+zero-filled on entry (a fresh `Chunk` is); the generator writes every voxel
+below `yTop` and nothing at or above it. Total 1.55 ms mean (§12).
 
-Per-seed noise objects (`createNoise2D/3D` from `simplex-noise`, 19 fields)
-are built once per seed and cached; building them costs ~10 ms and is what
-makes the first chunk of a run 13–18 ms in §12. The engine must construct them
-at `World.create`/load, not per chunk.
+Noise fields (`createNoise2D/3D` from `simplex-noise`, 20 fields, §10) are
+built once per seed and kept in a module-level `Map<seed, Fields>` in
+`generation.v3.ts`. Building them costs 0.5–2.5 ms; the 10–13 ms first chunk
+of a process is V8 JIT warm-up, not field construction, and cannot be
+removed by caching.
+
+### 2.1 Downstream budget (engine measurements, gate 1)
+
+Per mounted chunk, 81 around spawn, real `fillChunkLights` +
+`computeChunkShadows` + `meshChunk`: v2 mount mean 18.5 ms; v3 generation
+2.1 + light 7.3–9.6 + shadows 12–20 (p95 27–37, max 95) + mesh 11 = **mean
+34–41 ms, p95 53–61**. Faces per chunk 2 958 mean vs 615 on v2. Shadows
+dominate: every sky-lit non-opaque voxel under the 3 × 3 max-opaque-y casts a
+32-block ray, and caves, pits and overhangs multiply those voxels. Liquid
+scheduler: tick 1 seeds 67–80 k water voxels (400 ms once), then the
+frontier decays to zero; 200 ticks produce 0 writes.
+
+Worldgen's share of this: the entrance-zone share (`ENT_T`, §6) and the
+80–119 cave density are the only cheap levers, and both are set by play
+targets (11.12), so worldgen keeps them. The rest is handed to the
+performance project explicitly: shadow ray budget, meshing off-thread,
+mount pacing (`flushDirtyChunks` mounts 2 chunks per frame → ~80 ms frames
+while streaming v3, ~37 on v2).
 
 ## 3. Terrain shape
 
-### 3.1 Column fields (stage 1, per column, 2-D simplex fBm)
+### 3.1 Column fields (stage 1, 2-D simplex fBm, octaves halve wavelength and amplitude)
 
-| Field | Octaves | Wavelength | Range | Drives |
-|---|---|---|---|---|
-| `C` continentalness | 3 | 420 | −1..1, +0.08 bias | base height, ocean/land |
-| `E` erosion | 3 | 330 | −1 rugged .. 1 flat | mountain-ness `M` |
-| `PV` peaks-valleys | 4 | 140 | ridged: `PV = 1 − 2·|fbm|` | ridges and valleys inside mountains |
-| `T` temperature | 2 | 320 | + 0.04 · `JIT` | biome |
-| `HU` humidity | 2 | 300 | + 0.04 · `JIT` | biome |
-| `R` river | 2 | 210 | channel where `|R| < w` | rivers |
-| `D` detail | 3 | 26 | ±3.5 blocks | small bumps |
-| `ENT` entrance mask | 1 | 90 | > 0.25 ⇒ caves may breach the surface | cave mouths |
-| `RG` ravine gate | 1 | 300 | > 0.4 ⇒ ravine zone | ravines |
-| `JIT` jitter | 1 | 14 | ±0.04 | fuzzy biome borders |
-| `PATCH` | 1 | 9 | patches of podzol / coarse dirt / gravel | surface variety |
+| Field | Oct. | Wavelength | Use |
+|---|---|---|---|
+| `C` continentalness | 3 | 420 | base height; `+0.08` bias |
+| `E` erosion | 3 | 330 | mountain-ness `M` |
+| `PV` peaks-valleys | 4 | 140 | `PV = 1 − 2·|fbm|` (ridged) |
+| `T` temperature | 2 | 320 | biome |
+| `HU` humidity | 2 | 300 | biome |
+| `R` river | 2 | 210 | channel where `|R| < w` |
+| `D` detail | 3 | 26 | ±3.5 blocks |
+| `ENT` entrance mask | 1 | 90 | `> ENT_T = 0.1` ⇒ tunnels may breach the surface |
+| `RG` ravine gate | 1 | 300 | `> 0.4` ⇒ ravine zone |
+| `RAV` ravine line | 1 | 230 | ravine where `|RAV| < w(y)` |
+| `RAVD` ravine depth | 1 | 300 | depth 40–65 |
+| `PATCH` | 1 | 9 | podzol / coarse dirt / gravel / clay patches |
 
-Spawn and wall shaping, applied to `C` before the spline:
-`C += 0.45 · smooth(1 − d_centre/110)` (spawn continent, guarantees land at
-(256, 256)); `C −= 0.8 · smooth(1 − d_edge/20)` (a 20-block ocean ring at the
-hard wall, so the wall reads as the sea's edge instead of a sliced mountain).
+No jitter field (gate 1 F1: it caused 2–3-block biome flicker). Spawn and
+wall shaping applied to `C` before the spline:
+`C += 0.45 · smooth(1 − d_centre/110)` (spawn continent: land at (256, 256)
+on every seed); `C −= 0.8 · smooth(1 − d_edge/20)` (20-block ocean ring at
+the wall). `smooth(t) = t²(3 − 2t)` on `t` clamped to 0..1.
 
-### 3.2 Height spline
-
-```
-base(C)  = spline C→y through (-1,98) (-0.55,104) (-0.3,113) (-0.15,121) (0.1,127) (0.45,136) (1,146)   [smoothstep between knots]
-M        = smooth((0.3 − E) / 0.7) · smooth((C + 0.05) / 0.35)          // mountain-ness 0..1
-h        = base + M · (PV > 0 ? 92·PV : 18·PV)                            // ridges up to +92, valleys down to −18
-badlands terraces (biome == badlands, h > 124): h = q + 6·smooth(2(h−q)/6 − 0.5), q = floor(h/6)·6
-rivers (§5)
-h       += 3.5 · D · (1 − river)
-hRaw     = h;  h = ceil(hRaw) − 1                                          // h = top solid y of a pure-2-D column, exactly
-```
-
-Vanilla reference: base −64..320 with sea at 63 and peaks to ~256 via a
-similar C/E/PV spline. Ours compresses to 98..238 around sea 120 because the
-column is 256 tall and the kid needs the 0..120 band for digging.
-
-### 3.3 3-D shape (overhangs, cliffs) without floating islands
+### 3.2 Height, exactly in this order
 
 ```
-amp(x,z) = h > 126 ? 22 · smooth((M − 0.3)/0.4) · smooth((h − 126)/20) : 0     // blocks; EXACTLY 0 on hills and lowlands
-S(node)  = amp · fbm3(SHAPE, x/44, y/30, z/44, 3 oct) · smooth(1 − |hRaw − y| / 40)   // lattice, 0 when amp = 0 or |hRaw − y| ≥ 40
-dt(voxel) = hRaw(column) − y + trilinear(S)                                   // block units; solid iff dt > 0
+base   = spline(C) through (-1,98) (-0.55,104) (-0.3,113) (-0.15,121) (0.1,127) (0.45,136) (1,146)  [smooth between knots]
+M      = smooth((0.3 − E)/0.7) · smooth((C + 0.05)/0.35) · (1 − 0.6·smooth(1 − d_centre/128))   // mountain-ness, softened near spawn
+h      = base + M · (PV > 0 ? 92·PV : 18·PV)
+T      = fbm(T) − 0.7·clamp((h − 130)/90)           // lapse rate on THIS h (pre-terrace, pre-river, pre-detail)
+land   = pickLand(T, HU)                             // §4, decided once
+if land == badlands and h > 124: q = floor(h/6)·6; h = q + 6·smooth((h − q)/3 − 0.5)    // terraces
+rivers (§5) may pull h toward 117
+h     += 3.5 · fbm(D) · (1 − river)
+hRaw   = h;  h = ceil(hRaw) − 1                      // top solid y in a flat cell
+biome  = h < 118 ? ocean : land
 ```
 
-`hRaw` is taken from the voxel's own column, not interpolated, so a column
-whose lattice cell has `amp = 0` at all four xz corners has its top solid
-block at exactly `h`. That is what makes trees and the spawn rule exact (§8,
-§9). The 40-block taper keeps `S` from producing solid far above the surface;
-with amplitude 22 and the vertical gradient of 1 block/block, a detached blob
-needs `fbm3 > 0.68` sustained over ≥ 4 blocks, which simplex fBm essentially
-never does. Decision: **no deliberate floating islands**. Measured: 0–40
-floating solid voxels in a 96 × 96 × 256 box around each seed's highest peak,
-out of 1.2–1.5 M solid (≤ 0.004 %), and 1–17 isolated single voxels per full
-map. Overhangs and vertical cliff faces occur wherever `amp > 8` (mountains).
+### 3.3 3-D shape (overhangs, cliffs), and why nothing floats
 
-Height distribution targets: see §1. Peaks: 222 / 234 / 238 on the three
-seeds; the spline caps at 146 + 92 = 238.
+```
+amp(x,z)    = h > 126 ? 22 · smooth((M − 0.4)/0.35) · smooth((h − 126)/20) : 0      // blocks; EXACTLY 0 unless M > 0.4
+S(node)     = amp · fbm3(SHAPE, x/44, y/30, z/44, 3 oct) · smooth(1 − |hRaw − y|/40)    // lattice; 0 when amp = 0 or |hRaw − y| ≥ 40
+flatCell(x,z) = amp == 0 at the cell's 4 xz corners (x&~3, z&~3), (+4,0), (0,+4), (+4,+4)
+dt(voxel)   = hRaw(own column) − y + (flatCell ? 0 : trilinear(S))                       // block units; solid iff dt > 0
+ampCell(x,z) = max amp over the same 4 corners                                            // bound on |trilinear(S)| in that column
+```
+
+`hRaw` comes from the voxel's own column, so in a flat cell the top solid
+block is exactly `h`; trees and the spawn rule only use flat cells (§8, §9).
+The 40-block taper plus the 1 block/block vertical gradient means a detached
+blob needs `fbm3 > 0.68` sustained over 4 blocks; measured floating solids
+are 1–14 isolated voxels per map (11.15). Decision: no deliberate floating
+islands.
 
 ## 4. Biomes
 
-Selection per column from `(T, HU, h)` with `T` lapse-corrected:
-`T −= 0.7 · clamp((h − 130) / 90, 0, 1)` (peaks go cold).
+`pickLand(T, HU)`: snowy if T < −0.45; else if T < −0.15: plains if HU <
+−0.25 else taiga; else if T < 0.3: plains if HU < −0.25, forest if HU < 0.35,
+else cherry; else badlands if HU < −0.35, desert if HU < 0.1, else savanna.
+Ocean = any column with h < 118 (its `land` value still selects ice and
+beach material).
 
-| Biome | Condition | Top / filler (depth 0 / 1–3) | Trees (§8) | Extras |
+Surface rules are applied per column, top-down, to the first 9 solid voxels
+under terrain-air or water (`depth` 0 = top). Cave-air resets the depth
+counter only when `y > hRaw − 9` (so cave-mouth ledges get their biome top
+and deep cave floors stay stone). Precedence, first match wins:
+
+1. **under water** (water directly above): depth 0 → `sand` if h > 110 (or `gravel` where PATCH > 0.35), else `clay` where PATCH > 0.2 else `gravel`; depth 1–2 → `sand`.
+2. **beach** (`117 ≤ h ≤ 122`, land ≠ badlands) or **river bank** (`river > 0.6`): depth 0–3 → `sand`, or `gravel` when land is snowy or taiga.
+3. **snow line** (`y ≥ 160 + 20·T`, or land = snowy at any y): depth 0 → `snow_block`, depth 1–2 → `dirt`.
+4. **stony peak** (`amp > 8`): stone (no top block).
+5. **biome**:
+
+| Biome | depth 0 | depth 1–3 | deeper | Trees (§8) |
 |---|---|---|---|---|
-| ocean | h < 118 | sea-floor rule (§5) | none | — |
-| snowy | T < −0.45 | `snow_block` / `dirt` × 3 | spruce 1–2 | water top at y 120 = `ice`; beaches are `gravel` |
-| taiga | −0.45 ≤ T < −0.15, HU > −0.3 | `grass_block` or `podzol` (PATCH > 0.45) / `dirt` × 3 | spruce 5–7 | gravel beaches |
-| plains | −0.45 ≤ T < 0.3, HU low | `grass_block` / `dirt` × 3 | oak 0–2 | — |
-| forest | −0.15 ≤ T < 0.3, −0.2 ≤ HU < 0.35 | `grass_block` / `dirt` × 3 | oak + birch 6–9 | — |
-| cherry | −0.15 ≤ T < 0.3, HU ≥ 0.35 | `grass_block` / `dirt` × 3 | cherry 2–4 | — |
-| badlands | T ≥ 0.3, HU < −0.35 | `red_sand` top at y ≤ 128, else terracotta bands / bands | none | terraces; bonus gold |
-| desert | T ≥ 0.3, −0.35 ≤ HU < 0.1 | `sand` × 3 / `sandstone` × 5 | none | — |
-| savanna | T ≥ 0.3, HU ≥ 0.1 | `grass_block` or `coarse_dirt` (PATCH > 0.55) / `dirt` × 3 | acacia 1–2 | — |
+| plains | `grass_block` | `dirt` | stone | oak 0–2 |
+| forest | `grass_block` | `dirt` | stone | oak+birch 8–12 attempts |
+| cherry | `grass_block` | `dirt` | stone | cherry 2–4 |
+| taiga | `podzol` where PATCH > 0.45 else `grass_block` | `dirt` | stone | spruce 6–9 |
+| snowy | (rule 3) | | | spruce 1–2 |
+| savanna | `coarse_dirt` where PATCH > 0.55 else `grass_block` | `dirt` | stone | acacia 1–2 |
+| desert | `sand` (depth 0–2) | `sandstone` (depth 3–7) | stone | none |
+| badlands | `red_sand` if y ≤ 128, else band | terracotta band for y ≥ 100 | stone | none |
 
-Terracotta bands (badlands, y ≥ 100, depth 0–8): index `y & 15` into
-`[terracotta, orange_terracotta, terracotta, yellow_terracotta, terracotta, white_terracotta, red_terracotta, terracotta, brown_terracotta, orange_terracotta, terracotta, light_gray_terracotta, terracotta, red_terracotta, orange_terracotta, terracotta]` — bands are by absolute y, as in vanilla, so they line up across terraces.
-
-Altitude rules (override biome, any land column):
-- stony peaks: `amp > 8` ⇒ top block is bare `stone` (no grass on cliff faces);
-- snow line: `y ≥ 160 + 20·T` (≈ 146 warm, 174 cold; snowy biome: always) ⇒ top `snow_block`, filler `dirt` × 2.
-
-Beaches: any non-badlands column with `117 ≤ h ≤ 122` gets `sand` (snowy /
-taiga: `gravel`) to depth 4. Sea floor (water above): `h > 110` ⇒ `sand`
-(`gravel` where PATCH > 0.35), else `clay` (PATCH > 0.2) or `gravel`; depth
-1–2 `sand`.
-
-Borders: biome choice is a hard argmax, blurred by `JIT` (±0.04 at wavelength
-14) so edges wander over ~6 blocks instead of following an iso-line. No
-cross-biome height blending is needed because height does not depend on
-biome except badlands terraces, which are smoothstepped.
+Terracotta band (badlands, y ≥ 100, depth 0–8): index `y & 15` into
+`[terracotta, orange_terracotta, terracotta, yellow_terracotta, terracotta, white_terracotta, red_terracotta, terracotta, brown_terracotta, orange_terracotta, terracotta, light_gray_terracotta, terracotta, red_terracotta, orange_terracotta, terracotta]`.
+Below all rules: `stone` for y ≥ 52, `deepslate` for y < 44, and between
+44 and 51 `deepslate` with probability `(52 − y)/8` from `hash(x, y, z)`.
 
 ## 5. Water
 
-- **Sea level 120, fixed.** Every terrain-air voxel (`dt ≤ 0`) with `y ≤ 120` is `water` (snowy biome: `ice` at y = 120). Nothing else places water above y 120, and there is **no water above sea level anywhere** (exact test, §11). Lakes are simply inland depressions of the C-spline below 118; mountain lakes are out of scope (§13).
-- **Rivers:** `w = 0.045 · clamp(1 − (h − 126)/30)` (rivers vanish above y 156); `river = 1 − smooth((|R| − w)/0.05)` for `|R| < w + 0.05`, `h ← h + (117 − h)·river` (channel bottom y 117, 3 deep, banks fade over ~5 blocks). Bank/channel columns (`river > 0.6`) get `sand` (cold biomes `gravel`) to depth 4.
-- **Stability with the liquid scheduler** (docs/liquids.md: a source spreads 4 hops sideways into air and falls without limit): generated water must have no `air` on its 4 sides or below. Proof: water sits only at `y ≤ 120` in terrain-air; a side neighbour at the same y is terrain-air (⇒ water), solid, or cave-air — and cave-air is forbidden within 6 blocks of any terrain-air/water surface of its 3 × 3 column neighbourhood (`caveCeil`, §6). Below is terrain-air (water) or solid. Ice at y 120 is solid. Measured: **0** violations per full map on 3 seeds.
-- **Underground pools** (own-chunk, interior 4..11 so all neighbours are known): per chunk 2 lava attempts (y 12–40) and 2 water attempts (y 40–100). Each looks down ≤ 8 blocks for a cave floor, takes a disc r 2–3.5 of floor voxels that have air above, and keeps only those whose 4 side neighbours and the block below are solid-or-in-disc; needs ≥ 4 survivors. The liquid replaces the floor block, so it is enclosed on 5 sides. Same rule for lava.
-- **Lava sea:** every cave-air voxel with `y ≤ 10` is `lava` (vanilla: lava level −54, 10 above bedrock). Sideways neighbours are lava or solid; below is lava, solid or bedrock. `lava.lightLevel` is 12 (blocks.base.data.ts:96), so the kid sees the glow through a cave opening from ~12 blocks away before reaching it.
-- Water never touches caves: enforced by `caveCeil`, not by post-hoc patching.
+- **Sea level 120, fixed.** Every terrain-air voxel (`dt ≤ 0`) with `y ≤ 120` is `water`; in snowy land the y = 120 voxel is `ice`. No other rule places water. Lakes are inland depressions below 118; there are no lakes above sea level.
+- **Rivers:** `w = 0.045 · clamp(1 − (h − 126)/30)` (none above h 156); for `|R| < w + 0.05` and h > 114: `river = 1 − smooth((|R| − w)/0.05)`, `h += (117 − h)·river`. Banks/channel (`river > 0.6`) get rule 2 of §4.
+- **Stability:** generated water and lava never have `air` on a side or below (11.5). Water sits only at y ≤ 120 in terrain-air; a side neighbour at that y is terrain-air (water), solid, or cave-air, and cave-air is kept ≥ 6 blocks under every nearby surface by `caveCeil` (§6). Ice is solid.
+- **Pools** (own chunk, centre in local 4..11): per chunk 2 lava attempts (y 12–40) and 2 water attempts (y 40–100). From the attempt point look ≤ 8 blocks down for a cave floor; take the disc of radius `r ∈ [2, 3.5)` of floor voxels with air above; keep those whose 4 side neighbours and the voxel below are solid or in the disc; place if ≥ 4 survive. Measured 280–335 pools per map.
+- **Lava sea:** every cave-air voxel with y ≤ 10 is `lava` (`lava.lightLevel` 12, blocks.base.data.ts:96: it glows before the kid reaches it). Parent decision: kept, Minecraft-faithful.
 
 ## 6. Caves
 
-All cave terms are evaluated at lattice nodes (4 × 4 × 4) as signed "blocks
-of carve" and trilinearly interpolated; a voxel is cave-air when the
-interpolated `Dc > 0` (vanilla samples the same way at 4 × 8 × 4; we use 4 in
-y so spaghetti floors are not stair-stepped). `deep = clamp((112 − y)/92)`.
+Carve terms are evaluated at lattice nodes (4 × 4 × 4) as signed "blocks of
+carve" and trilinearly interpolated; `deep = clamp((112 − y)/92)`; nodes
+with `y > h + 4` or `y < 2` are −99. A cell whose 8 corners are all ≤ 0 is
+skipped (most cells).
 
-| Type | Fields | Formula (positive ⇒ carve) | Where |
-|---|---|---|---|
-| cheese (caverns) | `CHEESE` 2 oct, xz/96, y/48 | `(n − (0.58 − 0.28·deep)) · 24` | y 2 .. h+4 |
-| spaghetti (tunnels) | `S1`, `S2` xz/54, y/32 | `(r² − (s1² + s2²)) · 450`, `r = 0.085 + 0.045·deep` (≈ 3–5 wide) | y 2 .. h+4 |
-| noodle (thin) | `N1`, `N2` xz/26, y/20 | `(0.0036 − (n1² + n2²)) · 1100` (≈ 1–2 wide) | y < 92 |
-| ravine | `RAV` 2-D, wavelength 230; gate `RG > 0.4`, land `h > 128`, `amp < 6`, `!waterNear` | air where `|RAV| < w(y)`, `w = ravW · (0.4 + 0.6·(y − bottom)/(h − bottom))`, `ravW = 0.035·smooth((RG − 0.4)/0.2)` (≈ 8 wide at the top, 3 at the bottom); `bottom = h − (40 + 25·smooth(RG'))` | y bottom .. h+60 |
+| Type | Node formula (positive ⇒ carve) |
+|---|---|
+| cheese `Dch` | `(fbm3(CHEESE, x/96, y/48, z/96, 2) − (0.58 − 0.28·deep)) · 24` |
+| spaghetti | `(rs² − (S1² + S2²)) · 450`, `S1, S2` at `(x/54, y/32, z/54)`, `rs = 0.085 + 0.045·deep + boost`, `boost = 0.04·clamp(1 − (h − y)/30)` in entrance columns else 0 |
+| noodle (y < 92) | `(0.0036 − (N1² + N2²)) · 1100`, fields at `(x/26, y/20, z/26)` |
+| `Dtn` | max(spaghetti, noodle) |
 
-`Dc = max(cheese, spaghetti, noodle)`. Per-cell skip: if none of a cell's 8
-corners has `Dc > 0` the cell is not interpolated (that is most cells; it is
-what keeps stage 3 under 1 ms).
+Per column: `waterNear = min over 3 × 3 of (hRaw − ampCell) < 122`;
+`caveCeil = that min − 6`; `entrance = ENT > 0.1 and not waterNear`.
+Per voxel with `dt > 0`, in this order:
+- cheese: cave-air if `dt > 6 and y < caveCeil − (entrance ? 18 : 0)` and `Dch > 0` — cheese never breaches; in entrance zones it stays ≥ 24 below the surface so a tunnel mouth cannot open straight into a cavern;
+- tunnels: cave-air if (`dt > 6 and y < caveCeil`) or (`entrance and dt > −2`), and `Dtn > 0`;
+- ravine (§6.1) may also carve.
+Cave-air at y ≤ 10 becomes lava. Measured cave-air share of rock per band
+and mouth statistics: 11.6, 11.12.
 
-Placement rules (per column, from stage 1):
-- `caveCeil = min over 3 × 3 columns of (hRaw − amp) − 6`; `waterNear = that min < 122`.
-- entrance zone: `ENT > 0.25 && !waterNear`.
-- outside entrance zones a voxel is cave-air only if `dt > 6` **and** `y < caveCeil` (≥ 6 blocks of rock to every nearby surface — vertical and horizontal — so no water ever sees cave air and no random pinholes);
-- inside entrance zones: cave-air if `dt > −2` (caves break the surface; open pits and cliff-side mouths).
-- lava below y 11 (§5). No cave carve at y < 2.
+### 6.1 Ravines
 
-Depth profile (measured, fraction of rock that is cave or lava): y 1–23:
-17.8 %, 24–47: 16.0 %, 48–79: 10.3 %, 80–119: 4.2 %, ≥ 120: 1.7 %. Vanilla
-1.18 is ≈ 12–15 % around y −40 and ≈ 4 % near the surface; we run slightly
-denser below 48 on purpose (the kid digs from 120, and the first 70 blocks
-are already the shallow band).
+Ravine zone: `RG > 0.4` and h > 128 and `amp < 6` and not waterNear;
+`ravW = 0.035·smooth((RG − 0.4)/0.2)`, `depth = 40 + 25·smooth(RAVD)`,
+`bottom = round(h − depth)`. Voxel is ravine air when `|RAV| < ravW · (0.4 +
+0.6·(y − bottom)/(h − bottom))` for `bottom ≤ y < h + 60` (≈ 8 wide at the
+rim, 3 at the floor). The 4 voxels `bottom − 4 ≤ y < bottom` of every
+ravine-core column (`|RAV| < 0.4·ravW`) are forced solid, so caves under the
+floor never merge into it (gate 1 F5). A column is "in the channel" when
+`|RAV| < ravW + 0.005`; trees and spawn use that predicate.
 
-Decoration (stage 5, over cave-air voxels, `DECO` 3-D noise xz/40 y/40):
-- moss: where `DECO > 0.45` and `56 < y < 112` (lush zones ~10 % of caves): floor block → `moss_block`; 1 in 5 floor voxels also get a moss block on top; 1 in 3 ceiling blocks → `moss_block`.
-- dripstone: where `DECO < −0.45`: 1 in 7 floor voxels grow a `dripstone_block` stalagmite 1–3 tall; 1 in 9 ceiling voxels a stalactite 1–3 tall. (Catalog has no `pointed_dripstone`; `dripstone_block` columns read as stalagmites at this scale.)
-Measured 25 k moss and 19–22 k dripstone voxels per map.
+### 6.2 Decoration (over cave-air voxels; `DECO` 3-D noise at xz/40, y/40)
 
-Minimum ceiling below the surface: 6 blocks outside entrance zones (exact by
-construction); entrance zones are ~44 % of land (`ENT > 0.25`).
+- moss: `DECO > 0.45` and `56 < y < 112`: floor block → `moss_block`; 1 in 5 floor voxels also get moss on top; 1 in 3 ceiling blocks → `moss_block`;
+- dripstone: `DECO < −0.45`: 1 in 7 floor voxels grow a `dripstone_block` column 1–3 tall; 1 in 9 ceiling voxels a stalactite 1–3 tall. (No `pointed_dripstone` in the catalog.)
+Ratios use `hash(x, y, z)` on world coordinates.
 
 ## 7. Ores and underground variety
 
-Deepslate: `stone → deepslate` for `y < 44`; for `44 ≤ y < 52` per-voxel
-probability `(52 − y)/8` (hash of world coords). Vanilla: −64..8 with an
-8-block blend at 0..8; ours puts the switch 72 blocks below the surface so
-the kid meets it after a real dig. Ore placed into deepslate uses the
-`deepslate_*_ore` row.
+All underground features are **instance lists** (§10): `oresOf`,
+`blobsOf`, `pocketsOf`, `geodesOf`, `poolsOf(seed, cx, cz)`. Veins are
+random walks of `size` steps driven by the instance's own sub-stream: write
+the current voxel, with p 0.5 also one diagonal neighbour, move one block on
+a random axis, then clamp y into `[y0, y1]` (exact band). Only `stone` and
+`deepslate` are replaced; in deepslate the `deepslate_*_ore` row is used. No
+exposure culling (glints in cave walls are the point). Origin y is drawn
+from a triangular distribution `tri(y0, peak, y1)`.
 
-Veins are random walks: `size` steps, each writes the current voxel and, with
-p 0.5, one diagonal neighbour, then moves 1 block in a random axis. Only
-`stone`/`deepslate` are replaced (never air, water, dirt, other ore), so
-veins are exposed on cave walls exactly as often as caves cut them — no
-extra "exposure" rule; vanilla's diamond 50 %-discard-if-exposed is dropped
-on purpose (glints in walls are the point). `y` is drawn from a triangular
-distribution `tri(y0, peak, y1)`.
-
-| Ore | y0–peak–y1 | attempts/chunk | vein steps | Vanilla (1.21) | Measured voxels/chunk (band split in §12) |
+| Ore | y0–peak–y1 | attempts/chunk | steps | Gate | Vanilla (1.21) |
 |---|---|---|---|---|---|
-| coal | 60–128–200 | 24 | 6–14 | 0..192 uniform ×20 size 17 + 136..320 ×30 | 106–123 |
-| iron | 16–60–112 | 12 | 4–9 | −24..56 peak 16 ×10 size 9 | 82–87 |
-| iron (mountain) | 140–185–230, only if max h in chunk ≥ 150 | 24 | 4–9 | 80..384 peak 232 ×90 | (included above; 7–11 above 120) |
-| copper | 50–92–130 | 10 | 5–10 | −16..112 peak 48 ×16 size 10 | 69–71 |
-| gold | 6–30–70 | 5 | 4–8 | −64..32 peak −16 ×4 size 9; badlands 32..256 ×50 | 27 |
-| gold (badlands bonus) | 40–80–120, columns in badlands only | 20 | 3–6 | see above | not in §12 (badlands 0.6–3.3 % of map) |
-| lapis | 12–40–76 | 4 | 3–7 | −32..32 peak 0 ×2 size 7 (+ buried) | 18–19 |
-| redstone | 4–12–40 | 8 | 4–8 | −64..15 ×4 size 8; −96..−32 peak −64 ×8 | 40–41 |
-| diamond | 4–8–36 | 4 | 2–5 | −144..16 peak −64 ×7 size 4 | 13–14 total |
-| diamond (large) | 4–10–30, p 1/8 | 1 | 5–8 | size 12 at 1/9 | " |
-| emerald | 100–180–220, only if max h in chunk ≥ 150 | 20 | 1–3 | mountains only ×100 size 3 | 4.6–6.9 world avg (≈ 25 in a mountain chunk) |
+| coal | 60–128–200 | 24 | 6–14 | — | 0..192 ×20 size 17 + 136..320 ×30 |
+| iron | 16–60–112 | 12 | 4–9 | — | −24..56 peak 16 ×10 |
+| iron (mountain) | 140–185–230 | 24 | 4–9 | origin chunk `chunkMaxH ≥ 165` | 80..384 peak 232 ×90 |
+| copper | 50–92–130 | 10 | 5–10 | — | −16..112 peak 48 ×16 |
+| gold | 6–30–70 | 5 | 4–8 | — | −64..32 peak −16 ×4 |
+| gold (badlands) | 40–80–120 | 20 | 3–6 | origin chunk centre column is badlands land, and the origin column is badlands with h > 120 | 32..256 ×50 in badlands |
+| lapis | 12–40–76 | 4 | 3–7 | — | −32..32 peak 0 ×2 |
+| redstone | 4–12–40 | 8 | 4–8 | — | −64..15 ×4; −96..−32 ×8 |
+| diamond | 4–8–36 | 4 | 2–5 | — | −144..16 peak −64 ×7 |
+| diamond (large) | 4–10–30 | 1 | 5–8 | p 1/8 | size 12 at 1/9 |
+| emerald | 100–180–220 | 20 | 1–3 | origin chunk `chunkMaxH ≥ 165` | mountains ×100 size 3 |
 
-Stone blobs (ellipsoids, `ry = 0.7·r`, 1 in 3 rim voxels skipped for a rough
-edge; replace stone/deepslate only): `granite`, `diorite`, `andesite` 3
-attempts each, y 40–120, r 3–5.5; `tuff` 3 attempts y 4–60 r 3–6; `calcite`
-1 attempt y 60–130 r 2–4. Measured ≈ 0.8 % of all blocks each for the three
-igneous ones, tuff 0.9 % — a different stone about every 12 blocks of tunnel.
-Vanilla: 2 × size-64 blobs per stone type per chunk in 0..128, tuff 0..16.
+`chunkMaxH(seed, cx, cz)` = max `h` over the 16 columns `(cx·16 + 4i + 2,
+cz·16 + 4j + 2)`, `i, j ∈ 0..3` — the origin chunk's own columns, whoever
+replays it. Gate 165 (was 150) keeps emerald out of spawn hills (11.12).
 
-Pockets (`ry = 0.6·r`): `gravel` 3 attempts y 20–115 r 2–4; `dirt` 4
+Stone blobs (ellipsoids `rx = rz = r`, `ry = 0.7·r`; a rim voxel with `0.7 ≤
+d ≤ 1` is skipped when `hash % 3 == 0`; replace stone/deepslate only):
+`granite`, `diorite`, `andesite` 5 attempts each, y 40–120, r 2.5–5;
+`tuff` 3 attempts, y 4–60, r 3–6; `calcite` 1 attempt, y 60–130, r 2–4.
+Pockets (`ry = 0.6·r`): `gravel` 7 attempts y 20–115 r 2–4; `dirt` 8
 attempts y 60–118 r 2–3.5; `clay` 1 attempt y 30–110 r 2–3.
 
-Amethyst geodes: 1 in 24 chunks (vanilla 1/24), centre y 24–60, radius
-4–6.5, per-voxel jitter 0..0.6 on the radius. Shells from outside in:
-`smooth_basalt` (r..r+0.8), `calcite` (r−1..r), `amethyst_block` with 1 in 6
-`budding_amethyst` (r−2..r−1), hollow air inside. Geodes overwrite anything
-(so they can cut a cave). Measured 6–7 k amethyst voxels per map (≈ 43
-geodes).
-
-All of the above use the padded-origin scheme: the chunk replays the feature
-streams of itself and its 8 neighbours and writes only voxels inside
-`0..15`; features whose bounding box misses the chunk are skipped after
-consuming their random draws (§10).
-
-"Feel" targets per 16-column shaft (kid digging a 3 × 3 hole from 120 to
-bedrock): at least one ore by 30 blocks on half of seeds (measured p50 20),
-a stone-type change every ≤ 15 blocks, a cave crossing at least once in
-0..48 for > 90 % of shafts (cave fraction 16–18 % there).
+Geodes: 1 in 24 chunks, centre y 24–60, radius `r ∈ [4, 6.5)`, per-voxel
+radial jitter `+0.6·(hash % 100)/100`. Shells: `smooth_basalt` for `r < d ≤
+r + 0.8`, `calcite` for `r − 1 < d ≤ r`, amethyst layer for `r − 2 < d ≤ r −
+1` (`budding_amethyst` where `hash % 6 == 0` **and** some face neighbour
+lies in the calcite or amethyst layer, otherwise `amethyst_block`), air
+inside. Geodes overwrite anything.
 
 ## 8. Surface decoration
 
-Trees are per-chunk feature lists (`treesOf(seed, cx, cz)`): the chunk's
-species set comes from the biome of its centre column (x 8, z 8); count `n`
-per the biome table (§4); each tree draws `(lx, lz)`, species, height, two
-extra reals from the stream, and is dropped if within Chebyshev 2 of an
-earlier tree, or if its column has `h < 121`, `river > 0.2`, a different
-biome than the chunk centre, `h ≥ snow line`, or is not in a **flat cell**
-(`amp = 0` at all 4 xz corners of its 4 × 4 lattice cell, so its ground is
-exactly `h`). The trunk base writes `dirt` at `h` if that voxel is air or
-water (a cave mouth under a tree gets a dirt plug rather than a floating
-tree), trunk logs overwrite anything, leaves only replace air.
+`treesOf(seed, cx, cz)`: species set from the biome of the chunk's centre
+column (x 8, z 8); `n` attempts per the §4 table; each draws `(lx, lz)`,
+species, trunk height and two reals from the chunk's TREE stream; dropped
+if within Chebyshev 2 of an earlier tree of the same chunk, or if its column
+has h < 121, is a beach (§4 rule 2), has `river > 0.2`, is in a ravine
+channel, has a biome different from the chunk centre, is at or above the
+snow line `160 + 20·T`, or is not a flat cell. The base voxel at `h` is
+replaced by `dirt` unless it is `dirt`, `grass_block`, `podzol`,
+`coarse_dirt` or `snow_block`; trunk logs overwrite anything; leaves only
+replace air.
 
-Canopies (explicit voxel rules; `top = h + trunk`):
-- **oak** (`oak_log`, `oak_leaves`, trunk 4–6) and **birch** (`birch_log`, `birch_leaves`, trunk 5–7): layers `top−3, top−2` radius 2 with each corner kept by a coin flip, `top−1` radius 1 without corners, `top` radius 1, plus `top+1` a plus-shape of 5. Vanilla oak canopy.
-- **spruce** (`spruce_log`, `spruce_leaves`, trunk 6–10): one leaf at `top+1`, then rings of radius 1, 2, 1, 2 … downwards to `h+3`, radius-2 rings without corners.
-- **acacia** (`acacia_log`, `acacia_leaves`, trunk 5–6): trunk bends one block sideways at `top−1` (direction from the two extra reals), flat 5 × 5 canopy at `top` minus corners and a plus-shape at `top+1`.
-- **cherry** (`cherry_log`, `cherry_leaves`, trunk 4–5): discs radius 3 at `top−1` and `top`, radius 2 at `top+1`, one leaf at `top+2`.
+Canopies (`top = h + trunk`):
+- **oak** (`oak_log`/`oak_leaves`, trunk 4–6) and **birch** (`birch_log`/`birch_leaves`, 5–7): layers `top−3`, `top−2` radius 2 with each corner kept when `hash % 2 == 1`, `top−1` and `top` radius 1 without corners, `top+1` the 5-voxel plus.
+- **spruce** (`spruce_log`/`spruce_leaves`, 6–10): one leaf at `top+1`; rings of radius 1, 2, 1, 2 … from `top` down to `h+3`, radius-2 rings without corners.
+- **acacia** (`acacia_log`/`acacia_leaves`, 5–6): the trunk shifts one block sideways at `top−1` (axis from real 1, sign from real 2); 5 × 5 canopy at `top` minus corners and a plus at `top+1`. The bent log has nothing under it by design (11.9 exempts it).
+- **cherry** (`cherry_log`/`cherry_leaves`, 4–5): discs radius 3 at `top−1` and `top`, radius 2 at `top+1`, one leaf at `top+2`.
 
-Padded origins: chunk `(cx, cz)` draws `treesOf` for all 9 chunks in its
-3 × 3 neighbourhood and clips. Max canopy reach is 3 (cherry) plus the acacia
-bend 1, both < 16, so one ring of neighbours suffices. Measured: 0 leaves
-without a log within 3 blocks over 59–76 k leaves per map.
+Padded origins: a chunk draws `treesOf` for the 9 chunks around it and
+clips. Max reach is 3 (cherry) + 1 (acacia bend) < 16.
 
-Snow: `snow_block` as the top block above the snow line and in the snowy
-biome (there is no thin snow layer in the catalog). Beaches per §4. Bushes
-and mossy cobblestone: dropped — the prototype's forests read as full at
-6–9 trees per chunk without them (§13).
+Snow: `snow_block` tops (no thin layer block exists). Beaches per §4.
+Bushes and mossy cobblestone: dropped.
 
 ## 9. Spawn rule
 
-`spawnColumnV3(seed) → (x, z)`: walk square rings `r = 0..96` around (256,
-256) (ring order, then dz then dx — deterministic) and return the first column
-with: `h ≥ 122`, `river = 0`, `ravW = 0`, `ENT ≤ 0.25` (no cave mouth), biome
-≠ snowy, flat cell (`amp = 0` at the 4 cell corners ⇒ surface exactly `h`),
-`|h − h(±2, 0)| ≤ 2` and `|h − h(0, ±2)| ≤ 2`, and no tree of the 3 × 3
-surrounding chunks with base within Chebyshev 3. Fallback (256, 256) — never
-hit in 100 seeds because the spawn-continent term forces land there. The
-player then stands at `(x + 0.5, h + 1, z + 0.5)`; the engine's
-`findSafeSpawn` column scan is a no-op on that column. Measured: 0 failures
-in 100 seeds, offset from centre p50 21, p90 55, max 83.
+`spawnV3(seed) → (x, z)`, computed once at world creation and stored in the
+world meta (engine hand-off: `World.create` for genVersion ≥ 3 calls it and
+`main.ts` uses the stored column; `findSafeSpawn` then finds `h + 1` on that
+column with its existing scan). Walk square rings `r = 0..96` around (256,
+256), ring by ring, `dz` outer, `dx` inner; four passes in order:
 
-Engine hand-off (not worldgen code): `World.create` / `startGame` must ask
-`generation.ts` for the spawn column when `genVersion ≥ 3` instead of using
-(256, 256) — one new exported function, one call site in `main.ts`.
+| pass | min h | gentle 65 × 65 | mouth within 48 | min buildable |
+|---|---|---|---|---|
+| 1 | 130 | yes | yes | 40 % |
+| 2 | 122 | yes | yes | 40 % |
+| 3 | 122 | no | no | 40 % |
+| 4 | 122 | no | no | 0 |
+
+A column is accepted when all of: `river = 0`, not in a ravine zone
+(`ravW = 0`), land ≠ snowy, h < snow line, not a beach, `|h − h(±2, 0)| ≤ 2`
+and `|h − h(0, ±2)| ≤ 2` and the same for the 4 diagonals at ±1, flat cell,
+no tree instance of the 3 × 3 chunks with base within Chebyshev 7,
+**tunnelFree** (no tunnel node > 0 at the cell's 4 corners for y nodes from
+`(h − 16) & ~3` to `h + 4`, entrance boost assumed), no ravine-channel column
+within Chebyshev 32, **buildable** ≥ min (fraction of the 49 × 49 columns
+with h ≥ 121, `river = 0`, `|h − h_spawn| ≤ 3`); when *gentle*: every column
+within Chebyshev 32 has `amp ≤ 6` and differs from its +x and +z neighbour
+by ≤ 10; when *mouth*: some lattice corner column within Chebyshev 48 is an
+entrance column with a tunnel node > 0 at y ∈ {h−8, h−4, h} (a cave mouth
+is likely nearby). Pass 4 always succeeds in practice (100/100 seeds found
+a column in passes 1–3). Cost: p50 76 ms, p90 330 ms, max 3.2 s over 100
+seeds — paid once per world, which is why the result is stored.
 
 ## 10. Determinism and PRNG
 
-- **Noise fields:** `createNoise2D(alea(\`minicraft:v3:${seed}:${field}\`))`, one per field name, cached per seed. Field names are the table keys in §3.1 and §6; renaming a field is a generator-version change.
-- **Feature streams:** numeric, not alea. `streamSeed(seed, cx, cz, feature)` = murmur3 fmix32 applied four times: `h = fmix(seed ^ 0x3a5f0d1b); h = fmix(h ^ imul(cx, 0x9e3779b1)); h = fmix(h ^ imul(cz, 0x85ebca77)); h = fmix(h ^ imul(feature, 0xc2b2ae3d))`, then `mulberry32(h)` yields the stream. Feature ids: TREE 1, ORE 2, BLOB 3, POCKET 4, GEODE 5, POOL 6. Why numeric: a chunk replays 9 neighbours × 5 streams = 45 stream initialisations; alea's string seeding costs ~2 µs and an allocation each (≈ 0.1 ms/chunk) versus ~20 ns for the hash, and the string form would be built 45 times. specs.md §4's "all randomness flows through alea" must be amended to "through the seeded alea noise fields or the v3 hash streams; `Math.random` stays banned" — flagged as a decision.
-- **Order independence:** a feature with origin in chunk B is drawn from `streamSeed(seed, B, feature)` by every chunk that can be touched by it, in the same order, and each writes only its own voxels. Features consume a fixed number of draws whether or not they intersect the current chunk (skipped veins burn `4·size` draws). Nothing reads `World`. Invariant: `generateChunkV3(A)` is byte-identical whether or not B was generated first, in any order, in any session — tested by generating A alone and A after its 8 neighbours and comparing `blocks`.
-- **Reference hash:** SHA-256 over `blocks` of chunks (16,16), (0,0), (31,31) and the spawn chunk for seed 12345, recorded once; the test never re-records. Any change to a constant in this document changes the hash and therefore requires `genVersion 4`.
+- **Noise fields:** `createNoise2D(alea(\`minicraft:v3:${seed}:${name}\`))` for the 2-D names `C E PV T HU R D ENT RAV RG RAVD PATCH` and `createNoise3D` for `SHAPE CHEESE S1 S2 N1 N2 DECO`; the name is exactly the field's table key. Renaming a field is a generator-version change.
+- **Feature streams:** `streamSeed(seed, cx, cz, feature)` = murmur3 `fmix32` applied four times: `h = fmix(seed ^ 0x3a5f0d1b); h = fmix(h ^ imul(cx, 0x9e3779b1)); h = fmix(h ^ imul(cz, 0x85ebca77)); h = fmix(h ^ imul(feature, 0xc2b2ae3d))`; the chunk stream is `mulberry32(h)`. Feature ids: TREE 1, ORE 2, BLOB 3, POCKET 4, GEODE 5, POOL 6. Instance `i` of a list gets `subSeed = fmix(h ^ imul(i + 1, 0x9e3779b1))`, and every random decision inside the instance (vein walk) comes from `mulberry32(subSeed)`. The chunk stream is consumed only while *listing* (position, y, size, chance draw for every attempt, whether or not the attempt is kept), so a list is identical whoever computes it, and an instance's walk is identical whoever replays it. `hash(x, y, z)` (white noise for blob rims, geode jitter, canopy corners, deepslate blend) is `fmix(fmix(imul(x, 73856093) ^ imul(y, 19349663)) ^ imul(z, 83492791))` on **world** coordinates.
+- Why numeric streams: a chunk lists 9 × 5 = 45 feature streams; alea's string seeding costs ~2 µs and an allocation each versus ~20 ns for the hash. specs.md §4 must be amended to "all generation randomness comes from the seeded `alea` noise fields or the v3 hash streams; `Math.random` stays banned" (decision for the owner).
+- **Replay equivalence (the real invariant):** for every chunk B and every neighbour A, the instance list A uses for B's features is `oresOf(seed, B)` itself, and mountain/badlands gates read B's own columns (`chunkMaxH`, centre column). Tests 11.2 make this observable at the voxel level (ore continuity and density across chunk planes), because "A generated alone equals A generated after B" is true of any pure generator and catches nothing.
+- **Reference hash — bootstrap procedure, not a value:** (1) implement `generateChunkV3` so that 11.1–11.16 are green; (2) run the vitest suite twice in separate processes and once in the browser build, hashing `blocks` of chunks (16,16), (0,0), (31,31) and the spawn chunk of seed 12345 with SHA-256; (3) only when the three hashes agree, commit them as constants with the commit message naming the prototype commit and this spec's section; (4) from then on any change to a constant in this document is `genVersion 4`. Until step 3 the hash test is skipped with a reason, never made to pass by recording whatever comes out.
 
 ## 11. Tests (the instrument)
 
-E = exact, S = statistical with the stated tolerance. "Map" = all 1024 chunks
-of one seed, "3 seeds" = 1, 2, 3 (≈ 5 s in vitest per seed).
+"Map" = all 1024 chunks of one seed; statistical bounds are from the 12
+seeds 1–12 (§12) with the margin stated; kid targets from 100 seeds. Every
+bound lives here only.
 
-1. E — reference hash for seed 12345 (§10); dispatcher `generateChunk(c, seed, 3)` requires height 256; `worldProfile(3) = {height: 256}`; v1 and v2 hashes unchanged.
-2. E — order independence: chunk (16,16) generated cold equals the same chunk generated after all 8 neighbours; also equals after generating in reverse order.
-3. E — every column has `bedrock` at y 0 and nothing but bedrock at y 0; no block at y ≥ 253.
-4. S — height histogram over a map: min ≥ 50, median in 118–134, p90 in 150–185, max in 200–240; water columns 18–42 %; flat-ish land ≥ 48 %. (Goes red on a flattened spline or a missing PV term.)
-5. E — no water at y > 120; no `water`/`lava` voxel with `air` on any of its 4 sides or below (checked across chunk borders on a whole map); no `ice` except at y 120 in snowy columns. (Goes red if `caveCeil` is dropped or measured only vertically — that exact bug was caught in the prototype, 4–12 voxels per map.)
-6. S — cave air fraction of rock per band on a map: 1–23 in 13–22 %, 24–47 in 12–20 %, 48–79 in 7–13 %, 80–119 in 3–8 %. E — no cave-air voxel at `y ≥ caveCeil` outside entrance zones; no cave-air at y ≤ 10 (it must be lava).
-7. S — ore voxels per chunk on a map, tolerance ±30 % of the §7 measured column, and E — zero ore outside its band (`y0..y1`), zero `*_ore` on deepslate rows above y 52 and zero plain `*_ore` below y 44; every ore voxel replaced stone or deepslate (never sits in air/water/dirt).
-8. S — stone blobs: granite, diorite, andesite each 0.5–1.2 % of non-air blocks; tuff 0.5–1.3 %, all tuff below y 66; amethyst 3–12 k voxels per map, every `budding_amethyst` has an `amethyst_block` neighbour.
-9. E — trees: every leaf has a log within Chebyshev 3; every log column stands on `dirt`/`grass_block`/`podzol`/`coarse_dirt`/log; S — forest chunks (centre biome forest) have 4–10 trunk bases each, desert/badlands chunks 0.
-10. S — biomes: all 8 land biomes present on each of 3 seeds; biome changes along the spawn row 8–30; E — badlands terracotta index equals `y & 15` for every terracotta voxel; E — snowy top block is `snow_block` or `ice`, desert top block is `sand` at every land column of that biome (beach/rocky/snow-line overrides excluded).
-11. E — spawn over 100 seeds (1000..1099): returned column has solid non-liquid top at exactly `h`, air at `h+1` and `h+2`, `h ≥ 121`, no log/leaf within Chebyshev 3, |Δh| ≤ 2 at ±2 in x and z; S — offset from centre p90 ≤ 64.
-12. S — kid targets over 100 seeds: nearest tree p50 ≤ 12 / p90 ≤ 32; nearest cave mouth p50 ≤ 30 / p90 ≤ 64; first ore in a 3 × 3 shaft p50 ≤ 30 / p90 ≤ 64.
-13. S — time: 81 chunks around spawn (after one warm-up chunk and after noise-field construction), mean ≤ 2.0 ms, max ≤ 3.5 ms, on the reference machine; fails on the per-voxel-noise variant (5–7 ms measured today).
-14. E — pools: every generated `water`/`lava` voxel at y > 10 that is not in a sea/river/lake column has 4 solid-or-same-liquid sides and a solid block below (subset of 5 but scoped to feature pools so the failure names the stage).
+1. **E** `worldProfile(3) = {height: 256}`, `NEWEST_GEN_VERSION === 3`, `generateChunk(c, seed, 3)` throws on a 64-high chunk; `generation.test.ts`'s current `expect(NEWEST_GEN_VERSION).toBe(2)` and `expect(() => worldProfile(3)).toThrow` are replaced; the dispatcher gets an explicit v3 branch. v1 and v2 reference hashes unchanged. v3 hash per the §10 bootstrap.
+2. **E replay:** for 20 random chunks B, `oresOf/blobsOf/pocketsOf/geodesOf/treesOf(seed, B)` computed in a fresh process equal the lists computed after generating B's 8 neighbours (deep equality, incl. `sub`). **S seam (map):** ore voxels per solid voxel by local x (16 bins): every bin within ±0.15 points of the mean of bins 7–8 (measured max deviation 0.04–0.09); same-ore +x continuity at local x = 15 within ±3 points of that at x = 7 (measured 32.6–33.9 vs 33.7–35.0; the pre-repair build gave 4.8 vs 34.8).
+3. **E** every column: `bedrock` at y 0 only; nothing at y ≥ 253.
+4. **S heights (map):** min ≥ 50, median 118–134, p90 150–180, max 210–240; water columns 22–50 %; flat-ish land (|Δh| ≤ 2 over ±2) ≥ 44 %; river-channel columns 4–12 %. Measured: min 62–88, median 120–131, p90 152–176, max 222–238, water 25.5–46.5, flat 47.0–64.1, river 5.1–11.2. Red on: PV amplitude 92 → 12; spline flattened; C bias removed.
+5. **E water (map, across chunk planes):** no `water`/`lava` voxel with `air` on any of its 4 sides or below; no water above y 120; `ice` only at y 120 in snowy land. Red on: `caveCeil` measured vertically only (pre-repair: 4–12 voxels per map).
+6. **S caves (map):** cave-or-lava share of rock per band y 1–23: 13–21 %, 24–47: 11–19 %, 48–79: 7–12 %, 80–119: 3–6 %, ≥ 120: ≤ 3 %. Measured 14.9–18.8 / 13.0–16.9 / 8.5–10.4 / 3.7–5.0 / 1.0–2.1. **E:** no cave-air at y ≤ 10 (it is lava). **E ceiling (observable, map):** for every air voxel below a column's terrain top in a column that is non-entrance, non-ravine and whose 3 × 3 are all flat cells: every non-entrance non-ravine column of that 3 × 3 has its highest solid ≥ 6 above the voxel (1.3–2.1 M voxels checked per map, 0 violations; red at 1 voxel on the pre-`ampCell` rule).
+7. **E ores:** every ore voxel is inside `[y0, y1]` of a row of its family (walks are clamped); `deepslate_*_ore` only below y 52 and plain `*_ore` only at or above y 44; every ore voxel replaced stone or deepslate. **S (map, voxels per chunk):** coal 90–140, iron 75–100, copper 65–78, gold 27–34, lapis 18–21, redstone 40–48, diamond 13–16, emerald 2–8. Measured: 97.6–131.5, 80.1–91.7, 69.1–73.0, 28.7–31.7, 19.5–19.9, 43.1–45.4, 14.1–15.0, 2.3–7.3. Red on: coal band shifted +8 (exact clause).
+8. **S blobs (map, % of non-air voxels):** granite, diorite, andesite each 1.5–2.4; tuff 1.5–2.4; calcite 0.15–0.3; gravel 1.0–1.8; clay 0.08–0.16; amethyst 2 500–8 500 voxels; geodes 20–60 per map. Measured 1.80–2.01 / 1.83–2.01 / 0.20–0.22 / 1.21–1.56 / 0.10–0.13 / 3 396–7 319 / 25–55. **E:** no `tuff` at y ≥ 66; every `budding_amethyst` has an `amethyst_block`, `calcite` or `smooth_basalt` face neighbour.
+9. **E trees (map):** for every instance of `treesOf` on every chunk, every log of its template is present in the world and every leaf of its template is a non-air block (occlusion by terrain or another tree allowed) — this is the border-truncation test; the base voxel of every instance is `dirt`, `grass_block`, `podzol`, `coarse_dirt` or `snow_block` (the acacia bend is not a base). **S:** forest-centre chunks average ≥ 2.5 trees (measured 2.8–3.6; attempts survive beaches, ravines, biome edges, snow line and non-flat cells at ~35 %); desert and badlands chunks 0.
+10. **E surface (map, land columns whose terrain top equals `h`, outside ravine zones):** beach columns top `sand` or `gravel`; columns at/above the snow line or in snowy land top `snow_block`; desert columns (not stony, not beach) top `sand`; ocean-floor columns top `sand`, `gravel` or `clay`; every terracotta voxel matches the `y & 15` band and lies in badlands land. **S:** all 8 land biomes present on every seed (12/12); biome changes along the 512-block row through spawn 5–30 (measured 6–26); runs shorter than 6 blocks on that row ≤ 6 (measured 0–5).
+11. **E spawn (100 seeds):** top block at exactly `h`, solid, not liquid/snow/ice; air at `h+1`, `h+2`; h ≥ 122; no log or leaf within Chebyshev 3 and 12 blocks up; passes 1–3 succeed (pass 4 never used); column buildable ≥ 40 % by the §9 definition. Measured 0 failures, buildable p50 47.6 %.
+12. **S kid targets (100 seeds, voxel-level, search radius 96, censored at 999):** buildable within 24 (dry, river-free, |top − spawn top| ≤ 3) p50 ≥ 40 % (measured 45.4); open-sky single-step drop within 32 (trees excluded) p90 ≤ 20 (17); nearest tree p50 ≤ 14, p90 ≤ 32 (9.8 / 27); nearest cave mouth (terrain top < h − 3, air above) p50 ≤ 50, p90 ≤ 96 (42 / 69); first ore in a 3 × 3 shaft p50 ≤ 30, p90 ≤ 80 (25 / 67); longest stretch of a 3 × 3 shaft that is only stone/deepslate p50 ≤ 30, p90 ≤ 45 (23 / 37 — the kid-lens ask of p90 ≤ 30 needs ~2× more blobs and was not taken); emerald voxels within 32 of spawn p50 = 0 (0); biome runs shorter than 6 along 4 × 64 walks p90 ≤ 5 (4). Runtime ≈ 15 s in vitest; state it in the test name.
+13. **S time (reference machine, after one warm-up chunk):** 81 chunks around spawn mean ≤ 2.0 ms and p95 ≤ 3.0 ms (measured over 12 seeds: mean 1.37–1.70, p95 1.75–2.54); full-map mean ≤ 2.0 (1.44–1.81). Not a CI gate: a GC pause can fail any max bound. Red on the per-voxel-noise variant (5–7 ms).
+14. **E pools (map):** every `poolsOf` instance that placed liquid is enclosed (covered by 5), and ≥ 200 pools placed per map (measured 280–335).
+15. **E/S shape (map):** isolated floating solid voxels (6 air neighbours, not leaves) ≤ 30 per map (1–14); ravine-core columns have floor ≥ `bottom − 1` (0 violations) and rim-to-floor depth ≤ 70 (max 41–63); at least 5 ravine-core columns per map (5–479; seed 8 has almost no ravine zone).
+16. **S decoration (map):** moss 15 k–30 k voxels, dripstone 12 k–24 k (measured 18.6–25.1 k / 16.2–19.4 k); lava 280 k–460 k (320–419 k).
 
-Statistical tests fix the seed, so they are deterministic; the tolerance
-exists so a legitimate constant tweak under a new `genVersion` does not need
-the whole suite rewritten.
+## 12. Evidence appendix (repaired prototype; Node 24, this machine)
 
-## 12. Evidence appendix (prototype, seeds 1 / 2 / 3, Node 24 on this machine)
+Solo timing, 12 seeds × 1023 chunks (first chunk excluded): mean 1.55 ms,
+p95 2.33, p99 3.00, max 9.96 (GC). Per seed p95 2.09–3.23 (seed 1 carries
+JIT warm-up of its first ~100 chunks). 81 around spawn: mean 1.37–1.70, p95
+1.75–2.54, max 1.96–4.04. Stage split (12-seed mean): cols 0.32, lattice
+0.21, fill 0.34, surface 0.17, features 0.42, deco 0.10, trees 0.01.
+`spawnV3`: 11–296 ms on seeds 1–12; p50 76, p90 329, max 3 214 ms on
+100 seeds.
 
-Generation time per chunk (1024 chunks per seed; the max is the first chunk,
-which builds the 19 noise fields):
-
-```
-seed 1: mean 1.60 ms  p50 1.40  p95 2.29  max 18.8 | 81 around spawn: mean 1.59 max 2.15
-seed 2: mean 1.56 ms  p50 1.42  p95 1.89  max 15.6 | 81 around spawn: mean 1.48 max 1.86
-seed 3: mean 1.45 ms  p50 1.43  p95 1.75  max 4.6  | 81 around spawn: mean 1.51 max 1.97
-stage split (100 chunks, cave-dense region): cols 0.30 lattice 0.24 fill 0.96 surface 0.31 features 0.39 deco 0.19 trees 0.08
-```
-
-Surface (top of terrain, water excluded) and biomes:
+12-seed map statistics (min / p50 / max):
 
 ```
-seed 1: min 68 p10 110 median 123 p90 163 max 222; water columns 36.8%; flat-ish land 58.0%; river columns 6.6%
-        histogram (bin:%): 96:4.6 104:9.2 112:22.3 120:26.0 128:13.7 136:6.4 144:3.7 152:2.8 160:3.0 168:2.7 176:1.7 184:1.5 192:1.1 200:0.7 208:0.4 216:0.1
-        biomes: ocean 32.0 snowy 17.4 taiga 14.9 forest 12.2 plains 8.2 savanna 5.9 cherry 5.5 desert 3.4 badlands 0.6; biome changes on spawn row 15
-seed 2: min 54 p10 111 median 129 p90 173 max 234; water 27.9%; flat 54.1%; river 5.0%
-        histogram: 96:3.5 104:7.9 112:16.3 120:19.6 128:11.5 136:14.1 144:5.6 152:5.2 160:4.2 168:2.7 176:2.6 184:2.0 192:2.1 200:1.2 208:0.6 216:0.4 224:0.2
-        biomes: ocean 24.7 forest 21.3 plains 17.4 taiga 13.3 snowy 7.4 cherry 6.8 badlands 3.3 savanna 3.1 desert 2.7; changes 21
-seed 3: min 65 p10 111 median 127 p90 171 max 238; water 27.3%; flat 54.7%; river 6.2%
-        histogram: 96:3.9 104:6.5 112:16.6 120:24.8 128:12.0 136:9.8 144:5.3 152:4.9 160:4.4 168:3.5 176:2.7 184:1.7 192:1.1 200:1.0 208:1.0 216:0.6 224:0.2
-        biomes: ocean 22.4 taiga 19.9 forest 17.1 plains 16.2 snowy 13.9 cherry 4.2 desert 3.7 savanna 1.6 badlands 1.0; changes 21
+surface   min 62/76/88  p10 107/111/114  median 120/125/131  p90 152/160/176  max 222/232/238
+water columns %  25.5 / 34.3 / 46.5      flat-ish land %  47.0 / 60.8 / 64.1      river columns %  5.1 / 8.1 / 11.2
+biomes % ocean 21.8/29.3/40.6 forest 11.0/18.8/23.8 taiga 9.8/14.0/19.0 plains 8.4/12.5/15.4 snowy 2.6/11.4/18.4
+         cherry 1.3/5.9/9.9 savanna 0.8/5.3/9.4 desert 2.7/4.4/7.5 badlands 0.6/1.8/3.0; distinct land biomes 8/8/8
+biome changes on the spawn row 6/15/26; runs < 6 blocks 0/2/5
+cave share of rock  1-23 14.9/16.8/18.8  24-47 13.0/14.8/16.9  48-79 8.5/9.6/10.4  80-119 3.7/4.4/5.0  120+ 1.0/1.4/2.1
+ore per chunk  coal 97.6/110.9/131.5  iron 80.1/84.1/91.7  copper 69.1/72.0/73.0  gold 28.7/29.8/31.7
+               lapis 19.5/19.8/19.9  redstone 43.1/44.2/45.4  diamond 14.1/14.4/15.0  emerald 2.3/3.5/7.3
+ore by band (p50, per chunk): coal 48-79 9.5, 80-119 70.5, 120+ 31.4 | iron 24-47 16.7, 48-79 43.3, 80-119 16.9, 120+ 6.0
+               copper 48-79 19.7, 80-119 50.8 | gold 1-23 5.5, 24-47 17.3, 48-79 6.5 | lapis 24-47 11.2, 48-79 7.3
+               redstone 1-23 32.0, 24-47 12.2 | diamond 1-23 11.8, 24-47 2.6 | emerald 120+ 3.2
+seam: ore density by local x — x=0 1.21, x=15 1.23, interior 1.26 (max deviation 0.06)
+      same-ore +x continuity at x=15: 33.2 %, at x=7: 34.0 %
+% of non-air: stone 52.2, deepslate 30.0, dirt 2.4, granite 1.96, diorite 1.93, tuff 1.94, andesite 1.87, gravel 1.43, lava 1.15, water 2.14, sand 0.71, calcite 0.21
+counts per map: moss 18.6k/22.3k/25.1k  dripstone 16.2k/18.8k/19.4k  amethyst 3.4k/5.1k/7.3k  geodes 25/42/55  pools 280/315/335
+                lava 320k/371k/419k  floaters 1/7/14  ravine-core columns 5/277/479  ravine depth p50 41-53 max 41-63
+trees per map 838/1219/1493; forest-centre chunks mean 2.8/3.4/3.6, max 9-10
+exact assertions (27 checks × 12 maps): all 0 — bedrock, water/lava enclosure, water ≤ 120, ice, cave ≤ 10 is lava,
+   ceiling (1.3-2.1 M voxels/map), ore bands, deepslate variants, tuff height, budding neighbours, tree bases,
+   tree completeness (logs and leaves of every instance), desert/badlands treeless, beach/snow/desert/sea-floor tops,
+   terracotta index and biome, ravine floor
 ```
 
-Ore voxels per chunk by y band (seed 1; seeds 2 and 3 within ±3 % except
-coal/iron which rise with more mountain area: coal 123, iron 86):
+100-seed spawn and kid targets (p10 / p50 / p90 / max):
 
 ```
-            1-23   24-47   48-79  80-119   120+   total  exposed-to-air
-coal         0.0     0.0     9.3    67.0   29.1   105.5   2%
-iron         0.9    15.1    42.0    16.8    7.2    81.9   4%
-copper       0.0     0.0    18.3    49.9    1.2    69.4   2%
-gold         5.1    16.7     5.5     0.0    0.0    27.3   5%
-lapis        1.3    10.5     6.5     0.0    0.0    18.4   5%
-redstone    29.6    11.8     0.0     0.0    0.0    41.4   5%
-diamond     11.1     2.3     0.0     0.0    0.0    13.5   4%
-emerald      0.0     0.0     0.0     0.5    4.1     4.6   4%
+spawn strict failures 0; spawn h 123/131/142/159; offset from centre 28/56/98/125; buildable (column rule) 40.2/47.6/73.6/95.3
+buildable within 24 (voxels) % 36.7/45.4/70.6/80.2      open-sky drop within 32  3/9/17/40
+nearest tree 8.1/9.8/27.0/74        nearest cave mouth 21.5/42.0/69.0/999 (1 seed none within 96)
+first ore in 3x3 shaft 7/25/67/999 (1 seed hit the lava sea first)      boring stretch 14/23/37/52
+emerald within 32: 0/0/37/240        nearest other biome 1/6/20/33       biome runs < 6 per 4x64 walks 0/2/4/7
+spawn biomes: plains 28, taiga 20, desert 20, forest 12, savanna 8, badlands 8, cherry 4
 ```
 
-Cave air fraction of rock: seed 1 — 1–23: 17.8 %, 24–47: 16.0 %, 48–79:
-10.3 %, 80–119: 4.2 %, 120+: 1.7 %; seed 2 — 18.4 / 18.1 / 10.4 / 4.9 / 2.2;
-seed 3 — 18.1 / 16.8 / 9.2 / 5.5 / 2.0.
-
-Water/feature integrity (per map): water voxels with air beside or below:
-**0 / 0 / 0**; water above y 120: 0; lava voxels 373 k / 375 k / 411 k; moss
-24.6 k / 26.2 k / 24.7 k; dripstone 18.9 k / 21.9 k / 21.3 k; amethyst
-7.1 k / 6.2 k / 7.2 k; isolated single floating solids 8 / 1 / 17; floating
-solids in the 96 × 96 box around the peak 0 / 10 / 40 of 1.2–1.5 M.
-
-Trees: 961 / 1188 / 1115 per map (0.94–1.16 per chunk, 364–378 chunks with
-trees); leaves 59 k / 76 k / 73 k; **0** leaves without a log within 3 on
-every seed.
-
-Spawn (3 seeds): seed 1 (280, 162, 260) forest, offset 24, tree 7, cave
-mouth 15, first ore at 50, other biome at 5; seed 2 (237, 146, 284) forest,
-offset 34, tree 5, mouth 31, ore 5, biome 8; seed 3 (256, 139, 256) forest,
-offset 0, tree 4, mouth 13, ore 46, biome 1.
-
-Spawn over 100 seeds (1000–1099): failures **0**; offset p50 21 p90 55 max
-83; first ore in a 3 × 3 shaft p50 20 p90 58 (one seed reached the lava sea
-with none — statistical, hence the p90 bound); nearest tree p50 6 p90 18 max
-48; nearest cave mouth p50 22 p90 47 (one seed none within 48); nearest
-other biome p50 5 p90 14; spawn biomes taiga 37, forest 23, plains 21,
-desert 12, cherry 4, savanna 3.
-
-Misses and adjustments, stated: (a) first prototype had 51 % ocean — the
-edge ring was cut from 40 to 20 blocks and the spline lifted; (b) 4–12
-water voxels per map were adjacent to cave air because the 6-block margin
-was only vertical — replaced by `caveCeil` over the 3 × 3 neighbourhood
-(§6); (c) trees and spawn were off by up to 2 blocks because the 2-D height
-was interpolated through the lattice — the design now takes `hRaw` from the
-voxel's own column and interpolates only the shape term (§3.3); (d) 23 %
-of spawns landed under a tree — the spawn rule now excludes tree columns
-(§9); (e) surface rules bled under cave floors (dirt/sand 2 blocks under any
-cave) — surface rules now apply only within 9 blocks of `hRaw` (§4); (f)
-the cave-mouth target was set from the measurement (p50 22) rather than the
-initial guess of 15; the entrance threshold was lowered 0.3 → 0.25.
-
-Cross-section through spawn, seed 3 (z = 256, x 224..287, y in 4-row bands,
-most notable block of the 4 shown; `.` stone `:` deepslate `#` bedrock `~`
-water `L` lava `g` grass `d` dirt `s` sand `T` terracotta/tuff `v` gravel
-`c` coal `I` iron `u` copper `$` diamond `R` redstone `G/D/N`
-granite/diorite/andesite `m` moss `i` dripstone `|` log `%` leaves):
+Cross-section through spawn, seed 3 (spawn (247, 133, 249); z = 249, x
+215..278, y in 4-row bands, most notable block of the 4 shown; `.` stone
+`:` deepslate `#` bedrock `~` water `L` lava `g` grass `d` dirt `s` sand `T`
+terracotta/tuff `v` gravel `c` coal `I` iron `u` copper `$` diamond `R`
+redstone `G/D/N` granite/diorite/andesite `i` dripstone `|` log `%` leaves):
 
 ```
-148 |                                                           %%%  |
-144 |                                                   |            |
-140 |                                                   |            |
-136 |           %%%%%            g                                 g.|
-132 |         .....................................               ...|
-128 |        g........................                               |
-124 |        ........................                                |
-120 |~~~~~~ ccc...c..cc.............                                 |
-116 |~~~~~~s......c.................                                 |
-112 |ssssssG.c.c........................d                            |
-108 |...   ....................NNNNNN .....uuu                    ..G|
-104 |....mm...... .NNNNNN......u...........uu.......NNNNNNNNN........|
-100 |..............NNNNNN...uu....................NNNNN.............u|
- 96 |......................uu...Iccc.........d....NNNNN......cc......|
- 92 |....DDD......................................I..................|
- 88 |..........uu............i...............u..................c....|
- 84 |...      .u.....................D.D.............................|
- 80 |G...    ...............  .....DDDDDDDD............c.............|
- 76 |...............  ....... .........................c.............|
- 72 |NNNNucc......... ........................... ...................|
- 68 |.NN.....................................vvvvv...................|
- 64 |..cccc.........   ..........II..................................|
- 60 |................ ..............................ccccc........D.DD|
- 56 |..LL....T.TTTTT.II...........L.    ..........GGGGG.............I|
- 52 |vv..............I..vvvvv........ .............GGGG.......TTT   I|
- 48 |.:GGGGGG..::.:....:.:...::...:::::::.::..::...:..::.:..::.:.....|
- 44 |vNNNNN::TTTTTTTTTT:::::::::::::::::::::::::::::::::::::::::DDD::|
- 40 |::::::::::TTTTTTT                          :::::::II:::::::::TTT|
- 36 |::::::::::                                      ::::::::::::::::|
- 32 |:II:::::::                                      ::::::GG::::::::|
- 28 |:I::::::::::                   G              ::::::::GG::::::::|
- 24 |  ::::::::::::::::TTRT::::::::::$$TTT::::$::::::::I:::::::::::::|
- 20 | ::::           R::::::::::::::    :::$$:::::::::::::::::::::  i|
- 16 |::::::      :::::::::::::::::::: :::::::GGG                     |
- 12 |::$$:::   :::::::::::::::::::::::R:::::                         |
-  8 |L:::::: L :::::LL:::::R:::::::LLLLLL:LLLLLLLLLLLLLLLLLLLLLLLLLLL|
-  4 |LLLLLL::::::::::LLLLLLLLLLLLL::LLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLL|
+140 |                                       %%%     %|%%%%%          |
+136 |                                                |               |
+132 |  gggg......dd             ..gg........................... .....|
+128 |........cccc...           ...............c                 .....|
+124 |................         .................                 .....|
+120 |..............cc.~~~~~~~ .c................                .....|
+116 |.     c.DDDDDD...s~~~~~~.....................              .u...|
+112 |.......vvvvvv......NNN........................                  |
+108 |    .......u.............................      i                |
+104 |........NNNN.....u...DDDDDD.....................ddddddu..NNNNNNN|
+100 |NN.................uu.......NNNNNN...........vvvvv..........vvvv|
+ 96 |.....uudvdvd..................................................I.|
+ 92 |....II.....................NNNuu..u...GGG.......ddd..III........|
+ 88 |.....................GGGGGGGGGuuu.........c.....cccc.II.........|
+ 84 |......DdDDDD...................D.D.D......uu......cc............|
+ 80 |.......GGGGv.....................DDD............................|
+ 76 |......................................uuu.......................|
+ 72 |.................................................ccc...c.III....|
+ 68 |...........................................................III..|
+ 64 |......................................uu.................II.....|
+ 60 |DDDDD ..............NNNNN.............uu...vvvv..vvv............|
+ 56 |.I........II........NNNNN................TTTTTTT.II.T........u..|
+ 52 |......II.......................................DDD............  |
+ 48 |::..::::.::GGGGGG.::.:..:.:::::..::...:.:....:DDDD::..:.:..:::.:|
+ 44 |TTTTTTTTTTT:::::::::::::::::::::::::::::::::::::::::::::L:G:::::|
+ 40 |::TGTT:TT::::::::::::::::::::TTTTTTTTT::::::::::::::::::::::::::|
+ 36 |L::::::::::::::::::::::::     I                 ::::::::::::::::|
+ 32 |:::::::::::::::::::::::::                    :::::::::::::::::::|
+ 28 |::::::::::::::G:::::::::::::::::::::::::T:::::I:I:::::::::::::TT|
+ 24 |::::::::::::::::      ::::::::::::::::::::::::::::::::::::::::::|
+ 20 |              :$:::::::::::::$::::::::::::::::::::::::::::::::::|
+ 16 |R          :T::::::::::::::::::::::::::::::::::::::::::::       |
+ 12 |:::::::TTTTTTTT:::::::::::::::::::::::::::::::::                |
+  8 |LL::::::::::::::::::::::::::::::::::::::::::LLLLLLLLLLLLLLLLLLLL|
+  4 |LLLLLLLLLLLLLLL::::::::::L:::::::::LLLL::::LLLLLLLLLLLLLLLLLLLLL|
   0 |################################################################|
 ```
 
-The spawn column is at x 256 (centre), grass at y 139 on the hill top
-left; a lake at y 116–120 to the west; a cave breaks through under x 262 at
-y 128–132; a large cheese cavern spans y 20–44 under the middle; the lava
-sea fills the cavern floor at y ≤ 10. Seed 1's section (mountain at spawn,
-snow at y 164–172, emerald at 148, iron seams at 152–160) and seed 2's (a
-geode at x 249–256 y 40–48, ravine-free forest) are in the prototype output
-and read the same way.
+A lake at y 116–120 left of spawn, a tunnel entrance at x ≈ 231 y 108–116
+under the hill, a cheese cavern at y 20–36 with a lone iron glint on its
+wall, the lava sea filling its floor at y ≤ 8, and the 6-block terracotta
+terrace bands at y 40–44 (a tuff blob reads the same in this legend).
+
+Misses, stated: the kid-lens "boring stretch p90 ≤ 30" was not reached (37)
+and the target was set to 45 rather than doubling blob density; one seed in
+100 has no cave mouth within 96 (spawn prefers flat land, mouths sit on
+slopes — pass 1–2 now require a likely mouth within 48, which lifted p50
+from 58 to 42); `spawnV3` can take 3 s on a bad seed, hence "compute once,
+store in meta".
 
 ## 13. Out of scope / later
 
-- Mountain lakes and any water above y 120 (would need a per-lake enclosure check; every other water rule is "≤ 120", which keeps test 5 exact).
-- Swamp / mangrove / mud biome: with all water at sea level a swamp is just a wet plain; revisit with lakes.
-- Bushes, mossy cobblestone patches, fallen logs, large oaks, dark oak, jungle: none needed to hit the tree targets.
-- Aquifers (vanilla's per-region water tables) — replaced by enclosed pools.
-- Ore veins as vanilla 1.18 "large ore veins" (copper/iron sheets): dropped, the per-chunk counts already exceed vanilla's per-block density.
-- Villages, structures, loot, mobs — CLAUDE.md non-goals.
-- Worker-thread generation, chunk eviction, greedy meshing — performance project.
-- Engine hand-offs, not worldgen: spawn column lookup (§9); noise-field cache keyed by seed (§2); `NEWEST_GEN_VERSION = 3` and `worldProfile(3)`; specs.md §4 wording on PRNGs (§10).
+- Lakes above sea level, swamp/mangrove, bushes, mossy cobblestone, fallen logs, large oak, dark oak, jungle, aquifers, vanilla "large ore veins", villages/structures/loot/mobs (non-goals).
+- Shadows, meshing, mount pacing and chunk eviction: performance project, with the §2.1 numbers as its input.
+- Engine hand-offs, not worldgen: `NEWEST_GEN_VERSION = 3`, `worldProfile(3)`, explicit dispatcher branch; noise-field cache; `spawnV3` at world creation + spawn column in world meta; specs.md §4 PRNG wording.
+
+## 14. Gate 1 changes
+
+Rigour (R), engine (E), kid (K); parent decisions from `decisions.md`.
+
+| Finding | Action |
+|---|---|
+| R-B1 / E-B1 padded-origin replay broken (vein draws vary; `colMax` ignored the origin) | Accepted. Every feature is an instance list with a per-instance sub-stream (§10); mountain gate = origin chunk's `chunkMaxH`; test 11.2 replaced by replay equality + voxel seam tests. Measured continuity 33.2 % at x = 15 vs 34.0 % interior (was 4.8 vs 34.8). |
+| R-B2 / U10 reference hash | Accepted: bootstrap procedure in §10, no value recorded. |
+| R-B3 / E-B2 tree bases on sand/gravel/snow/air | Accepted: trees skip beaches and river banks; `snow_block` allowed; acacia bend exempt; 0 bad bases on 12 maps. |
+| R-B4 spawn under canopies, on snow | Accepted: canopy exclusion radius 7, snow-line and snowy checks; 0/100 strict failures. |
+| R-B5 blob bounds (denominator), budding orphans | Accepted: bounds re-derived on 12 seeds as % of non-air; budding placed only with a calcite/amethyst face neighbour (exact by construction). |
+| R-B6 ore outside band | Accepted: walks clamp y into the band; exact clause green. |
+| R-N1 snowy top under cave mouths | Accepted: surface tests apply to columns whose terrain top equals h, outside ravine zones. |
+| R-N2/N3/N4/N10 bounds from 3 seeds, duplicated, contradicting | Accepted: every bound stated once in §11 from 12 seeds; snowy filler dirt × 2, plains threshold −0.25, lapse on pre-terrace h, precedence list, "within 9 of hRaw" rule, deepslate 44–52, badlands gold implemented — all in §4/§7. |
+| R-N6 leaf/log tautology | Accepted: template-completeness test (11.9), red on the truncated-canopy mutant by construction (missing leaves count). |
+| R-N7 / E-B2 timing bound | Accepted: p95 bound, not CI-gating; spawn cost stated and moved to creation time. |
+| R-N9 genVersion contract tests | Accepted (11.1). |
+| R-N11 rules without assertions | Accepted: 11.14–11.16 and additions to 11.4/11.8/11.10 cover ravines, floaters, rivers, pockets, calcite, pools, moss/dripstone, beaches, sea floor, snow line, gold bonus; acacia bend covered by 11.9's template check. |
+| U1–U9, U11 | U1 field names fixed (`HU`, `SHAPE`, `DECO`, `RAVD`); U2 jitter removed; U3 `RAVD` defined; U4 lapse/biome order fixed in §3.2; U5 −0.25; U6 precedence list; U7 in §4; U8 radii and mouth definition in 11.12; U9 zero-filled array stated in §2; U11 tolerances kept only as cross-seed bounds — the v3 hash is the exact guard. |
+| E-B2 ceiling test tautology | Accepted: observable ceiling test (11.6); it found a real 1-voxel defect (column `amp` vs cell-corner `amp`) fixed by `ampCell` (§3.3, §6). |
+| E-N3 downstream mount cost | Accepted as a budget row (§2.1); worldgen keeps `ENT_T` and cave density for play reasons; rest handed to perf. |
+| E-N6 `hashv` on local coords | Accepted: world coordinates everywhere. |
+| E-N8 first-chunk wording | Accepted (§2). |
+| K-B1 spawn on the roughest land | Accepted per parent: M softened by 0.6 within 128 of the centre; hill preferred (h ≥ 130 pass first); buildable ≥ 40 % required. Measured buildable p50 45 % (was 23), spawn h p50 131. |
+| K-B2 cliffs and 50–70-block pits near spawn | Accepted: cheese never breaches and stays ≥ 24 below the surface in entrance zones; tunnels alone breach; gentle 65 × 65 (`amp ≤ 6`, |Δh| ≤ 10) and no ravine channel within 32. Drop p90 17 (was 52; parent's bound 20). |
+| K-B3 lava plunge | Rejected per parent: lava sea stays. |
+| K-F1 biome flicker | Accepted: lapse on pre-detail h, jitter removed; short runs per 4 × 64 walks p90 4. |
+| K-F2 boring shafts | Partly: 5 blobs per igneous type (r 2.5–5), gravel 7, dirt 8; test added; p90 37 against the asked 30 — not pushed further (see §12 misses). |
+| K-F4 emerald under spawn | Accepted: mountain gate 165; emerald within 32 of spawn p50 0. |
+| K-F5 ravine floor | Accepted: 4-block solid floor, depth ≤ 63 measured. |
+| Owner: entrance share | `ENT_T` lowered 0.25 → 0.1 to keep cave mouths findable after cheese stopped breaching (mouth p50 42); the shadow cost of that is in §2.1. |

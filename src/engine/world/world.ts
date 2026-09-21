@@ -2,7 +2,7 @@ import type { BlockId } from '../../data/blocks.data';
 import { AIR, isLiquid } from '../../data/blocks.data';
 import { Chunk } from './chunk';
 import { WORLD_CHUNKS_X, WORLD_CHUNKS_Z, LEGACY_HEIGHT, inBounds, worldToChunk, indexOf, type WorldHeight } from './coords';
-import { generateChunk } from './generation';
+import { generateChunk, worldProfile, NEWEST_GEN_VERSION } from './generation';
 import { fillChunkLights } from './lighting';
 
 const key = (cx: number, cz: number) => `${cx},${cz}`;
@@ -22,6 +22,12 @@ export class World {
 		// Derived, not validated: a loaded record's own height is authoritative (spec §4).
 		this.genVersion = opts.genVersion ?? (this.height === 256 ? 2 : 1);
 		this.saveVersion = opts.saveVersion ?? 2;
+	}
+
+	/** A brand-new world: newest generator, its height, saved as v3. This is the ONE place height and genVersion are checked against each other (spec §4: a stored record's height is authoritative, so the constructor never validates). */
+	static create(seed: number): World {
+		const { height } = worldProfile(NEWEST_GEN_VERSION);
+		return new World(seed, { height, genVersion: NEWEST_GEN_VERSION, saveVersion: 3 });
 	}
 
 	inBounds(x: number, y: number, z: number): boolean {

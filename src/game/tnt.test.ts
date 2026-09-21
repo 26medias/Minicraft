@@ -70,4 +70,13 @@ describe('detonate', () => {
 		const r = detonate(w, 100, 60, 100, neverPrimed);
 		expect(r.destroyed).toContainEqual({ x: 100 + TNT_RADIUS, y: 60, z: 100 });
 	});
+
+	it('does not destroy unbreakable (hardness 0) blocks', () => {
+		const w = new World(1);
+		const bedrock = BLOCK_BY_NAME['bedrock'].id;
+		w.setBlock(100, 60, 100, tntId);
+		w.setBlock(101, 60, 100, bedrock);
+		const r = detonate(w, 100, 60, 100, neverPrimed);
+		expect(r.destroyed).not.toContainEqual({ x: 101, y: 60, z: 100 });
+	});
 });

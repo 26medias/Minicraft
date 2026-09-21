@@ -2,7 +2,7 @@ import { describe, it, expect } from 'vitest';
 import {
 	assignIds, classifyAlpha, facesToTextures, firstVariantModel, groupOf,
 	hardnessFor, isExcluded, isFullCube, labelFor, makeRows, modelKey, resolveFaces,
-	selectCandidates, HAND_CANDIDATES, type Models, type BlockstateJson,
+	selectCandidates, HAND_CANDIDATES, HARDNESS_OVERRIDES, type Models, type BlockstateJson,
 } from './catalog-rules';
 import { BASE_BLOCKS } from './blocks.base.data';
 
@@ -138,6 +138,9 @@ describe('isExcluded / groupOf / hardnessFor / labelFor', () => {
 		expect(labelFor('dark_oak_planks')).toBe('Dark Oak Planks');
 		expect(labelFor('jack_o_lantern')).toBe('Jack O Lantern');
 	});
+	it('bedrock is unbreakable through HARDNESS_OVERRIDES', () => {
+		expect(HARDNESS_OVERRIDES).toEqual({ bedrock: 0 });
+	});
 });
 
 describe('classifyAlpha', () => {
@@ -223,6 +226,15 @@ describe('makeRows', () => {
 		expect(rows[1].textures).toBeNull();
 		expect(rows[0]).toMatchObject({ name: 'blue_stained_glass', transparent: true, translucent: true, lightFilter: 0, group: 'glass', hardness: 0.3 });
 		expect(rows[2]).toMatchObject({ name: 'c', transparent: false, lightFilter: 15, group: 'other', hardness: 0.8, lightLevel: 0 });
+	});
+	it('applies HARDNESS_OVERRIDES so bedrock gets hardness 0 while keeping its group', () => {
+		const rows = makeRows(
+			[{ name: 'bedrock', textures: { kind: 'uniform', all: 'bedrock' } }, { name: 'stone_bricks', textures: { kind: 'uniform', all: 'stone_bricks' } }],
+			{ ids: { bedrock: 20, stone_bricks: 21 }, retired: [] },
+			() => ({ transparent: false, translucent: false }),
+		);
+		expect(rows.find((r) => r.name === 'bedrock')).toMatchObject({ hardness: 0, group: 'stone' });
+		expect(rows.find((r) => r.name === 'stone_bricks')).toMatchObject({ hardness: 1.2, group: 'stone' });
 	});
 	it('applies LIGHT_LEVELS', () => {
 		const rows = makeRows([{ name: 'sea_lantern', textures: { kind: 'uniform', all: 'sea_lantern' } }], { ids: { sea_lantern: 20 }, retired: [] }, () => ({ transparent: false, translucent: false }));

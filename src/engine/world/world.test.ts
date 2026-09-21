@@ -190,4 +190,8 @@ describe('World height', () => {
 		expect(w.getBlock(3, 250, 3)).toBe(stone);
 		expect(w.getBlock(3, 256, 3)).toBe(AIR);
 	});
+	it('World.create is tall, newest generator, v3', () => {
+		const w = World.create(1);
+		expect(w).toMatchObject({ height: 256, genVersion: 2, saveVersion: 3 });
+	});
 });

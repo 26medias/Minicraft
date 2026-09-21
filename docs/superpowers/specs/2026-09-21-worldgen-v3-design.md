@@ -63,8 +63,9 @@ are memoised per seed (engine: a module-level `Map` keyed by
 | 6 | Trees | per instance, 3 × 3 origins (9 replays) | trunks, canopies | 0.02 |
 
 Work counters `W.nodes` (one per lattice node evaluated), `W.replays` (one
-per instance-list replay) and `W.instances` (one per instance whose bounding
-box meets the chunk) are incremented **at the point of evaluation** and reset
+per instance-list replay) and `W.instances` (one per ore/blob/pocket/tree
+instance whose bounding box meets the chunk, plus one per geode and one per
+pool instance replayed, counted unconditionally as in the prototype) are incremented **at the point of evaluation** and reset
 per chunk; 11.13 asserts them.
 
 `yTop = min(252, ceil((max h over the padded columns + 28)/4)·4)`; the
@@ -314,8 +315,9 @@ Max reach 3 + 1 < 16: one ring of neighbours suffices.
 
 `spawnV3(seed) → {x, z}` is computed **in memory** at world creation by
 `main.ts`'s new-world branch only (`World.create` is untouched): it shows
-"Building your world…", yields one frame (`await` a `requestAnimationFrame`)
-so the message paints, calls `spawnV3`, and passes `[x + 0.5, height − 1, z +
+"Building your world…", yields **two** frames (`await` a `requestAnimationFrame`
+twice — a single rAF resolves before style/layout/paint, so the message would
+never show; gate 2), calls `spawnV3`, and passes `[x + 0.5, height − 1, z +
 0.5]` to `findSafeSpawn`, whose column scan lands on `h + 1`. No meta field,
 no schema change; continues use the persisted player position. Worst
 observed cost ≈ 2 s on fresh seeds. Search is **work-bounded**, never
@@ -351,13 +353,17 @@ column evaluations. Rings ≤ 128 is the bound.
 - **Feature streams:** `streamSeed(seed, cx, cz, feature)` = murmur3 `fmix32` four times: `h = fmix(seed ^ 0x3a5f0d1b); h = fmix(h ^ imul(cx, 0x9e3779b1)); h = fmix(h ^ imul(cz, 0x85ebca77)); h = fmix(h ^ imul(feature, 0xc2b2ae3d))`; chunk stream `mulberry32(h)`. Feature ids TREE 1, ORE 2, BLOB 3, POCKET 4, GEODE 5, POOL 6. **Instance index = attempt index** `i` (counted over every attempt of the list, kept or not); its sub-stream is `mulberry32(fmix(h ^ imul(i + 1, 0x9e3779b1)))`. The chunk stream is consumed only while listing (position, y, size, chance draw of every attempt); a vein's walk uses only its sub-stream. `hash(x, y, z) = fmix(fmix(imul(x, 73856093) ^ imul(y, 19349663)) ^ imul(z, 83492791))` on world coordinates.
 - Why numeric streams: 45 stream initialisations per chunk; alea string seeding ≈ 2 µs + allocation each vs ≈ 20 ns. specs.md §4 is to be amended: "generation randomness comes from the seeded `alea` noise fields or the v3 hash streams; `Math.random` stays banned".
 - **Replay equivalence:** every chunk that touches feature F of origin chunk B computes `xOf(seed, B)` and B's own gates (`chunkMaxH`, centre column). Tested at the voxel level in x and z (11.2); "A alone == A after B" is a property of any pure generator and is not a test.
-- **Reference hash bootstrap (executable):** (1) implement until 11.1–11.16 are green; (2) `generation.test.ts` hashes `blocks` of chunks **(0,0), (16,16), (31,31), (5,27)** of seed 12345 — fixed chunks, never the spawn chunk (spawn constants may be tuned without a version bump) — with the repo's existing **FNV-1a-32** `hashBytes`, which XORs each **Uint16 element** of `blocks` (not bytes) in index order — the prototype hashes the identical element sequence; (3) run the vitest suite twice in separate processes; only when both agree commit the four values as constants, the commit message naming this section; (4) the prototype is **not** committed: at bootstrap time its four FNV-1a-32 values are written into this section and the implementation's values are cross-checked against them — **if implementation and prototype disagree, the implementation is wrong until proven otherwise**; (5) thereafter any constant change is `genVersion 4`. No browser leg (no runner exists). Until step 3 the test is skipped with a reason.
+- **Reference hash bootstrap (executable):** (1) implement until 11.1–11.16 are green; (2) `generation.test.ts` hashes `blocks` of chunks **(0,0), (16,16), (31,31), (5,27)** of seed 12345 — fixed chunks, never the spawn chunk (spawn constants may be tuned without a version bump) — with the repo's existing **FNV-1a-32** `hashBytes`, which XORs each **Uint16 element** of `blocks` (not bytes) in index order — the prototype's ids are remapped to engine ids (`NAME[id]` → `BLOCK_BY_NAME[name].id`) before hashing, so both sides hash the identical element sequence; (3) run the vitest suite twice in separate processes; only when both agree commit the four values as constants, the commit message naming this section; (4) the prototype is committed as reference only (`docs/superpowers/reference/worldgen-v3-prototype/`, never imported by `src/`): at bootstrap time its four remapped FNV-1a-32 values are written into this section and the implementation's values are cross-checked against them. **The one rule on disagreement:** the engine port is presumed wrong; the executor hashes each stage's output (columns → lattice → fill → features → trees) engine vs prototype to find the first divergent stage; only if the divergence is a spec-vs-prototype conflict does the spec win — then the prototype is patched with a dated comment and the hash re-run; (5) thereafter any constant change is `genVersion 4`. No browser leg (no runner exists). Until step 3 the test is skipped with a reason.
 
 ## 11. Tests (the instrument)
 
-"Map" = all 1024 chunks of one seed. **CI runs the fixed seeds 1, 2, 3, 5,
-8, 13, 21, 34** for map-level tests (≈ 8 × 6 s) and seeds 1–100 for the
-spawn/kid suite on demand (≈ 15 min, not per-commit). **Margin rule:** every
+"Map" = all 1024 chunks of one seed. **The fixed CI seeds are 1, 2, 3, 5,
+8, 13, 21, 34.** Per-commit vitest runs the map-level tests on seeds 1 and 2
+only (≈ 25 s); the 8-seed sweep (`npm run worldgen:check`, ≈ 90 s measured,
+one map ≈ 12 s checked) is an exit criterion of the instrument and browser
+tasks and must be green before merge — a failure is a code bug, never a
+reason to widen a bound. Seeds 1–100 drive the spawn/kid suite on demand
+(≈ 15 min, not per-commit). **Margin rule:** every
 statistical bound is derived from the 100-seed run (seeds 1–100) as *mean ±
 4 sd* for count statistics and as the *observed range widened by 25 % of its
 width on each side* for fractions and heights, rounded outward (a few stated
@@ -495,7 +501,7 @@ x 215..278, y in 4-row bands; `.` stone `:` deepslate `#` bedrock `~` water
 
 - Lakes above sea level, swamp/mangrove, bushes, mossy cobblestone, fallen logs, large oak, dark oak, jungle, aquifers, vanilla "large ore veins"; villages/structures/loot/mobs (non-goals).
 - Shadows, meshing, mount pacing, chunk eviction: performance project (§2.1 ratios as input).
-- Engine hand-offs: `NEWEST_GEN_VERSION = 3`, `worldProfile(3)`, explicit dispatcher branch; noise-field and instance-list caches; `spawnV3` called from `main.ts`'s new-world branch only, after "Building your world…" and one `requestAnimationFrame` yield (§9); specs.md §4 PRNG wording.
+- Engine hand-offs: `NEWEST_GEN_VERSION = 3`, `worldProfile(3)`, explicit dispatcher branch; noise-field and instance-list caches; `spawnV3` called from `main.ts`'s new-world branch only, after "Building your world…" and two `requestAnimationFrame` yields (§9); specs.md §4 PRNG wording.
 
 ## 14. Gate 1 changes
 
@@ -538,7 +544,7 @@ Instance lists with per-instance sub-streams and origin-chunk gates (R-B1/E-B1);
 | R3-B3 margin rule | Stated in §11; all count bounds re-derived as mean ± 4 sd, fractions/heights as range ± 25 % (short runs ≤ 8, geodes 16–69, changes on row 4–27, water 8–60 %, flat ≥ 35 %, …) | §11 |
 | Kid: every world gets a ravine | RG threshold ramps 0.4 → 0.35 from 128 to 176 of the centre (§6.1); bound "≥ 1 ravine with ≥ 40 channel columns" on CI seeds | 8/8 CI seeds pass (1–5 ravines); of 101–106 seed 101 still fails — stated in §12 |
 | Kid: boredom metric | Deepslate transition counts as a new type; p90 ≤ 32 kept, max ≤ 45 over CI seeds | p50 18 / p90 31 / max 40 (100 seeds); CI max 40 |
-| E-N1–N4 hand-off | `main.ts` new-world branch only; rAF yield after the menu message; rings ≤ 128; ≈ 2 s worst | §9, §13 |
+| E-N1–N4 hand-off | `main.ts` new-world branch only; two rAF yields after the menu message (gate 2: one rAF resolves before paint); rings ≤ 128; ≈ 2 s worst | §9, §13 |
 | R3-N1 tree-origin mutant | Construction stated; reviewer's 4 / 5 220 / 301 quoted beside mine | 11.9 |
 | R3-N3 | `caveCeil` added to the cross-plane comparison; (30,30), (30,5), (5,30) always included | 11.2: 0 mismatches |
 | R3-N4 | §0 "hard cap 3 ms" replaced by the 11.13 reference | §0 |

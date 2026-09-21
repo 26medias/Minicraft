@@ -15,7 +15,7 @@ function around(seed: number, sx: number, sz: number, R: number) {
 describe('spawnV3 (§9, §11.11)', () => {
 	it('is deterministic, work-bounded, never uses pass 4 or the fallback on the CI seeds', () => {
 		for (const seed of CI) { const a = spawnV3(seed), b = spawnV3(seed); expect(a).toEqual(b); expect(a.pass).toBeLessThanOrEqual(3); expect(a.ringsSearched).toBeLessThanOrEqual(128); expect(a.work).toBeLessThanOrEqual(148225); }
-	});
+	}, 60_000); // 16 spawn searches ≈ 4.5 s single-threaded (seed 3 searches 84 rings since the §4 snow-line rule) — over vitest's 5 s default under parallel load; the work bound above is the real limit
 	it('strict spawn safety on the CI seeds: top block is exactly h, solid, not liquid/snow/ice; air at h+1, h+2; h ≥ 122; no log/leaf within Chebyshev 3 and 12 up; buildable ≥ 40 %; no ravine channel within 64; pass 1 ⇒ h ≥ 130', () => {
 		for (const seed of CI) {
 			const s = spawnV3(seed); const c = column(seed, s.x, s.z); const get = around(seed, s.x, s.z, 5);

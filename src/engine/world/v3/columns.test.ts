@@ -1,6 +1,9 @@
 import { describe, it, expect } from 'vitest';
 import { column, BIOME, SEA, snowLine, isBeach, flatCell, ampCellOf, waterNear, isEntrance, inRavineChannel, chunkMaxH, tunnelFree, cheeseDensity, tunnelDensity, ENT_T } from './columns';
 import { fields, smooth } from './fields';
+import { Chunk } from '../chunk';
+import { generateChunkV3 } from './generate';
+import { V3 } from './blocks';
 
 /** Column-level map statistics for one seed (262 144 columns, ≈ 1.5 s). */
 function mapStats(seed: number) {
@@ -88,7 +91,29 @@ describe('v3 columns', () => {
 		expect(sawFalse && sawTrue).toBe(true);
 	});
 	it('snowLine and isBeach follow §4', () => {
-		const c = column(1, 256, 256); expect(snowLine(c)).toBe(160 + 20 * c.T);
+		const c = column(1, 256, 256); expect(snowLine(c)).toBe(c.T >= 0 ? 160 + 20 * c.T : Math.max(122, 160 + 78 * c.T));
 		for (let i = 0; i < 2000; i++) { const q = column(1, (i * 17) % 512, (i * 29) % 512); expect(isBeach(q)).toBe(q.h >= SEA - 3 && q.h <= SEA + 2 && q.land !== BIOME.badlands); }
+	});
+	it('§4 rule 3: snowLine(T) is continuous with the snowy threshold — fixed points and clamp', () => {
+		const at = (T: number) => snowLine({ ...column(1, 256, 256), T });
+		expect(at(0)).toBe(160); expect(at(0.5)).toBe(170); expect(at(1)).toBe(180);   // T ≥ 0: 160 + 20·T
+		expect(at(-0.45)).toBeCloseTo(124.9, 9);                                       // meets the snowy-biome threshold in the lowlands
+		expect(at(-0.1)).toBeCloseTo(152.2, 9);                                        // 160 + 78·T, not 160 + 20·T (= 158)
+		expect(at(-0.5)).toBe(122); expect(at(-1)).toBe(122);                          // never below 122
+		for (let T = -1; T < 1; T += 0.01) expect(at(T + 0.01)).toBeGreaterThanOrEqual(at(T)); // monotone in T, continuous at 0
+	});
+	it('§4 rule 3 (seed 3 play-test): the taiga flank beside the snowy patch is snow-topped', () => {
+		const seed = 3; const blocks = new Map<number, Uint16Array>();
+		for (const [cx, cz] of [[20, 12], [21, 12]] as const) { const c = new Chunk(cx, cz, 256); generateChunkV3(c, seed); blocks.set(cz * 32 + cx, c.blocks); }
+		let checked = 0;
+		for (let z = 192; z <= 202; z++) for (let x = 326; x <= 336; x++) {
+			const c = column(seed, x, z); const b = blocks.get((z >> 4) * 32 + (x >> 4))!; const at = (y: number) => b[y * 256 + (z & 15) * 16 + (x & 15)];
+			if (c.ravW > 0 || at(c.h) === 0 || at(c.h + 1) !== 0) continue; // surface not intact (cave mouth / ravine): the sweep rule does not apply
+			expect(c.h, `h at ${x},${z}`).toBeGreaterThanOrEqual(133); expect(c.h, `h at ${x},${z}`).toBeLessThanOrEqual(138);
+			expect(c.T, `T at ${x},${z}`).toBeLessThan(-0.3); expect(c.land).not.toBe(BIOME.snowy);
+			expect(snowLine(c), `snowLine at ${x},${z}`).toBeLessThanOrEqual(c.h);
+			expect(at(c.h), `top block at ${x},${c.h},${z}`).toBe(V3.snow_block); checked++;
+		}
+		expect(checked).toBeGreaterThan(100);
 	});
 });

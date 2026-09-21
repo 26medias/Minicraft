@@ -58,7 +58,9 @@ export function column(seed: number, wx: number, wz: number): Col {
 	return { h, hRaw, biome, land, amp, ent, river, T, Hu, ravW, ravDepth, M };
 }
 
-export const snowLine = (c: Col) => 160 + 20 * c.T;
+/** §4 rule 3 (2026-09-21 implementation feedback, seed-3 play-test): for T < 0 the altitude line descends to the lowlands as T approaches the
+ *  snowy threshold −0.45 (`160 + 78·T`, clamped ≥ 122), so a hill beside a snowy patch is snow-topped instead of bare between h 135 and 151. */
+export const snowLine = (c: Col) => c.T >= 0 ? 160 + 20 * c.T : Math.max(122, 160 + 78 * c.T);
 export const isBeach = (c: Col) => c.h >= SEA - 3 && c.h <= SEA + 2 && c.land !== BIOME.badlands;
 export function ampCellOf(seed: number, wx: number, wz: number): number {
 	const x0 = wx & ~3, z0 = wz & ~3;

@@ -168,7 +168,7 @@ when `y > hRaw − 9`. Precedence, first match wins:
 
 1. **under water**: depth 0 → `sand` if h > 110 (`gravel` where PATCH > 0.35), else `clay` where PATCH > 0.2 else `gravel`; depth 1–2 → `sand`.
 2. **beach** (`117 ≤ h ≤ 122`, land ≠ badlands) or **bank** (`river > 0.6`): depth 0–3 → `sand` (`gravel` if land is snowy or taiga).
-3. **snow line** (`y ≥ 160 + 20·T`, or land = snowy at any y): depth 0 → `snow_block`, depth 1–2 → `dirt`.
+3. **snow line** (`y ≥ snowLine(T)`, or land = snowy at any y): depth 0 → `snow_block`, depth 1–2 → `dirt`, where **`snowLine(T) = 160 + 20·T` for `T ≥ 0` and `max(122, 160 + 78·T)` for `T < 0`** (`T` is the column's lapse-corrected temperature, §3.2). The line is continuous at T = 0 (160) and reaches the lowlands (125) exactly where the snowy-biome threshold T = −0.45 begins, so snow is monotonic with cold across a biome edge: a hill beside a snowy patch is snow-topped instead of bare between h 135 and 151 (implementation feedback, parent play-test on seed 3; §14). The same `snowLine` is used by trees (§8) and spawn (§9).
 4. **stony peak** (`amp > 8`): stone.
 5. **biome**:
 
@@ -297,7 +297,7 @@ column (x 8, z 8); `n` attempts per §4; each attempt draws `(lx, lz)`,
 species, trunk height and two reals from the TREE stream; dropped if within
 Chebyshev 2 of an earlier tree of the same chunk, or if its column has h <
 121, is a beach, has `river > 0.2`, is a ravine channel column, has a biome
-different from the chunk centre, is at or above the snow line `160 + 20·T`,
+different from the chunk centre, is at or above the snow line `snowLine(T)` (§4),
 is not a flat cell, or is an entrance column (`ENT > 0.1`) that fails
 `tunnelFree` (§9) — no tree over a cave mouth (round 2: seed 7 had a plug on
 air). The base voxel at `h` becomes `dirt` unless it is `dirt`,
@@ -333,7 +333,7 @@ outer, `dx` inner), four passes (a fifth, documented fallback returns the centre
 | 4 | 122 | no | no | 0 |
 
 A column qualifies when, in this order (cheap first): `river = 0`, `ravW =
-0`, land ≠ snowy, h < snow line, not a beach; `|h − h(±2,0)| ≤ 2`, `|h −
+0`, land ≠ snowy, h < `snowLine(T)` (§4), not a beach; `|h − h(±2,0)| ≤ 2`, `|h −
 h(0,±2)| ≤ 2`, same at the 4 diagonals ±1; flat cell; no tree instance of
 the 3 × 3 chunks with base within Chebyshev 7; **tunnelFree** (no tunnel or
 cheese node > 0 at the cell's 4 corners for y nodes `(h−16)&~3 .. h+4`,
@@ -413,6 +413,9 @@ counts per map  moss 18.6k/20.9k/22.9k/25.0k/27.7k   dripstone 15.1k/16.3k/17.3k
 ravines after the round-3 RG ramp (CI seeds 1,2,3,5,8,13,21,34): ravine-core columns 26..536 per map, depth p50 41-50 max 41-65; ravines with >= 40 channel columns: 1/4/4/2/2/1/5/4, largest 92/599/188/478/272/98/524/320 (gate-1 closure re-measurement)
   before the change 6 of 106 seeds (6, 24, 26, 55, 57, 101) had none; after it, of 101-106: 0/1/3/3/4/3 (seed 101 still none, 37 channel columns)
 work counters (CI seeds): lattice nodes max 1575-1600, replays == 46 on every interior chunk, instances per chunk max 528-553; per-seed instance max over seeds 1-100: 523-569, mean 547, sd 8.2
+snow line continuity (§4 rule 3, CI seeds, before -> after): bare-band columns (non-snow top, h >= 135, within 24 of a snowy-land column >= 5 lower) 39130 -> 9804 over the 8 seeds
+  (seed 3 near spawn: taiga flank h 133-137 beside the snowy patch at (325,191) bare -> snow-topped); snow tops 0.09-0.25 % -> 0.13-0.28 % of non-air; forest-centre trees mean 2.77 -> 2.75;
+  spawn column moved on 2 of 8 CI seeds (nearest mouth 33.6 -> 24.7 and 31.1 -> 65.1; p90 of the 8 unchanged at 78.9); biome shares, pits, drops, steps and all 32 exact counters unchanged
 pit cap (§6 rule 5, CI seeds, before -> after): pit.maxDepth 32/50/21/22/26/21/21/20 -> 24/24/21/22/24/21/21/20; columns over 30: 2 -> 0; nearest real mouth identical on all 8 (11.4/31.1/33.3/33.6/36.2/37.7/78.9/98.4);
   cave share unchanged to 2 decimals (1-23 13.9-18.5, 80-119 3.8-5.1), floaters, drops (max 19 within 32, 20 within 64), boredom (max 40) and all 32 exact counters unchanged (0)
 trees per map 422/610/833/1159/1391;  forest-centre chunk mean 1.28/1.73/2.47/2.97/3.75
@@ -561,3 +564,4 @@ Instance lists with per-instance sub-streams and origin-chunk gates (R-B1/E-B1);
 | Finding | Action | Evidence |
 |---|---|---|
 | Engine Task 7: §6 rule 3's entrance clause had no floor — a vertical tunnel shaft open to the sky ran 42 voxels (seed 2, (16,16)); map-wide `pit.maxDepth` 20/22/50 on CI seeds; kid gate-2 witness `≤ 30` red | §6 rule 5: open-sky pit cap — sky-open cave-air at `y ≤ h − 24` becomes solid in non-ravine columns (roofed air untouched). Prototype and reference copy patched with a dated comment; 11.15 gains `pit.over30 == 0` (E) and `pit.maxDepth ≤ 24` (S); mutant `nopitcap` | CI seeds: 24/24/21/22/24/21/21/20 (was 32/50/…); mouths, cave share, floaters, drops, boredom and all 32 exact counters unchanged |
+| Parent play-test (seed 3): "snow on the mountain next to the snow patch stops halfway up" — the snowy biome (T < −0.45) and the altitude line `160 + 20·T` (151 at T = −0.45) left a bare band between h 135 and 151 on flanks whose T0 warms faster than the lapse compensates; stronger lapse does not help (39 130 → 39 793 bare-band columns) | §4 rule 3: `snowLine(T) = 160 + 20·T` for T ≥ 0, `max(122, 160 + 78·T)` for T < 0 — the altitude line meets the biome threshold at the lowlands. Prototype and reference copy patched with a dated comment | CI seeds: bare-band columns 39 130 → 9 804 (−75 %); seed-3 flank beside the patch now snow-topped; all 32 exact counters 0; snow tops +0.04 pts of non-air; spawn moved on 2/8 seeds, kid bounds hold |

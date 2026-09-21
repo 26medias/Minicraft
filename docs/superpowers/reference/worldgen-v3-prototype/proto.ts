@@ -4,6 +4,7 @@ import alea from '/home/julien/Projects/Minicraft/node_modules/alea/alea.js';
 
 export const SEA = 120;
 const MUT = process.env.MUT ?? ''; // mutants for §11 evidence only
+const LAPSE_DROP = Number(process.env.LAPSE_DROP ?? 0.7), LAPSE_SPAN = Number(process.env.LAPSE_SPAN ?? 90); // §3.2 lapse (env only for the snow diagnosis sweep)
 const H = 256, CX = 16, CZ = 16, PAD = 4, PAD_HI = process.env.MUT === 'pad4' ? 4 : 5, PW = CX + PAD + PAD_HI; // pad −4/+5 (PW 25): every column at local −1..16 has its 4 lattice-cell corners (x&~3 .. +4) inside the grid
 const LAT = 4;
 export const DEEPSLATE_Y = 48, DEEP_BLEND = 4, LAVA_Y = 10, SURF_MARGIN = 6, ENT_T = 0.1, RAVINE_FLOOR = 4, PIT_CAP = 24;
@@ -76,7 +77,7 @@ function pickLand(T: number, Hu: number): number {
 }
 
 // ---------- stage 1: column ----------
-export type Col = { h: number; hRaw: number; biome: number; land: number; amp: number; ent: number; river: number; T: number; Hu: number; ravW: number; ravDepth: number; M: number };
+export type Col = { T0: number; h: number; hRaw: number; biome: number; land: number; amp: number; ent: number; river: number; T: number; Hu: number; ravW: number; ravDepth: number; M: number };
 export function column(seed: number, wx: number, wz: number): Col {
 	const f = fields(seed);
 	const dC = Math.sqrt((wx - 256) * (wx - 256) + (wz - 256) * (wz - 256)); // Math.sqrt is IEEE-exact; Math.hypot is not
@@ -92,7 +93,7 @@ export function column(seed: number, wx: number, wz: number): Col {
 	let h = base + M * (PV > 0 ? PV * 92 : PV * 18);
 	const T0 = fbm2(f.T, wx / 320, wz / 320, 2);
 	const Hu = fbm2(f.HU, wx / 300, wz / 300, 2);
-	const T = T0 - clamp((h - 130) / 90, 0, 1) * 0.7;      // lapse on the pre-river, pre-detail height
+	const T = T0 - clamp((h - 130) / LAPSE_SPAN, 0, 1) * LAPSE_DROP; // lapse on the pre-river, pre-detail height
 	const land = pickLand(T, Hu);
 	if (land === BIOME.badlands && h > SEA + 4) { const q = Math.floor(h / 6) * 6; h = q + 6 * smooth((h - q) / 3 - 0.5); }
 	const r = fbm2(f.R, wx / 210, wz / 210, 2);
@@ -110,11 +111,13 @@ export function column(seed: number, wx: number, wz: number): Col {
 	const rgT = 0.4 - 0.05 * smooth((dC - 128) / 48); // ravine gate threshold: 0.4 within 128 of the centre, 0.35 from 176 outward (round 3: every world gets a real ravine)
 	const ravW = rg > rgT && h > SEA + 8 && amp < 6 ? 0.035 * smooth((rg - rgT) / 0.2) * smooth((dC - 128) / 48) : 0; // no ravine zone within 128 of the centre
 	const ravDepth = 40 + 25 * smooth(f.RAVD(wx / 300, wz / 300));
-	return { h, hRaw, biome, land, amp, ent, river, T, Hu, ravW, ravDepth, M };
+	return { T0, h, hRaw, biome, land, amp, ent, river, T, Hu, ravW, ravDepth, M };
 }
 /** Column is inside a ravine channel (its air reaches the surface). */
 export function inRavineChannel(seed: number, wx: number, wz: number): boolean { const c = column(seed, wx, wz); return c.ravW > 0 && Math.abs(fields(seed).RAV(wx / 230, wz / 230)) < c.ravW + 0.005 && !waterNear(seed, wx, wz); }
-export const snowLine = (c: Col) => 160 + 20 * c.T;
+// 2026-09-21 implementation feedback (parent play-test, seed 3): the altitude snow line now meets the snowy-biome threshold — for T < 0 it descends
+// to the lowlands as T approaches −0.45 (`160 + 78·T`, clamped ≥ 122), so a hill beside a snowy patch is snow-topped instead of bare between h 135 and 151.
+export const snowLine = (c: Col) => process.env.SNOWLINE === 'old' ? 160 + 20 * c.T : c.T >= 0 ? 160 + 20 * c.T : Math.max(122, 160 + 78 * c.T);
 export const isBeach = (c: Col) => c.h >= SEA - 3 && c.h <= SEA + 2 && c.land !== BIOME.badlands;
 /** Entrance zone = caves may breach the surface. `waterNear` is the 3x3 min of (hRaw − amp) < SEA+2; computed by the chunk, replicated here for tests/spawn. */
 export function ampCellOf(seed: number, wx: number, wz: number): number { const x0 = wx & ~3, z0 = wz & ~3; return Math.max(column(seed, x0, z0).amp, column(seed, x0 + 4, z0).amp, column(seed, x0, z0 + 4).amp, column(seed, x0 + 4, z0 + 4).amp); }

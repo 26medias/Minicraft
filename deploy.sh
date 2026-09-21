@@ -102,10 +102,10 @@ assert c.get("numNewerVersions")==10, c
 	else
 		local body
 		body=$(curl -s "${uri}/health" || true)
-		if echo "${body}" | grep -q '"codec":2'; then
-			echo "  ok: ${uri}/health -> codec 2"
+		if echo "${body}" | grep -q '"codec":3'; then
+			echo "  ok: ${uri}/health -> codec 3"
 		else
-			echo "  FAIL: ${uri}/health -> '${body}' (expected {\"ok\":true,\"codec\":2}; old codec still deployed?)"
+			echo "  FAIL: ${uri}/health -> '${body}' (expected {\"ok\":true,\"codec\":3}; old codec still deployed?)"
 			failures=$((failures + 1))
 		fi
 	fi

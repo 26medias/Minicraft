@@ -9,6 +9,8 @@ import { stage6 } from './trees';
 export const H = 256, CX = 16, CZ = 16, LAT = 4;
 /** Asymmetric pad −4/+5 (spec §2): every column at local −1..16 has its four cell corners inside the grid. */
 export const PAD = 4, PAD_HI = 5, PW = CX + PAD + PAD_HI; // 25
+/** §6 rule 5: open-sky pit cap — sky-open cave-air at y ≤ h − PIT_CAP becomes solid in non-ravine columns. */
+export const PIT_CAP = 24;
 
 export type Ctx = { blocks: Uint16Array; bx: number; bz: number; poolLog?: number[] /* test-only: pool() pushes every index it writes when present */ };
 export type Setter = (at: number) => number;
@@ -96,6 +98,14 @@ export function generateChunkV3(chunk: Chunk, seed: number, capture?: Capture): 
 			}
 			kind[y * 256 + base] = kd;
 		}
+	}
+	// ---- stage 3, rule 5 (§6, 2026-09-21 implementation feedback): open-sky pit cap. In every column that is not a ravine-carving column,
+	// cave-air that is open to the sky (only air above it up to yTop) and lies at y ≤ h − PIT_CAP becomes solid, so h − terrain top ≤ 24.
+	// Roofed cave-air is untouched (sloping mouths keep their continuation); only vertical shafts open to the sky are plugged.
+	for (let lz = 0; lz < CZ; lz++) for (let lx = 0; lx < CX; lx++) {
+		const c = col(lx, lz); const pi = (lz + PAD) * PW + lx + PAD; if (c.ravW > 0 && wn[pi] === 0) continue;
+		const base = lz * 16 + lx; const floor = c.h - PIT_CAP;
+		for (let y = yTop - 1; y >= 1; y--) { const k = kind[y * 256 + base]; if (k === 1 || k === 3) break; if (k === 2 && y <= floor) kind[y * 256 + base] = 1; }
 	}
 	// ---- stage 4: surface (precedence: underwater > beach/bank > snow line > stony peak > biome)
 	for (let lz = 0; lz < CZ; lz++) for (let lx = 0; lx < CX; lx++) {

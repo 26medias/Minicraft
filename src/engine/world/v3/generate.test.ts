@@ -104,4 +104,16 @@ describe('generateChunkV3 — stages 2–4', () => {
 		for (let z = r.z0; z <= r.z1; z++) for (let x = r.x0; x <= r.x1; x++) { if (!flatCell(3, x, z) || isEntrance(3, x, z) || inRavineChannel(3, x, z)) continue; const c = column(3, x, z); if (c.h <= SEA) continue; n++; expect(r.terr(x, z)).toBe(c.h); }
 		expect(n).toBeGreaterThan(50);
 	});
+	it('§6 rule 5 / §11.15 open-sky pit cap: off ravine-carving columns no sky-open cave-air lies at y ≤ h − 24; roofed and shallow cave-air survive (seed 2, chunk (1,1), shaft at (16,16))', () => {
+		const seed = 2; const cap: Capture = {}; generateChunkV3(new Chunk(1, 1, 256), seed, cap); const kind = cap.kind!;
+		let deepOpen = 0, shallowOpen = 0, roofedDeep = 0, worst = 0;
+		for (let lz = 0; lz < 16; lz++) for (let lx = 0; lx < 16; lx++) {
+			const x = 16 + lx, z = 16 + lz; const c = column(seed, x, z); if (c.ravW > 0 && !waterNear(seed, x, z)) continue;
+			let y = 255; for (; y >= 1; y--) { const k = kind[y * 256 + lz * 16 + lx]; if (k === 1 || k === 3) break; if (k === 2) { if (y <= c.h - 24) { deepOpen++; worst = Math.max(worst, c.h - y); } else shallowOpen++; } }
+			for (; y >= 1; y--) if (kind[y * 256 + lz * 16 + lx] === 2 && y <= c.h - 24) roofedDeep++;
+		}
+		expect(deepOpen, `sky-open cave-air below h − 24 (deepest ${worst})`).toBe(0);
+		expect(shallowOpen).toBeGreaterThan(0); // the mouth is still there
+		expect(roofedDeep).toBeGreaterThan(0); // roofed cave-air below h − 24 is untouched
+	});
 });

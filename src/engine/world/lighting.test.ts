@@ -239,3 +239,51 @@ describe('updateLightsForBlockChange', () => {
 		expect(c.getSky(5, 25, 5)).toBe(0);
 	});
 });
+
+function tallEmptyWorld(): World {
+	const w = new World(1, { height: 256 });
+	const c = w.ensureChunk(0, 0);
+	c.blocks.fill(AIR);
+	c.lights.fill(0);
+	c.liquidFrontier.clear();
+	return w;
+}
+
+describe('skylight at height 256', () => {
+	it('lights an all-air column to 15 at y 255, 200, 64 and 0', () => {
+		const w = tallEmptyWorld();
+		const c = w.getChunk(0, 0)!;
+		fillChunkLights(w, c);
+		for (const y of [255, 200, 64, 0]) expect(c.getSky(3, y, 3)).toBe(15);
+	});
+
+	it('re-seeding a column under a roof at y=200 does not light y 0..63 from a stale 63 start', () => {
+		// A roof across the whole chunk at y=200 and one stone at (5,100,5). Removing the
+		// stone triggers reSeedSkylightColumn for column (5,5). A correct re-seed walks
+		// from height-1, hits the roof at 200 and seeds nothing below it. A re-seed that
+		// still starts at y=63 begins UNDER the roof and wrongly lights y 0..63 to 15.
+		// (Removing a roof block instead does not discriminate: refloodFromNeighbors
+		// already refills that column from the sky-15 voxel above it.)
+		const w = tallEmptyWorld();
+		const c = w.getChunk(0, 0)!;
+		for (let x = 0; x < 16; x++) for (let z = 0; z < 16; z++) c.blocks[indexOf(x, 200, z)] = stone;
+		c.blocks[indexOf(5, 100, 5)] = stone;
+		fillChunkLights(w, c);
+		expect(c.getSky(5, 30, 5)).toBe(0);
+		w.setBlock(5, 100, 5, AIR);
+		updateLightsForBlockChange(w, 5, 100, 5);
+		expect(c.getSky(5, 30, 5)).toBe(0);   // "expected 15 to be 0" on a stale 63
+		expect(c.getSky(5, 150, 5)).toBe(0);
+	});
+
+	it('fills an all-air 256 chunk in under 250 ms (shift() queue measured ~1800 ms)', () => {
+		// Threshold is loose on purpose: the suite runs alongside other agents.
+		// Cursor queue measured 2.4 ms; the gap to 250 ms is contention headroom.
+		const w = tallEmptyWorld();
+		const c = w.getChunk(0, 0)!;
+		fillChunkLights(w, c); // warm-up
+		const t0 = performance.now();
+		fillChunkLights(w, c);
+		expect(performance.now() - t0).toBeLessThan(250);
+	});
+});

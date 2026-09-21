@@ -1,7 +1,7 @@
 import { describe, it, expect } from 'vitest';
 import { Chunk } from '../chunk';
 import { generateChunkV3, W, type Capture } from './generate';
-import { V3, isLiquidId } from './blocks';
+import { V3, isLiquidId, LOG_IDS, LEAF_IDS } from './blocks';
 import { column, BIOME, SEA, isBeach, snowLine, isEntrance, waterNear, flatCell, inRavineChannel } from './columns';
 import { fields } from './fields';
 
@@ -11,7 +11,8 @@ function region(seed: number, cx0: number, cx1: number, cz0: number, cz1: number
 	for (let cz = cz0; cz <= cz1; cz++) for (let cx = cx0; cx <= cx1; cx++) { const c = new Chunk(cx, cz, 256); const cap: Capture = {}; generateChunkV3(c, seed, cap); m.set(cz * 32 + cx, c.blocks); kinds.set(cz * 32 + cx, cap.kind!); }
 	const get = (x: number, y: number, z: number) => { const b = m.get((z >> 4) * 32 + (x >> 4)); if (!b || y < 0 || y > 255 || x < 0 || z < 0) return -1; return b[y * 256 + (z & 15) * 16 + (x & 15)]; };
 	const kind = (x: number, y: number, z: number) => kinds.get((z >> 4) * 32 + (x >> 4))![y * 256 + (z & 15) * 16 + (x & 15)];
-	const terr = (x: number, z: number) => { let y = 255; while (y > 0 && (get(x, y, z) === 0 || isLiquidId(get(x, y, z)) || get(x, y, z) === V3.ice)) y--; return y; };
+	// First non-air, non-liquid, non-ice, non-tree voxel (the prototype checker's "first non-air non-tree"): stage 6 logs and leaves sit above h.
+	const terr = (x: number, z: number) => { let y = 255; while (y > 0 && (get(x, y, z) === 0 || isLiquidId(get(x, y, z)) || get(x, y, z) === V3.ice || LOG_IDS.has(get(x, y, z)) || LEAF_IDS.has(get(x, y, z)))) y--; return y; };
 	return { get, kind, terr, x0: cx0 * 16, x1: cx1 * 16 + 15, z0: cz0 * 16, z1: cz1 * 16 + 15 };
 }
 

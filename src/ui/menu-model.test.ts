@@ -7,7 +7,7 @@ import type { WorldSummary } from '../persistence/adapter';
 const MIN = 60_000;
 const at = (d: number, h: number, mi: number) => new Date(2026, 8, d, h, mi).getTime();
 const schedule: Schedule = { worldId: 'w1', seed: 42, name: "Noah's World", limitMin: 45, startMin: 420 };
-const w1: WorldSummary = { id: 'w1', seed: 42, name: "Noah's World", createdAt: 0, updatedAt: 0, origin: 'local' };
+const w1: WorldSummary = { id: 'w1', seed: 42, name: "Noah's World", createdAt: 0, updatedAt: 0, origin: 'local', version: 2 };
 const base = (over: Partial<MenuInput> = {}): MenuInput => ({
 	schedule: { kind: 'armed', schedule }, session: null, worlds: [w1], offline: false, now: at(7, 9, 0), ...over,
 });

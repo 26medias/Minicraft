@@ -6,7 +6,9 @@ import type {
 	WorldSave,
 	WorldSummary,
 } from './adapter';
+import { blocksPerChunk, isWorldHeight, LEGACY_HEIGHT, type WorldHeight } from '../engine/world/coords';
 import { decodeChunk, decodeFluidMeta, encodeChunk, encodeFluidMeta } from './codec';
+import { SaveCorrupt } from './errors';
 
 export type CloudErrorCode = 'NETWORK' | 'CONFLICT' | 'TOO_LARGE' | 'SERVER' | 'NOT_FOUND' | 'BAD';
 
@@ -21,7 +23,11 @@ export class CloudError extends Error {
 }
 
 type Wire = {
-	version: 2;
+	version: 2 | 3;
+	/** v3 only. */
+	height?: number;
+	/** v3 only. */
+	genVersion?: number;
 	id: string;
 	seed: number;
 	name: string;
@@ -32,6 +38,11 @@ type Wire = {
 	lights?: WorldSave['lights'];
 	generation?: string;
 };
+
+type ListRow = WorldSummary & { generation?: string; height?: number; genVersion?: number };
+
+/** Tall worlds live under their own routes; the old ones are never touched. */
+const prefixFor = (version: 2 | 3) => (version === 3 ? '/v3/worlds' : '/worlds');
 
 export class CloudAdapter implements PersistenceAdapter {
 	/** Generation each world was LOADED from. Never refreshed by a comparison fetch. */
@@ -70,22 +81,42 @@ export class CloudAdapter implements PersistenceAdapter {
 	}
 
 	encode(save: WorldSave): EncodedChunk[] {
+		const len = blocksPerChunk(save.height);
 		return save.chunks.map((c) => {
-			const out: EncodedChunk = { cx: c.cx, cz: c.cz, blocks: encodeChunk(c.blocks, 16 * 64 * 16) };
+			const out: EncodedChunk = { cx: c.cx, cz: c.cz, blocks: encodeChunk(c.blocks, len) };
 			if (c.fluidMeta && c.fluidMeta.size > 0) out.fluidMeta = encodeFluidMeta(c.fluidMeta);
 			return out;
 		});
 	}
 
 	private static decode(wire: Wire): WorldSave {
-		const chunks: RawChunk[] = wire.chunks.map((c) => ({
-			cx: c.cx,
-			cz: c.cz,
-			blocks: decodeChunk(c.blocks, 16 * 64 * 16),
-			fluidMeta: c.fluidMeta ? decodeFluidMeta(c.fluidMeta) : undefined,
-		}));
+		// The body's own version is what sizes the chunks. A v2 body has no height
+		// field and is 64 by definition; a v3 body must say, or it is refused.
+		let height: WorldHeight = LEGACY_HEIGHT;
+		let genVersion = 1;
+		if (wire.version === 3) {
+			if (!isWorldHeight(wire.height) || !Number.isInteger(wire.genVersion) || (wire.genVersion as number) < 1) {
+				throw new SaveCorrupt(`cloud v3 world ${wire.id} has no valid height/genVersion`);
+			}
+			height = wire.height;
+			genVersion = wire.genVersion as number;
+		}
+		const len = blocksPerChunk(height);
+		let chunks: RawChunk[];
+		try {
+			chunks = wire.chunks.map((c) => ({
+				cx: c.cx,
+				cz: c.cz,
+				blocks: decodeChunk(c.blocks, len),
+				fluidMeta: c.fluidMeta ? decodeFluidMeta(c.fluidMeta) : undefined,
+			}));
+		} catch (err) {
+			throw new SaveCorrupt(`cloud world ${wire.id}: ${(err as Error).message}`);
+		}
 		return {
-			version: 2,
+			version: wire.version === 3 ? 3 : 2,
+			height,
+			genVersion,
 			id: wire.id,
 			seed: wire.seed,
 			name: wire.name,
@@ -99,21 +130,29 @@ export class CloudAdapter implements PersistenceAdapter {
 	}
 
 	async loadWorld(id: string): Promise<WorldSave | null> {
-		const res = await this.request(`/worlds/${id}`);
-		if (res.status === 404) return null;
-		if (!res.ok) throw new CloudError(CloudAdapter.classify(res.status));
-		const wire = (await res.json()) as Wire;
-		const gen = res.headers?.get?.('X-Generation') ?? wire.generation;
-		if (gen) {
-			this.generations.set(id, gen);
-			this.unsynced.delete(id);
+		for (const version of [3, 2] as const) {
+			const res = await this.request(`${prefixFor(version)}/${id}`);
+			if (res.status === 404) continue;
+			if (!res.ok) throw new CloudError(CloudAdapter.classify(res.status));
+			const wire = (await res.json()) as Wire;
+			// The body's version wins, never the namespace that answered. Overriding
+			// it with the probed route would reinterpret a v2 body as v3 and reject
+			// it; decode() sizes the chunks from what the body says it is.
+			const gen = res.headers?.get?.('X-Generation') ?? wire.generation;
+			if (gen) {
+				this.generations.set(id, gen);
+				this.unsynced.delete(id);
+			}
+			return CloudAdapter.decode(wire);
 		}
-		return CloudAdapter.decode(wire);
+		return null;
 	}
 
 	async saveWorld(save: WorldSave, pre?: EncodedChunk[]): Promise<SaveResult> {
+		const prefix = prefixFor(save.version);
 		const body: Wire = {
-			version: 2,
+			version: save.version,
+			...(save.version === 3 ? { height: save.height, genVersion: save.genVersion } : {}),
 			id: save.id,
 			seed: save.seed,
 			name: save.name,
@@ -135,7 +174,7 @@ export class CloudAdapter implements PersistenceAdapter {
 			headers['If-None-Match'] = '*';
 		}
 
-		const res = await this.request(`/worlds/${save.id}`, {
+		const res = await this.request(`${prefix}/${save.id}`, {
 			method: 'PUT',
 			headers,
 			body: JSON.stringify(body),
@@ -151,7 +190,7 @@ export class CloudAdapter implements PersistenceAdapter {
 		if (res.status === 409) {
 			// A committed write whose response was lost looks exactly like a conflict
 			// on retry. Re-read before believing it: same updatedAt means it was ours.
-			const check = await this.request(`/worlds/${save.id}`);
+			const check = await this.request(`${prefix}/${save.id}`);
 			if (check.ok) {
 				const stored = (await check.json()) as Wire;
 				const gen = check.headers?.get?.('X-Generation') ?? stored.generation;
@@ -168,18 +207,29 @@ export class CloudAdapter implements PersistenceAdapter {
 	}
 
 	async listWorlds(): Promise<WorldSummary[]> {
-		const res = await this.request('/worlds');
-		if (!res.ok) throw new CloudError(CloudAdapter.classify(res.status));
-		const rows = (await res.json()) as (WorldSummary & { generation?: string })[];
-		return rows.map((r) => ({ ...r, origin: 'cloud' as const }));
+		// Issued in this order on purpose: v3 first, then v2. Tests stub the
+		// responses positionally.
+		const [tall, old] = await Promise.all([this.request('/v3/worlds'), this.request('/worlds')]);
+		if (!tall.ok) throw new CloudError(CloudAdapter.classify(tall.status));
+		if (!old.ok) throw new CloudError(CloudAdapter.classify(old.status));
+		const tallRows = (await tall.json()) as ListRow[];
+		const oldRows = (await old.json()) as ListRow[];
+		return [
+			...tallRows.map((r) => ({
+				...r,
+				origin: 'cloud' as const,
+				version: 3 as const,
+				height: isWorldHeight(r.height) ? r.height : undefined,
+			})),
+			...oldRows.map((r) => ({ ...r, origin: 'cloud' as const, version: 2 as const, height: LEGACY_HEIGHT })),
+		];
 	}
 
 	async deleteWorld(id: string): Promise<void> {
-		const res = await this.request(`/worlds/${id}`, { method: 'DELETE' });
-		if (res.status === 204 || res.status === 404) {
-			this.generations.delete(id);
-			return;
+		for (const version of [3, 2] as const) {
+			const res = await this.request(`${prefixFor(version)}/${id}`, { method: 'DELETE' });
+			if (res.status !== 204 && res.status !== 404) throw new CloudError(CloudAdapter.classify(res.status));
 		}
-		throw new CloudError(CloudAdapter.classify(res.status));
+		this.generations.delete(id);
 	}
 }

@@ -7,6 +7,7 @@ import type {
 } from './adapter';
 import type { LocalStorageAdapter } from './localStorage';
 import type { CloudAdapter } from './cloud';
+import { SaveCorrupt, SaveMismatch } from './errors';
 import { isLegacyId, newWorldId } from './uuid';
 
 function sameContent(a: EncodedChunk[], b: EncodedChunk[]): boolean {
@@ -102,21 +103,49 @@ export class DualAdapter implements PersistenceAdapter {
 	}
 
 	async loadWorld(id: string): Promise<WorldSave | null> {
-		const localCopy = await this.local.loadWorld(id);
+		// Each leg may fail on its own (spec §4). A copy that cannot be fully parsed
+		// is never opened, never forked from, and never overwrites the good one.
+		let localCopy: WorldSave | null = null;
+		let localError: Error | null = null;
+		try {
+			localCopy = await this.local.loadWorld(id);
+		} catch (err) {
+			localError = err as Error;
+		}
 
-		if (!this.cloud || isLegacyId(id)) return localCopy;
+		if (!this.cloud || isLegacyId(id)) {
+			if (localError) throw localError;
+			return localCopy;
+		}
 
 		let cloudCopy: WorldSave | null = null;
 		try {
 			cloudCopy = await this.cloud.loadWorld(id);
-		} catch {
+		} catch (err) {
+			if (err instanceof SaveCorrupt) {
+				// The cloud object is unreadable; the local copy (if any) is what we have.
+				if (localError) throw localError;
+				if (localCopy) {
+					this.cloud.markUnsynced(id);
+					this.needsUpload.add(id);
+					return localCopy;
+				}
+				throw err;
+			}
 			// Offline. The local copy is authoritative for this session, and its first
 			// save must not adopt a generation it never saw.
+			if (localError) throw localError;
 			if (localCopy) {
 				this.cloud.markUnsynced(id);
 				this.needsUpload.add(id);
 			}
 			return localCopy;
+		}
+
+		if (localError) {
+			// The good copy wins; nothing is forked from a corrupt one.
+			if (cloudCopy) return cloudCopy;
+			throw localError;
 		}
 
 		if (!cloudCopy) {
@@ -130,6 +159,16 @@ export class DualAdapter implements PersistenceAdapter {
 		}
 
 		if (!localCopy) return cloudCopy;
+
+		// A world's height and generator are fixed for life. Two copies that disagree
+		// are not two edits of one world; forking here would write a 256-tall record
+		// into the 64-high namespace. Chunk counts are deliberately NOT compared:
+		// differing chunk sets are what the ancestor / content / fork arbitration is for.
+		if (localCopy.height !== cloudCopy.height || localCopy.genVersion !== cloudCopy.genVersion) {
+			throw new SaveMismatch(
+				`world ${id}: local is ${localCopy.height}/gen${localCopy.genVersion}, cloud is ${cloudCopy.height}/gen${cloudCopy.genVersion}`,
+			);
+		}
 
 		const ancestor =
 			localCopy.lastSyncedGeneration != null &&

@@ -578,3 +578,20 @@ describe('LiquidScheduler — sponge', () => {
 		expect(w.getBlock(262, 30, 260)).toBe(AIR);
 	});
 });
+
+describe('liquids at height 256', () => {
+	it('a source at y=240 falls to a floor at y=121', () => {
+		const w = new World(1, { height: 256 });
+		const c = w.ensureChunk(16, 16); c.blocks.fill(AIR); c.lights.fill(0); c.liquidFrontier.clear();
+		floor(w, 258, 262, 258, 262, 121);
+		w.setBlock(260, 240, 260, water);
+		const s = new LiquidScheduler(w, () => {});
+		// The scheduler advances one block per 0.5 s flow step; tick until the water
+		// lands or we give up. 2000 ticks is ~10x the 118-block fall.
+		let ticks = 0;
+		while (w.getBlock(260, 122, 260) !== water && ticks < 2000) { s.tick(0.5); ticks++; }
+		expect(ticks).toBeLessThan(2000);
+		expect(w.getBlock(260, 122, 260)).toBe(water);
+		expect(w.getBlock(260, 121, 260)).toBe(stone);
+	});
+});

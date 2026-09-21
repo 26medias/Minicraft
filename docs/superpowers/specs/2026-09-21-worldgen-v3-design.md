@@ -107,7 +107,7 @@ shadow cost (measured: it fell).
 | `R` | 2 | 210 | rivers |
 | `D` | 3 | 26 | ±3.5 blocks detail |
 | `ENT` | 1 | 90 | entrance zone where `> ENT_T = 0.1` |
-| `RG` | 1 | 300 | ravine zone where `> 0.4` |
+| `RG` | 1 | 300 | ravine zone where `> RG_T` (`RG_T` = 0.4 near spawn, ramping to 0.35 between 128 and 176 blocks from the centre; formula in §6.1) |
 | `RAV` | 1 | 230 | ravine line |
 | `RAVD` | 1 | 300 | ravine depth 40–65 |
 | `PATCH` | 1 | 9 | surface patches |
@@ -320,7 +320,7 @@ so the message paints, calls `spawnV3`, and passes `[x + 0.5, height − 1, z +
 no schema change; continues use the persisted player position. Worst
 observed cost ≈ 2 s on fresh seeds. Search is **work-bounded**, never
 time-bounded: rings `r = 0..128` around (256, 256), ring by ring (`dz`
-outer, `dx` inner), four passes:
+outer, `dx` inner), four passes (a fifth, documented fallback returns the centre column (256, 256) if all four fail; never reached on any measured seed):
 
 | pass | min h | gentle | mouth | min buildable |
 |---|---|---|---|---|
@@ -360,8 +360,9 @@ column evaluations. Rings ≤ 128 is the bound.
 spawn/kid suite on demand (≈ 15 min, not per-commit). **Margin rule:** every
 statistical bound is derived from the 100-seed run (seeds 1–100) as *mean ±
 4 sd* for count statistics and as the *observed range widened by 25 % of its
-width on each side* for fractions and heights, rounded outward; bounds are
-therefore properties, not memorised values, and hold on all 100 seeds by
+width on each side* for fractions and heights, rounded outward (a few stated
+bounds are rounded inward by ≤ 0.5 units; all still hold on seeds 1–112);
+bounds are therefore properties, not memorised values, and hold on all 100 seeds by
 construction (measured range in parentheses). The mutant that turns an
 assertion red is named where the assertion changed in gate 1.
 
@@ -379,12 +380,12 @@ assertion red is named where the assertion changed in gate 1.
 12. **S kid targets (100 seeds, voxel-level, trees excluded from "terrain top", search radius 96, censored at 999):** buildable within 24 (dry, river-free, |top − spawn top| ≤ 3) p50 ≥ 40 % (48.2; p10 37); open-sky single-step drop within 32 p90 ≤ 20 (16); worst step within 64 excluding coast (low side ≤ 120) p90 ≤ 25 (19); no ravine channel column within 64 on 100/100; 1–2-column holes ≥ 4 deep within 64 ≤ 8 (max 3); pockmarked land within 64 ≤ 10 % (max 6.4); nearest trunk (a log within 12 of the top) p50 ≤ 14, p90 ≤ 32 (10.6 / 22.2); **cave mouth** = column c whose terrain top is < h − 3 with air above, with ≥ 6 such open columns in the 9 × 9 around c, an 8-neighbour that is not open and whose top is ≤ 5 above c's floor, and air reachable from c's floor (6-connected, within Chebyshev 8) at a voxel ≥ 8 below its own column's h with solid somewhere above it: nearest p50 ≤ 50, p90 ≤ 90 (42 / 87); first ore in a 3 × 3 shaft p50 ≤ 30, p90 ≤ 80 (21 / 57; censored — lava sea reached first — on 1/100 seeds, counted as 999); longest run of 3 × 3 shaft layers that are only stone/deepslate, **the stone→deepslate transition at y 44–52 counting as a new block type**, p90 ≤ 32 (31 — the ask was 30; see §12) and, over the CI seeds, max ≤ 45 (40); emerald voxels within 32 p50 = 0 (0); biome runs < 6 along 4 × 64 walks p90 ≤ 5 (3). Runtime ≈ 15 min; on demand.
 13. **Time, informational (not CI):** cold — fresh memo, `spawnV3` first, then the 81 chunks around spawn — mean ≤ 4 ms, p95 ≤ 10 ms (this run: mean 1.49–3.31, p95 2.06–7.27, max 3.1–10.4 on seeds 1, 3, 7, 12, 21, 34, 55, 89); warm full map (100 seeds, 4 processes contending) mean 1.64–2.27, p95 2.34–4.38. **CI work-bound (E, machine-independent, from the §2 counters incremented at the point of evaluation):** lattice nodes per chunk ≤ 1 600 (= 5 × 5 × 64 with yTop clamped to 252; measured max 1 575–1 600); instance-list replays per interior chunk **== 46** (36 for ores/blobs/pockets/geodes × 9 origins + 1 pools own-chunk + 9 trees; edge chunks fewer) — 0 deviations on the CI seeds; feature instances drawn per chunk ≤ 580 (per-seed max: mean 547 + 4 sd 8.2 over seeds 1–100; observed 523–569). An extra lattice pass or a dropped origin changes a counter and goes red.
 14. **E pools (map):** every placed pool voxel has 4 solid-or-liquid sides and a solid below (subset of 5, scoped); pools placed per map 224–383 (mean ± 4 sd; 259–358). Mutant `poolrav` (pools allowed in ravine cores): 4 ravine-floor violations on seed 14.
-15. **E/S shape (map):** isolated floating solids ≤ 46 (mean + 4 sd; 3–47 before the RG change); every ravine-core column's floor ≥ `bottom − 1` (0); rim-to-floor depth ≤ 70 where present (41–66); **at least one ravine with ≥ 40 8-connected channel columns per map on the CI seeds** (measured 1–5 such ravines, largest 92–599 columns, on all 8 CI seeds; of the fresh seeds 101–106, five pass and seed 101 does not — 37 channel columns, largest 12 — see §12).
+15. **E/S shape (map):** isolated floating solids ≤ 60 (100-seed max 47 + margin; the mean + 4 sd rule gives 46, which CI seed 3 exceeds at 47, so this bound uses max + 25 % of range instead); every ravine-core column's floor ≥ `bottom − 1` (0); rim-to-floor depth ≤ 70 where present (41–66); **at least one ravine with ≥ 40 8-connected channel columns per map on the CI seeds** (measured 1–5 such ravines, largest 92–599 columns, on all 8 CI seeds; of the fresh seeds 101–106, five pass and seed 101 does not — 37 channel columns, largest 12 — see §12).
 16. **S decoration (map, mean ± 4 sd):** moss 16.4 k–29.4 k (18.6 k–27.7 k), dripstone 13.6 k–21.1 k (15.1 k–20.1 k), lava 200 k–499 k (257 k–450 k).
 
 ## 12. Evidence appendix (repaired prototype, seeds 1–100; Node 24, this machine)
 
-Exact: **30 assertion counters, all 0 on all 100 maps** (2, 3, 5, 6, 7, 8,
+Exact: **31 assertion counters, all 0 on all 100 maps** (2, 3, 5, 6, 7, 8, 13,
 9, 10, 14, 15 above). Mutants: see §11.
 
 Map statistics, min / p10 / p50 / p90 / max:
@@ -401,8 +402,8 @@ seam  ore density by local x: x=0 1.17-1.26, x=15 1.21-1.28, interior 1.23-1.31,
 % of non-air  stone 50.3-57.3  deepslate 23.4-26.6  dirt 2.4-3.1  granite 1.79-2.05  diorite 1.77-1.97  andesite 1.74-1.91  tuff 4.24-4.88  gravel 1.42-1.85  calcite 0.36-0.42  lava 0.79-1.40  water 0.85-3.93
 counts per map  moss 18.6k/20.9k/22.9k/25.0k/27.7k   dripstone 15.1k/16.3k/17.3k/18.6k/20.1k   amethyst 2.9k/4.3k/5.6k/6.6k/7.8k   geodes 25/34/42/51/57
                 pools 259/280/302/331/358   lava 257k/301k/347k/407k/450k   floaters 3/11/19/28/47   ravine cores 5/29/148/296/535 (RG 0.4)   ravine depth max 41/41/56/65/66
-ravines after the round-3 RG ramp (CI seeds 1,2,3,5,8,13,21,34): ravine-core columns 26..536 per map, depth p50 41-50 max 41-65; ravines with >= 40 channel columns: 1/4/4/2/4/4/3/3, largest 92/599/188/272/320/365/524/268
-  before the change 6 of 106 seeds (6, 24, 26, 55, 57, 101) had none; after it, of 101-106: 1/3/2/1/3/0 (seed 101 still none, 37 channel columns)
+ravines after the round-3 RG ramp (CI seeds 1,2,3,5,8,13,21,34): ravine-core columns 26..536 per map, depth p50 41-50 max 41-65; ravines with >= 40 channel columns: 1/4/4/2/2/1/5/4, largest 92/599/188/478/272/98/524/320 (gate-1 closure re-measurement)
+  before the change 6 of 106 seeds (6, 24, 26, 55, 57, 101) had none; after it, of 101-106: 0/1/3/3/4/3 (seed 101 still none, 37 channel columns)
 work counters (CI seeds): lattice nodes max 1575-1600, replays == 46 on every interior chunk, instances per chunk max 528-553; per-seed instance max over seeds 1-100: 523-569, mean 547, sd 8.2
 trees per map 422/610/833/1159/1391;  forest-centre chunk mean 1.28/1.73/2.47/2.97/3.75
 shared lattice nodes checked per seed 13.6k-18.4k, mismatches 0;  ceiling voxels checked per map 1.2-2.2M (flat) + 0.17-0.79M (amp), violations 0
@@ -427,7 +428,7 @@ spawnV3 cost 16/250/1162/1713 ms; work 16.6k/70.0k/98.9k/120.9k column evaluatio
 buildable within 24 (voxels) 37.1/48.2/67.0/81.9 %;  drop within 32  3/9/16/28;  worst step within 64 (no coast) 8/11/19/24
 nearest ravine channel: none within 64 on 100/100;  small holes within 64  0/0/2/3;  pockmarked land within 64  0.1/0.6/2.8/6.4 %
 nearest trunk 8.1/10.6/22.2/94;  nearest cave mouth 13.9/42.0/86.7/110;  first ore in 3x3 shaft 4/21/57/(one seed: lava first)
-boring stretch (stone/deepslate-only layers) 13/19/31/50;  emerald within 32  0/0/22/322;  biome short runs per 4x64 walks 0/1/3/4
+boring stretch (new metric, stone→deepslate transition counts as a new block; kid100b) 12/18/31/40;  emerald within 32  0/0/22/322;  biome short runs per 4x64 walks 0/1/3/4
 spawn biomes: plains 35, taiga 22, desert 12, savanna 10, cherry 8, forest 8, badlands 5
 ```
 

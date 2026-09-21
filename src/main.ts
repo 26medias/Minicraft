@@ -26,6 +26,7 @@ import { ColorPicker } from './ui/color-picker';
 import { LIGHT_PALETTE } from './data/light-palette.data';
 import type { Action } from './data/keybindings.data';
 import { worldFromSave, applySave } from './game/apply-save';
+import { spawnV3 } from './engine/world/v3/spawn';
 import { resolveContinue, type LoadOutcome } from './game/continue-policy';
 import type { WorldSave } from './persistence/adapter';
 import { PlaytimeController, resolveSession } from './game/playtime-controller';
@@ -130,6 +131,18 @@ async function main() {
 		// The World comes from the record (its stored height is authoritative) or,
 		// for a new world, from the newest generator's profile.
 		const world = save ? worldFromSave(save) : World.create(seed);
+		// New v3 worlds: the spawn column is searched once, in memory (spec §9). Show the
+		// message and yield TWO frames: the first rAF callback runs before style/layout/paint,
+		// so a single yield lets the synchronous search start before the text is on screen.
+		let v3Spawn: [number, number, number] | null = null;
+		if (!save && world.genVersion >= 3) {
+			menu.showBuilding('Building your world…');
+			const nextFrame = () => new Promise<void>((r) => requestAnimationFrame(() => r()));
+			await nextFrame(); await nextFrame();
+			const s = spawnV3(seed);
+			v3Spawn = [s.x + 0.5, world.height - 1, s.z + 0.5];
+			menu.hide();
+		}
 		let createdAt = Date.now();
 		let worldName = name;
 		const player = new Player([256.5, world.height - 1, 256.5], world.height);
@@ -164,7 +177,7 @@ async function main() {
 		// Ground the player only once every saved chunk is in the world, so there is
 		// something to stand on. New worlds spawn on the generated surface (v2: ~120),
 		// saved ones near where they left off.
-		player.position = findSafeSpawn(world, savedSpawn ?? [256.5, world.height - 1, 256.5]);
+		player.position = findSafeSpawn(world, savedSpawn ?? v3Spawn ?? [256.5, world.height - 1, 256.5]);
 
 		// Nine slots, saved per world. Saves from before the inventory hold the
 		// whole block pool and get the default bar (see resolveHotbar).

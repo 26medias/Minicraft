@@ -10,6 +10,7 @@
 		"preview": "vite preview",
 		"build-atlas": "tsx scripts/build-atlas.ts",
 		"gen-catalog": "tsx scripts/gen-catalog.ts",
+		"worldgen:kid": "tsx scripts/worldgen-kid.ts",
 		"test": "vitest run",
 		"test:watch": "vitest",
 		"lint": "eslint .",

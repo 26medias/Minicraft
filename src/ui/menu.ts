@@ -50,6 +50,18 @@ export class MainMenu {
 		this.root.classList.add('hidden');
 	}
 
+	/** One-line status card shown while main.ts does synchronous work (spawn search). `hide()` removes it. */
+	showBuilding(text: string): void {
+		this.stopRefresh();
+		this.root.classList.remove('hidden');
+		this.root.innerHTML = '';
+		const card = document.createElement('div');
+		card.className = 'menu-card';
+		card.innerHTML = `<h1>Minicraft</h1>`;
+		const line = document.createElement('div'); line.className = 'menu-loading'; line.textContent = text; card.appendChild(line);
+		this.root.appendChild(card);
+	}
+
 	private stopRefresh(): void {
 		if (this.refresh !== null) clearInterval(this.refresh);
 		this.refresh = null;

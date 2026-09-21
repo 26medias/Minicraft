@@ -12,7 +12,7 @@ import { formatStartTime, resolveWorld, sessionInForce } from '../game/schedule'
 
 export type MenuAction =
 	| { type: 'new'; id: string; seed: number; name: string }
-	| { type: 'continue'; id: string; seed: number }
+	| { type: 'continue'; id: string; seed: number; name: string }
 	| { type: 'options' };
 
 export class MainMenu {
@@ -24,6 +24,8 @@ export class MainMenu {
 	private staged: Staged | null = null;
 	/** Bumped per renderHome so an older, slower world-list fetch cannot paint over a newer render. */
 	private renderGen = 0;
+	/** Shown once under the title on the next renderHome, then cleared so the refresh does not repeat it. */
+	private notice: string | null = null;
 
 	constructor(
 		container: HTMLElement,
@@ -34,10 +36,11 @@ export class MainMenu {
 		container.appendChild(this.root);
 	}
 
-	show(onAction: (a: MenuAction) => void) {
+	show(onAction: (a: MenuAction) => void, notice?: string) {
 		this.onAction = onAction;
 		this.grownUpsOpen = false;
 		this.staged = null;
+		this.notice = notice ?? null;
 		this.root.classList.remove('hidden');
 		void this.renderHome();
 	}
@@ -53,7 +56,7 @@ export class MainMenu {
 	}
 
 	private model(worlds: WorldSummary[] | null, offline: boolean) {
-		return menuModel({ schedule: loadSchedule(), session: loadSession(), worlds, offline, now: Date.now() });
+		return menuModel({ schedule: loadSchedule(), session: loadSession(), worlds, offline, now: Date.now(), notice: this.notice });
 	}
 
 	private async renderHome() {
@@ -80,6 +83,14 @@ export class MainMenu {
 
 		card.innerHTML = `<h1>Minicraft</h1>`;
 		const model = this.model(worlds, offline);
+		// One-shot: the 30 s card refresh and any later renderHome must not repeat it.
+		this.notice = null;
+		if (model.notice) {
+			const n = document.createElement('div');
+			n.className = 'menu-warning';
+			n.textContent = model.notice;
+			card.appendChild(n);
+		}
 		if (model.mode === 'card') {
 			this.renderCard(card, model, worlds, offline);
 		} else {
@@ -125,7 +136,7 @@ export class MainMenu {
 		play.disabled = !current.playEnabled;
 		play.onclick = () => {
 			if (current.playEnabled && current.world) {
-				this.onAction?.({ type: 'continue', id: current.world.id, seed: current.world.seed });
+				this.onAction?.({ type: 'continue', id: current.world.id, seed: current.world.seed, name: current.world.name });
 			}
 		};
 		card.append(title, line, play);
@@ -157,7 +168,7 @@ export class MainMenu {
 			label.textContent = w.degraded
 				? `${w.name} (needs recovery)`
 				: `${w.name} (seed ${w.seed})`;
-			label.onclick = () => this.onAction?.({ type: 'continue', id: w.id, seed: w.seed });
+			label.onclick = () => this.onAction?.({ type: 'continue', id: w.id, seed: w.seed, name: w.name });
 			row.appendChild(label);
 
 			const del = document.createElement('button');

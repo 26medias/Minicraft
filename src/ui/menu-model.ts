@@ -12,6 +12,8 @@ export type MenuInput = {
 	worlds: WorldSummary[] | null;
 	offline: boolean;
 	now: number;
+	/** One-shot text under the title (e.g. why Continue refused); null when there is nothing to say. */
+	notice: string | null;
 };
 
 export type CardModel = {
@@ -19,35 +21,36 @@ export type CardModel = {
 	title: string;
 	line: string;
 	playEnabled: boolean;
-	world: { id: string; seed: number } | null;
+	world: { id: string; seed: number; name: string } | null;
+	notice: string | null;
 };
 
-export type MenuModel = { mode: 'full' } | CardModel;
+export type MenuModel = { mode: 'full'; notice: string | null } | CardModel;
 
-function card(title: string, line: string, playEnabled: boolean, world: CardModel['world']): CardModel {
-	return { mode: 'card', title, line, playEnabled, world };
+function card(notice: string | null, title: string, line: string, playEnabled: boolean, world: CardModel['world']): CardModel {
+	return { mode: 'card', title, line, playEnabled, world, notice };
 }
 
 /** What the menu shows. Rows are checked in the spec's order; the first match wins. */
 export function menuModel(i: MenuInput): MenuModel {
-	if (i.schedule.kind === 'none') return { mode: 'full' };
-	if (i.schedule.kind === 'broken') return card('Locked', "Something's wrong · ask a grown-up", false, null);
+	if (i.schedule.kind === 'none') return { mode: 'full', notice: i.notice };
+	if (i.schedule.kind === 'broken') return card(i.notice, 'Locked', "Something's wrong · ask a grown-up", false, null);
 	const s = i.schedule.schedule;
-	if (i.worlds === null) return card(s.name, 'Loading…', false, null);
+	if (i.worlds === null) return card(i.notice, s.name, 'Loading…', false, null);
 	const found = resolveWorld(s, i.worlds);
 	if (!found) {
-		return card(s.name, i.offline ? "Can't reach cloud saves · try again later" : 'World not found · ask a grown-up', false, null);
+		return card(i.notice, s.name, i.offline ? "Can't reach cloud saves · try again later" : 'World not found · ask a grown-up', false, null);
 	}
-	const world = { id: found.id, seed: found.seed };
+	const world = { id: found.id, seed: found.seed, name: found.name };
 	const time = formatStartTime(s.startMin, i.now);
-	if (!gateOpen(s.startMin, i.now)) return card(s.name, `Play at ${time}`, false, world);
+	if (!gateOpen(s.startMin, i.now)) return card(i.notice, s.name, `Play at ${time}`, false, world);
 	const live = i.session && sessionInForce(i.session, s, i.now) ? i.session : null;
 	if (live && phaseOf(live, i.now) === 'playing') {
 		const left = Math.max(1, Math.ceil((live.limitMs - live.playedMs) / 60_000));
-		return card(s.name, `${left} minute${left === 1 ? '' : 's'} left`, true, world);
+		return card(i.notice, s.name, `${left} minute${left === 1 ? '' : 's'} left`, true, world);
 	}
-	if (live) return card(s.name, `All done for today · play again at ${time} tomorrow`, false, world);
-	return card(s.name, `${s.limitMin} minutes today`, true, world);
+	if (live) return card(i.notice, s.name, `All done for today · play again at ${time} tomorrow`, false, world);
+	return card(i.notice, s.name, `${s.limitMin} minutes today`, true, world);
 }
 
 export type Staged = { worldId: string; limitMin: number | null; breakMin: number | null; startRaw: string };

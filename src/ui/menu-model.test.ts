@@ -9,7 +9,7 @@ const at = (d: number, h: number, mi: number) => new Date(2026, 8, d, h, mi).get
 const schedule: Schedule = { worldId: 'w1', seed: 42, name: "Noah's World", limitMin: 45, startMin: 420 };
 const w1: WorldSummary = { id: 'w1', seed: 42, name: "Noah's World", createdAt: 0, updatedAt: 0, origin: 'local', version: 2 };
 const base = (over: Partial<MenuInput> = {}): MenuInput => ({
-	schedule: { kind: 'armed', schedule }, session: null, worlds: [w1], offline: false, now: at(7, 9, 0), ...over,
+	schedule: { kind: 'armed', schedule }, session: null, worlds: [w1], offline: false, now: at(7, 9, 0), notice: null, ...over,
 });
 const sess = (over: Partial<PlaytimeSession> = {}): PlaytimeSession => ({
 	limitMs: 45 * MIN, breakMs: null, playedMs: 0, frozenAt: null, startedAt: at(7, 7, 10), updatedAt: at(7, 7, 10), ...over,
@@ -22,7 +22,7 @@ const card = (i: MenuInput) => {
 
 describe('menuModel', () => {
 	it('no schedule → full menu', () => {
-		expect(menuModel(base({ schedule: { kind: 'none' } }))).toEqual({ mode: 'full' });
+		expect(menuModel(base({ schedule: { kind: 'none' } }))).toEqual({ mode: 'full', notice: null });
 	});
 	it('broken beats everything, even with the gate open and a world present', () => {
 		const m = card(base({ schedule: { kind: 'broken' } }));
@@ -57,7 +57,7 @@ describe('menuModel', () => {
 		const m = card(base({ session: sess({ playedMs: 33 * MIN }) }));
 		expect(m.line).toBe('12 minutes left');
 		expect(m.playEnabled).toBe(true);
-		expect(m.world).toEqual({ id: 'w1', seed: 42 });
+		expect(m.world).toEqual({ id: 'w1', seed: 42, name: "Noah's World" });
 	});
 	it('frozen today: all done, disabled', () => {
 		const m = card(base({ session: sess({ playedMs: 45 * MIN, frozenAt: at(7, 7, 55), updatedAt: at(7, 7, 55) }) }));
@@ -106,7 +106,19 @@ describe('menuModel', () => {
 	it('legacy id resolves to the adopted uuid and Play carries it', () => {
 		const leg = { ...schedule, worldId: 'legacy:42' };
 		const m = card(base({ schedule: { kind: 'armed', schedule: leg }, worlds: [{ ...w1, id: 'uuid-9' }] }));
-		expect(m.world).toEqual({ id: 'uuid-9', seed: 42 });
+		expect(m.world).toEqual({ id: 'uuid-9', seed: 42, name: "Noah's World" });
 		expect(m.playEnabled).toBe(true);
+	});
+});
+
+describe('menuModel notice', () => {
+	it('passes a notice through on the full menu', () => {
+		expect(menuModel(base({ schedule: { kind: 'none' }, notice: 'Nope' }))).toEqual({ mode: 'full', notice: 'Nope' });
+	});
+	it('passes a notice through on the card', () => {
+		expect(card(base({ notice: 'Nope' })).notice).toBe('Nope');
+	});
+	it('is null when there is nothing to say', () => {
+		expect(menuModel(base({ schedule: { kind: 'none' } }))).toEqual({ mode: 'full', notice: null });
 	});
 });

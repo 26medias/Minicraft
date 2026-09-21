@@ -25,7 +25,9 @@ import { LightRegistry } from './engine/render/light-registry';
 import { ColorPicker } from './ui/color-picker';
 import { LIGHT_PALETTE } from './data/light-palette.data';
 import type { Action } from './data/keybindings.data';
-import { fillChunkLights } from './engine/world/lighting';
+import { worldFromSave, applySave } from './game/apply-save';
+import { resolveContinue, type LoadOutcome } from './game/continue-policy';
+import type { WorldSave } from './persistence/adapter';
 import { PlaytimeController, resolveSession } from './game/playtime-controller';
 import { loadSession, saveSession } from './persistence/playtime';
 import { loadSchedule } from './persistence/schedule';
@@ -63,7 +65,7 @@ async function main() {
 
 	setupPointerLock(renderer.gl.domElement, (dx, dy) => cam.applyMouseDelta(dx, dy));
 
-	function showMenu() {
+	function showMenu(notice?: string) {
 		menu.show((action) => {
 			if (action.type === 'options') {
 				menu.hide();   // stops the card's refresh interval while Options is up
@@ -78,8 +80,8 @@ async function main() {
 				return;
 			}
 			if (action.type === 'new') startGame(action.id, action.seed, action.name, null);
-			else startGame(action.id, action.seed, '', 'continue');
-		});
+			else startGame(action.id, action.seed, action.name, 'continue');
+		}, notice);
 	}
 
 	showMenu();
@@ -93,16 +95,31 @@ async function main() {
 		menu.hide();
 		// Clear any lights from a prior session of startGame (returning from main menu to a new world).
 		for (const entry of [...lights.entries()]) lights.remove(entry.x, entry.y, entry.z);
-		const world = new World(seed);
-		let createdAt = Date.now();
-		let worldName = name;
 
-		const player = new Player([256, 60, 256]);
+		// Load BEFORE building anything. A failed load used to console.warn and start
+		// a fresh world, whose first autosave pruned the local copy to zero chunks.
+		let save: WorldSave | null = null;
+		if (mode === 'continue') {
+			let outcome: LoadOutcome;
+			try {
+				outcome = { save: await adapter.loadWorld(worldId) };
+			} catch (err) {
+				console.error('loadWorld failed', err);
+				outcome = { error: err };
+			}
+			const decision = resolveContinue(outcome, name || 'this world');
+			if (!decision.ok) {
+				showMenu(decision.notice);
+				return;
+			}
+			save = decision.save;
+		}
 
 		// A legacy (v1) world is adopted under a fresh uuid the first time it is played.
 		// Writing v2 records under its `legacy:` id would make both namespaces yield the
 		// same id next launch: the v1 copy would win the load and the prune sweep would
-		// then delete this session's chunks.
+		// then delete this session's chunks. Adoption runs only AFTER a successful load,
+		// so a legacy world that refuses to open really has had nothing changed.
 		let activeId = worldId;
 		if (isLegacyId(worldId)) {
 			const seedOfLegacy = seedFromLegacyId(worldId);
@@ -110,50 +127,44 @@ async function main() {
 			localAdapter.adoptLegacy(seedOfLegacy, activeId);
 		}
 
+		// The World comes from the record (its stored height is authoritative) or,
+		// for a new world, from the newest generator's profile.
+		const world = save ? worldFromSave(save) : World.create(seed);
+		let createdAt = Date.now();
+		let worldName = name;
+		const player = new Player([256.5, world.height - 1, 256.5], world.height);
+
 		let savedSpawn: [number, number, number] | null = null;
 		let savedHotbar: BlockId[] | undefined;
 		let savedSelected = 0;
-		if (mode === 'continue') {
-			const save = await adapter.loadWorld(worldId);
-			if (!save) {
-				console.warn('No save for world', worldId);
-			} else {
-				worldName = save.name;
-				createdAt = save.createdAt;
-				for (const rc of save.chunks) {
-					const c = world.ensureChunk(rc.cx, rc.cz);
-					c.blocks.set(rc.blocks);
-					c.fluidMeta.clear();
-					if (rc.fluidMeta) {
-						for (const [idx, packed] of rc.fluidMeta) c.fluidMeta.set(idx, packed);
-					}
-					c.modified = true;
-					c.dirty = true;
-				}
-				// Lights were computed during ensureChunk using the freshly-generated blocks, then
-				// overwritten by saved blocks. Recompute now that all saved blocks are in place so
-				// cross-chunk BFS sees the correct final state.
-				for (const rc of save.chunks) {
-					const c = world.getChunk(rc.cx, rc.cz);
-					if (c) fillChunkLights(world, c);
-				}
-				// Repairs a save written while the player was outside the world: one
-				// world came back at y = -193917, which loads as an empty sky. Set
-				// after the chunks are applied so there is terrain to stand on.
-				savedSpawn = [save.player.x, save.player.y, save.player.z];
-				cam.yaw = save.player.yaw;
-				cam.pitch = save.player.pitch;
-				savedHotbar = save.player.hotbar;
-				savedSelected = save.player.selected;
-				if (save?.lights) {
-					for (const l of save.lights) lights.add(l.x, l.y, l.z, l.color);
-				}
+		if (save) {
+			worldName = save.name;
+			createdAt = save.createdAt;
+			try {
+				applySave(world, save);
+			} catch (err) {
+				console.error('applySave failed', err);
+				const d = resolveContinue({ error: err }, save.name);
+				showMenu(d.ok ? 'Nothing was changed.' : d.notice);
+				return;
+			}
+			// Repairs a save written while the player was outside the world: one
+			// world came back at y = -193917, which loads as an empty sky. Set
+			// after the chunks are applied so there is terrain to stand on.
+			savedSpawn = [save.player.x, save.player.y, save.player.z];
+			cam.yaw = save.player.yaw;
+			cam.pitch = save.player.pitch;
+			savedHotbar = save.player.hotbar;
+			savedSelected = save.player.selected;
+			if (save.lights) {
+				for (const l of save.lights) lights.add(l.x, l.y, l.z, l.color);
 			}
 		}
 
 		// Ground the player only once every saved chunk is in the world, so there is
-		// something to stand on.
-		if (savedSpawn) player.position = findSafeSpawn(world, savedSpawn);
+		// something to stand on. New worlds spawn on the generated surface (v2: ~120),
+		// saved ones near where they left off.
+		player.position = findSafeSpawn(world, savedSpawn ?? [256.5, world.height - 1, 256.5]);
 
 		// Nine slots, saved per world. Saves from before the inventory hold the
 		// whole block pool and get the default bar (see resolveHotbar).

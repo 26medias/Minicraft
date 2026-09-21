@@ -1,6 +1,6 @@
 # World v2 — tall worlds (256 high)
 
-Status: gate 1 closed 2026-09-20 (reviewers A + B incorporated). Branch `v2`.
+Status: implemented on branch `v2` 2026-09-21 (both gates closed, workflow run, 631 tests green). Plan: docs/superpowers/plans/2026-09-20-world-v2-tall-worlds.md. Branch `v2`.
 
 ## 1. Goal
 

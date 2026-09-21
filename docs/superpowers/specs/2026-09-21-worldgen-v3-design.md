@@ -3,7 +3,7 @@
 Status: design, gate 1 rounds 1 and 2 repaired 2026-09-21 (§14). Branch
 `worldgen`. Targets generator version 3 (`genVersion 3`, height 256); v1
 and v2 worlds are untouched forever. Evidence in §12 comes from a throwaway
-prototype (scratchpad `wg3/proto.ts`, not committed) that implements every
+prototype (committed as reference only under `docs/superpowers/reference/worldgen-v3-prototype/`, never imported by `src/`) that implements every
 rule below, run on **100 full maps (seeds 1–100)** and, for spawn and kid
 targets, the same 100 seeds. Every exact assertion in §11 is green on all
 100; every statistical bound in §11 is derived from those 100 and holds on
@@ -542,6 +542,6 @@ Instance lists with per-instance sub-streams and origin-chunk gates (R-B1/E-B1);
 | R3-N1 tree-origin mutant | Construction stated; reviewer's 4 / 5 220 / 301 quoted beside mine | 11.9 |
 | R3-N3 | `caveCeil` added to the cross-plane comparison; (30,30), (30,5), (5,30) always included | 11.2: 0 mismatches |
 | R3-N4 | §0 "hard cap 3 ms" replaced by the 11.13 reference | §0 |
-| R3-N5 | `hashBytes` XORs Uint16 elements; prototype not committed, its values recorded in §10 at bootstrap | §10 |
+| R3-N5 | `hashBytes` XORs Uint16 elements; prototype kept as reference under docs/superpowers/reference/worldgen-v3-prototype/; its four hash values recorded in §10 at bootstrap | §10 |
 | R3-N6/N7/N8 | kid.ts `Math.hypot`/`sin`/`cos` noted as measurement-only; "p50 ≥ 40 % (p10 37)"; first-ore censoring 1/100 stated | §0, 11.12 |
 | Kid: badlands spawns, trees skipping entrance columns | No change | — |

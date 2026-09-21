@@ -6,7 +6,7 @@ A deliberately minimal, kid-friendly Minecraft-style voxel sandbox for the brows
 
 Minicraft is a single-player, creative-only voxel sandbox. The whole point is what it *doesn't* do. There are no enemies, no health, no hunger, no day/night mechanics, no networking, no crafting tables, no mods. The entire loop is: walk around, mine blocks, place blocks. The game ships as a static web bundle.
 
-Current catalog: 19 hand-written blocks (grass, dirt, stone, cobblestone, sand, oak planks, oak log, glass, 6 wool colors, TNT, lamp, water, lava) plus about 350 solid-cube blocks from Minecraft 1.21.6, picked from an I-key inventory (whole cubes only — no stairs, slabs, doors or flowers). Gameplay toys on top of place/mine: TNT with chain-reaction explosions, coloured lamps that emit point-light illumination, and water/lava with simple block-by-block flow, and a sponge that soaks them back up.
+Current catalog: 19 hand-written blocks (grass, dirt, stone, cobblestone, sand, oak planks, oak log, glass, 6 wool colors, TNT, lamp, water, lava) plus about 350 solid-cube blocks from Minecraft 1.21.6, picked from an I-key inventory (whole cubes only — no stairs, slabs, doors or flowers). Gameplay toys on top of place/mine: TNT with chain-reaction explosions, coloured lamps that emit point-light illumination, and water/lava with simple block-by-block flow, and a sponge that soaks them back up. New worlds (generator v3) have mountains and overhangs, eight biomes with their own trees, three kinds of caves plus ravines, ore veins in vanilla-style depth bands, geodes, a lava sea, and a hill-with-a-view spawn — all deterministic from the seed.
 
 ## Tech Stack
 

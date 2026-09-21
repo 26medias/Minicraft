@@ -258,3 +258,17 @@ describe('generateChunk v2 (tall)', () => {
 		expect(hashBytes(c.blocks)).toBe(EXPECTED_HASH_V2);
 	});
 });
+
+/** v3 reference hashes (spec §10): chunks (0,0), (16,16), (31,31), (5,27) of seed 12345, FNV-1a-32 over the Uint16 elements of `blocks`. Recorded ONCE at bootstrap (two processes agreed; prototype cross-check in the spec §10); never re-recorded — any constant change is genVersion 4. */
+const EXPECTED_HASH_V3: readonly [number, number, number, number] = [2020764513, 800740276, 2743801548, 161955245]; // bootstrapped 2026-09-21 (spec §10): engine = prototype, two processes agreed
+const V3_CHUNKS: readonly [number, number][] = [[0, 0], [16, 16], [31, 31], [5, 27]];
+
+describe('generateChunk v3 (rich world) — reference hashes', () => {
+	const bootstrapped = EXPECTED_HASH_V3.length === 4;
+	(bootstrapped ? it : it.skip)('hashes the four fixed chunks of seed 12345 to the recorded values', () => {
+		V3_CHUNKS.forEach(([cx, cz], i) => { const c = new Chunk(cx, cz, 256); generateChunk(c, 12345, 3); expect(hashBytes(c.blocks), `chunk ${cx},${cz}`).toBe(EXPECTED_HASH_V3[i]); });
+	});
+	it('is deterministic across two fresh generations of the same chunk', () => {
+		const a = new Chunk(16, 16, 256), b = new Chunk(16, 16, 256); generateChunk(a, 12345, 3); generateChunk(b, 12345, 3); expect(hashBytes(a.blocks)).toBe(hashBytes(b.blocks));
+	});
+});

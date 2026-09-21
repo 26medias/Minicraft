@@ -72,8 +72,8 @@ Mobs, combat, health, hunger, damage, multiplayer, networking gameplay, day/nigh
 - `NearestFilter` for magnification, `NearestMipMapLinearFilter` for minification, `generateMipmaps: true`.
 
 ### Determinism
-- All randomness in world generation flows through the seeded `alea` PRNG. **`Math.random()` is banned in generation code.**
-- Enforced by a unit test that hashes a known-seed world and compares to a committed reference hash.
+- All randomness in world generation flows through the seeded `alea` PRNG (noise fields) or, for generator v3 features, the numeric hash streams of `src/engine/world/v3/prng.ts` (murmur3 fmix32 + mulberry32, spec 2026-09-21-worldgen-v3 §10). **`Math.random()` is banned in generation code**, as are `Math.hypot/sin/cos/exp/pow` (implementation-approximated; v3 must be bit-exact across devices).
+- Enforced by unit tests that hash known-seed chunks and compare to committed reference hashes (v1: one chunk; v2: one chunk; v3: four fixed chunks of seed 12345).
 
 ### Collision
 - Hand-rolled swept AABB against the voxel grid. Gravity, jump, walk speed as constants in `engine/physics/`.

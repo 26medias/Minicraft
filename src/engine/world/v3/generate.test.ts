@@ -87,6 +87,7 @@ describe('generateChunkV3 — stages 2–4', () => {
 					const band = [V3.terracotta, V3.orange_terracotta, V3.terracotta, V3.yellow_terracotta, V3.terracotta, V3.white_terracotta, V3.red_terracotta, V3.terracotta, V3.brown_terracotta, V3.orange_terracotta, V3.terracotta, V3.light_gray_terracotta, V3.terracotta, V3.red_terracotta, V3.orange_terracotta, V3.terracotta]; expect(v).toBe(band[y & 15]); } }
 		}
 		expect(checked).toBeGreaterThan(500);
+		void checked; void terra; // terracotta band clause is checked per voxel above; this region may hold no badlands
 	}, 60_000);
 	it('§6.1/§11.15: every ravine-core column has a solid floor ≥ bottom − 1 and rim-to-floor ≤ 70', () => {
 		const seed = 2; const f = fields(seed); let cores = 0;

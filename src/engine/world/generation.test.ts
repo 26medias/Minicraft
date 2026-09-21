@@ -260,7 +260,7 @@ describe('generateChunk v2 (tall)', () => {
 });
 
 /** v3 reference hashes (spec §10): chunks (0,0), (16,16), (31,31), (5,27) of seed 12345, FNV-1a-32 over the Uint16 elements of `blocks`. Recorded ONCE at bootstrap (two processes agreed; prototype cross-check in the spec §10); never re-recorded — any constant change is genVersion 4. */
-const EXPECTED_HASH_V3: readonly [number, number, number, number] = [2020764513, 800740276, 2743801548, 161955245]; // bootstrapped 2026-09-21 (spec §10): engine = prototype, two processes agreed
+const EXPECTED_HASH_V3: readonly [number, number, number, number] = [2020764513, 800740276, 2743801548, 161955245]; // bootstrapped 2026-09-21 (spec §10): engine = prototype, two processes agreed; re-run 2026-09-21 after the §4 snow-line rule (17917e1): unchanged, AGREE
 const V3_CHUNKS: readonly [number, number][] = [[0, 0], [16, 16], [31, 31], [5, 27]];
 
 describe('generateChunk v3 (rich world) — reference hashes', () => {

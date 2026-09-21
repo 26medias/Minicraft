@@ -32,6 +32,8 @@ function save(over: Partial<WorldSave> = {}): WorldSave {
 	blocks[0] = 3;
 	return {
 		version: 2,
+		height: 64,
+		genVersion: 1,
 		id: ID,
 		seed: 1,
 		name: 'Castle',
@@ -314,6 +316,7 @@ describe('DualAdapter list and delete', () => {
 					createdAt: 1000,
 					updatedAt: 3000,
 					origin: 'cloud' as const,
+					version: 2 as const,
 				},
 			],
 		});

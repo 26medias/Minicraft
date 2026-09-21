@@ -17,7 +17,7 @@ const sess = (over: Partial<PlaytimeSession> = {}): PlaytimeSession => ({
 	limitMs: 45 * MIN, breakMs: null, playedMs: 0, frozenAt: null, startedAt: at(7, 7, 10), updatedAt: at(7, 7, 10), ...over,
 });
 const world = (over: Partial<WorldSummary> = {}): WorldSummary => ({
-	id: 'w1', seed: 42, name: 'W', createdAt: 0, updatedAt: 0, origin: 'local', ...over,
+	id: 'w1', seed: 42, name: 'W', createdAt: 0, updatedAt: 0, origin: 'local', version: 2, ...over,
 });
 
 describe('gate', () => {

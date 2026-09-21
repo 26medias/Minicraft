@@ -86,6 +86,8 @@ export class CloudAdapter implements PersistenceAdapter {
 		}));
 		return {
 			version: 2,
+			height: 64,
+			genVersion: 1,
 			id: wire.id,
 			seed: wire.seed,
 			name: wire.name,

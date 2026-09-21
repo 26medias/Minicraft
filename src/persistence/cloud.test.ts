@@ -10,6 +10,8 @@ function save(over: Partial<WorldSave> = {}): WorldSave {
 	blocks[0] = 3;
 	return {
 		version: 2,
+		height: 64,
+		genVersion: 1,
 		id: ID,
 		seed: 1,
 		name: 'Castle',

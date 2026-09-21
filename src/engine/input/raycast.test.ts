@@ -7,7 +7,7 @@ const stone = BLOCK_BY_NAME['stone'].id;
 
 describe('raycastVoxel', () => {
 	it('returns null when nothing is hit', () => {
-		const w = new World(1);
+		const w = new World(1, { height: 64 });
 		const hit = raycastVoxel(w, [8, 63, 8], [0, 1, 0], 10);
 		expect(hit).toBeNull();
 	});

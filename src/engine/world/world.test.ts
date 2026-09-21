@@ -19,7 +19,7 @@ describe('World', () => {
 	});
 
 	it('reads a block at world coords', () => {
-		const w = new World(42);
+		const w = new World(42, { height: 64 });
 		const air = w.getBlock(0, 63, 0);
 		expect(air).toBe(AIR);
 	});
@@ -163,5 +163,31 @@ describe('World.setBlockFlow', () => {
 
 		expect(c.isFlow(lx, 30, lz)).toBe(true);
 		expect(c.getFlowDistance(lx, 30, lz)).toBe(1);
+	});
+});
+
+describe('World height', () => {
+	it('defaults to 64 / genVersion 1 / saveVersion 2', () => {
+		const w = new World(1);
+		expect(w.height).toBe(64);
+		expect(w.genVersion).toBe(1);
+		expect(w.saveVersion).toBe(2);
+		expect(w.inBounds(0, 63, 0)).toBe(true);
+		expect(w.inBounds(0, 64, 0)).toBe(false);
+	});
+	it('derives genVersion 2 from height 256 unless told otherwise', () => {
+		expect(new World(1, { height: 256 }).genVersion).toBe(2);
+		expect(new World(1, { height: 256, genVersion: 7 }).genVersion).toBe(7); // stored records win; no validation here
+	});
+	it('creates 256-tall chunks when told to and bounds y by it', () => {
+		const w = new World(1, { height: 256, saveVersion: 3 });
+		const c = w.ensureChunk(0, 0);
+		expect(c.height).toBe(256);
+		expect(w.inBounds(0, 255, 0)).toBe(true);
+		expect(w.inBounds(0, 256, 0)).toBe(false);
+		const stone = BLOCK_BY_NAME['stone'].id;
+		w.setBlock(3, 250, 3, stone);
+		expect(w.getBlock(3, 250, 3)).toBe(stone);
+		expect(w.getBlock(3, 256, 3)).toBe(AIR);
 	});
 });

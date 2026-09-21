@@ -1,7 +1,7 @@
 import type { World } from './world';
 import type { Chunk } from './chunk';
 import { BLOCKS } from '../../data/blocks.data';
-import { CHUNK_SIZE_X, CHUNK_SIZE_Y, CHUNK_SIZE_Z, indexOf } from './coords';
+import { CHUNK_SIZE_X, CHUNK_SIZE_Z, indexOf } from './coords';
 
 // Sun from upper NW; shadows fall to the SE. Normalized on the fly.
 const SUN_DIR_RAW: [number, number, number] = [-0.5, 1.0, -0.3];
@@ -16,7 +16,7 @@ export function computeChunkShadows(world: World, chunk: Chunk): void {
 	const baseX = chunk.cx * CHUNK_SIZE_X;
 	const baseZ = chunk.cz * CHUNK_SIZE_Z;
 
-	for (let y = 0; y < CHUNK_SIZE_Y; y++) {
+	for (let y = 0; y < chunk.height; y++) {
 		for (let z = 0; z < CHUNK_SIZE_Z; z++) {
 			for (let x = 0; x < CHUNK_SIZE_X; x++) {
 				const idx = indexOf(x, y, z);
@@ -90,7 +90,7 @@ function rayHitsSolidInLoadedChunks(
 			t = tMaxZ;
 			tMaxZ += tDeltaZ;
 		}
-		if (iy >= CHUNK_SIZE_Y) return false; // ray escaped upward to sky
+		if (iy >= world.height) return false; // ray escaped upward to sky
 		if (iy < 0) return false;
 		const cx = Math.floor(ix / CHUNK_SIZE_X);
 		const cz = Math.floor(iz / CHUNK_SIZE_Z);

@@ -2,7 +2,7 @@ import { describe, it, expect } from 'vitest';
 import { Chunk } from './chunk';
 import { generateChunk } from './generation';
 import { BLOCK_BY_NAME } from '../../data/blocks.data';
-import { CHUNK_SIZE_X, CHUNK_SIZE_Y, CHUNK_SIZE_Z } from './coords';
+import { CHUNK_SIZE_X, CHUNK_SIZE_Z } from './coords';
 
 describe('generateChunk', () => {
 	it('is deterministic for a given seed + chunk coord', () => {
@@ -45,7 +45,7 @@ describe('generateChunk', () => {
 		for (let lz = 0; lz < CHUNK_SIZE_Z; lz++) {
 			for (let lx = 0; lx < CHUNK_SIZE_X; lx++) {
 				let topY = -1;
-				for (let y = CHUNK_SIZE_Y - 1; y >= 0; y--) {
+				for (let y = 63; y >= 0; y--) {
 					if (c.get(lx, y, lz) !== 0) {
 						topY = y;
 						break;

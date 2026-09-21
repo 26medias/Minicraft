@@ -1,9 +1,10 @@
 import type { BlockId } from '../../data/blocks.data';
-import { BLOCKS_PER_CHUNK, indexOf } from './coords';
+import { LEGACY_HEIGHT, blocksPerChunk, indexOf, type WorldHeight } from './coords';
 
 export class Chunk {
 	readonly cx: number;
 	readonly cz: number;
+	readonly height: WorldHeight;
 	readonly blocks: Uint16Array;
 	readonly lights: Uint16Array;
 	readonly sunlit: Uint8Array;
@@ -14,12 +15,14 @@ export class Chunk {
 	modified = false;
 	shadowsDirty = true;
 
-	constructor(cx: number, cz: number) {
+	constructor(cx: number, cz: number, height: WorldHeight = LEGACY_HEIGHT) {
 		this.cx = cx;
 		this.cz = cz;
-		this.blocks = new Uint16Array(BLOCKS_PER_CHUNK);
-		this.lights = new Uint16Array(BLOCKS_PER_CHUNK);
-		this.sunlit = new Uint8Array(BLOCKS_PER_CHUNK);
+		this.height = height;
+		const n = blocksPerChunk(height);
+		this.blocks = new Uint16Array(n);
+		this.lights = new Uint16Array(n);
+		this.sunlit = new Uint8Array(n);
 	}
 
 	get(x: number, y: number, z: number): BlockId {

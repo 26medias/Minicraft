@@ -1,7 +1,7 @@
 import { describe, it, expect, beforeEach } from 'vitest';
 import { LocalStorageAdapter } from './localStorage';
 import type { WorldSave } from './adapter';
-import { BLOCKS_PER_CHUNK } from '../engine/world/coords';
+const BLOCKS_PER_CHUNK = 16 * 64 * 16;
 import { encodeChunk } from './codec';
 import { legacyId } from './uuid';
 

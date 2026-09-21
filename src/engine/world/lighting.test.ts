@@ -2,7 +2,7 @@ import { describe, it, expect } from 'vitest';
 import { World } from './world';
 import { BLOCK_BY_NAME, AIR } from '../../data/blocks.data';
 import { fillChunkLights, updateLightsForBlockChange } from './lighting';
-import { CHUNK_SIZE_Y, indexOf } from './coords';
+import { indexOf } from './coords';
 
 const stone = BLOCK_BY_NAME['stone'].id;
 const glass = BLOCK_BY_NAME['glass'].id;
@@ -21,7 +21,7 @@ describe('fillChunkLights — skylight', () => {
 		const w = emptyWorld();
 		const c = w.getChunk(0, 0)!;
 		fillChunkLights(w, c);
-		for (let y = 0; y < CHUNK_SIZE_Y; y++) {
+		for (let y = 0; y < 64; y++) {
 			expect(c.getSky(0, y, 0)).toBe(15);
 		}
 	});

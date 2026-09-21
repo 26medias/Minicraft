@@ -1,5 +1,5 @@
 import { deflate, inflate } from 'pako';
-import { BLOCKS_PER_CHUNK } from '../engine/world/coords';
+const BLOCKS_PER_CHUNK = 16 * 64 * 16; // Task 6 parameterises this
 
 export function encodeChunk(blocks: Uint16Array): string {
 	if (blocks.length !== BLOCKS_PER_CHUNK) throw new Error('Unexpected chunk length');

@@ -1,7 +1,7 @@
 import { describe, it, expect } from 'vitest';
 import { deflate, inflate } from 'pako';
 import { encodeChunk, decodeChunk, encodeFluidMeta, decodeFluidMeta } from './codec';
-import { BLOCKS_PER_CHUNK } from '../engine/world/coords';
+const BLOCKS_PER_CHUNK = 16 * 64 * 16;
 
 describe('codec', () => {
 	it('round-trips an empty chunk', () => {

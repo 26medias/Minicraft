@@ -15,7 +15,8 @@ const NOISE_SCALE = 1 / 64;
 export const SEA_LEVEL = 28;
 const DIRT_BAND = 3;
 
-export function generateChunk(chunk: Chunk, seed: number): void {
+// genVersion is accepted and ignored here; Task 4 turns this into the dispatcher.
+export function generateChunk(chunk: Chunk, seed: number, _genVersion = 1): void {
 	const rng = alea(`minicraft:${seed}`);
 	const noise = createNoise2D(rng);
 

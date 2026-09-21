@@ -92,7 +92,7 @@ describe('Player fly mode', () => {
 	});
 
 	it('flying player still collides with walls (no clipping)', () => {
-		const w = new World(1);
+		const w = new World(1, { height: 64 });
 		// Wall at x=102 across a vertical strip.
 		for (let dy = 59; dy <= 63; dy++) w.setBlock(102, dy, 100, stone);
 		const p = new Player([100, 60, 99.7]);
@@ -180,7 +180,7 @@ describe('Player cursor-directed movement', () => {
 	});
 
 	it('swim speed is 60% of walk speed', () => {
-		const w = new World(1);
+		const w = new World(1, { height: 64 });
 		for (let y = 58; y <= 63; y++) w.setBlock(100, y, 100, water);
 		const p = new Player([100, 60, 100]);
 		p.update(0.01, w, noKeys(), FWD, RIGHT);

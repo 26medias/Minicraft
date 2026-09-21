@@ -1,6 +1,5 @@
 import type { World } from '../engine/world/world';
 import { BLOCK_BY_NAME, isSolid } from '../data/blocks.data';
-import { inBounds } from '../engine/world/coords';
 
 export const TNT_RADIUS = 3;
 export const TNT_PRIME_FUSE = 2.5;  // seconds — kid-ignited fuse
@@ -34,7 +33,7 @@ export function detonate(
 	const destroyed: Array<{ x: number; y: number; z: number }> = [];
 	const primed: Array<{ x: number; y: number; z: number }> = [];
 
-	if (inBounds(ox, oy, oz) && isSolid(world.getBlock(ox, oy, oz))) {
+	if (world.inBounds(ox, oy, oz) && isSolid(world.getBlock(ox, oy, oz))) {
 		destroyed.push({ x: ox, y: oy, z: oz });
 	}
 
@@ -46,7 +45,7 @@ export function detonate(
 				const x = ox + dx;
 				const y = oy + dy;
 				const z = oz + dz;
-				if (!inBounds(x, y, z)) continue;
+				if (!world.inBounds(x, y, z)) continue;
 
 				const id = world.getBlock(x, y, z);
 				if (id === tntId) {

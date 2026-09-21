@@ -333,7 +333,7 @@ export class GameLoop {
 			const c = this.world.ensureChunk(cx, cz);
 			// Ensure gen-placed liquids are in the frontier for at least one tick's check.
 			if (c.liquidFrontier.size === 0) {
-				for (let y = 0; y < 64; y++) {
+				for (let y = 0; y < c.height; y++) {
 					for (let lz = 0; lz < 16; lz++) {
 						for (let lx = 0; lx < 16; lx++) {
 							const idx = y * 16 * 16 + lz * 16 + lx;

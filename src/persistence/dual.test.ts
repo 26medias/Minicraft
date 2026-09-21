@@ -3,7 +3,7 @@ import { DualAdapter } from './dual';
 import { LocalStorageAdapter } from './localStorage';
 import { CloudAdapter, CloudError } from './cloud';
 import type { WorldSave } from './adapter';
-import { BLOCKS_PER_CHUNK } from '../engine/world/coords';
+const BLOCKS_PER_CHUNK = 16 * 64 * 16;
 import { legacyId } from './uuid';
 
 const ID = '11111111-1111-4111-8111-111111111111';

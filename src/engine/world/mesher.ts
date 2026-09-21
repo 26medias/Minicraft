@@ -1,7 +1,7 @@
 import type { BlockId, Face } from '../../data/blocks.data';
 import { BLOCKS, isLiquid, isSolid, isTranslucent, isTransparent } from '../../data/blocks.data';
 import type { Chunk } from './chunk';
-import { CHUNK_SIZE_X, CHUNK_SIZE_Y, CHUNK_SIZE_Z, indexOf } from './coords';
+import { CHUNK_SIZE_X, CHUNK_SIZE_Z, indexOf } from './coords';
 
 export type ChunkMesh = {
 	positions: Float32Array;
@@ -160,7 +160,7 @@ function neighborBlock(
 	y: number,
 	z: number,
 ): BlockId {
-	if (y < 0 || y >= CHUNK_SIZE_Y) return 0;
+	if (y < 0 || y >= chunk.height) return 0;
 	if (x >= 0 && x < CHUNK_SIZE_X && z >= 0 && z < CHUNK_SIZE_Z) {
 		return chunk.get(x, y, z);
 	}
@@ -188,7 +188,7 @@ function readLight(
 	y: number,
 	z: number,
 ): LightSample {
-	if (y < 0 || y >= CHUNK_SIZE_Y) return { sky: 0, r: 0, g: 0, b: 0 };
+	if (y < 0 || y >= chunk.height) return { sky: 0, r: 0, g: 0, b: 0 };
 	const inX = x >= 0 && x < CHUNK_SIZE_X;
 	const inZ = z >= 0 && z < CHUNK_SIZE_Z;
 	if (inX && inZ) {
@@ -226,7 +226,7 @@ function readLight(
 }
 
 function readBlockId(chunk: Chunk, neighbors: Neighbors, x: number, y: number, z: number): number {
-	if (y < 0 || y >= CHUNK_SIZE_Y) return 0;
+	if (y < 0 || y >= chunk.height) return 0;
 	const inX = x >= 0 && x < CHUNK_SIZE_X;
 	const inZ = z >= 0 && z < CHUNK_SIZE_Z;
 	if (inX && inZ) return chunk.blocks[indexOf(x, y, z)];
@@ -351,7 +351,7 @@ function lightSampleToRGB(s: LightSample): [number, number, number] {
 }
 
 function readSunlit(chunk: Chunk, neighbors: Neighbors, x: number, y: number, z: number): number {
-	if (y < 0 || y >= CHUNK_SIZE_Y) return 1;
+	if (y < 0 || y >= chunk.height) return 1;
 	const inX = x >= 0 && x < CHUNK_SIZE_X;
 	const inZ = z >= 0 && z < CHUNK_SIZE_Z;
 	if (inX && inZ) return chunk.sunlit[indexOf(x, y, z)];
@@ -413,7 +413,7 @@ function buildSolidMesh(
 	const indices: number[] = [];
 	let vcount = 0;
 
-	for (let y = 0; y < CHUNK_SIZE_Y; y++) {
+	for (let y = 0; y < chunk.height; y++) {
 		for (let z = 0; z < CHUNK_SIZE_Z; z++) {
 			for (let x = 0; x < CHUNK_SIZE_X; x++) {
 				const id = chunk.get(x, y, z);
@@ -491,7 +491,7 @@ function buildLiquidMesh(chunk: Chunk, neighbors: Neighbors, uvFor: UvFn): Chunk
 	const indices: number[] = [];
 	let vcount = 0;
 
-	for (let y = 0; y < CHUNK_SIZE_Y; y++) {
+	for (let y = 0; y < chunk.height; y++) {
 		for (let z = 0; z < CHUNK_SIZE_Z; z++) {
 			for (let x = 0; x < CHUNK_SIZE_X; x++) {
 				const here = chunk.get(x, y, z);

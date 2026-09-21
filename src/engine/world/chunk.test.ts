@@ -1,12 +1,12 @@
 import { describe, it, expect } from 'vitest';
 import { Chunk } from './chunk';
-import { BLOCKS_PER_CHUNK } from './coords';
+import { blocksPerChunk } from './coords';
 
 describe('Chunk', () => {
 	it('initialises to all air', () => {
 		const c = new Chunk(0, 0);
-		expect(c.blocks.length).toBe(BLOCKS_PER_CHUNK);
-		for (let i = 0; i < BLOCKS_PER_CHUNK; i++) {
+		expect(c.blocks.length).toBe(blocksPerChunk(64));
+		for (let i = 0; i < blocksPerChunk(64); i++) {
 			expect(c.blocks[i]).toBe(0);
 		}
 		expect(c.modified).toBe(false);
@@ -45,8 +45,8 @@ describe('Chunk', () => {
 describe('Chunk lightmap', () => {
 	it('lights array is allocated and initially all zero', () => {
 		const c = new Chunk(0, 0);
-		expect(c.lights.length).toBe(BLOCKS_PER_CHUNK);
-		for (let i = 0; i < BLOCKS_PER_CHUNK; i++) {
+		expect(c.lights.length).toBe(blocksPerChunk(64));
+		for (let i = 0; i < blocksPerChunk(64); i++) {
 			expect(c.lights[i]).toBe(0);
 		}
 	});
@@ -133,5 +133,24 @@ describe('Chunk.fluidMeta', () => {
 		c.modified = false;
 		c.clearFluidMeta(1, 1, 1); // no entry
 		expect(c.modified).toBe(false);
+	});
+});
+
+describe('Chunk height', () => {
+	it('defaults to the legacy 64 and sizes every array from it', () => {
+		const c = new Chunk(0, 0);
+		expect(c.height).toBe(64);
+		expect(c.blocks.length).toBe(16 * 64 * 16);
+		expect(c.lights.length).toBe(16 * 64 * 16);
+		expect(c.sunlit.length).toBe(16 * 64 * 16);
+	});
+	it('allocates 65536 entries at height 256', () => {
+		const c = new Chunk(2, 3, 256);
+		expect(c.height).toBe(256);
+		expect(c.blocks.length).toBe(65536);
+		expect(c.lights.length).toBe(65536);
+		expect(c.sunlit.length).toBe(65536);
+		c.set(5, 250, 5, 3);
+		expect(c.get(5, 250, 5)).toBe(3);
 	});
 });

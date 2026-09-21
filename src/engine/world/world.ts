@@ -1,18 +1,31 @@
 import type { BlockId } from '../../data/blocks.data';
 import { AIR, isLiquid } from '../../data/blocks.data';
 import { Chunk } from './chunk';
-import { WORLD_CHUNKS_X, WORLD_CHUNKS_Z, inBounds, worldToChunk, indexOf } from './coords';
+import { WORLD_CHUNKS_X, WORLD_CHUNKS_Z, LEGACY_HEIGHT, inBounds, worldToChunk, indexOf, type WorldHeight } from './coords';
 import { generateChunk } from './generation';
 import { fillChunkLights } from './lighting';
 
 const key = (cx: number, cz: number) => `${cx},${cz}`;
 
+export type WorldOptions = { height?: WorldHeight; genVersion?: number; saveVersion?: 2 | 3 };
+
 export class World {
 	readonly seed: number;
+	readonly height: WorldHeight;
+	readonly genVersion: number;
+	readonly saveVersion: 2 | 3;
 	private chunks = new Map<string, Chunk>();
 
-	constructor(seed: number) {
+	constructor(seed: number, opts: WorldOptions = {}) {
 		this.seed = seed;
+		this.height = opts.height ?? LEGACY_HEIGHT;
+		// Derived, not validated: a loaded record's own height is authoritative (spec §4).
+		this.genVersion = opts.genVersion ?? (this.height === 256 ? 2 : 1);
+		this.saveVersion = opts.saveVersion ?? 2;
+	}
+
+	inBounds(x: number, y: number, z: number): boolean {
+		return inBounds(x, y, z, this.height);
 	}
 
 	getChunk(cx: number, cz: number): Chunk | undefined {
@@ -23,8 +36,8 @@ export class World {
 		const k = key(cx, cz);
 		let c = this.chunks.get(k);
 		if (!c) {
-			c = new Chunk(cx, cz);
-			generateChunk(c, this.seed);
+			c = new Chunk(cx, cz, this.height);
+			generateChunk(c, this.seed, this.genVersion);
 			this.chunks.set(k, c);
 			fillChunkLights(this, c);
 		}
@@ -36,14 +49,14 @@ export class World {
 	}
 
 	getBlock(x: number, y: number, z: number): BlockId {
-		if (!inBounds(x, y, z)) return AIR;
+		if (!this.inBounds(x, y, z)) return AIR;
 		const { cx, cz, lx, lz } = worldToChunk(x, z);
 		const c = this.ensureChunk(cx, cz);
 		return c.get(lx, y, lz);
 	}
 
 	setBlock(x: number, y: number, z: number, id: BlockId): void {
-		if (!inBounds(x, y, z)) return;
+		if (!this.inBounds(x, y, z)) return;
 		const { cx, cz, lx, lz } = worldToChunk(x, z);
 		const c = this.ensureChunk(cx, cz);
 		c.set(lx, y, lz, id);
@@ -66,7 +79,7 @@ export class World {
 
 	/** Scheduler-only: write a liquid voxel as flow with the given distance from source. */
 	setBlockFlow(x: number, y: number, z: number, id: BlockId, distance: number): void {
-		if (!inBounds(x, y, z)) return;
+		if (!this.inBounds(x, y, z)) return;
 		const { cx, cz, lx, lz } = worldToChunk(x, z);
 		const c = this.ensureChunk(cx, cz);
 		c.set(lx, y, lz, id);
@@ -83,7 +96,7 @@ export class World {
 	}
 
 	markLiquidFrontier(x: number, y: number, z: number): void {
-		if (!inBounds(x, y, z)) return;
+		if (!this.inBounds(x, y, z)) return;
 		const { cx, cz, lx, lz } = worldToChunk(x, z);
 		const c = this.getChunk(cx, cz);
 		if (!c) return;

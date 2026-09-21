@@ -6,23 +6,23 @@ const BLOCKS_PER_CHUNK = 16 * 64 * 16;
 describe('codec', () => {
 	it('round-trips an empty chunk', () => {
 		const blocks = new Uint16Array(BLOCKS_PER_CHUNK);
-		const encoded = encodeChunk(blocks);
-		const decoded = decodeChunk(encoded);
+		const encoded = encodeChunk(blocks, 16384);
+		const decoded = decodeChunk(encoded, 16384);
 		expect(decoded).toEqual(blocks);
 	});
 
 	it('round-trips a striped chunk', () => {
 		const blocks = new Uint16Array(BLOCKS_PER_CHUNK);
 		for (let i = 0; i < BLOCKS_PER_CHUNK; i++) blocks[i] = i % 15;
-		const encoded = encodeChunk(blocks);
-		const decoded = decodeChunk(encoded);
+		const encoded = encodeChunk(blocks, 16384);
+		const decoded = decodeChunk(encoded, 16384);
 		expect(decoded).toEqual(blocks);
 	});
 
 	it('is small on runs of one block', () => {
 		const blocks = new Uint16Array(BLOCKS_PER_CHUNK);
 		blocks.fill(3);
-		const encoded = encodeChunk(blocks);
+		const encoded = encodeChunk(blocks, 16384);
 		expect(encoded.length).toBeLessThan(200);
 	});
 
@@ -30,7 +30,7 @@ describe('codec', () => {
 		const blocks = new Uint16Array(BLOCKS_PER_CHUNK);
 		[200, 255, 256, 353, 65535].forEach((v, i) => { blocks[i] = v; });
 		blocks[5000] = 300;
-		expect(decodeChunk(encodeChunk(blocks))).toEqual(blocks);
+		expect(decodeChunk(encodeChunk(blocks, 16384), 16384)).toEqual(blocks);
 	});
 
 	// Captured from the pre-16-bit codec: 100 × id 5, then id 0, one id 19 at 200, then 0.
@@ -45,11 +45,11 @@ describe('codec', () => {
 	}
 
 	it('decodes a chunk written by the old byte-value codec', () => {
-		expect(decodeChunk(LEGACY_B64)).toEqual(legacyBlocks());
+		expect(decodeChunk(LEGACY_B64, 16384)).toEqual(legacyBlocks());
 	});
 
 	it('writes the same RLE byte stream as the old codec for ids below 128', () => {
-		const bin = atob(encodeChunk(legacyBlocks()));
+		const bin = atob(encodeChunk(legacyBlocks(), 16384));
 		const bytes = new Uint8Array(bin.length);
 		for (let i = 0; i < bin.length; i++) bytes[i] = bin.charCodeAt(i);
 		expect(Array.from(inflate(bytes))).toEqual(LEGACY_RLE);
@@ -63,16 +63,16 @@ describe('codec', () => {
 
 	it('rejects a value above 0xffff before storing it', () => {
 		// value 70000 = varint [0xf0, 0xa2, 0x04], run 16384 = [0x80, 0x80, 0x01]
-		expect(() => decodeChunk(b64([0xf0, 0xa2, 0x04, 0x80, 0x80, 0x01]))).toThrow(/out of range/);
+		expect(() => decodeChunk(b64([0xf0, 0xa2, 0x04, 0x80, 0x80, 0x01]), 16384)).toThrow(/out of range/);
 	});
 
 	it('rejects a run that overruns the chunk before filling it', () => {
 		// value 1, run 0x0ffffff0
-		expect(() => decodeChunk(b64([1, 0xf0, 0xff, 0xff, 0x7f]))).toThrow(/overruns/);
+		expect(() => decodeChunk(b64([1, 0xf0, 0xff, 0xff, 0x7f]), 16384)).toThrow(/overruns/);
 	});
 
 	it('rejects a varint longer than four bytes', () => {
-		expect(() => decodeChunk(b64([0xff, 0xff, 0xff, 0xff, 0x7f, 1]))).toThrow(/varint too long/);
+		expect(() => decodeChunk(b64([0xff, 0xff, 0xff, 0xff, 0x7f, 1]), 16384)).toThrow(/varint too long/);
 	});
 });
 
@@ -96,5 +96,29 @@ describe('encode/decodeFluidMeta', () => {
 		expect(dec.get(0)).toBe(0x80);
 		expect(dec.get(123)).toBe(0x83);
 		expect(dec.get(9999)).toBe(0x8f);
+	});
+});
+
+describe('codec with an explicit length', () => {
+	it('round-trips a 65536-entry chunk', () => {
+		const b = new Uint16Array(65536);
+		b[0] = 3; b[65535] = 353;
+		expect(decodeChunk(encodeChunk(b, 65536), 65536)).toEqual(b);
+	});
+	it('refuses to encode an array whose length is not the expected one', () => {
+		expect(() => encodeChunk(new Uint16Array(16384), 65536)).toThrow('Unexpected chunk length');
+		expect(() => encodeChunk(new Uint16Array(65536), 16384)).toThrow('Unexpected chunk length');
+	});
+	it('refuses to decode a payload into the wrong length', () => {
+		const tall = encodeChunk(new Uint16Array(65536), 65536);
+		expect(() => decodeChunk(tall, 16384)).toThrow();
+		const short = encodeChunk(new Uint16Array(16384), 16384);
+		expect(() => decodeChunk(short, 65536)).toThrow();
+	});
+	it('refuses a non-integer expected length instead of allocating length 0', () => {
+		const short = encodeChunk(new Uint16Array(16384), 16384);
+		expect(() => decodeChunk(short, undefined as unknown as number)).toThrow();
+		expect(() => decodeChunk(short, Number.NaN)).toThrow();
+		expect(() => encodeChunk(new Uint16Array(16384), Number.NaN)).toThrow();
 	});
 });

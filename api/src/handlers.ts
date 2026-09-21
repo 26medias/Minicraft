@@ -1,5 +1,5 @@
 import express, { type Express, type Request, type Response, type NextFunction } from 'express';
-import { decodeChunk, decodeFluidMeta, BLOCKS_PER_CHUNK } from './codec';
+import { decodeChunk, decodeFluidMeta, LEGACY_BLOCKS_PER_CHUNK } from './codec';
 import { worldSaveWireSchema, WORLD_ID_RE, type WorldSaveWire } from './schema';
 
 export const MAX_BODY_BYTES = 32 * 1024 * 1024;
@@ -61,18 +61,18 @@ function validateChunks(world: WorldSaveWire): string | null {
 	for (const c of world.chunks) {
 		let blocks: Uint16Array;
 		try {
-			blocks = decodeChunk(c.blocks);
+			blocks = decodeChunk(c.blocks, LEGACY_BLOCKS_PER_CHUNK);
 		} catch {
 			return `chunk ${c.cx},${c.cz} has undecodable blocks`;
 		}
-		if (blocks.length !== BLOCKS_PER_CHUNK) {
+		if (blocks.length !== LEGACY_BLOCKS_PER_CHUNK) {
 			return `chunk ${c.cx},${c.cz} decoded to ${blocks.length} bytes`;
 		}
 		if (c.fluidMeta !== undefined) {
 			try {
 				const m = decodeFluidMeta(c.fluidMeta);
 				for (const idx of m.keys()) {
-					if (!Number.isInteger(idx) || idx < 0 || idx >= BLOCKS_PER_CHUNK) {
+					if (!Number.isInteger(idx) || idx < 0 || idx >= LEGACY_BLOCKS_PER_CHUNK) {
 						return `chunk ${c.cx},${c.cz} has fluidMeta index ${idx} out of range`;
 					}
 				}

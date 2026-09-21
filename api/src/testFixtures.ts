@@ -1,12 +1,12 @@
-import { encodeChunk, BLOCKS_PER_CHUNK } from './codec';
+import { encodeChunk, LEGACY_BLOCKS_PER_CHUNK } from './codec';
 import type { WorldSaveWire } from './schema';
 
 export const FIXTURE_ID = '11111111-1111-4111-8111-111111111111';
 
-export function chunkBlocks(fill: number): string {
-	const b = new Uint16Array(BLOCKS_PER_CHUNK);
+export function chunkBlocks(fill: number, len = LEGACY_BLOCKS_PER_CHUNK): string {
+	const b = new Uint16Array(len);
 	b.fill(fill);
-	return encodeChunk(b);
+	return encodeChunk(b, len);
 }
 
 export function manyChunks(n: number, fill = 3) {

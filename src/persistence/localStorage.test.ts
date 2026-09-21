@@ -171,7 +171,7 @@ describe('LocalStorageAdapter — fluidMeta round-trip', () => {
 				player: { x: 0, y: 0, z: 0, yaw: 0, pitch: 0, hotbar: [], selected: 0 },
 			}),
 		);
-		storage.setItem('minicraft:v1:world:123:chunk:0:0', encodeChunk(blocks));
+		storage.setItem('minicraft:v1:world:123:chunk:0:0', encodeChunk(blocks, BLOCKS_PER_CHUNK));
 
 		const loaded = await adapter.loadWorld(legacyId(123));
 		expect(loaded).not.toBeNull();
@@ -266,7 +266,7 @@ describe('LocalStorageAdapter legacy adoption', () => {
 				player: { x: 0, y: 0, z: 0, yaw: 0, pitch: 0, hotbar: [], selected: 0 },
 			}),
 		);
-		storage.setItem(`minicraft:v1:world:${seed}:chunk:0:0`, encodeChunk(blocks));
+		storage.setItem(`minicraft:v1:world:${seed}:chunk:0:0`, encodeChunk(blocks, BLOCKS_PER_CHUNK));
 	}
 
 	it('refuses to write a v2 record under a legacy id', async () => {

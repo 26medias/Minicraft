@@ -188,12 +188,14 @@ describe('world profile', () => {
 	it('maps generator versions to heights and rejects unknown ones', () => {
 		expect(worldProfile(1)).toEqual({ height: 64 });
 		expect(worldProfile(2)).toEqual({ height: 256 });
-		expect(NEWEST_GEN_VERSION).toBe(2);
-		expect(() => worldProfile(3)).toThrow(RangeError);
+		expect(worldProfile(3)).toEqual({ height: 256 });
+		expect(NEWEST_GEN_VERSION).toBe(3);
+		expect(() => worldProfile(4)).toThrow(RangeError);
 	});
 	it('refuses to run a generator on a chunk of the wrong height', () => {
 		expect(() => generateChunk(new Chunk(0, 0, 256), 1, 1)).toThrow();
 		expect(() => generateChunk(new Chunk(0, 0, 64), 1, 2)).toThrow();
+		expect(() => generateChunk(new Chunk(0, 0, 64), 1, 3)).toThrow();
 	});
 });
 

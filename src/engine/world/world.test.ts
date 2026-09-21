@@ -192,6 +192,6 @@ describe('World height', () => {
 	});
 	it('World.create is tall, newest generator, v3', () => {
 		const w = World.create(1);
-		expect(w).toMatchObject({ height: 256, genVersion: 2, saveVersion: 3 });
+		expect(w).toMatchObject({ height: 256, genVersion: 3, saveVersion: 3 });
 	});
 });

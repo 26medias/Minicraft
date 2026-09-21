@@ -343,7 +343,8 @@ describe('Player at height 256', () => {
 		expect(findSafeSpawn(w, [260.5, 5, 260.5])[1]).toBe(201);
 	});
 	it('spawn on a fresh v2 world lands on the generated surface, not y=60', () => {
-		const w = World.create(99);
+		// pinned to genVersion 2: this test is about v2 terrain, not the newest generator
+		const w = new World(99, { height: 256, genVersion: 2 });
 		const [, y] = findSafeSpawn(w, [256.5, w.height - 1, 256.5]);
 		expect(y).toBeGreaterThanOrEqual(115);
 		expect(y).toBeLessThanOrEqual(131);

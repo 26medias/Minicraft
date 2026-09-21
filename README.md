@@ -98,8 +98,8 @@ In fly or swim mode: pitch the camera up to ascend, down to descend — W moves 
 
 ## Features
 
-- **Deterministic world generation** from a seed (2D simplex heightmap, flattened to a 10-block amplitude around sea level 28). Columns below sea level fill with water; their top block is sand.
-- **Bounded world:** 32×32 chunks (512×512 blocks), hard walls at the edges. Chunks are 16×64×16.
+- **Deterministic world generation** from a seed (2D simplex heightmap, flattened to a 10-block amplitude around sea level — 120 in new worlds, 28 in worlds created before v3). Columns below sea level fill with water; their top block is sand. New worlds have an unbreakable bedrock floor at y = 0.
+- **Bounded world:** 32×32 chunks (512×512 blocks), hard walls at the edges. Chunks are 16×256×16 in new worlds (16×64×16 in worlds created before v3).
 - **Per-face texture atlas**, built offline and edge-replicated to avoid mipmap bleed.
 - **Build-time texture tinting:** grass top and leaves get plains-biome green, water_still gets plains-biome blue. One line per tint in `scripts/build-atlas.ts`.
 - **Voxel light propagation.** Per-voxel `skyLight` + RGB `blockLight`, packed into a 16-bit per-voxel nibble array. BFS flood-fill attenuates by each block's `lightFilter` value. Sunlight streams down open shafts unattenuated; lamps and lava seed coloured light outward. On every mine/place/TNT edit, an incremental update re-floods only the affected region. Caves go genuinely dark; overlapping lamps of different colours blend per-channel. See [`docs/lighting.md`](docs/lighting.md).

@@ -50,9 +50,9 @@ Mobs, combat, health, hunger, damage, multiplayer, networking gameplay, day/nigh
 - Out-of-bounds is a hard wall (no infinite generation).
 
 ### Chunks
-- **16 × 64 × 16** blocks (height capped at 64 — quarter the memory of vanilla, still plenty of vertical room for a kid).
-- Storage: **`Uint8Array(16384)`** per chunk (256 block IDs is enough for Phase 1 and Phase 2; upgrade to `Uint16Array` only if we exceed it).
-- Coordinate convention: Y is up. Chunk coords are `(cx, cz)`; block coords within a chunk are `(x ∈ 0..15, y ∈ 0..63, z ∈ 0..15)`.
+- **16 × H × 16** blocks, H = 64 (worlds saved before v3) or 256 (new worlds; surface ≈ 120, bedrock at 0).
+- Storage: **`Uint16Array(16·H·16)`** per chunk.
+- Coordinate convention: Y is up. Chunk coords are `(cx, cz)`; block coords within a chunk are `(x ∈ 0..15, y ∈ 0..H-1, z ∈ 0..15)`.
 
 ### Meshing
 - **Naive per-face culling** — a face is emitted only when its neighbor is air or a transparent block.
@@ -95,7 +95,7 @@ Async on purpose, even for `localStorage` — the Phase 2 remote swap must be a 
 - Backend: `localStorage`.
 - Key scheme: `minicraft:v1:world:{seed}:meta`, `minicraft:v1:world:{seed}:chunk:{cx}:{cz}`.
 - **Only modified chunks are persisted.** Untouched chunks regenerate from the seed.
-- Chunk payload: RLE-encode the `Uint8Array`, `deflate`, base64. Typical modified chunk → sub-kilobyte.
+- Chunk payload: RLE-encode the `Uint16Array`, `deflate`, base64. Typical modified chunk → sub-kilobyte.
 - Auto-save is **debounced to ~5 s** and also fires on `blur` / `visibilitychange`.
 - Wrap writes in try/catch — `QuotaExceededError` is real; on quota failure, surface a UI warning. (It must NOT stop auto-save: the cloud leg has room even when the device does not.)
 

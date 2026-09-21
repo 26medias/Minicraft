@@ -8,7 +8,7 @@ Sun shadow mapping leaks. On axis-aligned voxel geometry — cubes meeting at ri
 
 ## Data shape
 
-Each `Chunk` carries a `lights: Uint16Array` alongside its `blocks: Uint8Array`. Both are 16×64×16 = 16,384 entries, indexed by the same `indexOf(x, y, z)` helper in `src/engine/world/coords.ts`.
+Each `Chunk` carries a `lights: Uint16Array` alongside its `blocks: Uint16Array`. Both are 16 × H × 16 entries where H is the world's height (64 for every world saved before v3, 256 for new worlds), indexed by the same `indexOf(x, y, z)` helper in `src/engine/world/coords.ts`.
 
 Each 16-bit voxel entry packs **four 4-bit channels**:
 
@@ -43,7 +43,7 @@ Each row in `src/data/blocks.data.ts` carries two new fields:
 
 `fillChunkLights(world, chunk, getLampColor?)` — defined in `src/engine/world/lighting.ts`. Two BFS passes:
 
-**1. Skylight seeding + propagation.** For each `(x, z)` column, walk `y` from 63 down and set `skyLight = 15` at every voxel until the first block with `lightFilter >= 15` (opaque ceiling). Enqueue each seeded voxel. Then BFS outward in all 6 directions. The propagation rule is:
+**1. Skylight seeding + propagation.** For each `(x, z)` column, walk `y` from `height - 1` down and set `skyLight = 15` at every voxel until the first block with `lightFilter >= 15` (opaque ceiling). Enqueue each seeded voxel. Then BFS outward in all 6 directions. The propagation rule is:
 
 ```
 propagated = here - max(1, neighborFilter)
@@ -121,6 +121,7 @@ Directional shadows via per-voxel ray-cast toward a fixed sun direction (`[-0.5,
 Storage: `Chunk.sunlit: Uint8Array` (1 byte per voxel; 16 KB per chunk). Early exits make it cheap:
 - Opaque voxels skip the ray (their own `sunlit` value is never sampled).
 - Voxels with `skyLight === 0` skip the ray (fully enclosed, can't reach sky via any path).
+- Voxels above the highest opaque block of the 3×3 chunk neighbourhood skip the sun raycast (`maxOpaqueY`, recomputed from `blocks` on every call so it can never go stale; the 9-chunk top-down scan costs ~12 ms per chunk on a 256 world, ~1 s over the initial 81-chunk view, and is the price of not caching).
 
 Computed lazily at mesh time (before `meshChunk` runs), not at chunk generation — this avoids recursive chunk generation when the ray crosses a chunk boundary. When the ray exits the loaded region, it's treated as "no hit" (sunlit).
 
@@ -144,6 +145,6 @@ Invalidation: on any block change, `GameLoop.applyLightUpdate` flags the contain
 
 ## Known trade-offs
 
-- **BFS uses `Array.shift()`** which is O(n). Fine at chunk scale (16k voxels × BFS constant factor) but would warrant a ring-buffer replacement if profiling shows stalls.
+- **BFS queues use a head cursor** (not `Array.shift()`, whose V8 fast path dies past ~8k entries; a 256-high air column seeds 32k). Measured 492 ms → 2.4 ms per chunk.
 - **Diagonal chunk corners fall through to dark.** For a `py`/`ny` face at a chunk-corner column, sampling can request a voxel in the diagonal chunk; we return 0 there rather than routing across two boundaries. Produces sub-pixel darkening at chunk corner columns only — visually imperceptible at typical view angles.
 - **No animated light sources.** Lava glow is static; lamp colours are static. Adding a flicker or pulse would mean per-frame re-flood for affected voxels, which we avoid by keeping emission constant.

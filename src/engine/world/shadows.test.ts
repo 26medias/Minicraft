@@ -160,12 +160,13 @@ describe('computeChunkShadows — heightmap early-out equivalence', () => {
 		// neighbourhood max is 120 and every voxel above skips the ray. Measured ~19 ms
 		// with the early-out vs ~465 ms brute force. With a plate at 200 the 80 air
 		// layers between floor and plate still raycast (~100 ms) — that fixture is for
-		// the equivalence test, not this one. 150 ms leaves headroom for a loaded box.
+		// the equivalence test, not this one. Brute force measures 145-150 ms on a fast
+		// box, so the bound is 80 ms: still 4x the early-out time, and red without it.
 		const w = terrainFixture(256, 120, 120);
 		const c = w.getChunk(1, 1)!;
 		computeChunkShadows(w, c);
 		const t0 = performance.now();
 		computeChunkShadows(w, c);
-		expect(performance.now() - t0).toBeLessThan(150);
+		expect(performance.now() - t0).toBeLessThan(80);
 	});
 });

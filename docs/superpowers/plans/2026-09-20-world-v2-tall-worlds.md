@@ -29,8 +29,8 @@
 | Task | Depends on | Can run in parallel with |
 |---|---|---|
 | 1 Height plumbing | — | — (everything waits on it) |
-| 2 Lighting cursor queue | 1 | 3, 4, 5, 6 |
-| 3 Shadows early-out | 1 | 2, 4, 5, 6 |
+| 2 Lighting cursor queue | 1 | 4, 5, 6 |
+| 3 Shadows early-out | 1, **2** (its 256 fixture lights 9 chunks; on the shift() queue that is ~1.8 s each and the test times out) | 4, 5, 6 |
 | 4 Generation dispatch + bedrock | 1 | 2, 3, 6 |
 | 5 Player / TNT / loop + engine tests at 256 | 1, 4 | 2, 3, 6 |
 | 6 Codec expectedLength (client + API) + parity | 1 | 2, 3, 4, 5 |
@@ -43,6 +43,8 @@
 | 13 Browser verification | 10, 11 | 12 |
 
 Parallel tasks touch disjoint files; each commits only its own paths.
+
+**Execution note.** Every task's exit criterion is the FULL `npm test` (src + api) plus `npx tsc --noEmit`, so two tasks cannot share a working tree. Parallel tasks run in separate `git worktree`s on their own branches (`task/N`, cut from `v2` at the point their dependencies have merged). A merge step (parent) fast-forwards or merges each `task/N` into `v2` in dependency order and re-runs `npm test && npx tsc --noEmit && (cd api && npx tsc --noEmit)` on `v2` after every merge; a red merge is fixed on `v2` before the next one. Timing tests in Tasks 2 and 3 have thresholds sized for a loaded machine (several agents running at once); do not tighten them.
 
 ## Shared definitions (repeated in each task that uses them)
 
@@ -59,7 +61,7 @@ class Chunk { constructor(cx: number, cz: number, height: WorldHeight = LEGACY_H
 // src/engine/world/world.ts
 type WorldOptions = { height?: WorldHeight; genVersion?: number; saveVersion?: 2 | 3 };
 class World {
-	constructor(seed: number, opts?: WorldOptions);   // defaults: height 64, genVersion 1, saveVersion 2
+	constructor(seed: number, opts?: WorldOptions);   // defaults: height 64, genVersion derived from height (64 -> 1, 256 -> 2), saveVersion 2. The constructor NEVER validates height vs genVersion (spec §4: a stored record's height is authoritative); World.create (Task 4) and applySave (Task 11) are where the pair is checked.
 	readonly height: WorldHeight; readonly genVersion: number; readonly saveVersion: 2 | 3;
 	inBounds(x: number, y: number, z: number): boolean;
 	static create(seed: number): World;                // newest genVersion, its profile height, saveVersion 3 (Task 4)
@@ -84,7 +86,8 @@ export class SaveMismatch extends Error { name = 'SaveMismatch' }
 - Modify: `src/game/loop.ts:336`
 - Modify: `src/game/tnt.ts:3, 37, 49`
 - Modify: `src/persistence/codec.ts:2, 5, 26, 36, 39` (temporary: a local `LEGACY_BLOCKS_PER_CHUNK = 16384`; Task 6 replaces it)
-- Modify tests: `src/engine/world/coords.test.ts`, `chunk.test.ts`, `generation.test.ts:5,48`, `lighting.test.ts:5,24`, `src/persistence/localStorage.test.ts:4`, `cloud.test.ts:4`, `dual.test.ts:6`, `api/src/codec.parity.test.ts` (only the client import — see step 8)
+- Modify: `src/engine/world/generation.ts` (signature only: accept and ignore a third `genVersion` argument so Task 4's dispatch is a drop-in)
+- Modify tests: `src/engine/world/coords.test.ts`, `chunk.test.ts`, `generation.test.ts:5,48`, `lighting.test.ts:5,24`, `src/persistence/localStorage.test.ts:4`, `cloud.test.ts:4`, `dual.test.ts:6`, **`src/persistence/codec.test.ts:4`** (imports `BLOCKS_PER_CHUNK` from coords — vitest gives NO import error when a named export disappears, the binding is silently `undefined` and `new Uint16Array(undefined)` is length 0, so the suite goes 6 red if this file is missed), `api/src/codec.parity.test.ts` (unchanged — see step 6); cosmetic: `world.test.ts:23`, `player.test.ts:97,184,235`, `raycast.test.ts:11` get an explicit `{ height: 64 }` world
 
 **Interfaces:**
 - Produces:
@@ -98,6 +101,8 @@ export class SaveMismatch extends Error { name = 'SaveMismatch' }
   new Chunk(cx, cz, height: WorldHeight = LEGACY_HEIGHT); chunk.height
   // world.ts
   new World(seed, { height?, genVersion?, saveVersion? }); world.height; world.genVersion; world.saveVersion; world.inBounds(x,y,z)
+  // genVersion defaults from height: 64 -> 1, 256 -> 2. No validation in the constructor.
+  // generation.ts (this task): export function generateChunk(chunk: Chunk, seed: number, genVersion = 1): void  -- genVersion is ACCEPTED AND IGNORED here (v1 body runs at any height; 256 fixtures overwrite the blocks). Task 4 turns it into the dispatcher.
   ```
 - Consumes: nothing new.
 
@@ -196,8 +201,12 @@ describe('World height', () => {
 		expect(w.inBounds(0, 63, 0)).toBe(true);
 		expect(w.inBounds(0, 64, 0)).toBe(false);
 	});
+	it('derives genVersion 2 from height 256 unless told otherwise', () => {
+		expect(new World(1, { height: 256 }).genVersion).toBe(2);
+		expect(new World(1, { height: 256, genVersion: 7 }).genVersion).toBe(7); // stored records win; no validation here
+	});
 	it('creates 256-tall chunks when told to and bounds y by it', () => {
-		const w = new World(1, { height: 256, genVersion: 1, saveVersion: 3 });
+		const w = new World(1, { height: 256, saveVersion: 3 });
 		const c = w.ensureChunk(0, 0);
 		expect(c.height).toBe(256);
 		expect(w.inBounds(0, 255, 0)).toBe(true);
@@ -291,7 +300,8 @@ export class World {
 	constructor(seed: number, opts: WorldOptions = {}) {
 		this.seed = seed;
 		this.height = opts.height ?? LEGACY_HEIGHT;
-		this.genVersion = opts.genVersion ?? 1;
+		// Derived, not validated: a loaded record's own height is authoritative (spec §4).
+		this.genVersion = opts.genVersion ?? (this.height === 256 ? 2 : 1);
 		this.saveVersion = opts.saveVersion ?? 2;
 	}
 
@@ -300,7 +310,7 @@ export class World {
 	}
 ```
 
-In `ensureChunk`: `c = new Chunk(cx, cz, this.height);` (Task 4 changes the `generateChunk` call; here leave `generateChunk(c, this.seed)`). Replace the four bare `inBounds(x, y, z)` calls (getBlock, setBlock, setBlockFlow, markLiquidFrontier) with `this.inBounds(x, y, z)`.
+In `ensureChunk`: `c = new Chunk(cx, cz, this.height);` and `generateChunk(c, this.seed, this.genVersion);`. In `generation.ts` change the signature to `export function generateChunk(chunk: Chunk, seed: number, _genVersion = 1): void` — the body is untouched and still writes v1 terrain (y 24–34) into whatever height the chunk has; every 256 fixture in Tasks 2/3/5 does `blocks.fill(AIR)` right after `ensureChunk`, and Task 4 replaces this stub with the real dispatcher. (Without this stub Task 4's dispatcher would throw for every `new World(seed, { height: 256 })` fixture written in Tasks 2/3/5, which are developed in parallel with it.) Replace the four bare `inBounds(x, y, z)` calls (getBlock, setBlock, setBlockFlow, markLiquidFrontier) with `this.inBounds(x, y, z)`.
 
 - [ ] **Step 5: Fix every other engine site (no behaviour change at 64)**
 
@@ -324,18 +334,19 @@ In `ensureChunk`: `c = new Chunk(cx, cz, this.height);` (Task 4 changes the `gen
 
 - `generation.test.ts:5` → `import { CHUNK_SIZE_X, CHUNK_SIZE_Z } from './coords';` and :48 `CHUNK_SIZE_Y - 1` → `63` (it is a v1 test; the literal is its meaning).
 - `lighting.test.ts:5` → `import { indexOf } from './coords';` and :24 `y < CHUNK_SIZE_Y` → `y < 64`.
-- `localStorage.test.ts:4`, `cloud.test.ts:4`, `dual.test.ts:6`: replace `import { BLOCKS_PER_CHUNK } from '../engine/world/coords';` with `const BLOCKS_PER_CHUNK = 16 * 64 * 16;`.
+- `localStorage.test.ts:4`, `cloud.test.ts:4`, `dual.test.ts:6`, **`codec.test.ts:4`**: replace `import { BLOCKS_PER_CHUNK } from '../engine/world/coords';` with `const BLOCKS_PER_CHUNK = 16 * 64 * 16;`.
+- Cosmetic, per spec §2: `world.test.ts:23`, `player.test.ts:97,184,235`, `raycast.test.ts:11` — where those tests build a `new World(seed)` and then rely on a literal 63/64, pass `{ height: 64 }` explicitly so the test states the height it encodes. No assertion changes.
 - `api/src/codec.parity.test.ts`: unchanged (it imports `BLOCKS_PER_CHUNK` from `./codec`, the API copy, which Task 6 handles).
 
 - [ ] **Step 7: Run the whole suite and the build**
 
 Run: `npm test && npm run build`
-Expected: all 38+ files green (the 3 new describes included); build passes. `grep -rn "CHUNK_SIZE_Y\|BLOCKS_PER_CHUNK" src api/src --include=*.ts` must list ONLY `src/persistence/codec.ts` (local const), the three test-local consts, and `api/src/codec*.ts`.
+Expected: all 38+ files green (the 3 new describes included); build passes; `npx tsc --noEmit` clean (vitest does not type-check — a missed import shows up only here or as a silent `undefined`). `grep -rn "CHUNK_SIZE_Y\|BLOCKS_PER_CHUNK" src api/src --include=*.ts` must list ONLY `src/persistence/codec.ts` (local const), the four test-local consts (localStorage/cloud/dual/codec tests), and `api/src/codec*.ts`.
 
 - [ ] **Step 8: Commit**
 
 ```bash
-git add src/engine/world/coords.ts src/engine/world/chunk.ts src/engine/world/world.ts src/engine/world/lighting.ts src/engine/world/shadows.ts src/engine/world/mesher.ts src/game/loop.ts src/game/tnt.ts src/persistence/codec.ts src/engine/world/coords.test.ts src/engine/world/chunk.test.ts src/engine/world/world.test.ts src/engine/world/generation.test.ts src/engine/world/lighting.test.ts src/persistence/localStorage.test.ts src/persistence/cloud.test.ts src/persistence/dual.test.ts
+git add src/engine/world/coords.ts src/engine/world/chunk.ts src/engine/world/world.ts src/engine/world/generation.ts src/engine/world/lighting.ts src/engine/world/shadows.ts src/engine/world/mesher.ts src/game/loop.ts src/game/tnt.ts src/persistence/codec.ts src/engine/world/coords.test.ts src/engine/world/chunk.test.ts src/engine/world/world.test.ts src/engine/world/generation.test.ts src/engine/world/lighting.test.ts src/persistence/localStorage.test.ts src/persistence/cloud.test.ts src/persistence/dual.test.ts src/persistence/codec.test.ts src/game/player.test.ts src/engine/input/raycast.test.ts
 git commit -m "refactor(world): per-world height on World and Chunk; drop CHUNK_SIZE_Y
 
 Behaviour unchanged: every world is still 64 tall. Prepares v3 tall worlds.
@@ -376,25 +387,34 @@ describe('skylight at height 256', () => {
 		for (const y of [255, 200, 64, 0]) expect(c.getSky(3, y, 3)).toBe(15);
 	});
 
-	it('re-seeds the column above y=63 when a roof block at y=200 is removed', () => {
+	it('re-seeding a column under a roof at y=200 does not light y 0..63 from a stale 63 start', () => {
+		// A roof across the whole chunk at y=200 and one stone at (5,100,5). Removing the
+		// stone triggers reSeedSkylightColumn for column (5,5). A correct re-seed walks
+		// from height-1, hits the roof at 200 and seeds nothing below it. A re-seed that
+		// still starts at y=63 begins UNDER the roof and wrongly lights y 0..63 to 15.
+		// (Removing a roof block instead does not discriminate: refloodFromNeighbors
+		// already refills that column from the sky-15 voxel above it.)
 		const w = tallEmptyWorld();
 		const c = w.getChunk(0, 0)!;
 		for (let x = 0; x < 16; x++) for (let z = 0; z < 16; z++) c.blocks[indexOf(x, 200, z)] = stone;
+		c.blocks[indexOf(5, 100, 5)] = stone;
 		fillChunkLights(w, c);
+		expect(c.getSky(5, 30, 5)).toBe(0);
+		w.setBlock(5, 100, 5, AIR);
+		updateLightsForBlockChange(w, 5, 100, 5);
+		expect(c.getSky(5, 30, 5)).toBe(0);   // "expected 15 to be 0" on a stale 63
 		expect(c.getSky(5, 150, 5)).toBe(0);
-		w.setBlock(5, 200, 5, AIR);
-		updateLightsForBlockChange(w, 5, 200, 5);
-		// Only goes red if reSeedSkylightColumn still starts at 63.
-		expect(c.getSky(5, 150, 5)).toBe(15);
 	});
 
-	it('fills an all-air 256 chunk in under 50 ms (shift() queue takes ~500 ms)', () => {
+	it('fills an all-air 256 chunk in under 250 ms (shift() queue measured ~1800 ms)', () => {
+		// Threshold is loose on purpose: the suite runs alongside other agents.
+		// Cursor queue measured 2.4 ms; the gap to 250 ms is contention headroom.
 		const w = tallEmptyWorld();
 		const c = w.getChunk(0, 0)!;
 		fillChunkLights(w, c); // warm-up
 		const t0 = performance.now();
 		fillChunkLights(w, c);
-		expect(performance.now() - t0).toBeLessThan(50);
+		expect(performance.now() - t0).toBeLessThan(250);
 	});
 });
 ```
@@ -402,7 +422,7 @@ describe('skylight at height 256', () => {
 - [ ] **Step 2: Run to verify the perf test fails**
 
 Run: `npx vitest run src/engine/world/lighting.test.ts -t "height 256"`
-Expected: the first two pass (Task 1 already made the sites height-aware), the perf test FAILS (hundreds of ms).
+Expected: the first two pass (Task 1 already made the sites height-aware; the roof test goes red only on an implementation that regresses :452 to 63), the perf test FAILS (~1800 ms).
 
 - [ ] **Step 3: Replace `queue.shift()` with a head cursor** in all three BFS loops. Pattern (apply identically in `propagateSkylight`, `propagateBlockLight`, and the `remQueue` loop of `removeAndReflood`):
 
@@ -421,7 +441,7 @@ function propagateSkylight(world: World, queue: Coord[], touched: Set<Chunk>): v
 - [ ] **Step 4: Run the lighting suite**
 
 Run: `npx vitest run src/engine/world/lighting.test.ts`
-Expected: PASS (all, including the < 50 ms test).
+Expected: PASS (all, including the < 250 ms test).
 
 - [ ] **Step 5: Full suite, then commit**
 
@@ -444,7 +464,7 @@ Claude-Session: https://claude.ai/code/session_01WkqJrcc2U5KmXWvtU969AW"
 - Test: `src/engine/world/shadows.test.ts` (append)
 
 **Interfaces:**
-- Consumes: `World.height`, `World.getChunk`, `Chunk.height` (Task 1).
+- Consumes: `World.height`, `World.getChunk`, `Chunk.height` (Task 1); the cursor-queue `fillChunkLights` (Task 2 — REQUIRED: the 256 fixture lights 9 chunks, ~1.8 s each on the old queue, and the test times out at 5 s).
 - Produces: `computeChunkShadows(world, chunk)` unchanged signature; new exported helper `maxOpaqueY(chunk: Chunk): number` (-1 for an all-passable chunk).
 
 - [ ] **Step 1: Write the failing test** — append to `shadows.test.ts`:
@@ -536,13 +556,18 @@ describe('computeChunkShadows — heightmap early-out equivalence', () => {
 		expect(maxOpaqueY(c)).toBe(130);
 	});
 
-	it('is fast on a 256 column (sky voxels skip the raycast)', () => {
-		const w = terrainFixture(256, 120, 200);
+	it('is fast on a 256 column with only a floor (sky voxels skip the raycast)', () => {
+		// Floor-only fixture: plateY = floorY puts the "plate" inside the floor, so the
+		// neighbourhood max is 120 and every voxel above skips the ray. Measured ~19 ms
+		// with the early-out vs ~465 ms brute force. With a plate at 200 the 80 air
+		// layers between floor and plate still raycast (~100 ms) — that fixture is for
+		// the equivalence test, not this one. 150 ms leaves headroom for a loaded box.
+		const w = terrainFixture(256, 120, 120);
 		const c = w.getChunk(1, 1)!;
 		computeChunkShadows(w, c);
 		const t0 = performance.now();
 		computeChunkShadows(w, c);
-		expect(performance.now() - t0).toBeLessThan(40);
+		expect(performance.now() - t0).toBeLessThan(150);
 	});
 });
 ```
@@ -611,7 +636,7 @@ Claude-Session: https://claude.ai/code/session_01WkqJrcc2U5KmXWvtU969AW"
 **Files:**
 - Create: `src/engine/world/generation.v1.ts` (today's `generation.ts` body, moved verbatim)
 - Create: `src/engine/world/generation.v2.ts`
-- Modify: `src/engine/world/generation.ts` (becomes the dispatcher + profile table)
+- Modify: `src/engine/world/generation.ts` (Task 1 left it as the v1 body with an ignored `_genVersion` argument; it becomes the dispatcher + profile table)
 - Modify: `src/engine/world/world.ts` (`ensureChunk` passes `this.genVersion`; add `static create`)
 - Modify: `src/data/catalog-rules.ts:281` (+ new `HARDNESS_OVERRIDES`), regenerate `src/data/blocks.catalog.data.ts` via `npm run gen-catalog`
 - Modify: `src/game/tnt.ts` (TNT must not destroy hardness-0 blocks)
@@ -624,7 +649,7 @@ Claude-Session: https://claude.ai/code/session_01WkqJrcc2U5KmXWvtU969AW"
   // generation.ts
   export const NEWEST_GEN_VERSION = 2;
   export function worldProfile(genVersion: number): { height: WorldHeight };   // 1 -> 64, 2 -> 256, else throws RangeError
-  export function generateChunk(chunk: Chunk, seed: number, genVersion = 1): void; // dispatch; throws if chunk.height !== worldProfile(genVersion).height
+  export function generateChunk(chunk: Chunk, seed: number, genVersion = 1): void; // dispatch; throws if chunk.height !== worldProfile(genVersion).height. World's default genVersion is derived from height (Task 1), so `new World(seed, { height: 256 })` dispatches to v2 and `new World(seed)` to v1 without anyone naming a version.
   export const SEA_LEVEL = 28;            // re-exported from v1 for compatibility
   // generation.v1.ts:  export function generateChunkV1(chunk, seed): void;  export const SEA_LEVEL_V1 = 28;
   // generation.v2.ts:  export function generateChunkV2(chunk, seed): void;  export const SEA_LEVEL_V2 = 120;  MIN_H 114, MAX_H 130, bedrock at y=0
@@ -820,16 +845,16 @@ export function generateChunk(chunk: Chunk, seed: number, genVersion = 1): void 
 }
 ```
 
-`world.ts`: `generateChunk(c, this.seed, this.genVersion);` and
+`world.ts` (the `generateChunk(c, this.seed, this.genVersion)` call already exists from Task 1): add
 
 ```ts
-	/** A brand-new world: newest generator, its height, saved as v3. */
+	/** A brand-new world: newest generator, its height, saved as v3. This is the ONE place height and genVersion are checked against each other (spec §4: a stored record's height is authoritative, so the constructor never validates). */
 	static create(seed: number): World {
 		const { height } = worldProfile(NEWEST_GEN_VERSION);
 		return new World(seed, { height, genVersion: NEWEST_GEN_VERSION, saveVersion: 3 });
 	}
 ```
-(import `worldProfile, NEWEST_GEN_VERSION` from `./generation`).
+(import `worldProfile, NEWEST_GEN_VERSION` from `./generation`). Add to `world.test.ts`: `it('World.create is tall, newest generator, v3', () => { const w = World.create(1); expect(w).toMatchObject({ height: 256, genVersion: 2, saveVersion: 3 }); });`.
 
 `catalog-rules.ts`: after `hardnessFor`, add `export const HARDNESS_OVERRIDES: Record<string, number> = { bedrock: 0 };` and at :281 use `hardness: HARDNESS_OVERRIDES[name] ?? hardnessFor(group),`. Then run `npm run gen-catalog` (the jar is at `~/.minecraft/versions/1.21.6/1.21.6.jar`) and check `git diff --stat src/data/` shows ONLY the bedrock row's `hardness: 1.2` → `hardness: 0` in `blocks.catalog.data.ts` and no change to `blocks.catalog.ids.json`. If gen-catalog cannot run, hand-edit that one row and say so in the commit body.
 
@@ -845,7 +870,7 @@ Expected: everything green except the v2 hash test, which prints `expected <numb
 Run: `npm test` → green.
 
 ```bash
-git add src/engine/world/generation.ts src/engine/world/generation.v1.ts src/engine/world/generation.v2.ts src/engine/world/world.ts src/engine/world/generation.test.ts src/data/catalog-rules.ts src/data/catalog-rules.test.ts src/data/blocks.catalog.data.ts src/game/tnt.ts src/game/tnt.test.ts
+git add src/engine/world/generation.ts src/engine/world/generation.v1.ts src/engine/world/generation.v2.ts src/engine/world/world.ts src/engine/world/world.test.ts src/engine/world/generation.test.ts src/data/catalog-rules.ts src/data/catalog-rules.test.ts src/data/blocks.catalog.data.ts src/game/tnt.ts src/game/tnt.test.ts
 git commit -m "feat(worldgen): versioned generators (v1 verbatim, v2 tall placeholder), unbreakable bedrock
 
 Co-Authored-By: Claude Fable 5.1 <noreply@anthropic.com>
@@ -857,7 +882,7 @@ Claude-Session: https://claude.ai/code/session_01WkqJrcc2U5KmXWvtU969AW"
 ### Task 5: Player limits from height; engine tests at 256 (raycast, liquids, TNT, player, mesher)
 
 **Files:**
-- Modify: `src/game/player.ts:18-25, 34-41, 66, 71, 88, 93, 229`
+- Modify: `src/game/player.ts:18-25, 34-41, 66, 71, 88, 93, 224` (the `sanitizeSpawn(this.position)` call in `update` is at :224)
 - Modify: `src/main.ts:100` is NOT touched here (Task 11 owns main.ts); nothing else constructs `Player` with a height.
 - Test: `src/game/player.test.ts` (replace the `SKY_CEILING_Y` uses; append), `src/engine/input/raycast.test.ts`, `src/game/liquid-scheduler.test.ts`, `src/game/tnt.test.ts`, `src/engine/world/mesher.test.ts` (append each)
 
@@ -936,7 +961,11 @@ describe('liquids at height 256', () => {
 		floor(w, 258, 262, 258, 262, 121);
 		w.setBlock(260, 240, 260, water);
 		const s = new LiquidScheduler(w, () => {}, () => {});
-		for (let i = 0; i < 300; i++) s.tick(0.5);
+		// The scheduler advances one block per 0.5 s flow step; tick until the water
+		// lands or we give up. 2000 ticks is ~10x the 118-block fall.
+		let ticks = 0;
+		while (w.getBlock(260, 122, 260) !== water && ticks < 2000) { s.tick(0.5); ticks++; }
+		expect(ticks).toBeLessThan(2000);
 		expect(w.getBlock(260, 122, 260)).toBe(water);
 		expect(w.getBlock(260, 121, 260)).toBe(stone);
 	});
@@ -999,7 +1028,7 @@ export function sanitizeSpawn(pos: [number, number, number], height = 64): [numb
 
 `findSafeSpawn`: `const top = world.height - 1;` then `sanitizeSpawn(desired, world.height)`; `:66` `Math.min(..., top)`; `:71` `for (let y = top; y > start; y--)`; `:88` `groundAt(nx + 0.5, nz + 0.5, top)`; `:93` `return [dx, Math.max(dy, world.height / 2), dz];`.
 
-`Player`: add `readonly height: number;` set in `constructor(spawn, height = 64)` with `this.position = sanitizeSpawn(spawn, height)`; at `:229` use `sanitizeSpawn(this.position, world.height)`.
+`Player`: add `readonly height: number;` set in `constructor(spawn, height = 64)` with `this.position = sanitizeSpawn(spawn, height)`; at `:224` (inside `update`) use `sanitizeSpawn(this.position, world.height)`.
 
 - [ ] **Step 4: Run, then full suite, then commit**
 
@@ -1018,7 +1047,7 @@ Claude-Session: https://claude.ai/code/session_01WkqJrcc2U5KmXWvtU969AW"
 ### Task 6: Codec takes an expected length (client + API) and parity at both lengths
 
 **Files:**
-- Modify: `src/persistence/codec.ts`, `api/src/codec.ts`, `api/src/testFixtures.ts`, `api/src/handlers.ts:2,68,75` (call sites only), `src/persistence/localStorage.ts:105,240`, `src/persistence/cloud.ts:74,83`
+- Modify: `src/persistence/codec.ts`, `api/src/codec.ts`, `api/src/testFixtures.ts`, `api/src/handlers.ts:2,68,75` (call sites only), `src/persistence/localStorage.ts:96` (encodeChunk) and `:236-237` (the two decodeChunk calls), `src/persistence/cloud.ts:74,84`
 - Test: `src/persistence/codec.test.ts`, `api/src/codec.parity.test.ts`
 
 **Interfaces:**
@@ -1084,7 +1113,7 @@ export function decodeChunk(encoded: string, expectedLength: number): Uint16Arra
 }
 ```
 
-Call sites, all with the legacy length for now: `localStorage.ts` `encodeChunk(c.blocks, 16 * 64 * 16)` (:105) and `decodeChunk(..., 16 * 64 * 16)` (:240 both calls); `cloud.ts` likewise (:74, :83); `api/src/handlers.ts` `decodeChunk(c.blocks, LEGACY_BLOCKS_PER_CHUNK)` and the two `BLOCKS_PER_CHUNK` comparisons → `LEGACY_BLOCKS_PER_CHUNK`; `api/src/testFixtures.ts` `chunkBlocks(fill, len = LEGACY_BLOCKS_PER_CHUNK)` → `encodeChunk(b, len)`. Existing `codec.test.ts` cases: add `, 16384` to every encode/decode call. Delete the temporary `const BLOCKS_PER_CHUNK` from `src/persistence/codec.ts`.
+Call sites, all with the legacy length for now: `localStorage.ts` `encodeChunk(c.blocks, 16 * 64 * 16)` (:96) and `decodeChunk(..., 16 * 64 * 16)` (:236 and :237); `cloud.ts` likewise (:74, :84); `api/src/handlers.ts` `decodeChunk(c.blocks, LEGACY_BLOCKS_PER_CHUNK)` and the two `BLOCKS_PER_CHUNK` comparisons → `LEGACY_BLOCKS_PER_CHUNK`; `api/src/testFixtures.ts` `chunkBlocks(fill, len = LEGACY_BLOCKS_PER_CHUNK)` → `encodeChunk(b, len)`. Existing `codec.test.ts` cases: add `, 16384` to every encode/decode call. Delete the temporary `const BLOCKS_PER_CHUNK` from `src/persistence/codec.ts`.
 
 - [ ] **Step 4: Full suite + commit**
 
@@ -1124,7 +1153,7 @@ Claude-Session: https://claude.ai/code/session_01WkqJrcc2U5KmXWvtU969AW"
   saveLocalSync(save): version 2 -> v2 keys and today's meta payload (no new fields); version 3 -> v3 keys, meta gains height+genVersion. Both: shrink guard.
   Error('SUSPICIOUS_SHRINK') thrown by saveLocalSync when stored chunk keys > 4 and incoming < stored/2 (incoming chunks are still written; nothing is pruned; meta untouched)
   saveWorld(): maps SUSPICIOUS_SHRINK to { local: 'error', cloud: 'skipped' }
-  listWorlds(): v3 rows { version: 3, height }, v2 rows { version: 2, height: 64 }, legacy rows { version: 2, height: 64 }
+  listWorlds(): v3 rows { version: 3, height }, v2 rows { version: 2, height: 64 }, legacy rows { version: 2, height: 64 }. A v3 meta whose height is NOT 64|256 is still LISTED (height: undefined) — listing never throws — and refuses to open later via loadV3's SaveCorrupt. The menu keeps showing it rather than making it "disappear".
   deleteWorld(id): removes v3 AND v2 keys for the id (legacy untouched as today)
   setSyncedGeneration(id, gen): writes whichever of v3/v2 meta exists
   ```
@@ -1209,10 +1238,22 @@ describe('LocalStorageAdapter — v3 namespace', () => {
 		await expect(adapter.loadWorld(idFor(5))).rejects.toThrow(SaveCorrupt);
 	});
 
-	it('refuses to open a world with one undecodable chunk (no partial load)', async () => {
-		await adapter.saveWorld({ ...sampleSave(6), chunks: [{ cx: 0, cz: 0, blocks: new Uint16Array(16384) }, { cx: 1, cz: 0, blocks: new Uint16Array(16384) }] });
-		storage.setItem(`minicraft:v2:world:${idFor(6)}:chunk:1:0`, JSON.stringify({ blocks: '!!!not base64!!!' }));
+	it('refuses to open a tall world holding one chunk of the wrong length (no partial load)', async () => {
+		// A garbage payload already throws today (atob's InvalidCharacterError), so it
+		// would go green on a bare rethrow. A LENGTH mismatch is the case that only a
+		// "decode at the record's height" implementation catches: a 16384-length encode
+		// stored in a 256-high world must be refused, not decoded at its own length.
+		await adapter.saveWorld({ ...tallSave(6), chunks: [{ cx: 0, cz: 0, blocks: new Uint16Array(65536) }, { cx: 1, cz: 0, blocks: new Uint16Array(65536) }] });
+		storage.setItem(`minicraft:v3:world:${idFor(6)}:chunk:1:0`, JSON.stringify({ blocks: encodeChunk(new Uint16Array(16384), 16384) }));
 		await expect(adapter.loadWorld(idFor(6))).rejects.toThrow(SaveCorrupt);
+	});
+
+	it('lists a v3 meta with an invalid height (height undefined) but refuses to open it', async () => {
+		storage.setItem(`minicraft:v3:world:${idFor(7)}:meta`, JSON.stringify({ version: 3, id: idFor(7), seed: 7, name: 'Odd', height: 128, genVersion: 2, createdAt: 1, updatedAt: 2, player: { x: 0, y: 0, z: 0, yaw: 0, pitch: 0, hotbar: [], selected: 0 } }));
+		const list = await adapter.listWorlds();
+		expect(list.find((w) => w.seed === 7)).toMatchObject({ version: 3, name: 'Odd' });
+		expect(list.find((w) => w.seed === 7)!.height).toBeUndefined();
+		await expect(adapter.loadWorld(idFor(7))).rejects.toThrow(SaveCorrupt);
 	});
 
 	it('shrink guard: 9 stored chunks, a 2-chunk snapshot keeps all 9 and reports local error', async () => {
@@ -1288,7 +1329,13 @@ Add `const V3 = 'minicraft:v3';`, `v3MetaKey/v3ChunkKey/v3ChunkPrefix` mirroring
 
 `loadV2`/`loadV1` return `{ ..., version: 2, height: 64, genVersion: 1, chunks }` using `readChunks(prefix, 16384)`. `readChunks(prefix, len)` is the existing scan loop with `parseChunkPayload(cx, cz, data, len)` wrapped: `try { ... } catch (err) { throw new SaveCorrupt(`chunk ${k}: ${(err as Error).message}`); }`. `parseChunkPayload(cx, cz, data, len)` passes `len` to both `decodeChunk` calls.
 
-`encode(save)`: `encodeChunk(c.blocks, blocksPerChunk(save.height))`.
+`encode(save)`: `encodeChunk(c.blocks, blocksPerChunk(save.height))`. Add the helper the write loop and the shrink guard both use (today the `{ blocks, fluidMeta? }` object is built inline at localStorage.ts:144-146 — move it here so both paths write the same shape):
+
+```ts
+function payloadOf(c: EncodedChunk): { blocks: string; fluidMeta?: string } {
+	return c.fluidMeta === undefined ? { blocks: c.blocks } : { blocks: c.blocks, fluidMeta: c.fluidMeta };
+}
+```
 
 `saveLocalSync(save, pre)`: keep the legacy guard; pick `const ns = save.version === 3 ? { meta: v3MetaKey, chunk: v3ChunkKey, prefix: v3ChunkPrefix } : { meta: v2MetaKey, chunk: v2ChunkKey, prefix: v2ChunkPrefix };` and the meta payload:
 
@@ -1311,9 +1358,9 @@ Add `const V3 = 'minicraft:v3';`, `v3MetaKey/v3ChunkKey/v3ChunkPrefix` mirroring
 			}
 ```
 
-then the existing prune + write + meta-last using `ns.*`. `saveWorld`: `try { this.saveLocalSync(save, pre); return { local: 'ok', cloud: 'skipped' }; } catch (err) { if ((err as Error).message === 'SUSPICIOUS_SHRINK') return { local: 'error', cloud: 'skipped' }; throw err; }`.
+then the existing prune + write + meta-last using `ns.*`, with the write loop also using `JSON.stringify(payloadOf(c))`. A refused save keeps reporting `local: 'error'` for the rest of the session (the incoming count never grows back until reload) and self-heals on the next launch, because the surviving chunks are all loaded and marked modified again; Task 12 documents that so a "Saved on this device: error" is not misread as data loss. `saveWorld`: `try { this.saveLocalSync(save, pre); return { local: 'ok', cloud: 'skipped' }; } catch (err) { if ((err as Error).message === 'SUSPICIOUS_SHRINK') return { local: 'error', cloud: 'skipped' }; throw err; }`.
 
-`setSyncedGeneration`: try `v3MetaKey` first, else `v2MetaKey`. `listWorlds`: add a first loop over `${V3}:world:` metas pushing `{ ..., origin: 'local', version: 3, height: m.height }`; the v2 loop pushes `version: 2, height: 64`; the legacy loop likewise. `deleteWorld`: remove `v3MetaKey(id)`, `v2MetaKey(id)` and both chunk prefixes.
+`setSyncedGeneration`: try `v3MetaKey` first, else `v2MetaKey`. `listWorlds`: add a first loop over `${V3}:world:` metas pushing `{ ..., origin: 'local', version: 3, height: isWorldHeight(m.height) ? m.height : undefined }` (never throw while listing); the v2 loop pushes `version: 2, height: 64`; the legacy loop likewise. `deleteWorld`: remove `v3MetaKey(id)`, `v2MetaKey(id)` and both chunk prefixes.
 
 Update `cloud.test.ts` and `dual.test.ts` `save()` helpers with `height: 64, genVersion: 1` so they compile (their behaviour is Tasks 8/9).
 
@@ -1342,7 +1389,7 @@ Claude-Session: https://claude.ai/code/session_01WkqJrcc2U5KmXWvtU969AW"
 - Produces:
   ```ts
   // route prefix: version 3 -> '/v3/worlds', version 2 -> '/worlds'
-  loadWorld(id): GET /v3/worlds/:id; on 404 GET /worlds/:id; 404 on both -> null. A v3 body without a valid height/genVersion -> throws SaveCorrupt.
+  loadWorld(id): GET /v3/worlds/:id; on 404 GET /worlds/:id; 404 on both -> null. The BODY's own `wire.version` is what decode() trusts; the namespace that answered is never written over it (a v2 body answered from any route decodes as v2/64/1). A body with version 3 must carry a valid height/genVersion, else SaveCorrupt. If the /v3 route answers with a body whose version is not 3, throw SaveCorrupt (namespace/body disagreement).
   saveWorld(save): PUT to the prefix of save.version; v3 body adds height + genVersion; the 409 re-read uses the same prefix.
   listWorlds(): GET /v3/worlds and GET /worlds, concatenated; v3 rows { version: 3, height: row.height }, v2 rows { version: 2, height: 64 }; either failing throws CloudError.
   deleteWorld(id): DELETE /v3/worlds/:id then DELETE /worlds/:id (204 and 404 both fine).
@@ -1405,6 +1452,9 @@ describe('CloudAdapter v3 routing', () => {
 	});
 
 	it('lists both namespaces', async () => {
+		// stubFetch hands responses out POSITIONALLY: the implementation must issue the
+		// /v3/worlds request FIRST (then /worlds), or the rows below swap and the
+		// assertions fail in a confusing way.
 		const a = new CloudAdapter('https://api');
 		const calls = stubFetch(
 			res(200, [{ id: ID, seed: 1, name: 'Tall', createdAt: 1, updatedAt: 3, height: 256, genVersion: 2 }]),
@@ -1451,15 +1501,21 @@ const prefixFor = (version: 2 | 3) => (version === 3 ? '/v3/worlds' : '/worlds')
 			if (res.status === 404) continue;
 			if (!res.ok) throw new CloudError(CloudAdapter.classify(res.status));
 			const wire = (await res.json()) as Wire;
+			// The body's version wins. Overriding it with the probed namespace would
+			// reinterpret a v2 body as v3 and reject it (and breaks the two existing
+			// cloud tests that stub a single 200 without a 404 first).
+			if (version === 3 && wire.version !== 3) throw new SaveCorrupt(`cloud /v3 returned a version ${String(wire.version)} body for ${id}`);
 			const gen = res.headers?.get?.('X-Generation') ?? wire.generation;
 			if (gen) { this.generations.set(id, gen); this.unsynced.delete(id); }
-			return CloudAdapter.decode({ ...wire, version });
+			return CloudAdapter.decode(wire);
 		}
 		return null;
 	}
 ```
 
-`saveWorld`: `const prefix = prefixFor(save.version);` body gets `...(save.version === 3 ? { height: save.height, genVersion: save.genVersion } : {})`; both `request(...)` calls use `${prefix}/${save.id}`. `listWorlds`: two requests, `Promise.all`, map v3 rows to `{ ...r, origin: 'cloud', version: 3, height: r.height }` and v2 rows to `{ ...r, origin: 'cloud', version: 2, height: 64 }`. `deleteWorld`: loop both prefixes; any status other than 204/404 throws.
+The two pre-existing tests "sends the generation it loaded from on a subsequent save" (cloud.test.ts:85) and "encodes chunks on the way out and decodes them on the way back" (:131) stub ONE 200 response, which the probe loop consumes as the `/v3` reply. They MUST stay green untouched: their v2 body decodes as v2 because `decode` trusts `wire.version`. If either goes red, the implementation is overriding the body's version — fix the adapter, not the tests.
+
+`saveWorld`: `const prefix = prefixFor(save.version);` body gets `...(save.version === 3 ? { height: save.height, genVersion: save.genVersion } : {})`; both `request(...)` calls use `${prefix}/${save.id}`. `listWorlds`: two requests in the order `[GET /v3/worlds, GET /worlds]` (issue the v3 request first — the test's stubbed responses are positional), `Promise.all`, map v3 rows to `{ ...r, origin: 'cloud', version: 3, height: r.height }` and v2 rows to `{ ...r, origin: 'cloud', version: 2, height: 64 }`. `deleteWorld`: loop both prefixes; any status other than 204/404 throws.
 
 - [ ] **Step 4: Full suite + commit**
 
@@ -1488,6 +1544,7 @@ Claude-Session: https://claude.ai/code/session_01WkqJrcc2U5KmXWvtU969AW"
   - cloud throws `SaveCorrupt` + local good → `markUnsynced(id)`, `needsUpload.add(id)`, return local.
   - both bad (throw or null+throw) → rethrow the local error if any, else the cloud one.
   - both good and `height` or `genVersion` differ → throw `SaveMismatch`.
+  - Chunk COUNTS are deliberately not compared: differing chunk sets are what the existing `sameContent` / ancestor / fork arbitration is for. (A cloud copy with far fewer chunks than local can trip the local shrink guard for the session; that is the guard doing its job, and it self-heals next launch.)
   - Network errors keep today's offline behaviour.
 
 - [ ] **Step 1: Write the failing tests** — append to `dual.test.ts` (uses its `MemStorage`, `save()`, `fakeCloud()`; add `import { SaveCorrupt, SaveMismatch } from './errors';`):
@@ -1534,7 +1591,7 @@ describe('DualAdapter fail-closed load', () => {
 
 - [ ] **Step 2: Run to verify they fail**
 
-Run: `npx vitest run src/persistence/dual.test.ts` → FAIL (local corrupt propagates as a raw error; mismatch forks instead of throwing).
+Run: `npx vitest run src/persistence/dual.test.ts` → FAIL (local corrupt propagates as a raw error; mismatch forks instead of throwing — the un-guarded path reaches `forkLocalCopy`, writing a 256-tall fork into the v2 local namespace and PUTting it). Note: this expectation holds only at this task's place in the sequence (after Tasks 6–8); against pre-Task-6 code the mismatch test is red for the wrong reason (`Unexpected chunk length` from `sameContent`'s encode).
 
 - [ ] **Step 3: Implement** — top of `loadWorld`:
 
@@ -1603,7 +1660,8 @@ Claude-Session: https://claude.ai/code/session_01WkqJrcc2U5KmXWvtU969AW"
   ```ts
   // schema.ts
   export const worldSaveWireSchemaV3: z.ZodType<WorldSaveWireV3>; // .strict(); version: literal(3); height: 64 | 256; genVersion: int >= 1; same chunk/player/lights/dup rules as v2
-  export type WorldSaveWireV3 = WorldSaveWire & { version: 3; height: 64 | 256; genVersion: number };
+  export type WorldSaveWireV3 = z.infer<typeof worldSaveWireSchemaV3>;   // NOT an intersection with WorldSaveWire — `version: 2 & 3` is uninhabitable
+  export type WireBase = Omit<WorldSaveWire, 'version'> & { version: 2 | 3 };  // handlers.ts; the common shape both namespaces are typed against
   // handlers.ts routes
   GET  /v3/worlds            -> rows { id, seed, name, createdAt, updatedAt, origin:'cloud', sizeBytes, generation, height, genVersion } (degraded rows: no height/genVersion, degraded: true)
   GET  /v3/worlds/:id, PUT /v3/worlds/:id, DELETE /v3/worlds/:id  -> same contract as /worlds, objects under worlds3/{id}.json, chunk length 16*height*16, custom metadata gains height + genVersion
@@ -1698,7 +1756,12 @@ export type WorldSaveWireV3 = z.infer<typeof worldSaveWireSchemaV3>;
 `handlers.ts`: introduce
 
 ```ts
-type Namespace<W extends WorldSaveWire> = {
+/** `WorldSaveWire.version` is `literal(2)`, so `WorldSaveWireV3 extends WorldSaveWire` is FALSE and a
+ *  generic bounded by WorldSaveWire does not typecheck (TS2322 on the schema, TS2339 on .height).
+ *  vitest never type-checks, so this only surfaces in `cd api && npx tsc --noEmit` — run it. */
+export type WireBase = Omit<WorldSaveWire, 'version'> & { version: 2 | 3 };
+
+type Namespace<W extends WireBase> = {
 	routePrefix: string;          // '/worlds' | '/v3/worlds'
 	objectPrefix: string;         // 'worlds/' | 'worlds3/'
 	schema: z.ZodType<W>;
@@ -1706,16 +1769,21 @@ type Namespace<W extends WorldSaveWire> = {
 	extraMetadata: (w: W) => Record<string, string>;           // {} | { height, genVersion }
 	extraSummary: (custom: Record<string, string>) => Record<string, unknown>; // {} | { height: Number(custom.height), genVersion: Number(custom.genVersion) }
 };
-function registerWorldRoutes<W extends WorldSaveWire>(app: Express, bucket: BucketLike, ns: Namespace<W>): void { /* the four handlers, using ns.* wherever 'worlds/', OBJECT_RE, worldSaveWireSchema, BLOCKS_PER_CHUNK appeared */ }
+function registerWorldRoutes<W extends WireBase>(app: Express, bucket: BucketLike, ns: Namespace<W>): void { /* the four handlers, using ns.* wherever 'worlds/', OBJECT_RE, worldSaveWireSchema, BLOCKS_PER_CHUNK appeared */ }
 ```
 
-`objectName`/`OBJECT_RE` become functions of `ns.objectPrefix` (regex: `new RegExp('^' + prefix.replace('/', '\\/') + '([0-9a-f-]{36})\\.json$')`, keeping the uuid group). `validateChunks(world, len)` takes the length. In `createApp`: `registerWorldRoutes(app, bucket, { routePrefix: '/worlds', objectPrefix: 'worlds/', schema: worldSaveWireSchema, blocksPerChunk: () => LEGACY_BLOCKS_PER_CHUNK, extraMetadata: () => ({}), extraSummary: () => ({}) })` and the v3 twin (`blocksPerChunk: (w) => 16 * w.height * 16`, metadata `{ height: String(w.height), genVersion: String(w.genVersion) }`, summary parses them back; a degraded row (unreadable metadata) omits both and keeps `degraded: true`). Health: `codec: 3`. Every existing `/worlds` test must pass unchanged — that is the "byte-for-byte" guarantee.
+`validateChunks(world: WireBase, len: number)` and the shrink guard take `WireBase`. `objectName`/`OBJECT_RE` become functions of `ns.objectPrefix`, keeping the FULL anchored uuid group exactly as today (`[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}`), not a laxer `[0-9a-f-]{36}` — the old namespace must stay byte-for-byte:
+
+```ts
+const UUID_SRC = '[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}';
+function objectRe(prefix: string): RegExp { return new RegExp(`^${prefix.replace(/\//g, '\\/')}(${UUID_SRC})\\.json$`); }
+``` In `createApp`: `registerWorldRoutes(app, bucket, { routePrefix: '/worlds', objectPrefix: 'worlds/', schema: worldSaveWireSchema, blocksPerChunk: () => LEGACY_BLOCKS_PER_CHUNK, extraMetadata: () => ({}), extraSummary: () => ({}) })` and the v3 twin (`blocksPerChunk: (w) => 16 * w.height * 16`, metadata `{ height: String(w.height), genVersion: String(w.genVersion) }`, summary parses them back; a degraded row (unreadable metadata) omits both and keeps `degraded: true`). Health: `codec: 3`. Every existing `/worlds` test must pass unchanged — that is the "byte-for-byte" guarantee.
 
 `deploy.sh`: `'"codec":2'` → `'"codec":3'` and the two messages to say 3.
 
-- [ ] **Step 4: Full suite + commit**
+- [ ] **Step 4: Full suite, API type-check and build, commit**
 
-Run: `npm test` → green (API and client).
+Run: `npm test` → green (API and client). Then `cd api && npx tsc --noEmit && npm run build` → 0 errors (`api/package.json`'s `build` is `tsc`; this is what `./deploy.sh` ships, and vitest will not catch a generic-bound error).
 
 ```bash
 git add api/src/schema.ts api/src/handlers.ts api/src/testFixtures.ts api/src/handlers.test.ts api/src/schema.test.ts deploy.sh
@@ -1731,9 +1799,11 @@ Claude-Session: https://claude.ai/code/session_01WkqJrcc2U5KmXWvtU969AW"
 
 **Files:**
 - Create: `src/game/apply-save.ts` (pure: validates and applies a `WorldSave` into a `World`)
+- Create: `src/game/continue-policy.ts` (pure: the refuse-to-continue decision, so it is unit-tested and not only browser-checked)
 - Modify: `src/main.ts:86-160` (`startGame`), `:66-85` (`showMenu(notice?)`)
-- Modify: `src/ui/menu.ts:37-43` (`show(onAction, notice?)`), `renderHome` (render the notice)
-- Test: `src/game/apply-save.test.ts` (new), `src/ui/menu-model.test.ts` untouched
+- Modify: `src/ui/menu.ts:37-43` (`show(onAction, notice?)`), `renderHome` (:81 paint — the `card.innerHTML = '<h1>Minicraft</h1>'` AFTER the list resolves; the one at :65 is the "Loading worlds…" paint and gets overwritten)
+- Modify: `src/ui/menu-model.ts` (`MenuInput.notice`, `MenuModel` carries `notice`) — there is no jsdom/happy-dom in this repo, so the notice lives in the pure model and is tested there
+- Test: `src/game/apply-save.test.ts` (new), `src/game/continue-policy.test.ts` (new), `src/ui/menu-model.test.ts` (append)
 
 **Interfaces:**
 - Consumes: `World(seed, opts)`, `World.create(seed)` (Tasks 1, 4); `findSafeSpawn(world, pos)`, `new Player(spawn, height)` (Task 5); `adapter.loadWorld` throwing `SaveCorrupt | SaveMismatch | CloudError` (Tasks 7–9); `fillChunkLights` (existing).
@@ -1741,12 +1811,78 @@ Claude-Session: https://claude.ai/code/session_01WkqJrcc2U5KmXWvtU969AW"
   ```ts
   // apply-save.ts
   export function worldFromSave(save: WorldSave): World;                      // new World(save.seed, { height: save.height, genVersion: save.genVersion, saveVersion: save.version })
-  export function applySave(world: World, save: WorldSave): void;             // validates EVERY chunk length === blocksPerChunk(world.height) before writing any; then the existing apply loop + fillChunkLights pass; throws SaveCorrupt
+  export function applySave(world: World, save: WorldSave): void;             // pre-pass validates EVERY chunk: cx/cz integers in 0..WORLD_CHUNKS_X-1 / 0..WORLD_CHUNKS_Z-1 AND blocks.length === blocksPerChunk(world.height), before writing any; then the existing apply loop + fillChunkLights pass; throws SaveCorrupt
+  // continue-policy.ts
+  export type LoadOutcome = { save: WorldSave | null } | { error: unknown };
+  export type ContinueDecision = { ok: true; save: WorldSave } | { ok: false; notice: string };
+  export function resolveContinue(outcome: LoadOutcome, worldName: string): ContinueDecision;
+  //   { save: null }            -> { ok: false, notice: `Couldn't find the save for ${worldName}. Nothing was changed.` }
+  //   { error: SaveMismatch }   -> { ok: false, notice: `${worldName} has two different copies (this device and the cloud). Ask a grown-up. Nothing was changed.` }
+  //   { error: anything else } -> { ok: false, notice: `Couldn't open ${worldName} (${err.name}). Nothing was changed.` }
+  //   { save }                  -> { ok: true, save }
+  // menu-model.ts
+  MenuInput gains `notice: string | null`; both MenuModel variants gain `notice: string | null` (passed through unchanged)
   // menu.ts
-  show(onAction: (a: MenuAction) => void, notice?: string): void;              // notice rendered as a .menu-warning div under the title, once
+  show(onAction: (a: MenuAction) => void, notice?: string): void;              // stored on the instance; renderHome passes it into the model ONCE and clears it, so the 15 s refresh re-render does not repeat it; rendered as a .menu-warning div under the title (class already exists in ui.css:213)
   ```
 
-- [ ] **Step 1: Write the failing tests** — `src/game/apply-save.test.ts`:
+- [ ] **Step 1: Write the failing tests**
+
+`src/game/continue-policy.test.ts`:
+
+```ts
+import { describe, it, expect } from 'vitest';
+import { resolveContinue } from './continue-policy';
+import { SaveCorrupt, SaveMismatch } from '../persistence/errors';
+import type { WorldSave } from '../persistence/adapter';
+
+const save = { version: 2, height: 64, genVersion: 1, id: 'x', seed: 1, name: 'Castle', createdAt: 0, updatedAt: 0, player: { x: 0, y: 0, z: 0, yaw: 0, pitch: 0, hotbar: [], selected: 0 }, chunks: [] } as WorldSave;
+
+describe('resolveContinue', () => {
+	it('continues on a loaded save', () => {
+		expect(resolveContinue({ save }, 'Castle')).toEqual({ ok: true, save });
+	});
+	it('refuses a null load (today main.ts warns and starts a fresh world, whose first autosave prunes the local copy)', () => {
+		const d = resolveContinue({ save: null }, 'Castle');
+		expect(d.ok).toBe(false);
+		if (!d.ok) expect(d.notice).toBe("Couldn't find the save for Castle. Nothing was changed.");
+	});
+	it('refuses a corrupt save and names the error', () => {
+		const d = resolveContinue({ error: new SaveCorrupt('chunk 1,0 wrong length') }, 'Castle');
+		expect(d.ok).toBe(false);
+		if (!d.ok) expect(d.notice).toBe("Couldn't open Castle (SaveCorrupt). Nothing was changed.");
+	});
+	it('gives a mismatch its own wording', () => {
+		const d = resolveContinue({ error: new SaveMismatch('64 vs 256') }, 'Castle');
+		expect(d.ok).toBe(false);
+		if (!d.ok) expect(d.notice).toBe('Castle has two different copies (this device and the cloud). Ask a grown-up. Nothing was changed.');
+	});
+	it('handles a non-Error throw', () => {
+		const d = resolveContinue({ error: 'boom' }, 'Castle');
+		expect(d.ok).toBe(false);
+		if (!d.ok) expect(d.notice).toBe("Couldn't open Castle (Error). Nothing was changed.");
+	});
+});
+```
+
+`src/ui/menu-model.test.ts` — the `base()` helper gains `notice: null`; append:
+
+```ts
+describe('menuModel notice', () => {
+	it('passes a notice through on the full menu', () => {
+		expect(menuModel(base({ schedule: { kind: 'none' }, notice: 'Nope' }))).toEqual({ mode: 'full', notice: 'Nope' });
+	});
+	it('passes a notice through on the card', () => {
+		expect(card(base({ notice: 'Nope' })).notice).toBe('Nope');
+	});
+	it('is null when there is nothing to say', () => {
+		expect(menuModel(base({ schedule: { kind: 'none' } }))).toEqual({ mode: 'full', notice: null });
+	});
+});
+```
+(Existing `toEqual({ mode: 'full' })` assertions in that file become `toEqual({ mode: 'full', notice: null })`.)
+
+`src/game/apply-save.test.ts`:
 
 ```ts
 import { describe, it, expect } from 'vitest';
@@ -1778,16 +1914,56 @@ describe('worldFromSave / applySave', () => {
 		expect(() => applySave(w, base({ version: 3, height: 256, genVersion: 2, chunks: [{ cx: 0, cz: 0, blocks: good }, { cx: 1, cz: 0, blocks: bad }] }))).toThrow(SaveCorrupt);
 		expect(w.getChunk(0, 0)).toBeUndefined(); // nothing applied
 	});
+	it('refuses a chunk whose coordinates are outside the world (a malformed key yields NaN)', () => {
+		const w = worldFromSave(base({}));
+		const blocks = new Uint16Array(16384);
+		expect(() => applySave(w, base({ chunks: [{ cx: Number.NaN, cz: 0, blocks }] }))).toThrow(SaveCorrupt);
+		expect(() => applySave(w, base({ chunks: [{ cx: 32, cz: 0, blocks }] }))).toThrow(SaveCorrupt);
+		expect(() => applySave(w, base({ chunks: [{ cx: 1.5, cz: 0, blocks }] }))).toThrow(SaveCorrupt);
+		expect(w.getChunk(0, 0)).toBeUndefined();
+	});
 });
 ```
 
-- [ ] **Step 2: Run to verify it fails** — `npx vitest run src/game/apply-save.test.ts` → FAIL (module missing).
+- [ ] **Step 2: Run to verify they fail** — `npx vitest run src/game/apply-save.test.ts src/game/continue-policy.test.ts src/ui/menu-model.test.ts` → FAIL (modules missing; `notice` not in the model).
 
-- [ ] **Step 3: Implement apply-save.ts**
+- [ ] **Step 3: Implement continue-policy.ts, menu-model.ts, apply-save.ts**
+
+`src/game/continue-policy.ts`:
+
+```ts
+import type { WorldSave } from '../persistence/adapter';
+import { SaveMismatch } from '../persistence/errors';
+
+export type LoadOutcome = { save: WorldSave | null } | { error: unknown };
+export type ContinueDecision = { ok: true; save: WorldSave } | { ok: false; notice: string };
+
+/**
+ * Whether "Continue" may start the game. Refusing is the whole point: starting
+ * on a fresh world after a failed load makes the first autosave prune the local
+ * copy to zero chunks (main.ts used to console.warn and carry on).
+ */
+export function resolveContinue(outcome: LoadOutcome, worldName: string): ContinueDecision {
+	if ('error' in outcome) {
+		const err = outcome.error;
+		if (err instanceof SaveMismatch) {
+			return { ok: false, notice: `${worldName} has two different copies (this device and the cloud). Ask a grown-up. Nothing was changed.` };
+		}
+		const name = err instanceof Error ? err.name : 'Error';
+		return { ok: false, notice: `Couldn't open ${worldName} (${name}). Nothing was changed.` };
+	}
+	if (outcome.save === null) return { ok: false, notice: `Couldn't find the save for ${worldName}. Nothing was changed.` };
+	return { ok: true, save: outcome.save };
+}
+```
+
+`src/ui/menu-model.ts`: add `notice: string | null;` to `MenuInput`; change `export type MenuModel = { mode: 'full'; notice: string | null } | CardModel;` and add `notice: string | null;` to `CardModel`; `card(...)` takes `notice` as a first argument (`function card(notice, title, line, playEnabled, world)`) and every `return card(...)` in `menuModel` passes `i.notice`; the `{ mode: 'full' }` return becomes `{ mode: 'full', notice: i.notice }`.
+
+`src/game/apply-save.ts`:
 
 ```ts
 import { World } from '../engine/world/world';
-import { blocksPerChunk } from '../engine/world/coords';
+import { blocksPerChunk, WORLD_CHUNKS_X, WORLD_CHUNKS_Z } from '../engine/world/coords';
 import { fillChunkLights } from '../engine/world/lighting';
 import type { WorldSave } from '../persistence/adapter';
 import { SaveCorrupt } from '../persistence/errors';
@@ -1800,6 +1976,11 @@ export function worldFromSave(save: WorldSave): World {
 export function applySave(world: World, save: WorldSave): void {
 	const len = blocksPerChunk(world.height);
 	for (const rc of save.chunks) {
+		// localStorage builds cx/cz with Number() from the key; a malformed key gives NaN,
+		// ensureChunk(NaN, NaN) makes a phantom chunk and the next save writes ":chunk:NaN:NaN".
+		if (!Number.isInteger(rc.cx) || !Number.isInteger(rc.cz) || rc.cx < 0 || rc.cx >= WORLD_CHUNKS_X || rc.cz < 0 || rc.cz >= WORLD_CHUNKS_Z) {
+			throw new SaveCorrupt(`chunk ${String(rc.cx)},${String(rc.cz)} is outside the world`);
+		}
 		if (rc.blocks.length !== len) throw new SaveCorrupt(`chunk ${rc.cx},${rc.cz} has ${rc.blocks.length} blocks, world height ${world.height} needs ${len}`);
 	}
 	for (const rc of save.chunks) {
@@ -1826,23 +2007,30 @@ export function applySave(world: World, save: WorldSave): void {
 		menu.hide();
 		for (const entry of [...lights.entries()]) lights.remove(entry.x, entry.y, entry.z);
 
-		let activeId = worldId;
-		if (isLegacyId(worldId)) { /* unchanged adoption block */ }
-
 		let save: WorldSave | null = null;
 		if (mode === 'continue') {
+			let outcome: LoadOutcome;
 			try {
-				save = await adapter.loadWorld(worldId);
+				outcome = { save: await adapter.loadWorld(worldId) };
 			} catch (err) {
 				console.error('loadWorld failed', err);
-				showMenu(`Couldn't open this world (${(err as Error).name}). Nothing was changed.`);
+				outcome = { error: err };
+			}
+			const decision = resolveContinue(outcome, name || 'this world');
+			if (!decision.ok) {
+				showMenu(decision.notice);
 				return;
 			}
-			if (!save) {
-				// Proceeding on a fresh world here would make the first autosave prune the local copy to nothing.
-				showMenu("Couldn't find this world's save. Nothing was changed.");
-				return;
-			}
+			save = decision.save;
+		}
+
+		// Legacy (v1) adoption runs only AFTER a successful load, so a legacy world that
+		// refuses to open really has had "nothing changed" (the adoption map key included).
+		let activeId = worldId;
+		if (isLegacyId(worldId)) {
+			const seedOfLegacy = seedFromLegacyId(worldId);
+			activeId = localAdapter.adoptedId(seedOfLegacy) ?? newWorldId();
+			localAdapter.adoptLegacy(seedOfLegacy, activeId);
 		}
 
 		const world = save ? worldFromSave(save) : World.create(seed);
@@ -1860,7 +2048,8 @@ export function applySave(world: World, save: WorldSave): void {
 				applySave(world, save);
 			} catch (err) {
 				console.error('applySave failed', err);
-				showMenu(`Couldn't open ${save.name}: its save does not fit. Nothing was changed.`);
+				const d = resolveContinue({ error: err }, save.name);
+				showMenu(d.ok ? 'Nothing was changed.' : d.notice);
 				return;
 			}
 			savedSpawn = [save.player.x, save.player.y, save.player.z];
@@ -1873,18 +2062,18 @@ export function applySave(world: World, save: WorldSave): void {
 		// ... rest of startGame unchanged
 ```
 
-Remove the old `new World(seed)` at :96, the old `new Player([256, 60, 256])` at :100, the old load/apply block (:116-147) and the `fillChunkLights` import if now unused. Import `worldFromSave, applySave` from `./game/apply-save` and `type WorldSave` from `./persistence/adapter`.
+Remove the old `new World(seed)` at :96, the old `new Player([256, 60, 256])` at :100, the old adoption block at :105-112 (it moved below the load), the old load/apply block (:116-147) and the `fillChunkLights` import if now unused. Import `worldFromSave, applySave` from `./game/apply-save`, `resolveContinue, type LoadOutcome` from `./game/continue-policy`, and `type WorldSave` from `./persistence/adapter`. The menu's `continue` action (`menu.ts:14`) is `{ type: 'continue'; id; seed }` — no name, so the notice could not say which world. Extend it to `{ type: 'continue'; id: string; seed: number; name: string }`; the full-menu list (`menu.ts:160`) passes `w.name`; the schedule card (`menu.ts:128`) passes `current.world.name`, which requires `CardModel.world` in `menu-model.ts` to become `{ id: string; seed: number; name: string } | null` with `menuModel` building it as `{ id: found.id, seed: found.seed, name: found.name }` (`resolveWorld` returns a `WorldSummary`, which has `name`). In `main.ts:81` the handler becomes `startGame(action.id, action.seed, action.name, 'continue')`. `menu-model.test.ts` has no assertion on the `world` object's exact shape (grep `world:` finds none), so no existing test changes for this.
 
-`menu.ts`: `private notice: string | null = null;` `show(onAction, notice?: string) { ...; this.notice = notice ?? null; ... }` and in `renderHome`, right after `card.innerHTML = '<h1>Minicraft</h1>'`: `if (this.notice) { const n = document.createElement('div'); n.className = 'menu-warning'; n.textContent = this.notice; card.appendChild(n); this.notice = null; }`.
+`menu.ts`: `private notice: string | null = null;` `show(onAction, notice?: string) { ...; this.notice = notice ?? null; ... }`; `private model(worlds, offline)` passes `notice: this.notice` into `menuModel(...)`; in `renderHome`, at the SECOND `card.innerHTML = '<h1>Minicraft</h1>'` (:81, after the list resolved — the :65 one is the loading paint and is overwritten): `const model = this.model(worlds, offline); this.notice = null;` then `if (model.notice) { const n = document.createElement('div'); n.className = 'menu-warning'; n.textContent = model.notice; card.appendChild(n); }` before the `if (model.mode === 'card')` branch. Clearing `this.notice` right after building the model is what stops the 15 s refresh (`renderHome` is re-called by the interval) from repeating it.
 
 - [ ] **Step 5: Verify**
 
-Run: `npm test && npm run build && npm run lint` → green. Then a 60-second manual check: `npm run dev`, open `http://localhost:5173` with DevTools Network set to block requests to the API URL (or unset `VITE_MINICRAFT_API_URL` in a local `.env.local`), click New World, confirm the player stands on grass around y≈121 (`window.__mc.player.position` in the console), fly up past y=200, dig down — the console `__mc.world.height` is 256.
+Run: `npm test && npm run build && npm run lint` → green. Then a 60-second manual check: `VITE_MINICRAFT_API_URL=http://127.0.0.1:9099 npm run dev` (process env beats `.env.local` in Vite, and 127.0.0.1:9099 has nothing listening, so every save call fails closed instead of reaching the PRODUCTION API that `.env.local` points at — never edit `.env.local`), open `http://localhost:5173`, click New World, confirm the player stands on grass around y≈121 (`window.__mc.player.position` in the console), fly up past y=200, dig down — the console `__mc.world.height` is 256.
 
 - [ ] **Step 6: Commit**
 
 ```bash
-git add src/game/apply-save.ts src/game/apply-save.test.ts src/main.ts src/ui/menu.ts
+git add src/game/apply-save.ts src/game/apply-save.test.ts src/game/continue-policy.ts src/game/continue-policy.test.ts src/main.ts src/ui/menu.ts src/ui/menu-model.ts src/ui/menu-model.test.ts
 git commit -m "feat(main): tall new worlds; continue fails closed with a menu notice
 
 Co-Authored-By: Claude Fable 5.1 <noreply@anthropic.com>
@@ -1902,7 +2091,7 @@ Claude-Session: https://claude.ai/code/session_01WkqJrcc2U5KmXWvtU969AW"
 
 - [ ] **Step 1: Edit**
 
-- `docs/lighting.md:11`: "Each `Chunk` carries a `lights: Uint16Array` alongside its `blocks: Uint16Array`. Both are 16 × H × 16 entries where H is the world's height (64 for every world saved before v3, 256 for new worlds), indexed by the same `indexOf(x, y, z)`…". `:46`: "walk `y` from `height - 1` down". `:147`: replace the `Array.shift()` trade-off bullet with "**BFS queues use a head cursor** (not `Array.shift()`, whose V8 fast path dies past ~8k entries; a 256-high air column seeds 32k). Measured 492 ms → 2.4 ms per chunk." Add a bullet under the shadows section: "Voxels above the highest opaque block of the 3×3 chunk neighbourhood skip the sun raycast (`maxOpaqueY`, recomputed per call)."
+- `docs/lighting.md:11`: "Each `Chunk` carries a `lights: Uint16Array` alongside its `blocks: Uint16Array`. Both are 16 × H × 16 entries where H is the world's height (64 for every world saved before v3, 256 for new worlds), indexed by the same `indexOf(x, y, z)`…". `:46`: "walk `y` from `height - 1` down". `:147`: replace the `Array.shift()` trade-off bullet with "**BFS queues use a head cursor** (not `Array.shift()`, whose V8 fast path dies past ~8k entries; a 256-high air column seeds 32k). Measured 492 ms → 2.4 ms per chunk." Add a bullet under the shadows section: "Voxels above the highest opaque block of the 3×3 chunk neighbourhood skip the sun raycast (`maxOpaqueY`, recomputed from `blocks` on every call so it can never go stale; the 9-chunk top-down scan costs ~12 ms per chunk on a 256 world, ~1 s over the initial 81-chunk view, and is the price of not caching)."
 - `docs/persistence.md`: after `### v2 (current)` add:
 
   ```
@@ -1917,7 +2106,12 @@ Claude-Session: https://claude.ai/code/session_01WkqJrcc2U5KmXWvtU969AW"
   migrates. Load fails closed: a v3 meta without a valid height, any chunk that
   does not decode to the record's length, or local/cloud copies that disagree on
   height, refuse to open (the menu says so; nothing is written). localStorage now
-  carries the same shrink guard as the API.
+  carries the same shrink guard as the API: a save with fewer than half the stored
+  chunks (when more than 4 are stored) writes what it has, prunes nothing, and
+  reports "Saved on this device: error" — and keeps reporting it for the rest of
+  that session, because the snapshot never grows back until reload. It is not
+  data loss: on the next launch every surviving chunk loads and is marked
+  modified again, and saves go back to normal.
   ```
   and in `## API`: the `/v3` routes, `height`/`genVersion` custom metadata, `/health` → `codec 3`.
 - `docs/specs.md:53`: "**16 × H × 16** blocks, H = 64 (worlds saved before v3) or 256 (new worlds; surface ≈ 120, bedrock at 0). `Uint16Array(16·H·16)` per chunk." `:98`: "`Uint16Array`".
@@ -1942,13 +2136,13 @@ Claude-Session: https://claude.ai/code/session_01WkqJrcc2U5KmXWvtU969AW"
 **Interfaces:**
 - Consumes: the dev server (`npm run dev` → `http://localhost:5173`), `window.__mc = { world, player, loop }` (DEV only), the localStorage key formats from Task 7, the API contract from Task 10.
 
-- [ ] **Step 1: Start the dev server and intercept the API.** Run `npm run dev` in the background. In the browser session, register a route for `**/worlds*` and `**/v3/worlds*` on the API host (the value of `VITE_MINICRAFT_API_URL` in `.env*`) that (a) records every PUT body and (b) responds from an in-memory map: GET list → `[]` (or the served world below), GET id → 404 unless served, PUT → `200 { updatedAt, generation: "1" }`, DELETE → 204. **No request may reach the real API** — assert the recorded request log contains only intercepted URLs at the end.
+- [ ] **Step 1: Point the dev server at a dead host FIRST, then stub it.** `.env.local` holds `VITE_MINICRAFT_API_URL=https://minicraft-api-uv67ojrpvq-uc.a.run.app` — PRODUCTION. Intercepting by glob and asserting "nothing reached prod" only at the end puts the safety net after the risk: one glob typo and a real PUT lands in `gs://minicraft-worlds` under a fresh uuid and shows up in the kid's menu. So: start the server as `VITE_MINICRAFT_API_URL=http://127.0.0.1:9099 npm run dev` in the background (a process env var beats `.env.local` in Vite; never edit `.env.local`). Nothing listens on 9099, so a missed route fails closed. In the browser session register a Playwright route for `http://127.0.0.1:9099/**` that (a) records every request (method, url, PUT body) and (b) responds from an in-memory map: GET `/v3/worlds` and `/worlds` → `[]` (or the served world below), GET id → 404 unless served, PUT → `200 { updatedAt, generation: "1" }`, DELETE → 204. Only THEN open the page. Belt and braces: at the end assert the recorded log contains only `127.0.0.1:9099` URLs and that `page.evaluate(() => performance.getEntriesByType('resource').map(e => e.name))` contains no `run.app` URL.
 
 - [ ] **Step 2: Tall world round-trip.** Navigate to `http://localhost:5173/`, click New World, Create. Assert via `page.evaluate`:
   - `__mc.world.height === 256`, `__mc.world.genVersion === 2`, `__mc.world.saveVersion === 3`
   - `__mc.player.position[1]` between 115 and 132
   - fly: `__mc.player.position = [256.5, 250, 256.5]` then `__mc.world.setBlock(256, 250, 256, 3); __mc.loop.markChunkDirtyAround(256, 256); __mc.loop.onWorldMutated?.()` → `__mc.world.getBlock(256, 250, 256) === 3`
-  - bedrock: `__mc.world.getBlock(256, 0, 256) === 33` and `__mc.world.setBlock(256, 1, 256, 3)` → `getBlock === 3`
+  - bedrock: `__mc.world.getBlock(256, 0, 256) === 33` (bedrock's catalog id; prefer looking it up by name if the console has the catalog) and `__mc.world.setBlock(256, 1, 256, 3)` → `getBlock === 3`
   - wait > 6 s for autosave; assert a PUT to `/v3/worlds/<id>` was recorded with `height: 256`, `genVersion: 2`, and that `localStorage` holds `minicraft:v3:world:<id>:meta` and NO `minicraft:v2:world:<id>:*` keys.
   - reload, click the world in the list, assert `getBlock(256, 250, 256) === 3` and `getBlock(256, 1, 256) === 3`.
 
@@ -1960,9 +2154,28 @@ Claude-Session: https://claude.ai/code/session_01WkqJrcc2U5KmXWvtU969AW"
 
 ---
 
+## Gate 2 changes (2026-09-20)
+
+Both reviewers applied the plan's own edits to a scratch tree and ran vitest. What changed as a result:
+
+- Task 1 now also fixes `src/persistence/codec.test.ts:4` (missed import → silent `undefined` → 6 red), gives `generateChunk` an ignored third argument, derives `World.genVersion` from height, and adds explicit `{ height: 64 }` to the literal-63 tests. `npx tsc --noEmit` is part of its exit criterion.
+- Task 2's roof test replaced by the variant that actually goes red on a stale `y = 63` re-seed; perf threshold 50 → 250 ms (measured 1800 ms red / 2.4 ms green; headroom for a loaded box).
+- Task 3 now depends on Task 2 (its fixture times out on the shift() queue); perf test uses a floor-only fixture with a 150 ms threshold (the plate fixture measured ~100 ms on the *correct* code).
+- Task 4: `World.create` is the one place height/genVersion are cross-checked; constructor never validates.
+- Task 5: liquid test ticks until the water lands (≤ 2000); `sanitizeSpawn` call is at :224.
+- Task 6: line refs corrected (:96, :236-237, cloud :84).
+- Task 7: `payloadOf` defined; corrupt-chunk test is a LENGTH mismatch (a garbage payload already throws today); invalid-height v3 rows are listed, not hidden; shrink-guard wedge documented.
+- Task 8: the body's `version` wins over the probed namespace (the override broke two existing cloud tests); positional stub order stated.
+- Task 9: chunk counts are not compared; red-for-the-right-reason only after Task 6.
+- Task 10: `WireBase` generic bound (the `WorldSaveWire`-bounded generic does not compile — `version: 2` vs `3`); full uuid pattern kept; `cd api && npx tsc --noEmit && npm run build` in the exit criterion.
+- Task 11: `resolveContinue` is a pure, unit-tested policy; the menu notice rides the pure `menuModel` (no jsdom in the repo); legacy adoption moved after a successful load; `applySave` validates cx/cz; the continue action carries the world name.
+- Task 13: the dev server is pointed at an unroutable host on the command line BEFORE any stub, so a missed route fails closed instead of reaching production.
+- Execution note added: parallel tasks need separate worktrees because every task's gate is the full suite.
+
 ## Self-review (done while writing)
 
 - **Spec coverage.** §2 sites → Task 1 (every file:line listed), shadows early-out → Task 3, BFS cursor → Task 2, player fallback :93 → Task 5, tnt → Tasks 1/4, raycast not edited (Task 5 only tests it). §3 → Task 4 (v1 verbatim + dispatcher default 1, v2, profile, bedrock unbreakable incl. TNT). §4 → Task 7 (records, keys, probe order, codec length, fail-closed local, shrink guard), Task 8 (cloud probe/list/metadata decode), Task 9 (dual fallback + mismatch), Task 11 (World after load, apply length check, refuse-to-continue). §5 → Task 10 (+ deploy.sh, parity in Task 6). §6 → Task 11. §7.1–7.10 → Tasks 4, 4, 6, 7, 7, 8, 9, 11, 10, 2/3/5 respectively; §7.11 → Task 13. §8 rollout is operational (API deploy then site), not a code task — the parent runs `./deploy.sh --verify` after Task 10 lands and before the site goes up.
 - **Placeholders.** None: every step has code or an exact edit. The only "recorded later" value is `EXPECTED_HASH_V2`, by design (spec §7.2), with the recording step spelled out.
 - **Type consistency.** `blocksPerChunk(height)`, `isWorldHeight`, `WorldHeight`, `LEGACY_HEIGHT` (Task 1) are used with those names in Tasks 6–11. `World(seed, { height, genVersion, saveVersion })` and `World.create(seed)` (Tasks 1, 4) match Tasks 5, 11. `SaveCorrupt`/`SaveMismatch` (Task 7) match Tasks 8, 9, 11. `encodeChunk(blocks, len)` / `decodeChunk(str, len)` (Task 6) match Tasks 7, 8, 10. `skyCeilingY`, `sanitizeSpawn(pos, height)`, `Player(spawn, height)` (Task 5) match Task 11. `worldSaveWireSchemaV3`, `WorldSaveWireV3`, `validWireV3` (Task 10) are internal to the API.
-- **Dependency correction found in review:** Task 5's player tests call `World.create`, so Task 5 depends on Tasks 1 **and 4** (table updated).
+- **Dependency correction found in review:** Task 5's player tests call `World.create`, so Task 5 depends on Tasks 1 **and 4** (table updated). Gate 2 added: Task 3 depends on Task 2.
+- **Type consistency after gate 2:** `World(seed, { height?, genVersion?, saveVersion? })` with genVersion derived from height (Task 1) is what Tasks 2/3/5 fixtures rely on; `generateChunk(chunk, seed, genVersion = 1)` has the same signature in Task 1 (ignored) and Task 4 (dispatch); `WireBase` (Task 10) is only used inside `api/src`; `resolveContinue(outcome, worldName)` / `LoadOutcome` / `ContinueDecision` (Task 11) match their use in `startGame`; `MenuAction.continue.name`, `CardModel.world.name`, `MenuInput.notice`, `MenuModel.notice` are defined and consumed only in Task 11; `payloadOf(c: EncodedChunk)` (Task 7) uses the existing `EncodedChunk` type from `adapter.ts`.

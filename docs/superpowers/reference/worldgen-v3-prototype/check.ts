@@ -38,6 +38,8 @@ for (const seed of seeds) {
 	const entCWater = new Uint8Array(512 * 512); for (let z = 0; z < 512; z++) for (let x = 0; x < 512; x++) entCWater[z * 512 + x] = P.waterNear(seed, x, z) ? 1 : 0;
 	const entC = new Uint8Array(512 * 512); for (let z = 0; z < 512; z++) for (let x = 0; x < 512; x++) entC[z * 512 + x] = cols[z * 512 + x].ent > P.ENT_T && entCWater[z * 512 + x] === 0 ? 1 : 0;
 	const flat9 = new Uint8Array(512 * 512); for (let z = 1; z < 511; z++) for (let x = 1; x < 511; x++) { let ok = 1; for (let dz = -1; dz <= 1; dz++) for (let dx = -1; dx <= 1; dx++) if (!flatC[(z + dz) * 512 + x + dx]) ok = 0; flat9[z * 512 + x] = ok; }
+	// pit depth: land columns not in a ravine channel: h − terrain top (terrain top = highest non-air/liquid/ice/log/leaf voxel)
+	{ let mx = 0, over24 = 0, over30 = 0; for (let z = 0; z < 512; z++) for (let x = 0; x < 512; x++) { const c = cols[z * 512 + x]; if (c.h <= SEA) continue; if (c.ravW > 0 && P.inRavineChannel(seed, x, z)) continue; const d = c.h - terr[z * 512 + x]; if (d > mx) mx = d; if (d > 24) over24++; if (d > 30) over30++; } push('pit.maxDepth', mx); push('pit.over24', over24); ex('pit.over30', over30); }
 	// T3 bedrock
 	{ let bad = 0, high = 0; for (let z = 0; z < 512; z++) for (let x = 0; x < 512; x++) { if (get(x, 0, z) !== B.bedrock) bad++; for (let y = 1; y < 256; y++) if (get(x, y, z) === B.bedrock) bad++; for (let y = 253; y < 256; y++) if (get(x, y, z) !== 0) high++; } ex('T3.bedrockBad', bad); ex('T3.blocksAbove252', high); }
 	// T4 heights

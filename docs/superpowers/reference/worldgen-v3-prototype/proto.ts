@@ -6,7 +6,7 @@ export const SEA = 120;
 const MUT = process.env.MUT ?? ''; // mutants for §11 evidence only
 const H = 256, CX = 16, CZ = 16, PAD = 4, PAD_HI = process.env.MUT === 'pad4' ? 4 : 5, PW = CX + PAD + PAD_HI; // pad −4/+5 (PW 25): every column at local −1..16 has its 4 lattice-cell corners (x&~3 .. +4) inside the grid
 const LAT = 4;
-export const DEEPSLATE_Y = 48, DEEP_BLEND = 4, LAVA_Y = 10, SURF_MARGIN = 6, ENT_T = 0.1, RAVINE_FLOOR = 4;
+export const DEEPSLATE_Y = 48, DEEP_BLEND = 4, LAVA_Y = 10, SURF_MARGIN = 6, ENT_T = 0.1, RAVINE_FLOOR = 4, PIT_CAP = 24;
 
 export const B = {
 	air: 0, grass: 1, dirt: 2, stone: 3, cobble: 4, sand: 5, water: 17, lava: 18, bedrock: 20, deepslate: 21,
@@ -292,6 +292,14 @@ export function generateChunkV3(blocks: Uint16Array, seed: number, cx: number, c
 		}
 	}
 	(globalThis as any).LAST_KIND = kind; (globalThis as any).LAST_CEIL = caveCeil; (globalThis as any).LAST_PW = PW; (globalThis as any).LAST_PAD = PAD;
+	// 2026-09-21 implementation feedback (§6 rule 5): open-sky pit cap. In every column that is not a ravine-carving column,
+	// cave-air that is open to the sky (only air above it up to yTop) and lies at y ≤ h − PIT_CAP becomes solid (so h − terrain top ≤ 24). Roofed cave-air is untouched,
+	// so sloping mouths keep their continuation; only vertical shafts open to the sky are plugged at depth 24.
+	if (MUT !== 'nopitcap') for (let lz = 0; lz < CZ; lz++) for (let lx = 0; lx < CX; lx++) {
+		const c = col(lx, lz); const pi = (lz + PAD) * PW + lx + PAD; if (c.ravW > 0 && wn[pi] === 0) continue;
+		const base = lz * 16 + lx; const floor = c.h - PIT_CAP;
+		for (let y = yTop - 1; y >= 1; y--) { const k = kind[y * 256 + base]; if (k === 1 || k === 3) break; if (k === 2 && y <= floor) kind[y * 256 + base] = 1; }
+	}
 	T.fill += performance.now() - tA; tA = performance.now();
 	// stage 4: surface (precedence: underwater > beach/bank > snow line > stony peak > biome)
 	for (let lz = 0; lz < CZ; lz++) for (let lx = 0; lx < CX; lx++) {

@@ -595,3 +595,77 @@ describe('liquids at height 256', () => {
 		expect(w.getBlock(260, 121, 260)).toBe(stone);
 	});
 });
+
+describe('world edge and arrival seeding (perf gate-1 follow-up)', () => {
+	it('water against the world edge treats outside the map as a wall: no writes, frontier decays', () => {
+		const w = new World(1);
+		const c = w.ensureChunk(31, 16); // east edge: world x 496..511
+		c.blocks.fill(AIR);
+		c.liquidFrontier.clear();
+		for (let x = 500; x <= 511; x++) for (let z = 260; z <= 265; z++) {
+			w.setBlock(x, 29, z, stone);
+			w.setBlock(x, 30, z, water);
+		}
+		// wall the other three sides so only the map edge is open
+		for (let z = 259; z <= 266; z++) { w.setBlock(499, 30, z, stone); }
+		for (let x = 499; x <= 511; x++) { w.setBlock(x, 30, 259, stone); w.setBlock(x, 30, 266, stone); }
+		for (let x = 500; x <= 511; x++) for (let z = 260; z <= 265; z++) c.liquidFrontier.add((30 * 256) + ((z & 15) * 16) + (x & 15));
+		let writes = 0;
+		const s = new LiquidScheduler(w, () => {}, () => { writes++; });
+		for (let k = 0; k < 4; k++) s.tick(0.5);
+		expect(writes).toBe(0);
+		expect(c.liquidFrontier.size).toBe(0);
+	});
+
+	it('seedArrival adds only liquid cells that can act this tick, and one tick then matches full seeding', () => {
+		const build = () => {
+			const w = freshWorldWide();
+			floor(w, 256, 271, 256, 271);
+			// enclosed pool (stone walls, no air contact): rests
+			for (let x = 258; x <= 262; x++) for (let z = 258; z <= 262; z++) w.setBlock(x, 30, z, water);
+			for (let x = 257; x <= 263; x++) { w.setBlock(x, 30, 257, stone); w.setBlock(x, 30, 263, stone); w.setBlock(x, 31, 257, stone); w.setBlock(x, 31, 263, stone); }
+			for (let z = 257; z <= 263; z++) { w.setBlock(257, 30, z, stone); w.setBlock(263, 30, z, stone); }
+			for (let x = 258; x <= 262; x++) for (let z = 258; z <= 262; z++) w.setBlock(x, 31, z, stone); // lid
+			// open puddle next to air: can spread
+			w.setBlock(266, 30, 266, water);
+			// water touching lava under a lid: reacts
+			w.setBlock(268, 30, 260, water); w.setBlock(269, 30, 260, LAVA);
+			for (const [x, z] of [[267, 260], [270, 260], [268, 259], [268, 261], [269, 259], [269, 261]] as const) w.setBlock(x, 30, z, stone);
+			w.setBlock(268, 31, 260, stone); w.setBlock(269, 31, 260, stone);
+			// water next to a sponge
+			w.setBlock(260, 30, 268, water); w.setBlock(261, 30, 268, sponge);
+			for (const [x, z] of [[259, 268], [260, 267], [260, 269]] as const) w.setBlock(x, 30, z, stone);
+			w.setBlock(260, 31, 268, stone);
+			const c = w.getChunk(16, 16)!;
+			c.liquidFrontier.clear();
+			return { w, c };
+		};
+		const snap = (w: World) => Array.from(w.getChunk(16, 16)!.blocks);
+		// reference: today's full seeding (every liquid voxel)
+		const A = build();
+		for (let i = 0; i < A.c.blocks.length; i++) if (A.c.blocks[i] === water || A.c.blocks[i] === LAVA) A.c.liquidFrontier.add(i);
+		const sa = new LiquidScheduler(A.w, () => {});
+		// candidate: seedArrival
+		const B = build();
+		const sb = new LiquidScheduler(B.w, () => {});
+		sb.seedArrival(B.c);
+		// the 25-cell enclosed pool is not seeded; the puddle, the water/lava pair and the sponge-side water are
+		expect(B.c.liquidFrontier.size).toBe(4);
+		sa.tick(0.5); sb.tick(0.5);
+		expect(snap(B.w)).toEqual(snap(A.w));
+		expect([...B.c.liquidFrontier].sort()).toEqual([...A.c.liquidFrontier].sort());
+	});
+
+	it('a chunk holding flow cells is seeded in full (drain needs its sources)', () => {
+		const w = freshWorld();
+		const c = w.getChunk(16, 16)!;
+		floor(w, 256, 271, 256, 271);
+		w.setBlock(260, 30, 260, water);
+		w.setBlockFlow(261, 30, 260, water, 1);
+		for (const [x, z] of [[259, 260], [262, 260], [260, 259], [260, 261], [261, 259], [261, 261]] as const) w.setBlock(x, 30, z, stone);
+		w.setBlock(260, 31, 260, stone); w.setBlock(261, 31, 260, stone);
+		c.liquidFrontier.clear();
+		new LiquidScheduler(w, () => {}).seedArrival(c);
+		expect(c.liquidFrontier.size).toBe(2);
+	});
+});

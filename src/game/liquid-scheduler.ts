@@ -33,7 +33,7 @@
 
 import type { World } from '../engine/world/world';
 import type { Chunk } from '../engine/world/chunk';
-import { AIR, OBSIDIAN, WATER, LAVA, SPONGE, WET_SPONGE, isLiquid } from '../data/blocks.data';
+import { AIR, OBSIDIAN, WATER, LAVA, SPONGE, WET_SPONGE, isLiquid, BLOCK_BY_NAME } from '../data/blocks.data';
 import { CHUNK_SIZE_X, CHUNK_SIZE_Z, worldToChunk } from '../engine/world/coords';
 
 /**
@@ -44,6 +44,8 @@ import { CHUNK_SIZE_X, CHUNK_SIZE_Z, worldToChunk } from '../engine/world/coords
 export const UNKNOWN_BLOCK = -1;
 
 const TICK_INTERVAL = 0.5;
+/** What a read outside the map returns: the world has a hard wall there, so liquid never "flows out" (it used to read AIR and re-attempted ~5.5k phantom writes every tick at the edge ring). */
+const OUT_OF_WORLD = BLOCK_BY_NAME['bedrock'].id;
 const WATER_BUDGET = 4;
 const LAVA_BUDGET = 2;
 const SPONGE_RADIUS = 7;   // BFS hops through liquid from the sponge cell
@@ -77,7 +79,8 @@ export class LiquidScheduler {
 
 	/** Every block read of a tick goes through here: inside the ring = World.getBlock; outside = loaded chunks only, else UNKNOWN_BLOCK. */
 	private read(x: number, y: number, z: number): number {
-		if (this.withinData(x, z) || !this.world.inBounds(x, y, z)) return this.world.getBlock(x, y, z);
+		if (!this.world.inBounds(x, y, z)) return OUT_OF_WORLD;
+		if (this.withinData(x, z)) return this.world.getBlock(x, y, z);
 		const { cx, cz, lx, lz } = worldToChunk(x, z);
 		const c = this.world.getChunk(cx, cz);
 		if (import.meta.env?.DEV && c === undefined && this.world.chunkInWorld(cx, cz)) this.outsideRingMisses++;
@@ -86,6 +89,42 @@ export class LiquidScheduler {
 
 	/** DEV counter: reads that landed on a dropped chunk outside the ring (answered UNKNOWN_BLOCK, never regenerated). */
 	outsideRingMisses = 0;
+
+	/**
+	 * Seed a newly arrived (generated or loaded) chunk's liquid into the frontier. Only cells that can
+	 * act in the next tick are added: a cell touching air (or an unknown chunk), a sponge, or the other
+	 * liquid (reaction). Every other cell would pass through sponge/drain/spread/reaction untouched and be
+	 * removed by decayFrontier at the end of that tick, so skipping it changes nothing but the cost (an
+	 * ocean chunk used to add ~5k cells, and the first tick after a flight scanned up to 106k).
+	 * A chunk holding any flow cell is seeded in full: the drain step needs its sources in the frontier.
+	 */
+	seedArrival(c: Chunk): void {
+		const H = c.height;
+		const b = c.blocks;
+		const full = c.fluidMeta.size > 0;
+		const baseX = c.cx * CHUNK_SIZE_X, baseZ = c.cz * CHUNK_SIZE_Z;
+		const at = (lx: number, y: number, lz: number): number => {
+			if (y < 0 || y >= H) return this.read(baseX + lx, y, baseZ + lz);
+			if (lx < 0 || lx > 15 || lz < 0 || lz > 15) return this.read(baseX + lx, y, baseZ + lz);
+			return b[y * 256 + lz * 16 + lx];
+		};
+		for (let y = 0; y < H; y++) for (let lz = 0; lz < 16; lz++) for (let lx = 0; lx < 16; lx++) {
+			const idx = y * 256 + lz * 16 + lx;
+			const here = b[idx];
+			if (!isLiquid(here)) continue;
+			if (full) { c.liquidFrontier.add(idx); continue; }
+			const other = here === WATER ? LAVA : WATER;
+			const n = [at(lx + 1, y, lz), at(lx - 1, y, lz), at(lx, y - 1, lz), at(lx, y, lz + 1), at(lx, y, lz - 1), at(lx, y + 1, lz)];
+			let act = false;
+			for (let k = 0; k < 6; k++) {
+				const v = n[k];
+				// air/unknown only counts on the five sides decayFrontier checks (liquid never flows up)
+				if (k < 5 && (v === AIR || v === UNKNOWN_BLOCK)) { act = true; break; }
+				if (v === SPONGE || v === other) { act = true; break; }
+			}
+			if (act) c.liquidFrontier.add(idx);
+		}
+	}
 
 	tick(dt: number): boolean {
 		this.accumulator += dt;
@@ -494,6 +533,7 @@ export class LiquidScheduler {
 		for (const [k, w] of map) {
 			const [xs, ys, zs] = k.split(',');
 			const x = Number(xs), y = Number(ys), z = Number(zs);
+			if (!this.world.inBounds(x, y, z)) continue; // defence in depth: nothing lives outside the map
 			const current = this.read(x, y, z);
 			if (current === w.id && !isLiquid(w.id)) continue;
 			if (w.flowDistance === null) {

@@ -7,7 +7,7 @@ import { meshChunk, type ChunkMeshResult, type UvFn } from '../engine/world/mesh
 import { computeChunkShadows, ensureShadowNeighbourhood, hashSunlit } from '../engine/world/shadows';
 import type { ChunkJobs } from '../engine/world/chunk-jobs';
 import { raycastVoxel, type VoxelHit } from '../engine/input/raycast';
-import { AIR, BLOCKS, BLOCK_BY_NAME, isSolid, isLiquid, type BlockId } from '../data/blocks.data';
+import { AIR, BLOCKS, BLOCK_BY_NAME, isSolid, type BlockId } from '../data/blocks.data';
 import type { ParticleSystem } from '../engine/render/particles';
 import type { PrimedOverlay } from '../engine/render/primed-overlay';
 import type { LightRegistry } from '../engine/render/light-registry';
@@ -58,6 +58,8 @@ export class GameLoop {
 	private editLane = new Set<number>();
 	/** Chunks dirtied only by shadow invalidation: re-meshed only when their sunlitHash changed (spec §3.E). */
 	private shadowOnly = new Set<number>();
+	/** Chunk objects whose liquid was already seeded (re-entry creates a new object, so it is seeded again). */
+	private liquidSeeded = new WeakSet<Chunk>();
 	private mountedChunks = new Set<number>();
 	/** Posted to the worker, reply not yet in. Skipped by loadNearbyChunks and the stream order (spec §3.D). */
 	private inFlightIndex = new Set<number>();
@@ -523,20 +525,15 @@ export class GameLoop {
 		const existed = !!this.world.getChunk(cx, cz);
 		const c = this.world.ensureChunk(cx, cz);
 		if (!existed) this.onChunkArrived(c);
-		// Ensure gen-placed liquids are in the frontier for at least one tick's check (dry chunks skip the 65 k scan: spec §3.E hasLiquid).
-		if (c.hasLiquid && c.liquidFrontier.size === 0) {
-			for (let y = 0; y < c.height; y++) {
-				for (let lz = 0; lz < 16; lz++) {
-					for (let lx = 0; lx < 16; lx++) {
-						const idx = y * 16 * 16 + lz * 16 + lx;
-						if (isLiquid(c.blocks[idx])) c.liquidFrontier.add(idx);
-					}
-				}
-			}
-		}
 		// §3.C.1 precondition: the full 3×3 exists (generated + lit) before a chunk is shadowed;
 		// any neighbour created here is an arrival and re-dirties ITS 3×3 (live for edits / re-entry).
 		this.ensureNeighbourhood(c);
+		// Seed liquid once per chunk object, after the 3×3 exists (border cells read their neighbours; reading
+		// before would generate them without arrival bookkeeping). Only cells that can act are added (seedArrival).
+		if (c.hasLiquid && !this.liquidSeeded.has(c)) {
+			this.liquidSeeded.add(c);
+			if (c.liquidFrontier.size === 0) this.scheduler.seedArrival(c);
+		}
 		return c;
 	}
 

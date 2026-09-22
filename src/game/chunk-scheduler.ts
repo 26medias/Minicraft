@@ -1,10 +1,12 @@
 import { WORLD_CHUNKS_Z } from '../engine/world/coords';
 export { MESH_RADIUS, UNMOUNT_RADIUS, DATA_RADIUS } from '../engine/world/radii';
 
-export const BUDGET_STILL_MS = 30;
+// 20, not the spec's first 30: 30 ms of chunk work + ~15 ms of rendering left no headroom under the 50 ms
+// task line, so a first texture upload or one slow chunk tipped the initial load over (bench attribution).
+export const BUDGET_STILL_MS = 20;
 export const BUDGET_MOVING_MS = 6;
 
-/** 30 ms while the initial ring is loading or the player is still; 6 ms while moving (spec §3.B). */
+/** 20 ms while the initial ring is loading or the player is still; 6 ms while moving (spec §3.B). */
 export function budgetFor(moving: boolean, initialLoad: boolean): number {
 	return initialLoad || !moving ? BUDGET_STILL_MS : BUDGET_MOVING_MS;
 }

@@ -94,7 +94,11 @@ export class Renderer {
 		this.gl.compile(this.scene, this.camera);
 		for (const p of probes) this.chunkGroup.remove(p);
 		geo.dispose();
+		// First GPU upload of the atlas (measured 9 ms texSubImage2D + up to 16 ms getExtension on the first
+		// frame that drew a chunk) happens now instead of mid-load.
+		this.gl.initTexture(this.material instanceof THREE.MeshBasicMaterial && this.material.map ? this.material.map : new THREE.Texture());
 	}
+
 
 	onTick(fn: (dt: number) => void) {
 		this.tickFn = fn;

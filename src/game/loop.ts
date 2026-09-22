@@ -52,6 +52,9 @@ export type BlockBrokenEvent = {
 	blockId: BlockId;
 };
 
+/** Time a new chunk needs (generate + light, measured ≈ 7.5 ms median on v3): don't start one with less left. */
+const CHUNK_GEN_RESERVE_MS = 10;
+
 export class GameLoop {
 	/** All keyed by the flat chunk index (coords.chunkIndex); only ever filled through chunkIndexOrNeg. */
 	private streamSet = new Set<number>();
@@ -508,11 +511,12 @@ export class GameLoop {
 		for (const [ox, oz] of reach) for (let dx = -1; dx <= 1; dx++) for (let dz = -1; dz <= 1; dz++) {
 			const x = cx + ox + dx, z = cz + oz + dz;
 			if (!this.world.chunkInWorld(x, z) || this.world.getChunk(x, z)) continue;
-			if (made > 0 && performance.now() >= this.frameDeadline) return false;
+			// Start a chunk only with a chunk's worth of time left (one took 27 ms from 1.8 ms before the deadline).
+			if (made > 0 && performance.now() > this.frameDeadline - CHUNK_GEN_RESERVE_MS) return false;
 			this.onChunkArrived(this.world.ensureChunk(x, z));
 			made++;
 		}
-		return !(made > 0 && performance.now() >= this.frameDeadline);
+		return !(made > 0 && performance.now() > this.frameDeadline - CHUNK_GEN_RESERVE_MS);
 	}
 
 	private ensureNeighbourhood(c: Chunk): void {

@@ -21,7 +21,7 @@ describe('chunk scheduler (spec §6.2)', () => {
 	});
 
 	it('budget is honoured across two budgets × two costs and a non-uniform sequence (mutants: ignore the budget; precompute floor(budget/cost))', () => {
-		for (const [moving, budget] of [[true, 6], [false, 30]] as [boolean, number][]) {
+		for (const [moving, budget] of [[true, 6], [false, 20]] as [boolean, number][]) {
 			for (const cost of [2, 5]) {
 				const c = clock([cost]);
 				const stream = new Set(Array.from({ length: 40 }, (_, k) => I(10 + (k % 6), 10 + Math.floor(k / 6))));
@@ -30,9 +30,9 @@ describe('chunk scheduler (spec §6.2)', () => {
 				expect(r.mounts.length).toBe(Math.max(1, Math.ceil(budget / cost)));
 			}
 		}
-		const c = clock([2, 2, 10, 2]); // 2+2=4 < 6 → third mount runs (10) → 14 ≥ 6 → stop: 3 mounts, not floor(6/2)=3 by luck — so also check the 30 budget: 2,2,10,2,2,2,10 → 30 → stop at 7
+		const c = clock([2, 2, 10, 2]); // 2+2=4 < 6 → third mount runs (10) → 14 ≥ 6 → stop: 3 mounts, not floor(6/2)=3 by luck — so also check the 20 budget: 2,2,10,2,2,2 → 20 → stop at 6
 		const r = planFrame(input({ stream: new Set(Array.from({ length: 20 }, (_, k) => I(10, 10 + k))), moving: false }), c.now, c.mount);
-		expect(r.mounts.length).toBe(7);
+		expect(r.mounts.length).toBe(6);
 	});
 
 	it('mounts at least one chunk when the clock is already past budget (mutant: while (elapsed < budget))', () => {
@@ -54,11 +54,11 @@ describe('chunk scheduler (spec §6.2)', () => {
 		expect(r.mounts).toEqual([]);
 	});
 
-	it('adaptive budget: 30 ms while still or loading, 6 ms while moving (mutant: constant 6 → initial-load fixture needs > 20 frames)', () => {
-		expect(budgetFor(true, false)).toBe(6); expect(budgetFor(false, false)).toBe(30); expect(budgetFor(true, true)).toBe(30);
+	it('adaptive budget: 20 ms while still or loading, 6 ms while moving (mutant: constant 6 → initial-load fixture needs > 20 frames)', () => {
+		expect(budgetFor(true, false)).toBe(6); expect(budgetFor(false, false)).toBe(20); expect(budgetFor(true, true)).toBe(20);
 		const stream = new Set(Array.from({ length: 121 }, (_, k) => I(k % 11, Math.floor(k / 11))));
 		let frames = 0;
 		while (stream.size > 0 && frames < 200) { const c = clock([9]); const r = planFrame(input({ stream, moving: true, initialLoad: true, playerCx: 5, playerCz: 5 }), c.now, c.mount); for (const i of r.mounts) stream.delete(i); frames++; }
-		expect(frames).toBeLessThanOrEqual(31); // 121 chunks / 4 per frame at 9 ms under a 30 ms budget
+		expect(frames).toBeLessThanOrEqual(41); // 121 chunks / 3 per frame at 9 ms under a 20 ms budget
 	});
 });

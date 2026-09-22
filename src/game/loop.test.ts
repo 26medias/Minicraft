@@ -354,16 +354,19 @@ describe('paced neighbour generation (perf: initial-load gate)', () => {
 		const orig = world.ensureChunk.bind(world);
 		let created = 0;
 		world.ensureChunk = (cx: number, cz: number) => {
-			if (!world.getChunk(cx, cz)) { created++; clock += 10; } // each new chunk costs 10 ms of main thread
+			if (!world.getChunk(cx, cz)) { created++; clock += 7; } // each new chunk costs 7 ms of main thread
 			return orig(cx, cz);
 		};
 		try {
 			const perTick: number[] = [];
 			for (let k = 0; k < 6; k++) { const b = created; tick(1 / 60); clock += 16; perTick.push(created - b); }
-			// initial-load budget is 30 ms: at most budget/10 + 1 new chunks in any frame (the +1 is the minimum
-			// progress step). Before the fix the first streaming mount generated its whole 3×3 in one frame.
-			for (const n of perTick) expect(n).toBeLessThanOrEqual(4);
-			expect(perTick.reduce((a, b) => a + b, 0)).toBeGreaterThan(8); // it still makes progress
+			// Initial-load budget 20 ms, and a chunk is started only with ≥ 10 ms left: at 7 ms per chunk that is
+			// 2 per frame (starts at 0 and 7; at 14 only 6 ms remain). Without the reserve a third starts at 14 and
+			// overshoots to 21; before pacing the first streaming mount generated its whole 3×3 in one frame.
+			// (tick 0 also generates the chunk under the crosshair via the aim raycast, outside the stream budget)
+			for (const n of perTick.slice(1)) expect(n).toBeLessThanOrEqual(2);
+			expect(perTick[0]).toBeLessThanOrEqual(3);
+			expect(perTick.reduce((a, b) => a + b, 0)).toBeGreaterThanOrEqual(8); // it still makes progress
 		} finally {
 			spy.mockRestore();
 		}

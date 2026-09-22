@@ -1,9 +1,10 @@
 import type { World } from '../engine/world/world';
+import type { Chunk } from '../engine/world/chunk';
 import type { FpCamera } from '../engine/render/camera';
 import type { Renderer } from '../engine/render/renderer';
 import type { Player, Keys } from './player';
 import { meshChunk, type UvFn } from '../engine/world/mesher';
-import { computeChunkShadows } from '../engine/world/shadows';
+import { computeChunkShadows, ensureShadowNeighbourhood } from '../engine/world/shadows';
 import { raycastVoxel, type VoxelHit } from '../engine/input/raycast';
 import { AIR, BLOCKS, BLOCK_BY_NAME, isSolid, isLiquid, type BlockId } from '../data/blocks.data';
 import type { ParticleSystem } from '../engine/render/particles';
@@ -321,6 +322,27 @@ export class GameLoop {
 		}
 	}
 
+	/** Spec §3.C.1: a chunk that just came into existence makes every already-shadowed 3×3 neighbour stale. */
+	private onChunkArrived(c: Chunk): void {
+		for (let dx = -1; dx <= 1; dx++) for (let dz = -1; dz <= 1; dz++) {
+			const n = this.world.getChunk(c.cx + dx, c.cz + dz);
+			if (n && n !== c) n.shadowsDirty = true;
+		}
+	}
+
+	/** `ensureShadowNeighbourhood` plus the arrival re-dirty for every neighbour it created. */
+	private ensureNeighbourhood(c: Chunk): void {
+		const before: (Chunk | undefined)[] = [];
+		for (let dx = -1; dx <= 1; dx++) for (let dz = -1; dz <= 1; dz++) before.push(this.world.getChunk(c.cx + dx, c.cz + dz));
+		ensureShadowNeighbourhood(this.world, c);
+		let i = 0;
+		for (let dx = -1; dx <= 1; dx++) for (let dz = -1; dz <= 1; dz++, i++) {
+			if (before[i]) continue;
+			const n = this.world.getChunk(c.cx + dx, c.cz + dz);
+			if (n) this.onChunkArrived(n);
+		}
+	}
+
 	private flushDirtyChunks() {
 		if (this.dirtyChunks.size === 0) return;
 		let budget = 2;
@@ -329,7 +351,9 @@ export class GameLoop {
 			// Indices only ever come from chunkIndexOrNeg, so (cx, cz) is in the world.
 			const cx = Math.floor(i / WORLD_CHUNKS_Z),
 				cz = i % WORLD_CHUNKS_Z;
+			const existed = !!this.world.getChunk(cx, cz);
 			const c = this.world.ensureChunk(cx, cz);
+			if (!existed) this.onChunkArrived(c);
 			// Ensure gen-placed liquids are in the frontier for at least one tick's check.
 			if (c.liquidFrontier.size === 0) {
 				for (let y = 0; y < c.height; y++) {
@@ -341,10 +365,16 @@ export class GameLoop {
 					}
 				}
 			}
+			// §3.C.1 precondition: the full 3×3 exists (generated + lit) before a chunk is shadowed;
+			// any neighbour created here is an arrival and re-dirties ITS 3×3 (live for edits / re-entry).
+			this.ensureNeighbourhood(c);
 			if (c.shadowsDirty) computeChunkShadows(this.world, c);
 			// Neighbors may have received shadow changes from edits near chunk boundaries; recompute if dirty.
 			for (const n of Object.values(this.world.neighbors(c))) {
-				if (n && n.shadowsDirty) computeChunkShadows(this.world, n);
+				if (n && n.shadowsDirty) {
+					this.ensureNeighbourhood(n);
+					computeChunkShadows(this.world, n);
+				}
 			}
 			const result = meshChunk(c, this.world.neighbors(c), this.uvFor);
 			this.renderer.mountChunkMesh(c, result);

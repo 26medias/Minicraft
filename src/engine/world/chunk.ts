@@ -14,6 +14,8 @@ export class Chunk {
 	dirty = true;
 	modified = false;
 	shadowsDirty = true;
+	/** FNV-1a of `sunlit` after the last `computeChunkShadows`; neighbours re-mesh only when it changed (spec §3.E). */
+	sunlitHash = 0;
 
 	constructor(cx: number, cz: number, height: WorldHeight = LEGACY_HEIGHT) {
 		this.cx = cx;

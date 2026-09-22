@@ -170,3 +170,84 @@ describe('computeChunkShadows — heightmap early-out equivalence', () => {
 		expect(performance.now() - t0).toBeLessThan(80);
 	});
 });
+
+// ---------------------------------------------------------------------------
+// Task 2 (spec §3.C / §6.1): early-out + in-chunk walk, ray counter, load-order independence.
+// ---------------------------------------------------------------------------
+import { computeChunkShadowsBrute } from './shadows.brute';
+import { hashSunlit, SHADOW_STATS, ensureShadowNeighbourhood } from './shadows';
+import { spawnV3 } from './v3/spawn';
+import type { Chunk } from './chunk';
+
+function fnv8(a: Uint8Array): number { let h = 2166136261 >>> 0; for (let i = 0; i < a.length; i++) { h ^= a[i]; h = Math.imul(h, 16777619) >>> 0; } return h; }
+
+/** Fully-loaded reference: every chunk of the (radius+1) square exists before any shadow is cast. */
+function fullyLoaded(seed: number, radius: number) {
+	const w = World.create(seed);
+	const s = spawnV3(seed);
+	const pcx = Math.floor(s.x / 16), pcz = Math.floor(s.z / 16);
+	const order: [number, number][] = [];
+	for (let dx = -radius - 1; dx <= radius + 1; dx++) for (let dz = -radius - 1; dz <= radius + 1; dz++) {
+		const cx = pcx + dx, cz = pcz + dz;
+		if (w.chunkInWorld(cx, cz)) { w.ensureChunk(cx, cz); if (Math.max(Math.abs(dx), Math.abs(dz)) <= radius) order.push([cx, cz]); }
+	}
+	return { w, pcx, pcz, order };
+}
+
+describe('computeChunkShadows — §3.C early-out and in-chunk walk', () => {
+	it('is byte-identical to the brute-force caster on a fully-loaded 3×3 (v2 fixtures + v3 seeds 1–3)', { timeout: 30_000 }, () => {
+		for (const seed of [1, 2, 3]) {
+			const { w, order } = fullyLoaded(seed, 2);
+			for (const [cx, cz] of order) {
+				const c = w.getChunk(cx, cz)!;
+				computeChunkShadowsBrute(w, c); const ref = fnv8(c.sunlit);
+				c.shadowsDirty = true; computeChunkShadows(w, c);
+				expect(fnv8(c.sunlit), `seed ${seed} chunk ${cx},${cz}`).toBe(ref);
+			}
+		}
+	});
+
+	it('casts at most 2 % of the candidate rays (measured 0.72 %; mutant: drop the per-start-column early-out → 11.7 %)', { timeout: 30_000 }, () => {
+		const { w, order } = fullyLoaded(3, 1);
+		let candidates = 0;
+		for (const [cx, cz] of order) {
+			const c = w.getChunk(cx, cz)!;
+			for (let i = 0; i < c.blocks.length; i++) { const d = BLOCKS[c.blocks[i]]; const opaque = !!d && d.lightFilter >= 15 && d.liquid === 'none'; if (!opaque && ((c.lights[i] >> 12) & 0xf) !== 0) candidates++; }
+		}
+		SHADOW_STATS.rays = 0;
+		for (const [cx, cz] of order) { const c = w.getChunk(cx, cz)!; c.shadowsDirty = true; computeChunkShadows(w, c); }
+		expect(SHADOW_STATS.rays).toBeLessThan(candidates * 0.02);
+	});
+
+	it('hashSunlit is FNV-1a over the bytes and changes when one voxel flips', () => {
+		const a = new Uint8Array(16).fill(1); const h = hashSunlit(a); a[7] = 0;
+		expect(hashSunlit(a)).not.toBe(h);
+		expect(hashSunlit(new Uint8Array(0))).toBe(2166136261);
+	});
+});
+
+describe('shadows are independent of load order (spec §3.C.1; red at HEAD: 5 of 49 chunks differ on this fixture)', () => {
+	it('a simulated nearest-first stream of seed 3 ends with the same sunlit as the fully-loaded reference (mutant: shadow without ensuring the 3×3)', { timeout: 30_000 }, () => {
+		const ref = fullyLoaded(3, 3);
+		const refHash = new Map<string, number>();
+		for (const [cx, cz] of ref.order) { const c = ref.w.getChunk(cx, cz)!; computeChunkShadowsBrute(ref.w, c); refHash.set(`${cx},${cz}`, fnv8(c.sunlit)); }
+
+		const w = World.create(3);
+		const { pcx, pcz } = ref;
+		// nearest-first stream, exactly what the scheduler will do: ensure the chunk, ensure its 3×3, shadow, and re-dirty the 3×3 neighbours already shadowed.
+		const stream = [...ref.order].sort((a, b) => Math.max(Math.abs(a[0] - pcx), Math.abs(a[1] - pcz)) - Math.max(Math.abs(b[0] - pcx), Math.abs(b[1] - pcz)));
+		const shadowed: Chunk[] = [];
+		for (const [cx, cz] of stream) {
+			const c = w.ensureChunk(cx, cz);
+			ensureShadowNeighbourhood(w, c);
+			computeChunkShadows(w, c);
+			shadowed.push(c);
+			// any already-shadowed chunk whose 3×3 just gained a member is stale: the loop re-dirties it
+			for (const s of shadowed) if (s !== c && Math.abs(s.cx - cx) <= 1 && Math.abs(s.cz - cz) <= 1) s.shadowsDirty = true;
+			for (const s of shadowed) if (s.shadowsDirty) computeChunkShadows(w, s);
+		}
+		let diff = 0;
+		for (const [cx, cz] of ref.order) if (fnv8(w.getChunk(cx, cz)!.sunlit) !== refHash.get(`${cx},${cz}`)) diff++;
+		expect(diff).toBe(0);
+	});
+});

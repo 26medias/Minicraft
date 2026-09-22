@@ -1,20 +1,27 @@
 # Performance — smooth movement in v3 worlds
 
-Status: gate 1 repaired 2026-09-22 (engine + rigour findings incorporated,
-see §8). Branch `perf` (cut from `worldgen`).
+Status: gate 1 closed 2026-09-22 (engine + rigour findings and the closure
+check incorporated, see §8). Branch `perf` (cut from `worldgen`).
 
-Constants this document hangs off: `VIEW_RADIUS = 4` (loop.ts) — 81 chunks
-in the 9×9 mesh view today; the mesh ring becomes radius 5 (§3.E). Fly tier
-5 = `FLY_TIER_MAX` × `WALK_SPEED` = 25 blocks/s (player.ts); there is no
-faster movement, so "fast flight" below means tier 5.
+Constants this document hangs off (all Chebyshev radii in chunks from the
+current player chunk): `VIEW_RADIUS = 4` (loop.ts; today the 81-chunk 9×9
+mesh view — after this project it is the walk/physics ring only, and its
+comment says so); **`MESH_RADIUS = 5`** (enqueue ring, 11×11 = 121 chunks;
+also the "wanted" predicate for worker replies); **`UNMOUNT_RADIUS = 6`**
+(mounted peaks at 13×13 = 169); **`DATA_RADIUS = 7`** (unmodified chunk data
+dropped beyond it; 15×15 = 225 chunks). Three named constants, never
+`VIEW_RADIUS + n`. Fly tier 5 = `FLY_TIER_MAX` × `WALK_SPEED` = 25 blocks/s
+(player.ts); there is no faster movement, so "fast flight" below means
+tier 5. Machines: "desktop" = the parent's GPU desktop where the 10 fps was
+seen; "dev box" = the RTX 3080 machine where §2 and the gate probes ran.
 
 ## 1. Goal
 
 The parent measured ≈ 10 fps with periodic freezes while moving in a
 generator-v3 world on the GPU desktop. The exit criterion is the browser
 benchmark of §6.5 on seed 3 around `spawnV3(3)`, **same machine, same
-session**, median of 5 repetitions per phase (first repetition discarded as
-warm-up). Primary metrics are the two that hold to ±6 % / ±15 % between runs
+session**, 6 repetitions per phase, the first discarded as warm-up, median
+of the remaining 5. Primary metrics are the two that hold to ±6 % / ±15 % between runs
 of the same build: **total long-task ms per phase** and **count of frames
 > 50 ms**. fps and p95 frame time are reported but never gate (they swing
 2× between runs of one build — gate 1, R-B1).
@@ -23,16 +30,18 @@ of the same build: **total long-task ms per phase** and **count of frames
 |---|---|---|
 | Standing still, 10 s | 0 long tasks | 0 long tasks, 0 frames > 50 ms |
 | Walking 5 b/s, 10 s, ≥ 40 blocks travelled | 799–896 ms long tasks, 13–17 frames > 50 ms | ≤ 100 ms long tasks, 0 frames > 50 ms |
-| Flying tier 5 (25 b/s), 8 s, ≥ 160 blocks | 575–615 ms long tasks, 4.5 s on the desktop | ≤ 400 ms long tasks, ≤ 5 frames > 50 ms |
-| Initial load (81 mesh + ring), new world | 3.7–3.9 s wall, 35 long tasks, worst 445 ms | no task > 50 ms after the first frame; wall time informational |
-| Edits: place 20 blocks along a chunk edge, then break them | 130–160 ms freeze per edit | 0 frames > 50 ms; interior edit re-meshes one chunk in < 20 ms |
-| Memory: fly tier 5 for 30 s, idle 2 s, read heap | 407 MB after 450 chunks, unbounded | ≤ 200 MB; mounted ≤ 121, data chunks ≤ 169 |
+| Flying tier 5 (25 b/s), 8 s, ≥ 160 blocks | 575–615 ms long tasks (dev box, bench driver); 4.55 s in the §2 probe (dev box, hand-driven, more chunks crossed) | ≤ 400 ms long tasks, ≤ 5 frames > 50 ms |
+| Initial load (121 mesh + ring), fresh page + new world per repetition | 3.7–3.9 s wall, 35 long tasks, worst 445 ms (dev box) | no task > 50 ms after the first frame; wall time informational |
+| Edits: place 20 stone blocks along the chunk edge nearest spawn, then break them (§6.5) | 130–160 ms freeze per edit (dev box, Node replay) | 0 frames > 50 ms; every edit's `loop.stats.lastEditMs` < 20 ms interior / < 50 ms on the edge |
+| Memory: fly tier 5 for 30 s, idle 2 s, forced GC, read heap via CDP | 407 MB after 450 chunks via `performance.memory` (informational; bucketised — re-measured with CDP in the bench's first run), unbounded | ≤ 250 MB (`Runtime.getHeapUsage` after `HeapProfiler.collectGarbage`); mounted ≤ 169, data chunks ≤ 225 |
 
 World data stays byte-identical (the v1/v2/v3 reference hashes must not
-move). Rendering stays **identical to a fully-loaded reference**: after this
-project a chunk's `sunlit` no longer depends on the order chunks arrived
-(today it does — §3.C, gate 1 R-B3). The only visible change is that far
-chunks unload behind fog.
+move). **`sunlit` becomes identical to a fully-loaded reference**: after
+this project a chunk's cast shadows no longer depend on the order chunks
+arrived (today they do — §3.C, gate 1 R-B3). Block light and skylight stay
+order-dependent as today (§3.D parity note; faint seams on re-entry
+accepted, §3.E) — no test covers lights and none is implied. The only
+visible change is that far chunks unload behind fog.
 
 ## 2. Baseline (measured 2026-09-22, Node 24 + headed Chromium, RTX 3080)
 
@@ -62,15 +71,16 @@ Shadows today depend on load order: `rayHitsSolidInLoadedChunks` treats a
 ray leaving the loaded region as "sunlit", `neighbourhoodMaxOpaqueY` reads
 neighbours without ensuring them, and `computeChunkShadows` clears
 `shadowsDirty` — so a frontier chunk keeps partial-neighbourhood shadows
-forever. Replaying the 81-chunk load: 14 of 117 chunks / 595 voxels differ
-from a fully-loaded reference; nearest-first order alone makes it worse
-(632 voxels). Independently confirmed by both reviewers.
+forever. Measured on seed 3 (dev box): today's insertion-order load differs
+from a fully-loaded reference by 37 voxels; nearest-first order alone
+differs by 632 voxels; the two orders differ from each other in 14 of 117
+chunks / 595 voxels. Independently confirmed by both reviewers.
 
 ## 3. Changes, in build order (each independently measurable)
 
 ### A. `World.getChunk` numeric index
 `World` stores chunks in a flat `Array(WORLD_CHUNKS_X * WORLD_CHUNKS_Z)`
-indexed by **exactly** `cx * 32 + cz`, and `getChunk` returns `undefined`
+indexed by **exactly** `cx * WORLD_CHUNKS_Z + cz` (32 today), and `getChunk` returns `undefined`
 unless `0 ≤ cx < 32 && 0 ≤ cz < 32` — the bounds check is mandatory because
 hot paths call it with out-of-range coordinates today
 (`neighbourhoodMaxOpaqueY` dz −1..1, the DDA's `floor(iz/16)`, `applyLightUpdate`'s
@@ -84,8 +94,9 @@ keys (`dual.ts` merges by `"cx,cz"`) are a separate namespace and are not
 touched.
 Expected: −8.5 ms of the 33 ms cold mount. Tests: full suite and the three
 reference hashes unchanged; **edge test** — chunks with cx, cz ∈ {0, 31}
-plus inputs −1 and 32 compared against a string-keyed reference `World`
-(mutant: drop the bounds check → (1,−1) returns (0,31)).
+plus inputs −1 and 32 compared against a string-keyed reference (a
+test-local shim, since the real string-keyed `World` ceases to exist in this
+change) (mutant: drop the bounds check → (1,−1) returns (0,31)).
 
 ### C. Shadow ray cost, and load-order independence
 `computeChunkShadows` keeps byte-identical output for a fully-loaded 3×3
@@ -94,7 +105,10 @@ and becomes independent of load order:
    `fillChunkLights`) before shadowing a chunk; rays can then only leave
    the loaded region at the world edge (treated as sunlit, deterministic).
    A chunk's shadows are re-dirtied whenever a 3×3 neighbour arrives or is
-   dropped (§3.E), so nothing keeps a partial answer.
+   dropped (§3.E), so nothing keeps a partial answer. Under the
+   precondition `sunlit` is a pure function of the 3×3's blocks, so for pure
+   streaming the arrival re-dirty is dead code; it is live for edits and for
+   eviction / re-entry (§3.E), which is where its test lives (§6.4).
 2. **Per-start-column early-out** (the exact form, gate 1 E-B4): every ray
    starts at a voxel centre with the same direction, so the relative voxel
    path is one constant table (51 steps, spanning −14 x, −9 z, +28 y).
@@ -110,9 +124,10 @@ byte-identical `sunlit`.
 Tests: brute-force equivalence fixtures plus v3 chunks from seeds 1–3
 (mutant: drop clause 2 → still identical, so also assert the ray-step
 counter falls by ≥ 90 %); **stream-equivalence** — `sunlit` after a
-simulated nearest-first stream of the 81 chunks of seed 3 equals `sunlit`
-of the fully-loaded reference (red at HEAD: 37 voxels; mutant: skip the
-re-dirty on neighbour arrival → red).
+simulated nearest-first stream of the 121 chunks of seed 3 equals `sunlit`
+of the fully-loaded reference (red at HEAD: 632 voxels for nearest-first,
+37 for insertion order; mutant: shadow a chunk without ensuring its 3×3 —
+drop the precondition — → red).
 
 ### G. No-allocation mesher
 `meshChunk` allocates, per corner, 4 `LightSample` objects, a `V[]` and 3
@@ -128,21 +143,29 @@ byte golden of §6.1 (mutant: any changed vertex, colour or index → red).
 ### B. Budgeted, nearest-first streaming with an edit lane
 `flushDirtyChunks` becomes a pure scheduler over `(edit lane, stream set,
 player chunk, clock, moving flag)`:
-- **Edit lane first, budget-exempt**: the edited chunk (and any chunk whose
-  `sunlit` actually changed — §3.E's compare) is re-meshed on the main
-  thread this frame, before any streaming. Today an edit sits in
-  `dirtyChunks` behind streaming chunks; this is a change.
+- **Edit lane first, budget-exempt**: the edited chunk (and any neighbour
+  whose `sunlitHash` changed — the compare in §3.E) is re-meshed on the
+  main thread this frame, before any streaming, and **the edit lane
+  suppresses the stream budget for that frame** (no streaming mount after an
+  edit; otherwise a 30 ms still-budget stacked on an edit breaks the edit
+  row's own 50 ms line). Today an edit sits in `dirtyChunks` behind
+  streaming chunks; this is a change. `loop.stats.lastEditMs` records the
+  time from the edit call to its geometry being mounted (read by the bench
+  and shown on F3).
 - **Stream set** ordered by Chebyshev distance to the player's chunk (ties:
   insertion order), mounted while `elapsed < budget`, minimum one per
   frame, with neighbour `ensureChunk` work (the 3×3 of §3.C.1) counted
-  against the same budget.
+  against the same budget. The check runs before each mount, so a frame
+  legally overshoots by one cold chunk (≈ 9 ms after A/D): 30 + 9 + render
+  stays under the 50 ms task line by ≈ 10 ms — that margin is why the still
+  budget is 30 and not more.
 - **Adaptive budget**: 30 ms per frame while the initial ring is loading or
   the player is still; 6 ms while moving. A cold v3 mount (≈ 20 ms after
   A) exceeds 6 ms, so while moving the minimum-one rule makes this exactly
   1 cold chunk per frame — which is §2's winning probe; the 6 ms constant
   only binds for cheap warm re-meshes. The 30 ms budget is what keeps the
   initial load under 50 ms tasks without taking 175 frames (E-B2).
-- `loadNearbyChunks` enqueues the mesh ring at radius 5 (§3.E) nearest-first.
+- `loadNearbyChunks` enqueues the mesh ring `MESH_RADIUS = 5` (§3.E) nearest-first.
 Expected: walking-pace hitches 74–116 ms → < 40 ms; with A, C and G,
 < 25 ms.
 
@@ -173,10 +196,20 @@ Shadows and meshing are pure given the 3×3, so they move to one `Worker`:
   a fresh `Chunk`). Parity note: a neighbour whose lights changed from a
   later chunk's generation is not re-meshed today; keep that parity — do
   not bump `rev` for it, or frontier jobs cancel in a loop.
-- **Wanted** = within Chebyshev `VIEW_RADIUS + 1` of the *current* player
-  chunk; this is the same predicate the evictor uses (§3.E), so a reply for
-  an evicted chunk is always unwanted. One worker, at most **2** jobs in
-  flight (a deeper queue buys no parallelism and maximises staleness).
+- **Wanted** = within `MESH_RADIUS` of the *current* player chunk — the same
+  ring `loadNearbyChunks` enqueues. The evictor's rings are wider
+  (`UNMOUNT_RADIUS` 6, `DATA_RADIUS` 7), so evicted ⇒ unwanted holds, but
+  the predicates are not the same; do not wire "wanted" to the evictor.
+  One worker, at most **2** jobs in flight (a deeper queue buys no
+  parallelism and maximises staleness).
+- **Invariant: a chunk stays in the dirty set until a reply is applied.**
+  A reply dropped for identity or `rev` mismatch re-dirties the chunk
+  immediately (it is re-enqueued in the stream set, or in the edit lane if
+  the drop came from an edit), so the next job re-posts it. Without this an
+  already-mounted chunk whose reply was dropped (edit or any `rev` bump
+  between post and reply) renders pre-edit geometry until evicted:
+  `loadNearbyChunks` only re-enqueues chunks that are not in
+  `mountedChunks`.
 - The `Worker` is constructed through an injectable factory
   (`vite`: `new Worker(new URL('./chunk.worker.ts', import.meta.url),
   {type: 'module'})`; tests inject a stub) because vitest runs in the node
@@ -187,35 +220,48 @@ Expected: main-thread cost per streamed chunk ≈ generate 2–3 ms + lights
 ≈ 5 ms + snapshot 0.3 ms + upload; moving fps ≈ still fps.
 
 ### E. Bounded memory and scene
-- **Rings** (all Chebyshev from the current player chunk, `VIEW_RADIUS =
-  4`): mesh ring radius 5 (121 chunks; the visible frontier is 80 blocks
-  ahead of the player); unmount beyond radius 6 (dispose geometry, drop
-  from the renderer maps, remove from the numeric `mountedChunks` and
-  `dirtyChunks` sets — an entry left in `mountedChunks` would block the
-  re-mesh on re-entry); drop **unmodified** chunk data beyond radius 8
-  (13×13 = 169 data chunks × 320 KB ≈ 54 MB + ≈ 121 meshes × 0.6 MB
-  CPU-side ≈ 73 MB → ≈ 130 MB plus baseline). `modified` chunks stay in
-  memory for the session; `autosave.snapshot()` is exactly
+- **Rings** (named constants, header): `MESH_RADIUS = 5` — enqueue ring,
+  11×11 = 121 chunks, the visible frontier is ≥ 80 blocks ahead of the
+  player (worst case at a chunk edge); `UNMOUNT_RADIUS = 6` — beyond it
+  dispose geometry, drop from the renderer maps, remove from the numeric
+  `mountedChunks` and `dirtyChunks` sets (an entry left in `mountedChunks`
+  would block the re-mesh on re-entry), so mounted peaks at 13×13 = 169;
+  `DATA_RADIUS = 7` — beyond it drop **unmodified** chunk data, so data
+  peaks at 15×15 = 225 chunks. Arithmetic (chunk = 65 536 voxels × (2 blocks
+  + 2 lights + 1 sunlit) = 320 KB): 225 × 320 KB ≈ 72 MB data + ≈ 169 ×
+  0.6 MB CPU-side mesh copies ≈ 101 MB → ≈ 175 MB plus THREE/texture/
+  baseline, hence the ≤ 250 MB row in §1. `modified` chunks stay in memory
+  for the session; `autosave.snapshot()` is exactly
   `world.modifiedChunks()` (verified), so nothing a save needs is dropped.
   Re-entry regenerates byte-identical blocks (verified 32/32) and re-lights
   (≈ 14.6 ms/chunk); faint light seams on re-entry are the pre-existing
   frontier behaviour, now crossed more often — accepted.
 - Dropping a neighbour re-dirties the retained chunks' shadows (§3.C.1).
+- **`sunlitHash` compare**: after every `computeChunkShadows` the chunk
+  stores `sunlitHash` (FNV-1a over the `Uint8Array` view of `sunlit`,
+  ≈ 0.05 ms). A chunk dirtied only by shadow invalidation (the SE neighbours
+  of an edit, a neighbour arrival or drop) is re-meshed only when its hash
+  changed. This is what makes an interior edit re-mesh 1 chunk instead of
+  4, and a corner edit ≤ 2 instead of 6; no per-chunk copy of `sunlit` is
+  kept (that would be +64 KB per chunk).
 - Eviction runs **after** `scheduler.tick` in the frame, and no scheduler
   read may reach beyond the data ring: `World.getBlock → ensureChunk`
   regenerates silently (19 scheduler call sites), so a dev-mode assertion
-  fires if a read lands outside radius 8. v3 generation places no liquid
+  fires if a read lands outside `DATA_RADIUS`. v3 generation places no liquid
   with an air side or air below (0 shoreline cells on seeds 1–3), so
   generated lakes decay out of the frontier and cannot thrash; a
   player-placed source marks its chunk modified and is kept.
-- **Fog** today 60 / 200; new near 43 / far 72, inside the 80-block mesh
-  frontier so the unload edge is never visible. Sky colour unchanged.
+- **Fog** today near 60 / far 200; new **far = `MESH_RADIUS × 16 − 8` = 72,
+  near = 60 % of far ≈ 43**, inside the ≥ 80-block mesh frontier so the
+  unload edge is never visible. Sky colour unchanged. This is a large
+  visual change (today the 64–80-block frontier is barely fogged); gate 2
+  includes a kid-playtest-lens pass on it.
 - **`hasLiquid`**: skip the 65 k-voxel liquid-frontier rescan on re-mesh
   when the chunk has no liquid. The flag is set by generation, by any
   liquid write, **and recomputed in `applySave`** — a naturally dry chunk
   the kid poured water into is reloaded from the save, not generated, and
   must still enter the frontier (R-N4).
-Expected: heap ≤ 200 MB, draw calls bounded, no long-session slowdown.
+Expected: heap ≤ 250 MB, draw calls bounded, no long-session slowdown.
 
 ### F. F3 stats overlay
 Top-left monospace, click-through, F3 toggles. Gated exactly like the Tab
@@ -240,7 +286,7 @@ mount), any change to world data or save format.
 byte-identical output (A: suite + hashes + edge test; C: equivalence +
 stream-equivalence; G: byte golden); B is a pure scheduler with unit tests;
 D depends on A–C for a fair baseline, on G for edit-lane latency and on B
-for job ordering; E depends on B (the scheduler owns the wanted set); F is
+for job ordering; E depends on B (the scheduler owns the stream set); F is
 independent and may be built in parallel with any of them. The final bench
 (§6.5) is the exit criterion of the last task; per-task bench lines are
 informational only (per-task attribution is below the run-to-run noise).
@@ -277,18 +323,26 @@ Every test names the mutant that turns it red.
    identical); the sender's arrays are detached after post (mutant: stub
    that calls the function directly → not detached); stale reply dropped
    when `rev` moved or the `Chunk` object was replaced, **and** a fresh
-   reply is applied (mutant: drop all replies → the twin fails); UV table
-   built from `AtlasJson` equals `uvFor` for every block face (mutant: swap
-   two faces).
+   reply is applied (mutant: drop all replies → the twin fails);
+   **dropped reply re-dirties**: post, bump `rev`, reply dropped → the chunk
+   is still in the dirty set → the next reply applies (mutant: drop without
+   re-dirty → stale geometry stays mounted); UV table built from `AtlasJson`
+   equals `uvFor` for every block face (mutant: swap two faces).
 4. **Eviction tests**: in one world, a modified and an unmodified chunk at
    the same distance beyond the data ring → the unmodified one is gone,
    the modified one present (mutant: no-op evictor); re-entry regenerates
-   byte-identical blocks; `mountedChunks` / `dirtyChunks` no longer hold
-   the evicted index (mutant: leave the entry → re-entry never re-meshes);
-   retained neighbours' shadows are re-dirtied (mutant: skip → stream
-   equivalence red); fog far = 72 given `VIEW_RADIUS = 4`; `hasLiquid`
-   after `applySave` of a chunk with placed water is true (mutant: flag
-   only from generation → red).
+   byte-identical blocks (mutant: regenerate with a different seed);
+   `mountedChunks` / `dirtyChunks` no longer hold the evicted index
+   (mutant: leave the entry → re-entry never re-meshes); **eviction /
+   re-entry shadows**: evict a neighbour of a retained chunk, re-enter it,
+   assert the retained chunk's `sunlit` equals the fully-loaded reference
+   (mutant: skip the re-dirty on drop / arrival → red — this fixture, not the
+   pure stream, is where that re-dirty is load-bearing); **`sunlitHash`
+   compare**: a corner edit on an interior-flat fixture dirties 6 chunks and
+   re-meshes ≤ 2 (mutant: skip the compare → 6); fog far equals
+   `MESH_RADIUS × 16 − 8` (formula, not a literal); `hasLiquid` after
+   `applySave` of a chunk with placed water is true (mutant: flag only from
+   generation → red).
 5. **Browser benchmark** — `scripts/perf-bench.ts`, `npm run perf:bench`,
    Playwright as a devDependency (`npm i -D playwright` + `npx playwright
    install chromium`, an explicit ~200 MB decision) against
@@ -300,16 +354,31 @@ Every test names the mutant that turns it red.
    player by writing `player.position` each frame** (key events measured
    14 blocks in 10 s of "walking" and 0 in 8 s of "flying" while passing
    every fps criterion — R-B2) and **asserting blocks travelled** (walk
-   ≥ 40 in 10 s, fly ≥ 160 in 8 s; fewer → the run fails). Median of 5
-   repetitions per phase, first discarded. Prints the §1 table, exits 1
-   when a primary target is missed. Mutant: a build that stalls 60 ms
-   every 30th frame → walking row red.
+   ≥ 40 in 10 s, fly ≥ 160 in 8 s; fewer → the run fails). 6 repetitions
+   per phase, first discarded, median of 5; the initial-load phase reloads
+   a fresh page and creates a new world per repetition. **Edit phase**: the
+   bench calls the same functions `main.ts` calls on a click — place:
+   `loop.replaceBlock(hit, stoneId, color)` where `hit` targets the surface
+   block, i.e. exactly what the left-click handler does after `placeBlock`
+   (`loop.markChunkDirtyAround(x, z)` + `loop.applyLightUpdate(x, y, z)`);
+   break: `world.setBlock(x, y, z, AIR)` + `loop.markChunkDirtyAround` +
+   `loop.applyLightUpdate`, the sequence `GameLoop.tick` runs when mining
+   completes — on the chunk boundary nearest `spawnV3(3)` in +x, at surface
+   height, 20 stone blocks placed then broken; it reads
+   `loop.stats.lastEditMs` after each and gates per §1. **Memory phase**:
+   fly tier 5 for 30 s, idle 2 s, then CDP `HeapProfiler.collectGarbage`
+   followed by `Runtime.getHeapUsage` (`performance.memory` is bucketised
+   and cached without `--enable-precise-memory-info`, so it never gates);
+   also reports mounted and data chunk counts from `loop.stats`. Prints the
+   §1 table, exits 1 when a primary target is missed. Mutant: a build that
+   stalls 60 ms every 30th frame → walking row red.
 6. **Overlay aggregation tests**: rolling fps / avg / worst / count > 50 ms
    from a synthetic frame series (mutant: off-by-one window).
+7. **Gate 2 kid-playtest-lens pass** on the fog change (60/200 → 43/72): the plan is reviewed for what the kid sees at the frontier; not a code test.
 
 ## 7. Deviations from the draft, stated
 "Initial load ≤ 2 s" is dropped as a gate: with a fixed 6 ms budget it is
-unreachable (117 chunks × ≈ 9 ms main-thread = 175 frames ≈ 2.9 s); the
+unreachable (117 chunks × ≈ 9 ms main-thread = 175 frames ≈ 2.9 s; the mesh ring is now 121 + its 3×3 halo); the
 adaptive 30 ms budget makes it ≈ 1 s but wall time stays informational.
 "Pixel-identical" became "identical to a fully-loaded reference" because
 today's rendering is not even self-consistent (§2).
@@ -322,7 +391,7 @@ today's rendering is not even self-consistent (§2).
 | E-B3 edit path 130–160 ms freeze, absent from §1 | §1 edit row; §3.B edit lane; §3.E sunlit-compare before neighbour re-mesh; change G |
 | E-B4 §3.C early-out wording not exact; measured 16 → 0.5 ms | §3.C rewritten as the per-start-column form with the measured numbers |
 | E-N1/N2 lights on main thread; rev counter and identity | §3.D snapshot after the 3×3; `Chunk.rev` + object identity; parity note |
-| E-N3–N5 eviction numbers | §3.E: 14.6 ms re-entry, autosave = modifiedChunks, 169 data chunks ≈ 130 MB |
+| E-N3–N5 eviction numbers | §3.E: 14.6 ms re-entry, autosave = modifiedChunks; ring arithmetic corrected at closure (C-B1: 225 data chunks, ≈ 175 MB) |
 | E-N7 frontier shadows never redone | §3.C.1 re-dirty on neighbour arrival/drop |
 | E-N8 mesher allocations | Change G |
 | E-N9 uv table inside `loadAtlas` | §3.D pure `AtlasJson` → `Float32Array` function |
@@ -344,3 +413,9 @@ today's rendering is not even self-consistent (§2).
 | R-U5/U6 "wanted", counter | §3.D |
 | R-U7 F3 gating | §3.F |
 | R-U8 27 b/s unreachable | Tier 5 = 25 b/s everywhere |
+| **Closure** C-B1 memory arithmetic (radius 8 = 289 chunks, mounted 169 not 121; ≤ 200 MB red on a correct build) | Header + §3.E named `MESH_RADIUS 5 / UNMOUNT_RADIUS 6 / DATA_RADIUS 7`, 225 data chunks ≈ 72 MB + 169 meshes ≈ 101 MB; §1 mounted ≤ 169, data ≤ 225, heap ≤ 250 MB via CDP |
+| C-B2 E-B3 half-landed: no sunlit compare in §3.E | §3.E `sunlitHash`; §3.B edit lane references it; §6.4 corner-edit test with "skip the compare" mutant |
+| C-B3 R-B3 mutant cannot go red under the 3×3 precondition | §3.C stream-equivalence mutant = shadow without ensuring the 3×3; §6.4 eviction / re-entry fixture owns the re-dirty mutant; arrival re-dirty stated dead for pure streaming |
+| C-B4 dropped worker reply leaves stale geometry forever | §3.D invariant (dirty until applied; drop ⇒ re-dirty); §6.3 test |
+| C-B5 edit and heap targets had no instrument | §1 rows name `loop.stats.lastEditMs` and CDP heap; §6.5 names the `main.ts` / `GameLoop.tick` calls, the edge, the block, the GC + heap reader |
+| C-N wanted ≠ evictor predicate; "identical" overclaim; 37 vs 595; 575 ms vs 4.5 s; median of 4; fresh page per load rep; edit lane stacking; overshoot margin; fog formula; re-entry mutant; stride literal; string-keyed shim; `VIEW_RADIUS + n` drift; fog is a big visual change | §3.D wanted = `MESH_RADIUS` ring; §1 scoped to `sunlit`; §2 reconciled with machine labels; 6 keep 5; §6.5; §3.B suppresses the stream budget and states the overshoot; §3.E fog formula; §6.4 seed mutant; §3.A `WORLD_CHUNKS_Z` + shim; header constants; §3.E kid-lens pass at gate 2 |

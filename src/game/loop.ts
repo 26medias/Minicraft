@@ -17,7 +17,7 @@ import { detonate, tntKey, TNT_CHAIN_FUSE, TNT_PRIME_FUSE } from './tnt';
 import { updateLightsForBlockChange } from '../engine/world/lighting';
 import { LiquidScheduler } from './liquid-scheduler';
 import { chunkIndex, chunkIndexOrNeg, WORLD_CHUNKS_Z } from '../engine/world/coords';
-import { planFrame, chebyshev, MESH_RADIUS, UNMOUNT_RADIUS, DATA_RADIUS } from './chunk-scheduler';
+import { planFrame, chebyshev, budgetFor, MESH_RADIUS, UNMOUNT_RADIUS, DATA_RADIUS } from './chunk-scheduler';
 
 const LAMP_ID = BLOCK_BY_NAME['lamp'].id;
 
@@ -58,6 +58,8 @@ export class GameLoop {
 	private editLane = new Set<number>();
 	/** Chunks dirtied only by shadow invalidation: re-meshed only when their sunlitHash changed (spec §3.E). */
 	private shadowOnly = new Set<number>();
+	/** Deadline of the current frame's stream budget (performance.now() ms), set before planFrame. */
+	private frameDeadline = 0;
 	/** Chunk objects whose liquid was already seeded (re-entry creates a new object, so it is seeded again). */
 	private liquidSeeded = new WeakSet<Chunk>();
 	private mountedChunks = new Set<number>();
@@ -491,6 +493,28 @@ export class GameLoop {
 	}
 
 	/** `ensureShadowNeighbourhood` plus the arrival re-dirty for every neighbour it created. */
+	/**
+	 * Generate the chunk at `i` and its 3×3 one chunk at a time until this frame's budget is spent (always
+	 * at least one, so a cold start still progresses). Returns true when all nine exist and the mount may
+	 * proceed; false leaves the index queued for the next frame. Measured: the first streaming mount of a
+	 * new world generated all nine in one ~85 ms task.
+	 */
+	private generatePaced(i: number): boolean {
+		const cx = Math.floor(i / WORLD_CHUNKS_Z), cz = i % WORLD_CHUNKS_Z;
+		// Worker path: the 3×3. Sync fallback: mountSync also re-shadows the 4 axis neighbours, and each of
+		// those needs ITS 3×3 — pace that cross too, or it lands in one frame (12 chunks, measured).
+		const reach = this.jobs ? [[0, 0]] : [[0, 0], [1, 0], [-1, 0], [0, 1], [0, -1]];
+		let made = 0;
+		for (const [ox, oz] of reach) for (let dx = -1; dx <= 1; dx++) for (let dz = -1; dz <= 1; dz++) {
+			const x = cx + ox + dx, z = cz + oz + dz;
+			if (!this.world.chunkInWorld(x, z) || this.world.getChunk(x, z)) continue;
+			if (made > 0 && performance.now() >= this.frameDeadline) return false;
+			this.onChunkArrived(this.world.ensureChunk(x, z));
+			made++;
+		}
+		return !(made > 0 && performance.now() >= this.frameDeadline);
+	}
+
 	private ensureNeighbourhood(c: Chunk): void {
 		const before: (Chunk | undefined)[] = [];
 		for (let dx = -1; dx <= 1; dx++) for (let dz = -1; dz <= 1; dz++) before.push(this.world.getChunk(c.cx + dx, c.cz + dz));
@@ -590,6 +614,7 @@ export class GameLoop {
 				for (const i of this.streamSet) if (!this.inFlightIndex.has(i)) stream.add(i);
 			}
 			this.refusedIndex = -1;
+			this.frameDeadline = performance.now() + budgetFor(this.moving, this.initialLoad);
 			let editWorkMs = 0;
 			const r = planFrame(
 				{
@@ -602,6 +627,11 @@ export class GameLoop {
 				},
 				() => performance.now(),
 				(i) => {
+					// Streaming only: generate the missing 3×3 a few chunks per frame (edits stay immediate).
+					if (!this.editLane.has(i) && !this.generatePaced(i)) {
+						this.refusedIndex = i;
+						return false;
+					}
 					if (this.jobs && !this.editLane.has(i)) return this.mountStream(i);
 					if (!this.editLane.has(i)) return this.mountSync(i);
 					const w0 = performance.now();

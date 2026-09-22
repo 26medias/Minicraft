@@ -1,4 +1,4 @@
-import { describe, it, expect } from 'vitest';
+import { describe, it, expect, vi } from 'vitest';
 import * as THREE from 'three';
 import { makeLoop } from './test-loop';
 import { DATA_RADIUS as DATA_RADIUS_T } from '../engine/world/radii';
@@ -94,7 +94,7 @@ describe('GameLoop.onWorldMutated', () => {
 
 describe('GameLoop.paused', () => {
 	it('stops physics and simulation but keeps loading chunks', () => {
-		const { loop, world, player, keys, tick, mounts } = makeLoop();
+		const { loop, world, player, keys, tick } = makeLoop();
 		world.setBlock(260, 30, 260, tnt);
 		world.setBlock(261, 30, 260, stone);
 		let mutations = 0;
@@ -106,13 +106,16 @@ describe('GameLoop.paused', () => {
 		keys.forward = true;
 		loop.paused = true;
 		const before = [...player.position];
+		const chunksBefore = world.chunkCount;
 		// Each tick loads/meshes chunks (~50 ms), so use few, long ticks:
 		// Player.update sub-steps internally and 3 × 1 s > TNT_PRIME_FUSE (2.5 s).
 		for (let i = 0; i < 3; i++) tick(1.0);
 		expect(player.position).toEqual(before);
 		expect(mutations).toBe(0);
 		expect(world.getBlock(261, 30, 260)).toBe(stone);
-		expect(mounts()).toBeGreaterThan(0);
+		// Loading continues while paused. Neighbour generation is paced per frame, so the first mount may
+		// need more than these 3 frames; the property is that chunks keep being generated.
+		expect(world.chunkCount).toBeGreaterThan(chunksBefore);
 
 		loop.paused = false;
 		for (let i = 0; i < 3; i++) tick(1.0);
@@ -340,5 +343,29 @@ describe('stale stream entries (perf gate-1 follow-up)', () => {
 		};
 		for (let k = 0; k < 40; k++) tick(1 / 60);
 		expect(far).toEqual([]);
+	}, 30_000);
+});
+
+describe('paced neighbour generation (perf: initial-load gate)', () => {
+	it('a streaming mount generates its missing 3×3 across frames within the budget, never all at once', () => {
+		const { world, tick } = makeLoop();
+		let clock = 1000;
+		const spy = vi.spyOn(performance, 'now').mockImplementation(() => clock);
+		const orig = world.ensureChunk.bind(world);
+		let created = 0;
+		world.ensureChunk = (cx: number, cz: number) => {
+			if (!world.getChunk(cx, cz)) { created++; clock += 10; } // each new chunk costs 10 ms of main thread
+			return orig(cx, cz);
+		};
+		try {
+			const perTick: number[] = [];
+			for (let k = 0; k < 6; k++) { const b = created; tick(1 / 60); clock += 16; perTick.push(created - b); }
+			// initial-load budget is 30 ms: at most budget/10 + 1 new chunks in any frame (the +1 is the minimum
+			// progress step). Before the fix the first streaming mount generated its whole 3×3 in one frame.
+			for (const n of perTick) expect(n).toBeLessThanOrEqual(4);
+			expect(perTick.reduce((a, b) => a + b, 0)).toBeGreaterThan(8); // it still makes progress
+		} finally {
+			spy.mockRestore();
+		}
 	}, 30_000);
 });

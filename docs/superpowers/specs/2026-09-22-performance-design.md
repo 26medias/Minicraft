@@ -26,14 +26,25 @@ of the same build: **total long-task ms per phase** and **count of frames
 > 50 ms**. fps and p95 frame time are reported but never gate (they swing
 2× between runs of one build — gate 1, R-B1).
 
-| Phase | Today (baseline build) | Target |
+| Phase | Today (Task-1 tree, dev box, CDP bench — recorded by Task 8a, median of 5 after warm-up) | Target |
 |---|---|---|
-| Standing still, 10 s | 0 long tasks | 0 long tasks, 0 frames > 50 ms |
-| Walking 5 b/s, 10 s, ≥ 40 blocks travelled | 799–896 ms long tasks, 13–17 frames > 50 ms | ≤ 100 ms long tasks, 0 frames > 50 ms |
-| Flying tier 5 (25 b/s), 8 s, ≥ 160 blocks | 575–615 ms long tasks (dev box, bench driver); 4.55 s in the §2 probe (dev box, hand-driven, more chunks crossed) | ≤ 400 ms long tasks, ≤ 5 frames > 50 ms |
-| Initial load (121 mesh + ring), fresh page + new world per repetition | 3.7–3.9 s wall, 35 long tasks, worst 445 ms (dev box) | no task > 50 ms after the first frame; wall time informational |
-| Edits: place 20 stone blocks along the chunk edge nearest spawn, then break them (§6.5) | 130–160 ms freeze per edit (dev box, Node replay) | 0 frames > 50 ms; every edit's `loop.stats.lastEditMs` < 20 ms interior / < 50 ms on the edge |
-| Memory: fly tier 5 for 30 s, idle 2 s, forced GC, read heap via CDP | 407 MB after 450 chunks via `performance.memory` (informational; bucketised — re-measured with CDP in the bench's first run), unbounded | ≤ 250 MB (`Runtime.getHeapUsage` after `HeapProfiler.collectGarbage`); mounted ≤ 169, data chunks ≤ 225 |
+| Standing still, 10 s | 0 long-task ms, 0 frames > 50 ms (60.0 fps, p95 17.4 ms) | 0 long tasks, 0 frames > 50 ms |
+| Walking 5 b/s, 10 s, ≥ 40 blocks travelled | 0 long-task ms, 3 frames > 50 ms (58 blocks; 58.1 fps, p95 17.8 ms — the 3 frames are the 3 chunk-row crossings, 2 mounts each; pre-Task-1 build: 799–896 ms, 13–17 frames) | ≤ 100 ms long tasks, 0 frames > 50 ms |
+| Flying tier 5 (25 b/s), 8 s, ≥ 160 blocks | 444 ms long tasks, 18 frames > 50 ms (305 blocks; 46.3 fps, p95 49.2 ms; pre-Task-1 build: 575–615 ms with the bench driver, 4.55 s in the §2 hand-driven probe) | ≤ 400 ms long tasks, ≤ 5 frames > 50 ms |
+| Initial load (121 mesh + ring), fresh page + new world per repetition | 2 478 ms wall (menu click → queue empty, one document), 1 403 ms long tasks, 14 frames > 50 ms, worst task after the first frame 433 ms (pre-Task-1 build: 3.7–3.9 s wall, 35 long tasks, worst 445 ms) | no task > 50 ms after the first frame; wall time informational |
+| Edits: place 20 stone blocks along the chunk edge nearest spawn, then break them (§6.5) | 130–160 ms freeze per edit (dev box, Node replay); CDP baseline recorded at 8b's first run after Task 6 (`lastEditMs` needs Task 4) | 0 frames > 50 ms; every edit's `loop.stats.lastEditMs` < 20 ms interior / < 50 ms on the edge |
+| Memory: fly tier 5 for 30 s, idle 2 s, forced GC, read heap via CDP | 407 MB after 450 chunks via `performance.memory` (informational; bucketised), unbounded; CDP baseline recorded at 8b's first run after Task 6 (`mounted`/`data` need Task 6) | ≤ 250 MB (`Runtime.getHeapUsage` after `HeapProfiler.collectGarbage`); mounted ≤ 169, data chunks ≤ 225 |
+
+Bench protocol notes (Task 8a, `scripts/perf-bench.ts`): every phase but
+`load` starts after a forced CDP GC and a 1 s settle — on the Task-1 tree
+the initial load's garbage was collected on idle ≈ 100 ms into the still
+phase as one 60 ms frame with no long task, in 6 of 6 repetitions; with
+the settle, 0 of 10. A frame > 50 ms with 0 long-task ms is otherwise real
+(two ≈ 20 ms mounts plus render in one frame): the walk row's 3 frames are
+its 3 chunk-row crossings. The stall mutant (60 ms busy-wait every 30th
+tick) turned the walk row red: 1 080 ms long tasks, 22 frames > 50 ms,
+exit 1. The request guard was proven by pointing the API env var at
+`127.0.0.2`: the menu's `/v3/worlds` fetch was aborted, exit 2.
 
 World data stays byte-identical (the v1/v2/v3 reference hashes must not
 move). **`sunlit` becomes identical to a fully-loaded reference**: after

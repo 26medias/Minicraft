@@ -313,6 +313,8 @@ export function updateLightsForBlockChange(
 		propagateBlockLight(world, q, touched);
 	}
 
+	// Spec §3.D: a lights change invalidates any worker job posted for these chunks.
+	for (const c of touched) c.rev++;
 	return touched;
 }
 

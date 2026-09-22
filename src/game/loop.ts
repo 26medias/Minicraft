@@ -3,8 +3,9 @@ import type { Chunk } from '../engine/world/chunk';
 import type { FpCamera } from '../engine/render/camera';
 import type { Renderer } from '../engine/render/renderer';
 import type { Player, Keys } from './player';
-import { meshChunk, type UvFn } from '../engine/world/mesher';
-import { computeChunkShadows, ensureShadowNeighbourhood } from '../engine/world/shadows';
+import { meshChunk, type ChunkMeshResult, type UvFn } from '../engine/world/mesher';
+import { computeChunkShadows, ensureShadowNeighbourhood, hashSunlit } from '../engine/world/shadows';
+import type { ChunkJobs } from '../engine/world/chunk-jobs';
 import { raycastVoxel, type VoxelHit } from '../engine/input/raycast';
 import { AIR, BLOCKS, BLOCK_BY_NAME, isSolid, isLiquid, type BlockId } from '../data/blocks.data';
 import type { ParticleSystem } from '../engine/render/particles';
@@ -16,13 +17,18 @@ import { detonate, tntKey, TNT_CHAIN_FUSE, TNT_PRIME_FUSE } from './tnt';
 import { updateLightsForBlockChange } from '../engine/world/lighting';
 import { LiquidScheduler } from './liquid-scheduler';
 import { chunkIndex, chunkIndexOrNeg, WORLD_CHUNKS_Z } from '../engine/world/coords';
-import { planFrame, MESH_RADIUS } from './chunk-scheduler';
+import { planFrame, chebyshev, MESH_RADIUS } from './chunk-scheduler';
 
 const LAMP_ID = BLOCK_BY_NAME['lamp'].id;
 
 /** Walk/physics ring; the mesh ring is MESH_RADIUS (src/engine/world/radii.ts). */
 export const VIEW_RADIUS = 4;
 const REACH = 6;
+
+/** [+x, −x, +z, −z] via getChunk (never ensureChunk). */
+function axisNeighbours(world: World, c: Chunk): (Chunk | undefined)[] {
+	return [world.getChunk(c.cx + 1, c.cz), world.getChunk(c.cx - 1, c.cz), world.getChunk(c.cx, c.cz + 1), world.getChunk(c.cx, c.cz - 1)];
+}
 
 type MiningState = {
 	target: { x: number; y: number; z: number };
@@ -45,6 +51,10 @@ export class GameLoop {
 	/** Chunks dirtied only by shadow invalidation: re-meshed only when their sunlitHash changed (spec §3.E). */
 	private shadowOnly = new Set<number>();
 	private mountedChunks = new Set<number>();
+	/** Posted to the worker, reply not yet in. Skipped by loadNearbyChunks and the stream order (spec §3.D). */
+	private inFlightIndex = new Set<number>();
+	/** The index mountStream could not post this frame (worker full): it must stay in the stream set. */
+	private refusedIndex = -1;
 	private lastPlayerChunk = -1;
 	private lastPlayerPos: [number, number] | null = null;
 	private horizontalSpeed = 0;
@@ -83,12 +93,50 @@ export class GameLoop {
 		private overlay: PrimedOverlay | null = null,
 		private lights: LightRegistry | null = null,
 		private highlight: FaceHighlight | null = null,
+		private jobs: ChunkJobs | null = null,
 	) {
 		this.scheduler = new LiquidScheduler(
 			this.world,
 			(cx, cz) => this.markChunkDirty(cx, cz),
 			(x, y, z) => this.applyLightUpdate(x, y, z),
 		);
+		if (this.jobs) {
+			this.jobs.onReply = (job, sunlit, mesh) => this.onJobReply(job.chunk, sunlit, mesh);
+			this.jobs.onDropped = (job) => this.onJobDropped(job.cx, job.cz);
+		}
+	}
+
+	/** Spec §3.D "wanted": within MESH_RADIUS of the CURRENT player chunk (the enqueue ring, not the evictor's). */
+	private wanted(i: number): boolean {
+		return chebyshev(i, Math.floor(this.player.position[0] / 16), Math.floor(this.player.position[2] / 16)) <= MESH_RADIUS;
+	}
+
+	/** Fresh reply (identity + rev checked by ChunkJobs): store sunlit, mount, re-dirty mounted axis neighbours shadowOnly. */
+	private onJobReply(c: Chunk, sunlit: Uint8Array, mesh: ChunkMeshResult): void {
+		const idx = chunkIndex(c.cx, c.cz);
+		this.inFlightIndex.delete(idx);
+		if (!this.wanted(idx)) return; // player left: do not mount what the evictor would drop next frame
+		c.sunlit.set(sunlit);
+		c.sunlitHash = hashSunlit(sunlit);
+		c.shadowsDirty = false;
+		this.renderer.mountChunkMesh(c, mesh);
+		this.mountedChunks.add(idx);
+		// Seams (spec §3.D): mounted axis neighbours sample this chunk's final sunlit at their border
+		// corners → re-dirty them shadowOnly; the sunlitHash compare keeps most from re-meshing.
+		for (const n of axisNeighbours(this.world, c)) {
+			if (n && this.mountedChunks.has(chunkIndex(n.cx, n.cz))) {
+				n.shadowsDirty = true;
+				n.rev++;
+				this.markChunkDirty(n.cx, n.cz, { shadowOnly: true });
+			}
+		}
+	}
+
+	/** Invariant (spec §3.D): a chunk stays dirty until a reply is applied — a dropped reply re-dirties it. */
+	private onJobDropped(cx: number, cz: number): void {
+		const idx = chunkIndex(cx, cz);
+		this.inFlightIndex.delete(idx);
+		if (this.wanted(idx)) this.streamSet.add(idx);
 	}
 
 	/**
@@ -115,12 +163,14 @@ export class GameLoop {
 		for (const c of touched) {
 			this.markChunkDirty(c.cx, c.cz, { edit: true });
 			c.shadowsDirty = true;
+			c.rev++;
 		}
 		// Also flag chunks in the shadow direction (SE of the edit) since a placed/removed
 		// block can shadow further SE.
 		const edited = this.world.getChunk(Math.floor(x / 16), Math.floor(z / 16));
 		if (edited) {
 			edited.shadowsDirty = true;
+			edited.rev++;
 			const seNeighbors = [
 				this.world.getChunk(edited.cx + 1, edited.cz),
 				this.world.getChunk(edited.cx, edited.cz + 1),
@@ -129,6 +179,7 @@ export class GameLoop {
 			for (const n of seNeighbors) {
 				if (n) {
 					n.shadowsDirty = true;
+					n.rev++;
 					this.markChunkDirty(n.cx, n.cz, { shadowOnly: true });
 				}
 			}
@@ -360,7 +411,7 @@ export class GameLoop {
 		for (let dx = -MESH_RADIUS; dx <= MESH_RADIUS; dx++) {
 			for (let dz = -MESH_RADIUS; dz <= MESH_RADIUS; dz++) {
 				const i = chunkIndexOrNeg(pcx + dx, pcz + dz);
-				if (i < 0 || this.mountedChunks.has(i)) continue;
+				if (i < 0 || this.mountedChunks.has(i) || this.inFlightIndex.has(i)) continue;
 				this.streamSet.add(i);
 			}
 		}
@@ -405,8 +456,8 @@ export class GameLoop {
 		return true;
 	}
 
-	/** Ensures, shadows and meshes one chunk (synchronous path; both lanes use it in this task). */
-	private mountIndex(i: number): void {
+	/** Shared prologue of both mount paths: ensure the chunk (arrival re-dirty), liquid scan, ensure the 3×3. */
+	private prepareChunk(i: number): Chunk {
 		// Indices only ever come from chunkIndexOrNeg, so (cx, cz) is in the world.
 		const cx = Math.floor(i / WORLD_CHUNKS_Z),
 			cz = i % WORLD_CHUNKS_Z;
@@ -427,6 +478,34 @@ export class GameLoop {
 		// §3.C.1 precondition: the full 3×3 exists (generated + lit) before a chunk is shadowed;
 		// any neighbour created here is an arrival and re-dirties ITS 3×3 (live for edits / re-entry).
 		this.ensureNeighbourhood(c);
+		return c;
+	}
+
+	/**
+	 * Streaming mount through the worker (spec §3.D). Returns false when the worker is full: the
+	 * chunk stays in the stream set and planFrame stops generating halos this frame.
+	 */
+	private mountStream(i: number): boolean {
+		const c = this.prepareChunk(i);
+		// A shadowOnly re-dirty of a mounted chunk: the sync compare decides whether a re-mesh is due
+		// (≈ 0.7 ms); only a changed sunlit goes to the worker.
+		if (this.shadowOnly.has(i) && c.shadowsDirty && !this.reshadow(c)) return true;
+		// Shadow the axis neighbours first: the worker computes only the CENTRE's sunlit and samples
+		// the neighbours' at border corners — all-zero neighbour sunlit gives every edge a dark seam.
+		for (const n of axisNeighbours(this.world, c)) if (n && n.shadowsDirty) computeChunkShadows(this.world, n);
+		if (this.jobs!.post(this.world, c)) {
+			this.inFlightIndex.add(i);
+			this.streamSet.delete(i);
+			this.shadowOnly.delete(i);
+			return true;
+		}
+		this.refusedIndex = i;
+		return false;
+	}
+
+	/** Ensures, shadows and meshes one chunk on the main thread (edits; every chunk when there is no worker). */
+	private mountSync(i: number): void {
+		const c = this.prepareChunk(i);
 		if (c.shadowsDirty && !this.reshadow(c)) return; // shadows unchanged: no re-mesh
 		this.shadowOnly.delete(i);
 		// Neighbors may have received shadow changes from edits near chunk boundaries; recompute if
@@ -444,30 +523,38 @@ export class GameLoop {
 		if (this.editLane.size > 0 || this.streamSet.size > 0) {
 			const pcx = Math.floor(this.player.position[0] / 16);
 			const pcz = Math.floor(this.player.position[2] / 16);
+			// A posted-but-unreplied chunk would be nearest again next frame and get posted twice.
+			let stream = this.streamSet;
+			if (this.inFlightIndex.size > 0) {
+				stream = new Set<number>();
+				for (const i of this.streamSet) if (!this.inFlightIndex.has(i)) stream.add(i);
+			}
+			this.refusedIndex = -1;
 			const r = planFrame(
 				{
 					editLane: this.editLane,
-					stream: this.streamSet,
+					stream,
 					playerCx: pcx,
 					playerCz: pcz,
 					moving: this.moving,
 					initialLoad: this.initialLoad,
 				},
 				() => performance.now(),
-				(i) => this.mountIndex(i),
+				(i) => (this.jobs && !this.editLane.has(i) ? this.mountStream(i) : this.mountSync(i)),
 			);
 			for (const i of r.edits) {
 				this.editLane.delete(i);
 				this.streamSet.delete(i);
 			}
-			for (const i of r.mounts) this.streamSet.delete(i);
+			for (const i of r.mounts) if (i !== this.refusedIndex) this.streamSet.delete(i);
 			if (r.edits.length > 0) {
 				this.stats.lastEditMs = performance.now() - this.editStartedAt;
 				this.editStartedAt = 0;
 			}
 		}
-		if (this.initialLoad && this.streamSet.size === 0) this.initialLoad = false;
+		if (this.initialLoad && this.streamSet.size === 0 && this.inFlightIndex.size === 0) this.initialLoad = false;
 		this.stats.streamQueue = this.streamSet.size;
+		this.stats.workerInFlight = this.jobs ? this.jobs.inFlight() : 0;
 		this.stats.editQueue = this.editLane.size;
 		this.stats.mounted = this.mountedChunks.size;
 	}

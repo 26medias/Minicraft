@@ -6,6 +6,7 @@ import { FpCamera } from './engine/render/camera';
 import { setupPointerLock } from './engine/input/pointerLock';
 import { Player, findSafeSpawn, type Keys } from './game/player';
 import { GameLoop } from './game/loop';
+import { ChunkJobs, type WorkerLike } from './engine/world/chunk-jobs';
 import { raycastVoxel } from './engine/input/raycast';
 import { placeBlock } from './game/actions';
 import { Hud } from './ui/hud';
@@ -375,6 +376,13 @@ async function main() {
 			overlay,
 			lights,
 			highlight,
+			// Shadows + meshing off the main thread (spec §3.D); the URL is relative to src/main.ts. The
+			// cast: ChunkJobs only assigns `onmessage` with a `{ data }` handler, which the DOM Worker's
+			// MessageEvent satisfies, but strictFunctionTypes rejects the property assignment.
+			new ChunkJobs(
+				() => new Worker(new URL('./engine/world/chunk.worker.ts', import.meta.url), { type: 'module' }) as unknown as WorkerLike,
+				atlas.uvTable,
+			),
 		);
 		loop.onBlockBroken = () => autosave.markDirty();
 		loop.onWorldMutated = () => autosave.markDirty();

@@ -11,9 +11,10 @@ import type { Renderer } from '../engine/render/renderer';
 import type { Chunk } from '../engine/world/chunk';
 import type { ChunkMeshResult } from '../engine/world/mesher';
 import { chunkIndex } from '../engine/world/coords';
+import type { ChunkJobs } from '../engine/world/chunk-jobs';
 
-export type MakeLoopOpts = { lights?: LightRegistry | null; highlight?: FaceHighlight | null; seed?: number };
-// Task 5 adds `jobs?: ChunkJobs | null` to MakeLoopOpts and passes it as GameLoop's last constructor argument.
+/** `jobs` null/undefined → every chunk mounts synchronously; a ChunkJobs → streaming mounts go through it. */
+export type MakeLoopOpts = { lights?: LightRegistry | null; highlight?: FaceHighlight | null; seed?: number; jobs?: ChunkJobs | null };
 
 /**
  * GameLoop's constructor only builds the LiquidScheduler; it never dereferences the renderer, so a
@@ -21,7 +22,7 @@ export type MakeLoopOpts = { lights?: LightRegistry | null; highlight?: FaceHigh
  * drive a full tick() headlessly, counts mounts and records the last mesh per chunk index.
  */
 export function makeLoop(opts: MakeLoopOpts = {}) {
-	const { lights = null, highlight = null, seed } = opts;
+	const { lights = null, highlight = null, seed, jobs = null } = opts;
 	// seed undefined → today's fixture: v1 world (64-high) with chunk (16,16) cleared. seed given → World.create(seed): 256-high v3 world.
 	const world = seed === undefined ? new World(1) : World.create(seed);
 	if (seed === undefined) {
@@ -48,7 +49,7 @@ export function makeLoop(opts: MakeLoopOpts = {}) {
 	} as unknown as Renderer;
 	const keys: Keys = { forward: false, back: false, left: false, right: false, jump: false };
 	const player = new Player(seed === undefined ? [260, 40, 260] : [256.5, 200, 256.5]);
-	const loop = new GameLoop(world, renderer, new FpCamera(), player, keys, () => [0, 0, 1, 1], null, null, lights, highlight);
+	const loop = new GameLoop(world, renderer, new FpCamera(), player, keys, () => [0, 0, 1, 1], null, null, lights, highlight, jobs);
 	loop.start();
 	const tick = (dt: number) => tickFn!(dt);
 	return { loop, world, player, keys, tick, mounts: () => mounts, meshes: () => meshes };

@@ -5,8 +5,39 @@ import { LightRegistry } from '../engine/render/light-registry';
 import { FaceHighlight, HIGHLIGHT_EPS } from '../engine/render/face-highlight';
 import { AIR, BLOCK_BY_NAME } from '../data/blocks.data';
 import { TNT_PRIME_FUSE } from './tnt';
-import { indexOf } from '../engine/world/coords';
+import { chunkIndex, indexOf } from '../engine/world/coords';
 import { fillChunkLights } from '../engine/world/lighting';
+import { readFileSync, existsSync } from 'node:fs';
+import { ChunkJobs } from '../engine/world/chunk-jobs';
+import { inlineWorkerFactory } from '../engine/world/chunk-jobs.test-utils';
+import { buildUvTable, type AtlasJson } from '../engine/render/uv-table';
+import { spawnV3 } from '../engine/world/v3/spawn';
+
+if (!existsSync('public/atlas.json')) throw new Error('public/atlas.json missing: run npm run build-atlas (it is gitignored)');
+const table = buildUvTable(JSON.parse(readFileSync('public/atlas.json', 'utf8')) as AtlasJson);
+const flush = () => new Promise((r) => setTimeout(r, 0));
+function fnvBytes(a: ArrayBufferView): number {
+	const b = new Uint8Array(a.buffer, a.byteOffset, a.byteLength);
+	let h = 2166136261 >>> 0;
+	for (let i = 0; i < b.length; i++) { h ^= b[i]; h = Math.imul(h, 16777619) >>> 0; }
+	return h;
+}
+/** Tick until the stream set and the worker are both drained (or maxTicks). Each tick is followed by a macrotask turn so the inline worker's microtasks run. */
+async function drain(h: ReturnType<typeof makeLoop>, maxTicks = 600) {
+	for (let k = 0; k < maxTicks; k++) {
+		h.tick(1 / 60);
+		await flush();
+		if (h.loop.stats.streamQueue === 0 && h.loop.stats.workerInFlight === 0 && k > 5) return;
+	}
+	throw new Error(`stream did not drain in ${maxTicks} ticks`);
+}
+function picksAround(seed: number): number[] {
+	const s = spawnV3(seed);
+	const pcx = Math.floor(s.x / 16), pcz = Math.floor(s.z / 16);
+	const out: number[] = [];
+	for (let dx = -1; dx <= 1; dx++) for (let dz = -1; dz <= 1; dz++) out.push(chunkIndex(pcx + dx, pcz + dz));
+	return out;
+}
 
 const tnt = BLOCK_BY_NAME['tnt'].id;
 const stone = BLOCK_BY_NAME['stone'].id;
@@ -249,4 +280,38 @@ describe('GameLoop edit lane', () => {
 		expect(mounts() - before).toBe(1);
 		expect(loop.stats.lastEditMs).toBeGreaterThan(0);
 	}, 30_000);
+});
+
+describe('worker streaming through the loop (spec §3.D / §6.3)', () => {
+	it('neighbour seams: the worker path meshes the 9 spawn chunks byte-identically to the synchronous path (mutant: skip the axis-neighbour shadow pass in mountStream → 0/9 identical)', { timeout: 60_000 }, async () => {
+		const seed = 3, s = spawnV3(seed), picks = picksAround(seed);
+		const sync = makeLoop({ seed }); // jobs null → mountSync for every chunk
+		const viaWorker = makeLoop({ seed, jobs: new ChunkJobs(inlineWorkerFactory(), table, 2) });
+		for (const h of [sync, viaWorker]) {
+			h.player.position = [s.x + 0.5, s.h + 2, s.z + 0.5];
+			await drain(h);
+		}
+		expect(picks.every((i) => sync.meshes().has(i) && viaWorker.meshes().has(i))).toBe(true);
+		let identical = 0;
+		for (const i of picks) if (fnvBytes(sync.meshes().get(i)!.opaque.colors) === fnvBytes(viaWorker.meshes().get(i)!.opaque.colors)) identical++;
+		expect(identical).toBe(9); // gate 2 measured 81/81 chunks differing when the pass is missing (all-zero neighbour sunlit → dark seams)
+	});
+
+	it('a reply dropped for a rev bump re-dirties the chunk and the next reply is applied (mutant: drop without re-dirty → stale geometry forever)', { timeout: 60_000 }, async () => {
+		const seed = 3, s = spawnV3(seed);
+		const h = makeLoop({ seed, jobs: new ChunkJobs(inlineWorkerFactory(), table, 2) });
+		h.player.position = [s.x + 0.5, s.h + 2, s.z + 0.5];
+		await drain(h);
+		const cx = Math.floor(s.x / 16), cz = Math.floor(s.z / 16);
+		const c = h.world.getChunk(cx, cz)!;
+		const before = h.mounts();
+		h.loop.markChunkDirty(cx, cz); // stream lane → mountStream posts a job
+		h.tick(1 / 60); // posted, in flight
+		expect(h.loop.stats.workerInFlight).toBe(1);
+		c.rev++; // invalidate while in flight → the reply must be dropped and the chunk re-dirtied
+		await drain(h); // onDropped re-adds it; the next job's reply is applied
+		expect(h.mounts()).toBeGreaterThan(before);
+		expect(h.loop.stats.streamQueue).toBe(0);
+		expect(h.loop.stats.workerInFlight).toBe(0);
+	});
 });

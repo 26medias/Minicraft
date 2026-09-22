@@ -1,9 +1,10 @@
 import type { BlockId } from '../../data/blocks.data';
-import { BLOCKS_PER_CHUNK, indexOf } from './coords';
+import { LEGACY_HEIGHT, blocksPerChunk, indexOf, type WorldHeight } from './coords';
 
 export class Chunk {
 	readonly cx: number;
 	readonly cz: number;
+	readonly height: WorldHeight;
 	readonly blocks: Uint16Array;
 	readonly lights: Uint16Array;
 	readonly sunlit: Uint8Array;
@@ -13,13 +14,44 @@ export class Chunk {
 	dirty = true;
 	modified = false;
 	shadowsDirty = true;
+	/** FNV-1a of `sunlit` after the last `computeChunkShadows`; neighbours re-mesh only when it changed (spec §3.E). */
+	sunlitHash = 0;
+	/**
+	 * Revision: bumped by `set`, by `updateLightsForBlockChange` for every touched chunk and by shadow
+	 * invalidation in the loop. A worker reply is applied only if the chunk's rev still equals the
+	 * rev it was posted with (spec §3.D).
+	 */
+	rev = 0;
+	/** True when any voxel is liquid: set by generation, by every liquid write and recomputed in applySave (spec §3.E). A dry chunk skips the 65 k-voxel liquid-frontier rescan on mount. */
+	hasLiquid = false;
 
-	constructor(cx: number, cz: number) {
+	constructor(
+		cx: number,
+		cz: number,
+		height: WorldHeight = LEGACY_HEIGHT,
+		blocks: Uint16Array | null = null,
+		lights: Uint16Array | null = null,
+		sunlit: Uint8Array | null = null,
+	) {
 		this.cx = cx;
 		this.cz = cz;
-		this.blocks = new Uint16Array(BLOCKS_PER_CHUNK);
-		this.lights = new Uint16Array(BLOCKS_PER_CHUNK);
-		this.sunlit = new Uint8Array(BLOCKS_PER_CHUNK);
+		this.height = height;
+		const n = blocksPerChunk(height);
+		this.blocks = blocks ?? new Uint16Array(n);
+		this.lights = lights ?? new Uint16Array(n);
+		this.sunlit = sunlit ?? new Uint8Array(n);
+	}
+
+	/** Wraps received buffers (the chunk worker); allocates only the arrays passed as null/undefined. */
+	static over(
+		cx: number,
+		cz: number,
+		height: WorldHeight,
+		blocks: Uint16Array,
+		lights?: Uint16Array | null,
+		sunlit?: Uint8Array | null,
+	): Chunk {
+		return new Chunk(cx, cz, height, blocks, lights ?? null, sunlit ?? null);
 	}
 
 	get(x: number, y: number, z: number): BlockId {
@@ -32,6 +64,7 @@ export class Chunk {
 		this.blocks[i] = id;
 		this.dirty = true;
 		this.modified = true;
+		this.rev++;
 	}
 
 	/** True if (x,y,z) has a flow entry. False for source voxels and non-liquid cells. */

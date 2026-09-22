@@ -1,6 +1,12 @@
 import express, { type Express, type Request, type Response, type NextFunction } from 'express';
-import { decodeChunk, decodeFluidMeta, BLOCKS_PER_CHUNK } from './codec';
-import { worldSaveWireSchema, WORLD_ID_RE, type WorldSaveWire } from './schema';
+import type { z } from 'zod';
+import { decodeChunk, decodeFluidMeta, LEGACY_BLOCKS_PER_CHUNK } from './codec';
+import {
+	worldSaveWireSchema,
+	worldSaveWireSchemaV3,
+	WORLD_ID_RE,
+	type WorldSaveWire,
+} from './schema';
 
 export const MAX_BODY_BYTES = 32 * 1024 * 1024;
 
@@ -31,8 +37,26 @@ export interface FileLike {
 	delete(opts?: { ifGenerationMatch?: string | number }): Promise<void>;
 }
 
-const objectName = (id: string) => `worlds/${id}.json`;
-const OBJECT_RE = /^worlds\/([0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12})\.json$/;
+/** `WorldSaveWire.version` is `literal(2)`, so `WorldSaveWireV3 extends WorldSaveWire` is FALSE and a
+ *  generic bounded by WorldSaveWire does not typecheck (TS2322 on the schema, TS2339 on .height).
+ *  vitest never type-checks, so this only surfaces in `cd api && npx tsc --noEmit` — run it. */
+export type WireBase = Omit<WorldSaveWire, 'version'> & { version: 2 | 3 };
+
+/** One storage namespace: the old `/worlds` (v2, fixed 64-tall) or `/v3/worlds`. */
+type Namespace<W extends WireBase> = {
+	routePrefix: string; // '/worlds' | '/v3/worlds'
+	objectPrefix: string; // 'worlds/' | 'worlds3/'
+	schema: z.ZodType<W>;
+	blocksPerChunk: (w: W) => number;
+	extraMetadata: (w: W) => Record<string, string>; // {} | { height, genVersion }
+	extraSummary: (custom: Record<string, string>) => Record<string, unknown>; // {} | { height, genVersion }
+};
+
+// The FULL anchored uuid group, exactly as the old namespace always had it.
+const UUID_SRC = '[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}';
+function objectRe(prefix: string): RegExp {
+	return new RegExp(`^${prefix.replace(/\//g, '\\/')}(${UUID_SRC})\\.json$`);
+}
 
 function isPreconditionFailure(err: unknown): boolean {
 	const code = (err as { code?: number }).code;
@@ -57,22 +81,22 @@ function bodyTooLarge(req: Request): boolean {
 	return Number.isFinite(len) && len > MAX_BODY_BYTES;
 }
 
-function validateChunks(world: WorldSaveWire): string | null {
+function validateChunks(world: WireBase, len: number): string | null {
 	for (const c of world.chunks) {
 		let blocks: Uint16Array;
 		try {
-			blocks = decodeChunk(c.blocks);
+			blocks = decodeChunk(c.blocks, len);
 		} catch {
 			return `chunk ${c.cx},${c.cz} has undecodable blocks`;
 		}
-		if (blocks.length !== BLOCKS_PER_CHUNK) {
+		if (blocks.length !== len) {
 			return `chunk ${c.cx},${c.cz} decoded to ${blocks.length} bytes`;
 		}
 		if (c.fluidMeta !== undefined) {
 			try {
 				const m = decodeFluidMeta(c.fluidMeta);
 				for (const idx of m.keys()) {
-					if (!Number.isInteger(idx) || idx < 0 || idx >= BLOCKS_PER_CHUNK) {
+					if (!Number.isInteger(idx) || idx < 0 || idx >= len) {
 						return `chunk ${c.cx},${c.cz} has fluidMeta index ${idx} out of range`;
 					}
 				}
@@ -118,12 +142,44 @@ export function createApp(bucket: BucketLike): Express {
 	app.use(express.json({ limit: '64mb' }));
 
 	app.get('/health', (_req, res) => {
-		res.json({ ok: true, codec: 2 });
+		res.json({ ok: true, codec: 3 });
 	});
 
-	app.get('/worlds', async (_req, res) => {
+	registerWorldRoutes(app, bucket, {
+		routePrefix: '/worlds',
+		objectPrefix: 'worlds/',
+		schema: worldSaveWireSchema,
+		blocksPerChunk: () => LEGACY_BLOCKS_PER_CHUNK,
+		extraMetadata: () => ({}),
+		extraSummary: () => ({}),
+	});
+
+	registerWorldRoutes(app, bucket, {
+		routePrefix: '/v3/worlds',
+		objectPrefix: 'worlds3/',
+		schema: worldSaveWireSchemaV3,
+		blocksPerChunk: (w) => 16 * w.height * 16,
+		extraMetadata: (w) => ({ height: String(w.height), genVersion: String(w.genVersion) }),
+		extraSummary: (custom) => ({
+			height: Number(custom.height),
+			genVersion: Number(custom.genVersion),
+		}),
+	});
+
+	return app;
+}
+
+function registerWorldRoutes<W extends WireBase>(
+	app: Express,
+	bucket: BucketLike,
+	ns: Namespace<W>,
+): void {
+	const objectName = (id: string) => `${ns.objectPrefix}${id}.json`;
+	const OBJECT_RE = objectRe(ns.objectPrefix);
+
+	app.get(ns.routePrefix, async (_req, res) => {
 		try {
-			const [files] = await bucket.getFiles({ prefix: 'worlds/' });
+			const [files] = await bucket.getFiles({ prefix: ns.objectPrefix });
 			const out = [];
 			for (const f of files) {
 				const m = OBJECT_RE.exec(f.name);
@@ -166,6 +222,7 @@ export function createApp(bucket: BucketLike): Express {
 						origin: 'cloud' as const,
 						sizeBytes: Number(meta.size) || 0,
 						generation: meta.generation,
+						...ns.extraSummary(custom),
 					});
 				} catch {
 					out.push({
@@ -186,7 +243,7 @@ export function createApp(bucket: BucketLike): Express {
 		}
 	});
 
-	app.get('/worlds/:id', async (req, res) => {
+	app.get(`${ns.routePrefix}/:id`, async (req, res) => {
 		const id = req.params.id;
 		if (!WORLD_ID_RE.test(id)) {
 			fail(res, 400, 'BAD_ID', 'id must be a uuid');
@@ -207,14 +264,14 @@ export function createApp(bucket: BucketLike): Express {
 		}
 	});
 
-	app.put('/worlds/:id', async (req, res) => {
+	app.put(`${ns.routePrefix}/:id`, async (req, res) => {
 		const id = req.params.id;
 		if (!WORLD_ID_RE.test(id)) {
 			fail(res, 400, 'BAD_ID', 'id must be a uuid');
 			return;
 		}
 
-		const parsed = worldSaveWireSchema.safeParse(req.body);
+		const parsed = ns.schema.safeParse(req.body);
 		if (!parsed.success) {
 			fail(res, 400, 'BAD_BODY', parsed.error.issues[0]?.message ?? 'invalid body');
 			return;
@@ -225,7 +282,7 @@ export function createApp(bucket: BucketLike): Express {
 			return;
 		}
 
-		const chunkError = validateChunks(world);
+		const chunkError = validateChunks(world, ns.blocksPerChunk(world));
 		if (chunkError) {
 			fail(res, 400, 'BAD_CHUNK', chunkError);
 			return;
@@ -268,6 +325,7 @@ export function createApp(bucket: BucketLike): Express {
 						seed: String(world.seed),
 						createdAt: String(world.createdAt),
 						updatedAt: String(world.updatedAt),
+						...ns.extraMetadata(world),
 					},
 				},
 			});
@@ -283,7 +341,7 @@ export function createApp(bucket: BucketLike): Express {
 		}
 	});
 
-	app.delete('/worlds/:id', async (req, res) => {
+	app.delete(`${ns.routePrefix}/:id`, async (req, res) => {
 		const id = req.params.id;
 		if (!WORLD_ID_RE.test(id)) {
 			fail(res, 400, 'BAD_ID', 'id must be a uuid');
@@ -311,8 +369,6 @@ export function createApp(bucket: BucketLike): Express {
 			fail(res, 500, 'SERVER', (err as Error).message);
 		}
 	});
-
-	return app;
 }
 
 /**
@@ -320,11 +376,11 @@ export function createApp(bucket: BucketLike): Express {
  * modified. A structurally perfect world with almost no chunks would otherwise
  * silently truncate the stored one.
  */
-async function shrinkGuard(file: FileLike, incoming: WorldSaveWire): Promise<string | null> {
-	let stored: WorldSaveWire;
+async function shrinkGuard(file: FileLike, incoming: WireBase): Promise<string | null> {
+	let stored: WireBase;
 	try {
 		const [buf] = await file.download();
-		stored = JSON.parse(buf.toString()) as WorldSaveWire;
+		stored = JSON.parse(buf.toString()) as WireBase;
 	} catch {
 		return null;
 	}

@@ -1,50 +1,34 @@
-import { createNoise2D } from 'simplex-noise';
-import alea from 'alea';
 import type { Chunk } from './chunk';
-import { CHUNK_SIZE_X, CHUNK_SIZE_Z } from './coords';
-import { BLOCK_BY_NAME } from '../../data/blocks.data';
+import { isLiquid } from '../../data/blocks.data';
+import type { WorldHeight } from './coords';
+import { generateChunkV1, SEA_LEVEL_V1 } from './generation.v1';
+import { generateChunkV2 } from './generation.v2';
+import { generateChunkV3 } from './v3/generate';
 
-const GRASS = BLOCK_BY_NAME['grass_block'].id;
-const DIRT = BLOCK_BY_NAME['dirt'].id;
-const STONE = BLOCK_BY_NAME['stone'].id;
-const SAND = BLOCK_BY_NAME['sand'].id;
-const WATER = BLOCK_BY_NAME['water'].id;
-const MIN_H = 24;
-const MAX_H = 34;
-const NOISE_SCALE = 1 / 64;
-export const SEA_LEVEL = 28;
-const DIRT_BAND = 3;
+/** Kept for callers of the old name; v1 sea level. */
+export const SEA_LEVEL = SEA_LEVEL_V1;
 
-export function generateChunk(chunk: Chunk, seed: number): void {
-	const rng = alea(`minicraft:${seed}`);
-	const noise = createNoise2D(rng);
+export const NEWEST_GEN_VERSION = 3;
 
-	const baseX = chunk.cx * CHUNK_SIZE_X;
-	const baseZ = chunk.cz * CHUNK_SIZE_Z;
+/** Consulted ONLY at world creation. A stored record's own `height` is authoritative afterwards. */
+export function worldProfile(genVersion: number): { height: WorldHeight } {
+	if (genVersion === 1) return { height: 64 };
+	if (genVersion === 2) return { height: 256 };
+	if (genVersion === 3) return { height: 256 };
+	throw new RangeError(`Unknown generator version ${genVersion}`);
+}
 
-	for (let lz = 0; lz < CHUNK_SIZE_Z; lz++) {
-		for (let lx = 0; lx < CHUNK_SIZE_X; lx++) {
-			const wx = baseX + lx;
-			const wz = baseZ + lz;
-			const n = noise(wx * NOISE_SCALE, wz * NOISE_SCALE);
-			const h = Math.floor(MIN_H + (n * 0.5 + 0.5) * (MAX_H - MIN_H));
+export function generateChunk(chunk: Chunk, seed: number, genVersion = 1): void {
+	const { height } = worldProfile(genVersion);
+	if (chunk.height !== height) throw new RangeError(`generator v${genVersion} needs a ${height}-high chunk, got ${chunk.height}`);
+	if (genVersion === 1) generateChunkV1(chunk, seed);
+	else if (genVersion === 2) generateChunkV2(chunk, seed);
+	else generateChunkV3(chunk, seed);
+	chunk.hasLiquid = anyLiquid(chunk.blocks);
+}
 
-			for (let y = 0; y <= h; y++) {
-				let id: number;
-				if (y === h) id = h < SEA_LEVEL ? SAND : GRASS;
-				else if (y >= h - DIRT_BAND) id = DIRT;
-				else id = STONE;
-				chunk.blocks[y * CHUNK_SIZE_X * CHUNK_SIZE_Z + lz * CHUNK_SIZE_X + lx] = id;
-			}
-
-			if (h < SEA_LEVEL) {
-				for (let y = h + 1; y <= SEA_LEVEL; y++) {
-					chunk.blocks[y * CHUNK_SIZE_X * CHUNK_SIZE_Z + lz * CHUNK_SIZE_X + lx] = WATER;
-				}
-			}
-		}
-	}
-
-	chunk.dirty = true;
-	chunk.modified = false;
+/** One pass over the chunk (≈ 0.1 ms); the flag gates the liquid-frontier rescan (spec §3.E). */
+export function anyLiquid(blocks: Uint16Array): boolean {
+	for (let i = 0; i < blocks.length; i++) if (isLiquid(blocks[i])) return true;
+	return false;
 }

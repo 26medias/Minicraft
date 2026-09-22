@@ -18,7 +18,7 @@ function stubDom(): Listeners {
 }
 
 function fakeWorld(): World {
-	return { seed: 1, modifiedChunks: () => [] } as unknown as World;
+	return { seed: 1, height: 64, genVersion: 1, saveVersion: 2, modifiedChunks: () => [] } as unknown as World;
 }
 
 const WORLD_ID = '11111111-1111-4111-8111-111111111111';
@@ -297,3 +297,30 @@ describe('AutoSave cloud behaviour', () => {
 });
 
 type SaveResultLike = { local: 'ok' | 'quota' | 'error'; cloud: 'ok' | 'failed' | 'skipped' };
+
+describe('AutoSave snapshot carries the world profile', () => {
+	beforeEach(() => stubDom());
+	afterEach(() => vi.unstubAllGlobals());
+	it('writes version 3 / height 256 / genVersion 2 for a tall world', async () => {
+		let seen: WorldSave | null = null;
+		const adapter = makeAdapter(async (s) => {
+			seen = s;
+		});
+		const world = { seed: 9, height: 256, genVersion: 2, saveVersion: 3, modifiedChunks: () => [] } as unknown as World;
+		const a = new AutoSave(adapter, world, () => PLAYER, { id: WORLD_ID, name: 'w', createdAt: 0 });
+		a.markDirty();
+		await a.flush();
+		expect(seen).toMatchObject({ version: 3, height: 256, genVersion: 2 });
+	});
+	it('keeps version 2 with height 64 for an old world', async () => {
+		let seen: WorldSave | null = null;
+		const a = makeAutoSave(
+			makeAdapter(async (s) => {
+				seen = s;
+			}),
+		);
+		a.markDirty();
+		await a.flush();
+		expect(seen).toMatchObject({ version: 2, height: 64, genVersion: 1 });
+	});
+});

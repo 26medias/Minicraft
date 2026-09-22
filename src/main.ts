@@ -6,9 +6,11 @@ import { FpCamera } from './engine/render/camera';
 import { setupPointerLock } from './engine/input/pointerLock';
 import { Player, findSafeSpawn, type Keys } from './game/player';
 import { GameLoop } from './game/loop';
+import { ChunkJobs, type WorkerLike } from './engine/world/chunk-jobs';
 import { raycastVoxel } from './engine/input/raycast';
 import { placeBlock } from './game/actions';
 import { Hud } from './ui/hud';
+import { PerfOverlay } from './ui/perf-overlay';
 import { MainMenu } from './ui/menu';
 import { OptionsMenu } from './ui/options';
 import { LocalStorageAdapter } from './persistence/localStorage';
@@ -25,9 +27,14 @@ import { LightRegistry } from './engine/render/light-registry';
 import { ColorPicker } from './ui/color-picker';
 import { LIGHT_PALETTE } from './data/light-palette.data';
 import type { Action } from './data/keybindings.data';
-import { fillChunkLights } from './engine/world/lighting';
+import { worldFromSave, applySave } from './game/apply-save';
+import { spawnV3 } from './engine/world/v3/spawn';
+import { resolveContinue, type LoadOutcome } from './game/continue-policy';
+import type { WorldSave } from './persistence/adapter';
 import { PlaytimeController, resolveSession } from './game/playtime-controller';
 import { loadSession, saveSession } from './persistence/playtime';
+import { loadSchedule } from './persistence/schedule';
+import { activeLimits, canStartNow, formatStartTime } from './game/schedule';
 import { PlaytimeOverlay } from './ui/playtime-overlay';
 import { TICK_MS } from './data/playtime.data';
 import { Inventory } from './ui/inventory';
@@ -61,15 +68,23 @@ async function main() {
 
 	setupPointerLock(renderer.gl.domElement, (dx, dy) => cam.applyMouseDelta(dx, dy));
 
-	function showMenu() {
+	function showMenu(notice?: string) {
 		menu.show((action) => {
 			if (action.type === 'options') {
+				menu.hide();   // stops the card's refresh interval while Options is up
 				options.show(() => showMenu());
 				return;
 			}
+			// Belt and braces under the menu model: never enter startGame (which
+			// hides the menu and registers listeners) when the schedule says no.
+			// Applies to 'new' too, so a re-added New World button cannot bypass it.
+			if (!canStartNow(loadSchedule(), loadSession(), Date.now())) {
+				showMenu();
+				return;
+			}
 			if (action.type === 'new') startGame(action.id, action.seed, action.name, null);
-			else startGame(action.id, action.seed, '', 'continue');
-		});
+			else startGame(action.id, action.seed, action.name, 'continue');
+		}, notice);
 	}
 
 	showMenu();
@@ -83,16 +98,31 @@ async function main() {
 		menu.hide();
 		// Clear any lights from a prior session of startGame (returning from main menu to a new world).
 		for (const entry of [...lights.entries()]) lights.remove(entry.x, entry.y, entry.z);
-		const world = new World(seed);
-		let createdAt = Date.now();
-		let worldName = name;
 
-		const player = new Player([256, 60, 256]);
+		// Load BEFORE building anything. A failed load used to console.warn and start
+		// a fresh world, whose first autosave pruned the local copy to zero chunks.
+		let save: WorldSave | null = null;
+		if (mode === 'continue') {
+			let outcome: LoadOutcome;
+			try {
+				outcome = { save: await adapter.loadWorld(worldId) };
+			} catch (err) {
+				console.error('loadWorld failed', err);
+				outcome = { error: err };
+			}
+			const decision = resolveContinue(outcome, name || 'this world');
+			if (!decision.ok) {
+				showMenu(decision.notice);
+				return;
+			}
+			save = decision.save;
+		}
 
 		// A legacy (v1) world is adopted under a fresh uuid the first time it is played.
 		// Writing v2 records under its `legacy:` id would make both namespaces yield the
 		// same id next launch: the v1 copy would win the load and the prune sweep would
-		// then delete this session's chunks.
+		// then delete this session's chunks. Adoption runs only AFTER a successful load,
+		// so a legacy world that refuses to open really has had nothing changed.
 		let activeId = worldId;
 		if (isLegacyId(worldId)) {
 			const seedOfLegacy = seedFromLegacyId(worldId);
@@ -100,50 +130,58 @@ async function main() {
 			localAdapter.adoptLegacy(seedOfLegacy, activeId);
 		}
 
+		// The World comes from the record (its stored height is authoritative) or,
+		// for a new world, from the newest generator's profile.
+		const world = save ? worldFromSave(save) : World.create(seed);
+		// New v3 worlds: the spawn column is searched once, in memory (spec §9). Show the
+		// message and yield TWO frames: the first rAF callback runs before style/layout/paint,
+		// so a single yield lets the synchronous search start before the text is on screen.
+		let v3Spawn: [number, number, number] | null = null;
+		if (!save && world.genVersion >= 3) {
+			menu.showBuilding('Building your world…');
+			const nextFrame = () => new Promise<void>((r) => requestAnimationFrame(() => r()));
+			await nextFrame(); await nextFrame();
+			const s = spawnV3(seed);
+			v3Spawn = [s.x + 0.5, world.height - 1, s.z + 0.5];
+			menu.hide();
+		}
+		let createdAt = Date.now();
+		let worldName = name;
+		const player = new Player([256.5, world.height - 1, 256.5], world.height);
+
 		let savedSpawn: [number, number, number] | null = null;
 		let savedHotbar: BlockId[] | undefined;
 		let savedSelected = 0;
-		if (mode === 'continue') {
-			const save = await adapter.loadWorld(worldId);
-			if (!save) {
-				console.warn('No save for world', worldId);
-			} else {
-				worldName = save.name;
-				createdAt = save.createdAt;
-				for (const rc of save.chunks) {
-					const c = world.ensureChunk(rc.cx, rc.cz);
-					c.blocks.set(rc.blocks);
-					c.fluidMeta.clear();
-					if (rc.fluidMeta) {
-						for (const [idx, packed] of rc.fluidMeta) c.fluidMeta.set(idx, packed);
-					}
-					c.modified = true;
-					c.dirty = true;
-				}
-				// Lights were computed during ensureChunk using the freshly-generated blocks, then
-				// overwritten by saved blocks. Recompute now that all saved blocks are in place so
-				// cross-chunk BFS sees the correct final state.
-				for (const rc of save.chunks) {
-					const c = world.getChunk(rc.cx, rc.cz);
-					if (c) fillChunkLights(world, c);
-				}
-				// Repairs a save written while the player was outside the world: one
-				// world came back at y = -193917, which loads as an empty sky. Set
-				// after the chunks are applied so there is terrain to stand on.
-				savedSpawn = [save.player.x, save.player.y, save.player.z];
-				cam.yaw = save.player.yaw;
-				cam.pitch = save.player.pitch;
-				savedHotbar = save.player.hotbar;
-				savedSelected = save.player.selected;
-				if (save?.lights) {
-					for (const l of save.lights) lights.add(l.x, l.y, l.z, l.color);
-				}
+		if (save) {
+			worldName = save.name;
+			createdAt = save.createdAt;
+			try {
+				applySave(world, save);
+			} catch (err) {
+				console.error('applySave failed', err);
+				const d = resolveContinue({ error: err }, save.name);
+				showMenu(d.ok ? 'Nothing was changed.' : d.notice);
+				return;
+			}
+			// Repairs a save written while the player was outside the world: one
+			// world came back at y = -193917, which loads as an empty sky. Set
+			// after the chunks are applied so there is terrain to stand on.
+			savedSpawn = [save.player.x, save.player.y, save.player.z];
+			cam.yaw = save.player.yaw;
+			cam.pitch = save.player.pitch;
+			savedHotbar = save.player.hotbar;
+			savedSelected = save.player.selected;
+			if (save.lights) {
+				for (const l of save.lights) lights.add(l.x, l.y, l.z, l.color);
 			}
 		}
 
 		// Ground the player only once every saved chunk is in the world, so there is
-		// something to stand on.
-		if (savedSpawn) player.position = findSafeSpawn(world, savedSpawn);
+		// something to stand on. New worlds spawn on the generated surface (v2: ~120),
+		// saved ones near where they left off.
+		player.position = findSafeSpawn(world, savedSpawn ?? v3Spawn ?? [256.5, world.height - 1, 256.5]);
+		// Streaming starts here: everything before (spawn search behind "Building your world…") is a one-time cost.
+		performance.mark('minicraft:world-ready');
 
 		// Nine slots, saved per world. Saves from before the inventory hold the
 		// whole block pool and get the default bar (see resolveHotbar).
@@ -297,6 +335,19 @@ async function main() {
 			syncHotbar();
 		});
 
+		// F3 toggles the performance overlay (spec §3.F). Gated more strictly than Tab on purpose:
+		// nothing while frozen, with the inventory or colour picker open, or with an <input> (the PIN
+		// field) focused. Only the key handler lives here; `loop.onFrame` is assigned after the loop
+		// is constructed below, since `loop` is in its temporal dead zone at this point.
+		const perfOverlay = new PerfOverlay(app);
+		window.addEventListener('keydown', (e) => {
+			if (e.code !== 'F3') return;
+			if (frozen || inventoryOpen || colorPicker.isOpen) return;
+			if ((document.activeElement as HTMLElement | null)?.tagName === 'INPUT') return;
+			e.preventDefault();
+			perfOverlay.toggle();
+		});
+
 		const autosave = new AutoSave(
 			adapter,
 			world,
@@ -341,7 +392,25 @@ async function main() {
 			overlay,
 			lights,
 			highlight,
+			// Shadows + meshing off the main thread (spec §3.D); the URL is relative to src/main.ts. The
+			// cast: ChunkJobs only assigns `onmessage` with a `{ data }` handler, which the DOM Worker's
+			// MessageEvent satisfies, but strictFunctionTypes rejects the property assignment.
+			new ChunkJobs(
+				() => new Worker(new URL('./engine/world/chunk.worker.ts', import.meta.url), { type: 'module' }) as unknown as WorkerLike,
+				atlas.uvTable,
+			),
 		);
+		loop.onFrame = (_dt, tickMs, frameMs) => {
+			const now = performance.now();
+			perfOverlay.tick(now, { t: now, frameMs, tickMs }, () => {
+				const mem = (performance as { memory?: { usedJSHeapSize: number } }).memory;
+				return {
+					...loop.stats,
+					...renderer.info(),
+					heapMB: mem ? Math.round(mem.usedJSHeapSize / 1048576) : 'n/a',
+				};
+			});
+		};
 		loop.onBlockBroken = () => autosave.markDirty();
 		loop.onWorldMutated = () => autosave.markDirty();
 		loop.onMiningProgress = (p) => hud.setMiningProgress(p);
@@ -352,11 +421,15 @@ async function main() {
 		// so the interval and listener below need no owner, like the window
 		// listeners above. The first tick runs before loop.start() on purpose:
 		// a session already in its break must freeze before the first frame.
-		if (opts.playLimitMin !== null) {
-			const session = resolveSession(loadSession(), opts.playLimitMin, opts.playBreakMin, Date.now());
+		const loadedSchedule = loadSchedule();
+		const schedule = loadedSchedule.kind === 'armed' ? loadedSchedule.schedule : null;
+		const limits = activeLimits(schedule, opts);
+		if (limits.limitMin !== null) {
+			const session = resolveSession(loadSession(), limits.limitMin, limits.breakMin, Date.now(), schedule);
 			saveSession(session);
 			const playtime = new PlaytimeController(session, {
 				overlay: new PlaytimeOverlay(app),
+				lockedText: schedule ? `PLAY AGAIN AT ${formatStartTime(schedule.startMin, Date.now()).toUpperCase()} TOMORROW` : undefined,
 				freeze: () => {
 					closeInventory();
 					loop.setLeftMouseDown(false);
@@ -389,7 +462,8 @@ async function main() {
 		loop.start();
 		if (import.meta.env.DEV) {
 			// Debug oracle for manual checks at localhost only; tree-shaken from the build.
-			(window as unknown as { __mc: unknown }).__mc = { world, player, loop };
+			// `apiUrl` lets the bench log which save API the page is wired to (never production).
+			(window as unknown as { __mc: unknown }).__mc = { world, player, loop, apiUrl };
 		}
 
 		window.addEventListener('mousedown', (e) => {

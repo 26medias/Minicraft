@@ -4,7 +4,7 @@ import {
 	Player,
 	type Keys,
 	VOID_FLOOR_Y,
-	SKY_CEILING_Y,
+	skyCeilingY,
 	sanitizeSpawn,
 	findSafeSpawn,
 } from './player';
@@ -92,7 +92,7 @@ describe('Player fly mode', () => {
 	});
 
 	it('flying player still collides with walls (no clipping)', () => {
-		const w = new World(1);
+		const w = new World(1, { height: 64 });
 		// Wall at x=102 across a vertical strip.
 		for (let dy = 59; dy <= 63; dy++) w.setBlock(102, dy, 100, stone);
 		const p = new Player([100, 60, 99.7]);
@@ -180,7 +180,7 @@ describe('Player cursor-directed movement', () => {
 	});
 
 	it('swim speed is 60% of walk speed', () => {
-		const w = new World(1);
+		const w = new World(1, { height: 64 });
 		for (let y = 58; y <= 63; y++) w.setBlock(100, y, 100, water);
 		const p = new Player([100, 60, 100]);
 		p.update(0.01, w, noKeys(), FWD, RIGHT);
@@ -244,7 +244,7 @@ describe('Player world bounds', () => {
 			p.vy = 20;
 			p.update(1 / 60, w, { ...noKeys, jump: true }, fwd, right);
 		}
-		expect(p.position[1]).toBeLessThanOrEqual(SKY_CEILING_Y);
+		expect(p.position[1]).toBeLessThanOrEqual(skyCeilingY(64));
 	});
 
 	it('keeps the player inside the horizontal world bounds', () => {
@@ -261,7 +261,7 @@ describe('Player world bounds', () => {
 		// Noah's world was saved at y = -193917 after falling out of the map.
 		const p = new Player(sanitizeSpawn([282.3, -193917.6, 512.87]));
 		expect(p.position[1]).toBeGreaterThanOrEqual(VOID_FLOOR_Y);
-		expect(p.position[1]).toBeLessThanOrEqual(SKY_CEILING_Y);
+		expect(p.position[1]).toBeLessThanOrEqual(skyCeilingY(64));
 		expect(p.position[2]).toBeLessThan(512);
 		expect(p.position[2]).toBeGreaterThanOrEqual(0);
 	});
@@ -292,7 +292,7 @@ describe('findSafeSpawn', () => {
 		// Saved far outside the map, below the world — Noah's actual broken save.
 		const p = findSafeSpawn(w, [282.3, -193917.6, 512.87]);
 		expect(p[1]).toBeGreaterThan(VOID_FLOOR_Y);
-		expect(p[1]).toBeLessThanOrEqual(SKY_CEILING_Y);
+		expect(p[1]).toBeLessThanOrEqual(skyCeilingY(64));
 		expect(p[0]).toBeLessThanOrEqual(511.5);
 		expect(p[2]).toBeLessThanOrEqual(511.5);
 	});
@@ -308,5 +308,45 @@ describe('findSafeSpawn', () => {
 		expect(p[1]).toBe(26);
 		expect(Math.abs(p[0] - 264.5)).toBeLessThan(0.01);
 		expect(Math.abs(p[2] - 264.5)).toBeLessThan(0.01);
+	});
+});
+
+describe('Player at height 256', () => {
+	it('ceiling scales with world height', () => {
+		expect(skyCeilingY(64)).toBe(120);
+		expect(skyCeilingY(256)).toBe(312);
+	});
+	it('sanitizeSpawn clamps y to the ceiling for the given height', () => {
+		expect(sanitizeSpawn([10, 1000, 10], 256)[1]).toBe(312);
+		expect(sanitizeSpawn([10, 1000, 10])[1]).toBe(120);
+	});
+	it('a flying player in a tall world is stopped at 312, not 120', () => {
+		const w = new World(1, { height: 256 });
+		const c = w.ensureChunk(16, 16); c.blocks.fill(AIR); c.lights.fill(0); c.liquidFrontier.clear();
+		const p = new Player([260, 200, 260], 256);
+		p.toggleFly();
+		// Fly mode is cursor-driven: look straight up and hold forward to ascend.
+		const keys = noKeys();
+		keys.forward = true;
+		const up = new THREE.Vector3(0, 1, 0);
+		for (let i = 0; i < 400; i++) p.update(0.05, w, keys, up, RIGHT);
+		expect(p.position[1]).toBeGreaterThan(200);
+		expect(p.position[1]).toBeLessThanOrEqual(skyCeilingY(256));
+		expect(p.position[1]).toBe(skyCeilingY(256));
+	});
+	it('findSafeSpawn searches the whole 256 column and lands on a platform at y=200', () => {
+		const w = new World(1, { height: 256 });
+		const c = w.ensureChunk(16, 16); c.blocks.fill(AIR); c.lights.fill(0); c.liquidFrontier.clear();
+		w.setBlock(260, 200, 260, stone);
+		expect(findSafeSpawn(w, [260.5, 250, 260.5])).toEqual([260.5, 201, 260.5]);
+		// From below the platform with nothing under: search from the top of the column finds it too.
+		expect(findSafeSpawn(w, [260.5, 5, 260.5])[1]).toBe(201);
+	});
+	it('spawn on a fresh v2 world lands on the generated surface, not y=60', () => {
+		// pinned to genVersion 2: this test is about v2 terrain, not the newest generator
+		const w = new World(99, { height: 256, genVersion: 2 });
+		const [, y] = findSafeSpawn(w, [256.5, w.height - 1, 256.5]);
+		expect(y).toBeGreaterThanOrEqual(115);
+		expect(y).toBeLessThanOrEqual(131);
 	});
 });

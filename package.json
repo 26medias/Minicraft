@@ -10,9 +10,12 @@
 		"preview": "vite preview",
 		"build-atlas": "tsx scripts/build-atlas.ts",
 		"gen-catalog": "tsx scripts/gen-catalog.ts",
+		"worldgen:kid": "tsx scripts/worldgen-kid.ts",
+		"worldgen:check": "tsx scripts/worldgen-check.ts 1,2,3,5,8,13,21,34 && tsx scripts/worldgen-kid.ts 1,2,3,5,8,13,21,34",
 		"test": "vitest run",
 		"test:watch": "vitest",
 		"lint": "eslint .",
+		"perf:bench": "tsx scripts/perf-bench.ts",
 		"format": "prettier --write ."
 	},
 	"dependencies": {
@@ -30,6 +33,7 @@
 		"@vitest/ui": "^4.1.5",
 		"eslint": "^10.2.1",
 		"eslint-config-prettier": "^10.1.8",
+		"playwright": "^1.47.0",
 		"prettier": "^3.8.3",
 		"sharp": "^0.33.0",
 		"tsx": "^4.19.0",

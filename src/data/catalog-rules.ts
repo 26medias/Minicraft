@@ -164,6 +164,8 @@ const HARDNESS: Record<BlockGroup, number> = {
 export function hardnessFor(group: BlockGroup): number {
 	return HARDNESS[group];
 }
+/** Per-block hardness that beats the group rule. 0 = unbreakable (mining and TNT both refuse). */
+export const HARDNESS_OVERRIDES: Record<string, number> = { bedrock: 0 };
 
 export function labelFor(name: string): string {
 	return name.split('_').map((w) => w.charAt(0).toUpperCase() + w.slice(1)).join(' ');
@@ -278,7 +280,7 @@ export function makeRows(
 		const group = groupOf(name);
 		rows.push({
 			id, name, label: labelFor(name), solid: true, transparent, translucent,
-			hardness: hardnessFor(group), lightLevel: LIGHT_LEVELS[name] ?? 0,
+			hardness: HARDNESS_OVERRIDES[name] ?? hardnessFor(group), lightLevel: LIGHT_LEVELS[name] ?? 0,
 			lightFilter: transparent ? 0 : 15, liquid: 'none', textures: c.textures, group,
 		});
 	}

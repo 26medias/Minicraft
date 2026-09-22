@@ -2,6 +2,15 @@ import * as THREE from 'three';
 import type { Chunk } from '../world/chunk';
 import type { ChunkMesh, ChunkMeshResult } from '../world/mesher';
 import type { LoadedAtlas } from './atlas';
+import { MESH_RADIUS } from '../world/radii';
+
+/**
+ * Fog from the mesh ring (spec §3.E): far sits inside the mesh frontier (≥ MESH_RADIUS × 16 blocks) so the
+ * unload edge is never visible. Near is 40: a 48-block progressive fade. The earlier 8-block band kept a
+ * distant summit crisp but read as a wall of fog appearing (parent play-test); distant hills now read hazy.
+ */
+export const FOG_FAR = MESH_RADIUS * 16 - 8;
+export const FOG_NEAR = 40;
 
 export class Renderer {
 	readonly scene: THREE.Scene;
@@ -16,11 +25,12 @@ export class Renderer {
 	readonly translucentMaterial: THREE.Material;
 	private tickFn: ((dt: number) => void) | null = null;
 	private last = performance.now();
+	private gpuString: string | null = null;
 
 	constructor(container: HTMLElement, atlas: LoadedAtlas) {
 		this.scene = new THREE.Scene();
 		this.scene.background = new THREE.Color(0x87ceeb); // sky blue
-		this.scene.fog = new THREE.Fog(0x87ceeb, 60, 200);
+		this.scene.fog = new THREE.Fog(0x87ceeb, FOG_NEAR, FOG_FAR);
 
 		this.camera = new THREE.PerspectiveCamera(75, 1, 0.1, 500);
 		this.camera.position.set(8, 70, 8);
@@ -66,8 +76,30 @@ export class Renderer {
 
 		this.resize();
 		window.addEventListener('resize', () => this.resize());
+		this.precompileChunkMaterials();
 		requestAnimationFrame(this.frame);
 	}
+
+	/**
+	 * Compile the three chunk shader programs now, with this scene's fog, instead of on the first frame a
+	 * liquid or translucent chunk becomes visible (measured: one ~35 ms shader compile mid-walk).
+	 */
+	private precompileChunkMaterials(): void {
+		const geo = new THREE.BufferGeometry();
+		geo.setAttribute('position', new THREE.BufferAttribute(new Float32Array(9), 3));
+		geo.setAttribute('normal', new THREE.BufferAttribute(new Float32Array(9), 3));
+		geo.setAttribute('uv', new THREE.BufferAttribute(new Float32Array(6), 2));
+		geo.setAttribute('color', new THREE.BufferAttribute(new Float32Array(9), 3));
+		const probes = [this.material, this.liquidMaterial, this.translucentMaterial].map((m) => new THREE.Mesh(geo, m));
+		for (const p of probes) this.chunkGroup.add(p);
+		this.gl.compile(this.scene, this.camera);
+		for (const p of probes) this.chunkGroup.remove(p);
+		geo.dispose();
+		// First GPU upload of the atlas (measured 9 ms texSubImage2D + up to 16 ms getExtension on the first
+		// frame that drew a chunk) happens now instead of mid-load.
+		this.gl.initTexture(this.material instanceof THREE.MeshBasicMaterial && this.material.map ? this.material.map : new THREE.Texture());
+	}
+
 
 	onTick(fn: (dt: number) => void) {
 		this.tickFn = fn;
@@ -126,6 +158,18 @@ export class Renderer {
 		}
 	}
 
+	/** Eviction (spec §3.E): remove and dispose the chunk's three meshes; a no-op when nothing is mounted. */
+	unmountChunk(cx: number, cz: number): void {
+		const k = `${cx},${cz}`;
+		for (const map of [this.chunkMeshes, this.liquidMeshes, this.translucentMeshes]) {
+			const m = map.get(k);
+			if (!m) continue;
+			this.chunkGroup.remove(m);
+			(m.geometry as THREE.BufferGeometry).dispose();
+			map.delete(k);
+		}
+	}
+
 	private buildGeometry(mesh: ChunkMesh): THREE.BufferGeometry {
 		const g = new THREE.BufferGeometry();
 		g.setAttribute('position', new THREE.BufferAttribute(mesh.positions, 3));
@@ -143,6 +187,23 @@ export class Renderer {
 		this.gl.setSize(w, h);
 		this.camera.aspect = w / h;
 		this.camera.updateProjectionMatrix();
+	}
+
+	/** Read by the F3 overlay (spec §3.F). Draw calls and triangles are last frame's `gl.info`. */
+	info(): { calls: number; triangles: number; pixelRatio: number; width: number; height: number; gpu: string } {
+		if (this.gpuString === null) {
+			const ctx = this.gl.getContext();
+			const ext = ctx.getExtension('WEBGL_debug_renderer_info');
+			this.gpuString = ext ? String(ctx.getParameter(ext.UNMASKED_RENDERER_WEBGL)) : 'n/a';
+		}
+		return {
+			calls: this.gl.info.render.calls,
+			triangles: this.gl.info.render.triangles,
+			pixelRatio: this.gl.getPixelRatio(),
+			width: this.gl.domElement.width,
+			height: this.gl.domElement.height,
+			gpu: this.gpuString,
+		};
 	}
 
 	private frame = () => {

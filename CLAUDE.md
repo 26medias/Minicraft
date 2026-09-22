@@ -28,7 +28,7 @@ Layout: `src/engine/` (world, render, input), `src/game/` (loop, player,
 liquids, TNT), `src/ui/`, `src/persistence/`, `src/data/` (`*.data.ts` are pure
 data). `api/` holds the Cloud Function for cloud saves and deploys separately.
 
-Per-subsystem docs live in `docs/`: `lighting.md`, `liquids.md`, `movement.md`,
+Per-subsystem docs live in `docs/`: `lighting.md`, `liquids.md`, `movement.md`, `worldgen.md`, `performance.md`,
 `persistence.md`. `docs/specs.md` is the source of truth for the tech stack.
 
 ⚠ **The kid's real worlds live in the localStorage of

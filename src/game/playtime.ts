@@ -16,6 +16,8 @@ export type PlaytimeSession = {
 	playedMs: number;
 	/** Wall clock when the limit was hit; null while playing. */
 	frozenAt: number | null;
+	/** Wall clock when this session was created; under a schedule, the day it belongs to. */
+	startedAt: number;
 	/** Wall clock of the last write; drives staleness. */
 	updatedAt: number;
 };

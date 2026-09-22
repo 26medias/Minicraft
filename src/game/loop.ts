@@ -1,11 +1,13 @@
 import type { World } from '../engine/world/world';
+import type { Chunk } from '../engine/world/chunk';
 import type { FpCamera } from '../engine/render/camera';
 import type { Renderer } from '../engine/render/renderer';
 import type { Player, Keys } from './player';
-import { meshChunk, type UvFn } from '../engine/world/mesher';
-import { computeChunkShadows } from '../engine/world/shadows';
+import { meshChunk, type ChunkMeshResult, type UvFn } from '../engine/world/mesher';
+import { computeChunkShadows, ensureShadowNeighbourhood, hashSunlit } from '../engine/world/shadows';
+import type { ChunkJobs } from '../engine/world/chunk-jobs';
 import { raycastVoxel, type VoxelHit } from '../engine/input/raycast';
-import { AIR, BLOCKS, BLOCK_BY_NAME, isSolid, isLiquid, type BlockId } from '../data/blocks.data';
+import { AIR, BLOCKS, BLOCK_BY_NAME, isSolid, type BlockId } from '../data/blocks.data';
 import type { ParticleSystem } from '../engine/render/particles';
 import type { PrimedOverlay } from '../engine/render/primed-overlay';
 import type { LightRegistry } from '../engine/render/light-registry';
@@ -14,11 +16,27 @@ import { canReplace, igniteTnt, type PrimedEntry } from './actions';
 import { detonate, tntKey, TNT_CHAIN_FUSE, TNT_PRIME_FUSE } from './tnt';
 import { updateLightsForBlockChange } from '../engine/world/lighting';
 import { LiquidScheduler } from './liquid-scheduler';
+import { chunkIndex, chunkIndexOrNeg, WORLD_CHUNKS_Z } from '../engine/world/coords';
+import { planFrame, chebyshev, budgetFor, MESH_RADIUS, UNMOUNT_RADIUS, DATA_RADIUS } from './chunk-scheduler';
 
 const LAMP_ID = BLOCK_BY_NAME['lamp'].id;
 
-const VIEW_RADIUS = 4; // chunks loaded around the player
+/** Walk/physics ring; the mesh ring is MESH_RADIUS (src/engine/world/radii.ts). */
+export const VIEW_RADIUS = 4;
 const REACH = 6;
+
+/** Spec §3.C.1: a chunk that just came into existence makes every already-shadowed 3×3 neighbour stale. The loop's arrival hook (not World.ensureChunk: gate 2). */
+export function markChunkArrived(world: World, c: Chunk): void {
+	for (let dx = -1; dx <= 1; dx++) for (let dz = -1; dz <= 1; dz++) {
+		const n = world.getChunk(c.cx + dx, c.cz + dz);
+		if (n && n !== c) n.shadowsDirty = true;
+	}
+}
+
+/** [+x, −x, +z, −z] via getChunk (never ensureChunk). */
+function axisNeighbours(world: World, c: Chunk): (Chunk | undefined)[] {
+	return [world.getChunk(c.cx + 1, c.cz), world.getChunk(c.cx - 1, c.cz), world.getChunk(c.cx, c.cz + 1), world.getChunk(c.cx, c.cz - 1)];
+}
 
 type MiningState = {
 	target: { x: number; y: number; z: number };
@@ -34,9 +52,30 @@ export type BlockBrokenEvent = {
 	blockId: BlockId;
 };
 
+/** Time a new chunk needs (generate + light, measured ≈ 7.5 ms median on v3): don't start one with less left. */
+const CHUNK_GEN_RESERVE_MS = 10;
+
 export class GameLoop {
-	private dirtyChunks = new Set<string>();
-	private mountedChunks = new Set<string>();
+	/** All keyed by the flat chunk index (coords.chunkIndex); only ever filled through chunkIndexOrNeg. */
+	private streamSet = new Set<number>();
+	private editLane = new Set<number>();
+	/** Chunks dirtied only by shadow invalidation: re-meshed only when their sunlitHash changed (spec §3.E). */
+	private shadowOnly = new Set<number>();
+	/** Deadline of the current frame's stream budget (performance.now() ms), set before planFrame. */
+	private frameDeadline = 0;
+	/** Chunk objects whose liquid was already seeded (re-entry creates a new object, so it is seeded again). */
+	private liquidSeeded = new WeakSet<Chunk>();
+	private mountedChunks = new Set<number>();
+	/** Posted to the worker, reply not yet in. Skipped by loadNearbyChunks and the stream order (spec §3.D). */
+	private inFlightIndex = new Set<number>();
+	/** The index mountStream could not post this frame (worker full): it must stay in the stream set. */
+	private refusedIndex = -1;
+	private lastPlayerChunk = -1;
+	private lastPlayerPos: [number, number] | null = null;
+	private horizontalSpeed = 0;
+	private initialLoad = true;
+	private moving = false;
+	private editStartedAt = 0;
 	private mining: MiningState | null = null;
 	private aim: VoxelHit | null = null;
 	private leftMouseDown = false;
@@ -55,6 +94,21 @@ export class GameLoop {
 	 */
 	paused = false;
 
+	/** Read by the F3 overlay (Task 7) and the bench (Task 8). Stub in this task; Tasks 4/5/6 fill the fields. */
+	/**
+	 * `lastEditMs`: click-to-mounted latency, including the wait for the next tick (informational).
+	 * `lastEditWorkMs`: main-thread time spent re-meshing the edit lane in that tick (the bench's edit gate).
+	 */
+	stats = { streamQueue: 0, editQueue: 0, lastEditMs: -1, lastEditWorkMs: -1, mounted: 0, data: 0, workerInFlight: 0 };
+
+	/**
+	 * F3 overlay hook (spec §3.F). Called at the end of every tick, paused or not, with the clamped
+	 * `dt`, this tick's main-thread duration and the RAW `performance.now()` delta since the last
+	 * tick (`renderer.frame` clamps `dt` at 100 ms, so a 400 ms hitch would otherwise read as 100).
+	 */
+	onFrame: ((dt: number, tickMs: number, frameMs: number) => void) | null = null;
+	private lastFrameAt = -1;
+
 	constructor(
 		private world: World,
 		private renderer: Renderer,
@@ -66,16 +120,72 @@ export class GameLoop {
 		private overlay: PrimedOverlay | null = null,
 		private lights: LightRegistry | null = null,
 		private highlight: FaceHighlight | null = null,
+		private jobs: ChunkJobs | null = null,
 	) {
 		this.scheduler = new LiquidScheduler(
 			this.world,
 			(cx, cz) => this.markChunkDirty(cx, cz),
 			(x, y, z) => this.applyLightUpdate(x, y, z),
+			// DEV assertion (spec §3.E): no scheduler read may reach beyond the data ring of the CURRENT player chunk.
+			(x, z) => {
+				const pcx = Math.floor(this.player.position[0] / 16), pcz = Math.floor(this.player.position[2] / 16);
+				return Math.max(Math.abs(Math.floor(x / 16) - pcx), Math.abs(Math.floor(z / 16) - pcz)) <= DATA_RADIUS;
+			},
 		);
+		if (this.jobs) {
+			this.jobs.onReply = (job, sunlit, mesh) => this.onJobReply(job.chunk, sunlit, mesh);
+			this.jobs.onDropped = (job) => this.onJobDropped(job.cx, job.cz);
+		}
 	}
 
-	markChunkDirty(cx: number, cz: number) {
-		this.dirtyChunks.add(`${cx},${cz}`);
+	/** Spec §3.D "wanted": within MESH_RADIUS of the CURRENT player chunk (the enqueue ring, not the evictor's). */
+	private wanted(i: number): boolean {
+		return chebyshev(i, Math.floor(this.player.position[0] / 16), Math.floor(this.player.position[2] / 16)) <= MESH_RADIUS;
+	}
+
+	/** Fresh reply (identity + rev checked by ChunkJobs): store sunlit, mount, re-dirty mounted axis neighbours shadowOnly. */
+	private onJobReply(c: Chunk, sunlit: Uint8Array, mesh: ChunkMeshResult): void {
+		const idx = chunkIndex(c.cx, c.cz);
+		this.inFlightIndex.delete(idx);
+		if (!this.wanted(idx)) return; // player left: do not mount what the evictor would drop next frame
+		c.sunlit.set(sunlit);
+		c.sunlitHash = hashSunlit(sunlit);
+		c.shadowsDirty = false;
+		this.renderer.mountChunkMesh(c, mesh);
+		this.mountedChunks.add(idx);
+		// Seams (spec §3.D): mounted axis neighbours sample this chunk's final sunlit at their border
+		// corners → re-dirty them shadowOnly; the sunlitHash compare keeps most from re-meshing.
+		for (const n of axisNeighbours(this.world, c)) {
+			if (n && this.mountedChunks.has(chunkIndex(n.cx, n.cz))) {
+				n.shadowsDirty = true;
+				n.rev++;
+				this.markChunkDirty(n.cx, n.cz, { shadowOnly: true });
+			}
+		}
+	}
+
+	/** Invariant (spec §3.D): a chunk stays dirty until a reply is applied — a dropped reply re-dirties it. */
+	private onJobDropped(cx: number, cz: number): void {
+		const idx = chunkIndex(cx, cz);
+		this.inFlightIndex.delete(idx);
+		if (this.wanted(idx)) this.streamSet.add(idx);
+	}
+
+	/**
+	 * `edit`: the chunk goes to the budget-exempt edit lane, re-meshed on the next tick before any
+	 * streaming. `shadowOnly`: dirtied only by shadow invalidation; the stream lane re-meshes it only
+	 * when its sunlitHash changed.
+	 */
+	markChunkDirty(cx: number, cz: number, opts?: { edit?: boolean; shadowOnly?: boolean }) {
+		const i = chunkIndexOrNeg(cx, cz);
+		if (i < 0) return;
+		if (opts?.edit) {
+			this.editLane.add(i);
+			if (!this.editStartedAt) this.editStartedAt = performance.now();
+		} else {
+			this.streamSet.add(i);
+			if (opts?.shadowOnly) this.shadowOnly.add(i);
+		}
 	}
 
 	applyLightUpdate(x: number, y: number, z: number): void {
@@ -83,14 +193,16 @@ export class GameLoop {
 			this.lights?.getColor(lx, ly, lz) ?? null;
 		const touched = updateLightsForBlockChange(this.world, x, y, z, getLampColor);
 		for (const c of touched) {
-			this.markChunkDirty(c.cx, c.cz);
+			this.markChunkDirty(c.cx, c.cz, { edit: true });
 			c.shadowsDirty = true;
+			c.rev++;
 		}
 		// Also flag chunks in the shadow direction (SE of the edit) since a placed/removed
 		// block can shadow further SE.
 		const edited = this.world.getChunk(Math.floor(x / 16), Math.floor(z / 16));
 		if (edited) {
 			edited.shadowsDirty = true;
+			edited.rev++;
 			const seNeighbors = [
 				this.world.getChunk(edited.cx + 1, edited.cz),
 				this.world.getChunk(edited.cx, edited.cz + 1),
@@ -99,23 +211,28 @@ export class GameLoop {
 			for (const n of seNeighbors) {
 				if (n) {
 					n.shadowsDirty = true;
-					this.markChunkDirty(n.cx, n.cz);
+					n.rev++;
+					this.markChunkDirty(n.cx, n.cz, { shadowOnly: true });
 				}
 			}
 		}
 	}
 
-	/** Mark the chunk containing a world block + any neighbor chunks if the block sits on a chunk edge. */
+	/**
+	 * Mark the chunk containing a world block + any neighbor chunks if the block sits on a chunk
+	 * edge. All go to the edit lane: both sides of a shared face must re-mesh for it to appear.
+	 */
 	markChunkDirtyAround(wx: number, wz: number) {
 		const cx = Math.floor(wx / 16);
 		const cz = Math.floor(wz / 16);
-		this.markChunkDirty(cx, cz);
+		const edit = { edit: true };
+		this.markChunkDirty(cx, cz, edit);
 		const lx = wx - cx * 16,
 			lz = wz - cz * 16;
-		if (lx === 0) this.markChunkDirty(cx - 1, cz);
-		if (lx === 15) this.markChunkDirty(cx + 1, cz);
-		if (lz === 0) this.markChunkDirty(cx, cz - 1);
-		if (lz === 15) this.markChunkDirty(cx, cz + 1);
+		if (lx === 0) this.markChunkDirty(cx - 1, cz, edit);
+		if (lx === 15) this.markChunkDirty(cx + 1, cz, edit);
+		if (lz === 0) this.markChunkDirty(cx, cz - 1, edit);
+		if (lz === 15) this.markChunkDirty(cx, cz + 1, edit);
 	}
 
 	setLeftMouseDown(down: boolean) {
@@ -177,10 +294,20 @@ export class GameLoop {
 	}
 
 	private tick(dt: number) {
+		const start = performance.now();
+		const frameMs = this.lastFrameAt < 0 ? 0 : start - this.lastFrameAt;
+		this.lastFrameAt = start;
+		this.tickBody(dt);
+		this.onFrame?.(dt, performance.now() - start, frameMs);
+	}
+
+	private tickBody(dt: number) {
 		if (this.paused) {
 			this.cam.sync(this.renderer.camera);
+			this.updateSpeed(dt);
 			this.loadNearbyChunks();
 			this.flushDirtyChunks();
+			this.evict();
 			this.highlight?.hide();
 			return;
 		}
@@ -206,9 +333,54 @@ export class GameLoop {
 		this.onFlyStateChange?.(this.player.flying ? this.player.flySpeedTier : null);
 		this.particles?.tick(dt);
 		this.simulate(dt);
+		this.evict();
 		this.overlay?.tick(dt);
+		this.updateSpeed(dt);
 		this.loadNearbyChunks();
 		this.flushDirtyChunks();
+	}
+
+	/**
+	 * Spec §3.E, after `simulate` (so no scheduler read of this tick lands on a dropped chunk): unmount
+	 * meshes beyond UNMOUNT_RADIUS and clear every numeric set of the index (an entry left in
+	 * mountedChunks would block the re-mesh on re-entry); drop UNMODIFIED data beyond DATA_RADIUS —
+	 * modified chunks stay for the session (autosave.snapshot() is exactly world.modifiedChunks()).
+	 */
+	private evict() {
+		const pcx = Math.floor(this.player.position[0] / 16), pcz = Math.floor(this.player.position[2] / 16);
+		for (const i of this.mountedChunks) {
+			if (chebyshev(i, pcx, pcz) > UNMOUNT_RADIUS) {
+				const cx = Math.floor(i / WORLD_CHUNKS_Z), cz = i % WORLD_CHUNKS_Z;
+				this.renderer.unmountChunk(cx, cz);
+				this.mountedChunks.delete(i);
+				this.streamSet.delete(i);
+				this.shadowOnly.delete(i);
+			}
+		}
+		// Queued work the player has left behind: an entry outside MESH_RADIUS is unwanted (same test as a worker
+		// reply's wanted()). Mounting it would regenerate its whole 3×3, up to 17 chunks away, for nothing.
+		for (const i of this.streamSet) if (chebyshev(i, pcx, pcz) > MESH_RADIUS) this.streamSet.delete(i);
+		for (const i of this.shadowOnly) if (chebyshev(i, pcx, pcz) > MESH_RADIUS) this.shadowOnly.delete(i);
+		for (const c of this.world.allChunks()) {
+			if (!c.modified && Math.max(Math.abs(c.cx - pcx), Math.abs(c.cz - pcz)) > DATA_RADIUS) {
+				const i = chunkIndex(c.cx, c.cz);
+				if (this.inFlightIndex.has(i)) continue; // its reply is still owed; onJobReply's wanted() discards it
+				this.world.dropChunk(c.cx, c.cz);
+			}
+		}
+		this.stats.mounted = this.mountedChunks.size;
+		this.stats.data = this.world.chunkCount;
+	}
+
+	/** Horizontal speed (blocks/s) from the player's position delta this tick; feeds the `moving` flag. */
+	private updateSpeed(dt: number) {
+		const p = this.player.position;
+		if (this.lastPlayerPos && dt > 0) {
+			this.horizontalSpeed = Math.hypot(p[0] - this.lastPlayerPos[0], p[2] - this.lastPlayerPos[1]) / dt;
+		} else {
+			this.horizontalSpeed = 0;
+		}
+		this.lastPlayerPos = [p[0], p[2]];
 	}
 
 	private updateMining(dt: number) {
@@ -303,55 +475,191 @@ export class GameLoop {
 		this.particles?.spawnBreak(ox, oy, oz, BLOCK_BY_NAME['tnt'].id);
 	}
 
+	/** Enqueues the MESH_RADIUS ring into the stream set (spec §3.B) and updates the `moving` flag. */
 	private loadNearbyChunks() {
 		const pcx = Math.floor(this.player.position[0] / 16);
 		const pcz = Math.floor(this.player.position[2] / 16);
-		for (let dx = -VIEW_RADIUS; dx <= VIEW_RADIUS; dx++) {
-			for (let dz = -VIEW_RADIUS; dz <= VIEW_RADIUS; dz++) {
-				const cx = pcx + dx,
-					cz = pcz + dz;
-				if (!this.world.chunkInWorld(cx, cz)) continue;
-				const k = `${cx},${cz}`;
-				if (this.mountedChunks.has(k)) continue;
-				this.dirtyChunks.add(k);
+		const pc = chunkIndexOrNeg(pcx, pcz);
+		this.moving = pc !== this.lastPlayerChunk || this.horizontalSpeed > 0.5;
+		this.lastPlayerChunk = pc;
+		for (let dx = -MESH_RADIUS; dx <= MESH_RADIUS; dx++) {
+			for (let dz = -MESH_RADIUS; dz <= MESH_RADIUS; dz++) {
+				const i = chunkIndexOrNeg(pcx + dx, pcz + dz);
+				if (i < 0 || this.mountedChunks.has(i) || this.inFlightIndex.has(i)) continue;
+				this.streamSet.add(i);
 			}
 		}
 	}
 
-	private flushDirtyChunks() {
-		if (this.dirtyChunks.size === 0) return;
-		let budget = 2;
-		for (const k of this.dirtyChunks) {
-			if (budget-- <= 0) break;
-			const [cxStr, czStr] = k.split(',');
-			const cx = Number(cxStr),
-				cz = Number(czStr);
-			if (!this.world.chunkInWorld(cx, cz)) {
-				this.dirtyChunks.delete(k);
-				continue;
-			}
-			const c = this.world.ensureChunk(cx, cz);
-			// Ensure gen-placed liquids are in the frontier for at least one tick's check.
-			if (c.liquidFrontier.size === 0) {
-				for (let y = 0; y < 64; y++) {
-					for (let lz = 0; lz < 16; lz++) {
-						for (let lx = 0; lx < 16; lx++) {
-							const idx = y * 16 * 16 + lz * 16 + lx;
-							if (isLiquid(c.blocks[idx])) c.liquidFrontier.add(idx);
-						}
-					}
-				}
-			}
-			if (c.shadowsDirty) computeChunkShadows(this.world, c);
-			// Neighbors may have received shadow changes from edits near chunk boundaries; recompute if dirty.
-			for (const n of Object.values(this.world.neighbors(c))) {
-				if (n && n.shadowsDirty) computeChunkShadows(this.world, n);
-			}
-			const result = meshChunk(c, this.world.neighbors(c), this.uvFor);
-			this.renderer.mountChunkMesh(c, result);
-			this.mountedChunks.add(k);
-			this.dirtyChunks.delete(k);
+	private onChunkArrived(c: Chunk): void {
+		markChunkArrived(this.world, c);
+	}
+
+	/** `ensureShadowNeighbourhood` plus the arrival re-dirty for every neighbour it created. */
+	/**
+	 * Generate the chunk at `i` and its 3×3 one chunk at a time until this frame's budget is spent (always
+	 * at least one, so a cold start still progresses). Returns true when all nine exist and the mount may
+	 * proceed; false leaves the index queued for the next frame. Measured: the first streaming mount of a
+	 * new world generated all nine in one ~85 ms task.
+	 */
+	private generatePaced(i: number): boolean {
+		const cx = Math.floor(i / WORLD_CHUNKS_Z), cz = i % WORLD_CHUNKS_Z;
+		// Worker path: the 3×3. Sync fallback: mountSync also re-shadows the 4 axis neighbours, and each of
+		// those needs ITS 3×3 — pace that cross too, or it lands in one frame (12 chunks, measured).
+		const reach = this.jobs ? [[0, 0]] : [[0, 0], [1, 0], [-1, 0], [0, 1], [0, -1]];
+		let made = 0;
+		for (const [ox, oz] of reach) for (let dx = -1; dx <= 1; dx++) for (let dz = -1; dz <= 1; dz++) {
+			const x = cx + ox + dx, z = cz + oz + dz;
+			if (!this.world.chunkInWorld(x, z) || this.world.getChunk(x, z)) continue;
+			// Start a chunk only with a chunk's worth of time left (one took 27 ms from 1.8 ms before the deadline).
+			if (made > 0 && performance.now() > this.frameDeadline - CHUNK_GEN_RESERVE_MS) return false;
+			this.onChunkArrived(this.world.ensureChunk(x, z));
+			made++;
 		}
+		return !(made > 0 && performance.now() > this.frameDeadline - CHUNK_GEN_RESERVE_MS);
+	}
+
+	private ensureNeighbourhood(c: Chunk): void {
+		const before: (Chunk | undefined)[] = [];
+		for (let dx = -1; dx <= 1; dx++) for (let dz = -1; dz <= 1; dz++) before.push(this.world.getChunk(c.cx + dx, c.cz + dz));
+		ensureShadowNeighbourhood(this.world, c);
+		let i = 0;
+		for (let dx = -1; dx <= 1; dx++) for (let dz = -1; dz <= 1; dz++, i++) {
+			if (before[i]) continue;
+			const n = this.world.getChunk(c.cx + dx, c.cz + dz);
+			if (n) this.onChunkArrived(n);
+		}
+	}
+
+	/**
+	 * Recomputes a dirty chunk's shadows (ensuring its 3×3 first). Returns false when the chunk was
+	 * dirtied only by shadow invalidation, is already mounted and its sunlit did not change: no
+	 * re-mesh is needed, so it also leaves the stream lane (spec §3.E sunlitHash compare).
+	 */
+	private reshadow(c: Chunk): boolean {
+		const i = chunkIndex(c.cx, c.cz);
+		const before = c.sunlitHash;
+		this.ensureNeighbourhood(c);
+		computeChunkShadows(this.world, c);
+		if (this.shadowOnly.has(i) && before === c.sunlitHash && this.mountedChunks.has(i)) {
+			this.shadowOnly.delete(i);
+			this.streamSet.delete(i);
+			return false;
+		}
+		return true;
+	}
+
+	/** Shared prologue of both mount paths: ensure the chunk (arrival re-dirty), liquid scan, ensure the 3×3. */
+	private prepareChunk(i: number): Chunk {
+		// Indices only ever come from chunkIndexOrNeg, so (cx, cz) is in the world.
+		const cx = Math.floor(i / WORLD_CHUNKS_Z),
+			cz = i % WORLD_CHUNKS_Z;
+		const existed = !!this.world.getChunk(cx, cz);
+		const c = this.world.ensureChunk(cx, cz);
+		if (!existed) this.onChunkArrived(c);
+		// §3.C.1 precondition: the full 3×3 exists (generated + lit) before a chunk is shadowed;
+		// any neighbour created here is an arrival and re-dirties ITS 3×3 (live for edits / re-entry).
+		this.ensureNeighbourhood(c);
+		// Seed liquid once per chunk object, after the 3×3 exists (border cells read their neighbours; reading
+		// before would generate them without arrival bookkeeping). Only cells that can act are added (seedArrival).
+		if (c.hasLiquid && !this.liquidSeeded.has(c)) {
+			this.liquidSeeded.add(c);
+			if (c.liquidFrontier.size === 0) this.scheduler.seedArrival(c);
+		}
+		return c;
+	}
+
+	/**
+	 * Streaming mount through the worker (spec §3.D). Returns false when the worker is full: the
+	 * chunk stays in the stream set and planFrame stops generating halos this frame.
+	 */
+	private mountStream(i: number): boolean {
+		const c = this.prepareChunk(i);
+		// A shadowOnly re-dirty of a mounted chunk: the sync compare decides whether a re-mesh is due
+		// (≈ 0.7 ms); only a changed sunlit goes to the worker.
+		if (this.shadowOnly.has(i) && c.shadowsDirty && !this.reshadow(c)) return true;
+		// Shadow the axis neighbours first: the worker computes only the CENTRE's sunlit and samples
+		// the neighbours' at border corners — all-zero neighbour sunlit gives every edge a dark seam.
+		for (const n of axisNeighbours(this.world, c)) if (n && n.shadowsDirty) computeChunkShadows(this.world, n);
+		if (this.jobs!.post(this.world, c)) {
+			this.inFlightIndex.add(i);
+			this.streamSet.delete(i);
+			this.shadowOnly.delete(i);
+			return true;
+		}
+		this.refusedIndex = i;
+		return false;
+	}
+
+	/** Ensures, shadows and meshes one chunk on the main thread (edits; every chunk when there is no worker). */
+	private mountSync(i: number): void {
+		const c = this.prepareChunk(i);
+		if (c.shadowsDirty && !this.reshadow(c)) return; // shadows unchanged: no re-mesh
+		this.shadowOnly.delete(i);
+		// Neighbors may have received shadow changes from edits near chunk boundaries; recompute if
+		// dirty. A shadowOnly neighbour whose hash is unchanged leaves the stream lane here.
+		for (const n of Object.values(this.world.neighbors(c))) {
+			if (n && n.shadowsDirty) this.reshadow(n);
+		}
+		const result = meshChunk(c, this.world.neighbors(c), this.uvFor);
+		this.renderer.mountChunkMesh(c, result);
+		this.mountedChunks.add(i);
+	}
+
+	/** Spec §3.B: edit lane first (budget-exempt, suppresses streaming), then nearest-first streaming under the adaptive budget. */
+	private flushDirtyChunks() {
+		if (this.editLane.size > 0 || this.streamSet.size > 0) {
+			const pcx = Math.floor(this.player.position[0] / 16);
+			const pcz = Math.floor(this.player.position[2] / 16);
+			// A posted-but-unreplied chunk would be nearest again next frame and get posted twice.
+			let stream = this.streamSet;
+			if (this.inFlightIndex.size > 0) {
+				stream = new Set<number>();
+				for (const i of this.streamSet) if (!this.inFlightIndex.has(i)) stream.add(i);
+			}
+			this.refusedIndex = -1;
+			this.frameDeadline = performance.now() + budgetFor(this.moving, this.initialLoad);
+			let editWorkMs = 0;
+			const r = planFrame(
+				{
+					editLane: this.editLane,
+					stream,
+					playerCx: pcx,
+					playerCz: pcz,
+					moving: this.moving,
+					initialLoad: this.initialLoad,
+				},
+				() => performance.now(),
+				(i) => {
+					// Streaming only: generate the missing 3×3 a few chunks per frame (edits stay immediate).
+					if (!this.editLane.has(i) && !this.generatePaced(i)) {
+						this.refusedIndex = i;
+						return false;
+					}
+					if (this.jobs && !this.editLane.has(i)) return this.mountStream(i);
+					if (!this.editLane.has(i)) return this.mountSync(i);
+					const w0 = performance.now();
+					const ok = this.mountSync(i);
+					editWorkMs += performance.now() - w0;
+					return ok;
+				},
+			);
+			for (const i of r.edits) {
+				this.editLane.delete(i);
+				this.streamSet.delete(i);
+			}
+			for (const i of r.mounts) if (i !== this.refusedIndex) this.streamSet.delete(i);
+			if (r.edits.length > 0) {
+				this.stats.lastEditMs = performance.now() - this.editStartedAt;
+				this.stats.lastEditWorkMs = editWorkMs;
+				this.editStartedAt = 0;
+			}
+		}
+		if (this.initialLoad && this.streamSet.size === 0 && this.inFlightIndex.size === 0) this.initialLoad = false;
+		this.stats.streamQueue = this.streamSet.size;
+		this.stats.workerInFlight = this.jobs ? this.jobs.inFlight() : 0;
+		this.stats.editQueue = this.editLane.size;
+		this.stats.mounted = this.mountedChunks.size;
 	}
 }
 

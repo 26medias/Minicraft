@@ -1,6 +1,6 @@
 import { describe, it, expect } from 'vitest';
-import { worldSaveWireSchema } from './schema';
-import { validWire, manyChunks } from './testFixtures';
+import { worldSaveWireSchema, worldSaveWireSchemaV3 } from './schema';
+import { validWire, validWireV3, manyChunks } from './testFixtures';
 
 describe('worldSaveWireSchema', () => {
 	it('accepts a valid world', () => {
@@ -61,5 +61,23 @@ describe('worldSaveWireSchema', () => {
 		expect(
 			worldSaveWireSchema.safeParse({ ...validWire(), version: 1 as never }).success,
 		).toBe(false);
+	});
+});
+
+describe('worldSaveWireSchemaV3', () => {
+	it('accepts a valid v3 world', () => {
+		expect(worldSaveWireSchemaV3.safeParse(validWireV3()).success).toBe(true);
+	});
+
+	it('rejects a height other than 64 or 256', () => {
+		expect(worldSaveWireSchemaV3.safeParse({ ...validWireV3(), height: 128 }).success).toBe(false);
+	});
+
+	it('rejects version 2', () => {
+		expect(worldSaveWireSchemaV3.safeParse({ ...validWireV3(), version: 2 }).success).toBe(false);
+	});
+
+	it('is refused by the frozen v2 schema', () => {
+		expect(worldSaveWireSchema.safeParse(validWireV3()).success).toBe(false);
 	});
 });

@@ -5,5 +5,10 @@ export default defineConfig({
 		environment: 'node',
 		include: ['src/**/*.test.ts', 'api/src/**/*.test.ts'],
 		globals: false,
+		// Local-time rules (schedule gate, day rollover) must be tested in a zone
+		// where local and UTC dates differ, or a UTC-getter build passes in CI.
+		env: { TZ: 'America/Toronto' },
+		// src/engine/world/v3/** map tests hold ≈ 340 MB each; cap parallel workers.
+		maxWorkers: 2,
 	},
 });

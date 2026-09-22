@@ -1,4 +1,5 @@
 import type { BlockId } from '../data/blocks.data';
+import type { WorldHeight } from '../engine/world/coords';
 
 export type PlayerSave = {
 	x: number;
@@ -20,6 +21,10 @@ export type WorldSummary = {
 	sizeBytes?: number;
 	/** Cloud object whose metadata could not be read. Listed anyway — never skipped. */
 	degraded?: boolean;
+	/** Save format the record lives in. */
+	version: 2 | 3;
+	/** Absent on a degraded cloud row, and on a v3 row whose stored height is not 64|256. */
+	height?: WorldHeight;
 };
 
 export type RawChunk = {
@@ -42,7 +47,11 @@ export type SaveResult = {
 
 // Callers always see decoded RawChunk[]. Encoding is handled internally by the adapter.
 export type WorldSave = {
-	version: 2;
+	/** Fixed for the life of a world. 2 = legacy 64-high namespace, 3 = tall. */
+	version: 2 | 3;
+	/** Authoritative for every array size. A v2 record is normalised to 64 on load. */
+	height: WorldHeight;
+	genVersion: number;
 	/** Immutable identity. The seed is worldgen input only — two worlds may share one. */
 	id: string;
 	seed: number;

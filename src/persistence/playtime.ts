@@ -18,6 +18,7 @@ function isSession(v: unknown): v is PlaytimeSession {
 		isFiniteNumber(o.playedMs) &&
 		o.playedMs >= 0 &&
 		(o.frozenAt === null || isFiniteNumber(o.frozenAt)) &&
+		(o.startedAt === undefined || isFiniteNumber(o.startedAt)) &&
 		isFiniteNumber(o.updatedAt)
 	);
 }
@@ -34,8 +35,16 @@ export function loadSession(): PlaytimeSession | null {
 	try {
 		const parsed: unknown = JSON.parse(raw);
 		if (!isSession(parsed)) return null;
-		const { limitMs, breakMs, playedMs, frozenAt, updatedAt } = parsed;
-		return { limitMs, breakMs, playedMs, frozenAt, updatedAt };
+		const { limitMs, breakMs, playedMs, frozenAt, updatedAt, startedAt } =
+			parsed as PlaytimeSession & { startedAt?: number };
+		return {
+			limitMs,
+			breakMs,
+			playedMs,
+			frozenAt,
+			updatedAt,
+			startedAt: isFiniteNumber(startedAt) ? startedAt : updatedAt,
+		};
 	} catch {
 		return null;
 	}

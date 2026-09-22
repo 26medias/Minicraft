@@ -1,7 +1,8 @@
 import { describe, it, expect, vi, afterEach } from 'vitest';
 import { CloudAdapter } from './cloud';
 import type { WorldSave } from './adapter';
-import { BLOCKS_PER_CHUNK } from '../engine/world/coords';
+import { SaveCorrupt } from './errors';
+const BLOCKS_PER_CHUNK = 16 * 64 * 16;
 
 const ID = '11111111-1111-4111-8111-111111111111';
 
@@ -10,6 +11,8 @@ function save(over: Partial<WorldSave> = {}): WorldSave {
 	blocks[0] = 3;
 	return {
 		version: 2,
+		height: 64,
+		genVersion: 1,
 		id: ID,
 		seed: 1,
 		name: 'Castle',
@@ -168,3 +171,76 @@ function wire() {
 		chunks: [],
 	};
 }
+
+function tallSave(): WorldSave {
+	return save({ version: 3, height: 256, genVersion: 2, chunks: [{ cx: 0, cz: 0, blocks: new Uint16Array(65536) }] });
+}
+
+describe('CloudAdapter v3 routing', () => {
+	afterEach(() => vi.unstubAllGlobals());
+
+	it('loads a v3 world from /v3/worlds/:id', async () => {
+		const a = new CloudAdapter('https://api');
+		const wire = { ...tallSave(), chunks: a.encode(tallSave()) };
+		const calls = stubFetch(res(200, wire, 'g1'));
+		const loaded = await a.loadWorld(ID);
+		expect(calls[0].url).toBe(`https://api/v3/worlds/${ID}`);
+		expect(loaded).toMatchObject({ version: 3, height: 256, genVersion: 2 });
+		expect(loaded!.chunks[0].blocks.length).toBe(65536);
+	});
+
+	it('falls through to /worlds/:id for a v2 world and normalises height 64', async () => {
+		const a = new CloudAdapter('https://api');
+		const wire = { ...save(), chunks: a.encode(save()) };
+		const calls = stubFetch(res(404), res(200, wire, 'g2'));
+		const loaded = await a.loadWorld(ID);
+		expect(calls.map((c) => c.url)).toEqual([`https://api/v3/worlds/${ID}`, `https://api/worlds/${ID}`]);
+		expect(loaded).toMatchObject({ version: 2, height: 64, genVersion: 1 });
+	});
+
+	it('returns null only when both namespaces 404', async () => {
+		const a = new CloudAdapter('https://api');
+		stubFetch(res(404), res(404));
+		expect(await a.loadWorld(ID)).toBeNull();
+	});
+
+	it('refuses a v3 body without a valid height', async () => {
+		const a = new CloudAdapter('https://api');
+		const wire = { ...tallSave(), chunks: a.encode(tallSave()) } as Record<string, unknown>;
+		delete wire.height;
+		stubFetch(res(200, wire, 'g1'));
+		await expect(a.loadWorld(ID)).rejects.toThrow(SaveCorrupt);
+	});
+
+	it('PUTs a tall world to /v3 with height and genVersion in the body', async () => {
+		const a = new CloudAdapter('https://api');
+		const calls = stubFetch(res(200, { generation: '5' }));
+		await a.saveWorld(tallSave());
+		expect(calls[0].url).toBe(`https://api/v3/worlds/${ID}`);
+		expect(JSON.parse(calls[0].init!.body as string)).toMatchObject({ version: 3, height: 256, genVersion: 2 });
+	});
+
+	it('PUTs a v2 world to /worlds without the new fields', async () => {
+		const a = new CloudAdapter('https://api');
+		const calls = stubFetch(res(200, { generation: '5' }));
+		await a.saveWorld(save());
+		expect(calls[0].url).toBe(`https://api/worlds/${ID}`);
+		const body = JSON.parse(calls[0].init!.body as string);
+		expect('height' in body).toBe(false);
+	});
+
+	it('lists both namespaces', async () => {
+		// stubFetch hands responses out POSITIONALLY: the implementation must issue the
+		// /v3/worlds request FIRST (then /worlds), or the rows below swap and the
+		// assertions fail in a confusing way.
+		const a = new CloudAdapter('https://api');
+		const calls = stubFetch(
+			res(200, [{ id: ID, seed: 1, name: 'Tall', createdAt: 1, updatedAt: 3, height: 256, genVersion: 2 }]),
+			res(200, [{ id: '22222222-2222-4222-8222-222222222222', seed: 2, name: 'Old', createdAt: 1, updatedAt: 2 }]),
+		);
+		const list = await a.listWorlds();
+		expect(calls.map((c) => c.url).sort()).toEqual(['https://api/v3/worlds', 'https://api/worlds']);
+		expect(list.find((w) => w.name === 'Tall')).toMatchObject({ version: 3, height: 256, origin: 'cloud' });
+		expect(list.find((w) => w.name === 'Old')).toMatchObject({ version: 2, height: 64, origin: 'cloud' });
+	});
+});

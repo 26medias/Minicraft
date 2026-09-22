@@ -112,7 +112,9 @@ export class AutoSave {
 
 	private snapshot(): WorldSave {
 		return {
-			version: 2,
+			version: this.world.saveVersion,
+			height: this.world.height,
+			genVersion: this.world.genVersion,
 			id: this.id,
 			seed: this.world.seed,
 			name: this.name,

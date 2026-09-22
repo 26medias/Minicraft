@@ -1,9 +1,10 @@
 import { describe, it, expect, beforeEach } from 'vitest';
 import { LocalStorageAdapter } from './localStorage';
 import type { WorldSave } from './adapter';
-import { BLOCKS_PER_CHUNK } from '../engine/world/coords';
+const BLOCKS_PER_CHUNK = 16 * 64 * 16;
 import { encodeChunk } from './codec';
 import { legacyId } from './uuid';
+import { SaveCorrupt } from './errors';
 
 class MemStorage {
 	private store = new Map<string, string>();
@@ -35,6 +36,8 @@ function sampleSave(seed: number): WorldSave {
 	blocks[2] = 5;
 	return {
 		version: 2,
+		height: 64,
+		genVersion: 1,
 		id: idFor(seed),
 		seed,
 		name: `World ${seed}`,
@@ -114,6 +117,8 @@ describe('LocalStorageAdapter — fluidMeta round-trip', () => {
 		]);
 		const save: WorldSave = {
 			version: 2,
+			height: 64,
+			genVersion: 1,
 			id: idFor(999),
 			seed: 999,
 			name: 'test',
@@ -138,6 +143,8 @@ describe('LocalStorageAdapter — fluidMeta round-trip', () => {
 		const blocks = new Uint16Array(BLOCKS_PER_CHUNK);
 		const save: WorldSave = {
 			version: 2,
+			height: 64,
+			genVersion: 1,
 			id: idFor(999),
 			seed: 999,
 			name: 'test',
@@ -171,7 +178,7 @@ describe('LocalStorageAdapter — fluidMeta round-trip', () => {
 				player: { x: 0, y: 0, z: 0, yaw: 0, pitch: 0, hotbar: [], selected: 0 },
 			}),
 		);
-		storage.setItem('minicraft:v1:world:123:chunk:0:0', encodeChunk(blocks));
+		storage.setItem('minicraft:v1:world:123:chunk:0:0', encodeChunk(blocks, BLOCKS_PER_CHUNK));
 
 		const loaded = await adapter.loadWorld(legacyId(123));
 		expect(loaded).not.toBeNull();
@@ -207,6 +214,8 @@ describe('LocalStorageAdapter torn saves', () => {
 		});
 		return {
 			version: 2,
+			height: 64,
+			genVersion: 1,
 			id: idFor(seed),
 			seed,
 			name: `World ${seed}`,
@@ -266,7 +275,7 @@ describe('LocalStorageAdapter legacy adoption', () => {
 				player: { x: 0, y: 0, z: 0, yaw: 0, pitch: 0, hotbar: [], selected: 0 },
 			}),
 		);
-		storage.setItem(`minicraft:v1:world:${seed}:chunk:0:0`, encodeChunk(blocks));
+		storage.setItem(`minicraft:v1:world:${seed}:chunk:0:0`, encodeChunk(blocks, BLOCKS_PER_CHUNK));
 	}
 
 	it('refuses to write a v2 record under a legacy id', async () => {
@@ -333,5 +342,158 @@ describe('LocalStorageAdapter legacy adoption', () => {
 
 		expect(storage.getItem('minicraft:v1:world:42:meta')).not.toBeNull();
 		expect(storage.getItem('minicraft:v1:world:42:chunk:0:0')).toBe(before);
+	});
+});
+
+function tallSave(seed: number): WorldSave {
+	const blocks = new Uint16Array(65536);
+	blocks[65000] = 3;
+	return {
+		version: 3,
+		height: 256,
+		genVersion: 2,
+		id: idFor(seed),
+		seed,
+		name: `Tall ${seed}`,
+		createdAt: 1000,
+		updatedAt: 2000,
+		player: { x: 10, y: 130, z: 10, yaw: 0, pitch: 0, hotbar: [1, 2, 3], selected: 0 },
+		chunks: [{ cx: 0, cz: 0, blocks }],
+	};
+}
+
+describe('LocalStorageAdapter — v3 namespace', () => {
+	let storage: MemStorage;
+	let adapter: LocalStorageAdapter;
+	beforeEach(() => {
+		storage = new MemStorage();
+		adapter = new LocalStorageAdapter(storage as unknown as Storage);
+	});
+
+	function keys(): string[] {
+		const out: string[] = [];
+		for (let i = 0; i < storage.length; i++) out.push(storage.key(i)!);
+		return out;
+	}
+
+	it('round-trips a tall world under minicraft:v3 keys only', async () => {
+		await adapter.saveWorld(tallSave(3));
+		expect(keys().every((k) => k.startsWith('minicraft:v3:'))).toBe(true);
+		const loaded = await adapter.loadWorld(idFor(3));
+		expect(loaded).toMatchObject({ version: 3, height: 256, genVersion: 2 });
+		expect(loaded!.chunks[0].blocks.length).toBe(65536);
+		expect(loaded!.chunks[0].blocks[65000]).toBe(3);
+	});
+
+	it('a v2 fixture loads as version 2 / height 64 / genVersion 1 and re-saves only v2 keys', async () => {
+		storage.setItem(
+			`minicraft:v2:world:${idFor(4)}:meta`,
+			JSON.stringify({
+				version: 2,
+				id: idFor(4),
+				seed: 4,
+				name: 'Old',
+				createdAt: 1,
+				updatedAt: 2,
+				player: { x: 0, y: 60, z: 0, yaw: 0, pitch: 0, hotbar: [1], selected: 0 },
+				lastSyncedGeneration: null,
+			}),
+		);
+		storage.setItem(
+			`minicraft:v2:world:${idFor(4)}:chunk:0:0`,
+			JSON.stringify({ blocks: encodeChunk(new Uint16Array(16384), 16384) }),
+		);
+		const loaded = await adapter.loadWorld(idFor(4));
+		expect(loaded).toMatchObject({ version: 2, height: 64, genVersion: 1 });
+		await adapter.saveWorld(loaded!);
+		expect(keys().some((k) => k.startsWith('minicraft:v3:'))).toBe(false);
+		const meta = JSON.parse(storage.getItem(`minicraft:v2:world:${idFor(4)}:meta`)!);
+		expect('height' in meta).toBe(false);
+	});
+
+	it('listWorlds returns both namespaces with their versions and heights', async () => {
+		await adapter.saveWorld(sampleSave(1));
+		await adapter.saveWorld(tallSave(2));
+		const list = await adapter.listWorlds();
+		expect(list.find((w) => w.seed === 1)).toMatchObject({ version: 2, height: 64 });
+		expect(list.find((w) => w.seed === 2)).toMatchObject({ version: 3, height: 256 });
+	});
+
+	it('deleteWorld removes exactly the namespace holding the id', async () => {
+		await adapter.saveWorld(sampleSave(1));
+		await adapter.saveWorld(tallSave(2));
+		await adapter.deleteWorld(idFor(2));
+		expect(await adapter.loadWorld(idFor(2))).toBeNull();
+		expect(await adapter.loadWorld(idFor(1))).not.toBeNull();
+		await adapter.deleteWorld(idFor(1));
+		expect(keys()).toEqual([]);
+	});
+
+	it('refuses to open a v3 meta without a valid height', async () => {
+		storage.setItem(
+			`minicraft:v3:world:${idFor(5)}:meta`,
+			JSON.stringify({
+				version: 3,
+				id: idFor(5),
+				seed: 5,
+				name: 'x',
+				createdAt: 1,
+				updatedAt: 2,
+				player: { x: 0, y: 0, z: 0, yaw: 0, pitch: 0, hotbar: [], selected: 0 },
+			}),
+		);
+		await expect(adapter.loadWorld(idFor(5))).rejects.toThrow(SaveCorrupt);
+	});
+
+	it('refuses to open a tall world holding one chunk of the wrong length (no partial load)', async () => {
+		// A garbage payload already throws today (atob's InvalidCharacterError), so it
+		// would go green on a bare rethrow. A LENGTH mismatch is the case that only a
+		// "decode at the record's height" implementation catches: a 16384-length encode
+		// stored in a 256-high world must be refused, not decoded at its own length.
+		await adapter.saveWorld({
+			...tallSave(6),
+			chunks: [
+				{ cx: 0, cz: 0, blocks: new Uint16Array(65536) },
+				{ cx: 1, cz: 0, blocks: new Uint16Array(65536) },
+			],
+		});
+		storage.setItem(
+			`minicraft:v3:world:${idFor(6)}:chunk:1:0`,
+			JSON.stringify({ blocks: encodeChunk(new Uint16Array(16384), 16384) }),
+		);
+		await expect(adapter.loadWorld(idFor(6))).rejects.toThrow(SaveCorrupt);
+	});
+
+	it('lists a v3 meta with an invalid height (height undefined) but refuses to open it', async () => {
+		storage.setItem(
+			`minicraft:v3:world:${idFor(7)}:meta`,
+			JSON.stringify({
+				version: 3,
+				id: idFor(7),
+				seed: 7,
+				name: 'Odd',
+				height: 128,
+				genVersion: 2,
+				createdAt: 1,
+				updatedAt: 2,
+				player: { x: 0, y: 0, z: 0, yaw: 0, pitch: 0, hotbar: [], selected: 0 },
+			}),
+		);
+		const list = await adapter.listWorlds();
+		expect(list.find((w) => w.seed === 7)).toMatchObject({ version: 3, name: 'Odd' });
+		expect(list.find((w) => w.seed === 7)!.height).toBeUndefined();
+		await expect(adapter.loadWorld(idFor(7))).rejects.toThrow(SaveCorrupt);
+	});
+
+	it('shrink guard: 9 stored chunks, a 2-chunk snapshot keeps all 9 and reports local error', async () => {
+		const nine = Array.from({ length: 9 }, (_, i) => ({ cx: i, cz: 0, blocks: new Uint16Array(16384) }));
+		await adapter.saveWorld({ ...sampleSave(8), chunks: nine });
+		const before = keys().filter((k) => k.includes(':chunk:')).length;
+		expect(before).toBe(9);
+		const result = await adapter.saveWorld({ ...sampleSave(8), updatedAt: 9999, chunks: nine.slice(0, 2) });
+		expect(result.local).toBe('error');
+		expect(keys().filter((k) => k.includes(':chunk:')).length).toBe(9);
+		const meta = JSON.parse(storage.getItem(`minicraft:v2:world:${idFor(8)}:meta`)!);
+		expect(meta.updatedAt).toBe(2000); // meta untouched by the refused save
 	});
 });

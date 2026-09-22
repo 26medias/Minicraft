@@ -2,7 +2,8 @@ import { describe, it, expect, beforeEach } from 'vitest';
 import request from 'supertest';
 import { createApp, type BucketLike } from './handlers';
 import { FakeBucket } from './fakeStorage';
-import { validWire, manyChunks, FIXTURE_ID } from './testFixtures';
+import { validWire, validWireV3, chunkBlocks, manyChunks, FIXTURE_ID } from './testFixtures';
+import type { WorldSaveWireV3 } from './schema';
 
 const NEW = { 'If-None-Match': '*' };
 
@@ -186,6 +187,71 @@ describe('worlds API', () => {
 	});
 
 	it('health check responds', async () => {
-		await request(app).get('/health').expect(200, { ok: true, codec: 2 });
+		await request(app).get('/health').expect(200, { ok: true, codec: 3 });
+	});
+});
+
+describe('worlds API v3', () => {
+	let bucket: FakeBucket;
+	let app: ReturnType<typeof createApp>;
+	beforeEach(() => {
+		bucket = new FakeBucket();
+		app = createApp(bucket as unknown as BucketLike);
+	});
+	const put3 = (w = validWireV3(), headers: Record<string, string> = NEW) =>
+		request(app).put(`/v3/worlds/${w.id}`).set(headers).send(w);
+
+	it('round-trips a 256 world under worlds3/ and lists it with its height', async () => {
+		const w = validWireV3();
+		await put3(w).expect(200);
+		expect([...bucket.entries.keys()]).toEqual([`worlds3/${w.id}.json`]);
+		const got = await request(app).get(`/v3/worlds/${w.id}`).expect(200);
+		expect(got.body).toMatchObject({ version: 3, height: 256, genVersion: 2 });
+		const list = await request(app).get('/v3/worlds').expect(200);
+		expect(list.body[0]).toMatchObject({ id: w.id, height: 256, genVersion: 2 });
+	});
+
+	it('rejects a 65536-length chunk claimed as height 64, and a 16384 chunk claimed as 256', async () => {
+		await put3(validWireV3({ height: 64 }))
+			.expect(400)
+			.then((r) => expect(r.body.code).toBe('BAD_CHUNK'));
+		await put3(validWireV3({ chunks: [{ cx: 0, cz: 0, blocks: chunkBlocks(3, 16384) }] }))
+			.expect(400)
+			.then((r) => expect(r.body.code).toBe('BAD_CHUNK'));
+	});
+
+	it('rejects a v3 body missing height (strict schema)', async () => {
+		const w = validWireV3() as Record<string, unknown>;
+		delete w.height;
+		await request(app).put(`/v3/worlds/${validWireV3().id}`).set(NEW).send(w).expect(400);
+	});
+
+	it('rejects unknown keys instead of stripping them', async () => {
+		await put3({ ...validWireV3(), bogus: 1 } as unknown as WorldSaveWireV3).expect(400);
+	});
+
+	it('stores height and genVersion in object metadata (the list reads only metadata)', async () => {
+		const w = validWireV3();
+		await put3(w).expect(200);
+		bucket.failOnDownload = true;
+		const list = await request(app).get('/v3/worlds').expect(200);
+		expect(list.body[0]).toMatchObject({ height: 256, genVersion: 2 });
+	});
+
+	it('old /worlds list does not see worlds3/ objects and /v3 list does not see worlds/', async () => {
+		await put3(validWireV3()).expect(200);
+		await request(app).put(`/worlds/${FIXTURE_ID}`).set(NEW).send(validWire()).expect(200);
+		expect((await request(app).get('/worlds').expect(200)).body).toHaveLength(1);
+		expect((await request(app).get('/v3/worlds').expect(200)).body).toHaveLength(1);
+	});
+
+	it('applies the shrink guard on /v3', async () => {
+		const w = validWireV3({
+			chunks: Array.from({ length: 10 }, (_, i) => ({ cx: i, cz: 0, blocks: chunkBlocks(3, 65536) })),
+		});
+		const first = await put3(w).expect(200);
+		await put3({ ...w, chunks: w.chunks.slice(0, 2) }, { 'If-Match': first.body.generation })
+			.expect(400)
+			.then((r) => expect(r.body.code).toBe('SUSPICIOUS_SHRINK'));
 	});
 });

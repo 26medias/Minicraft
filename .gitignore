@@ -146,5 +146,8 @@ smoke-test-*.png
 # Cloud Function build output
 api/build/
 
+# Browser benchmark output (scripts/perf-bench.ts)
+bench-out/
+
 # Kid's world backups — never commit these
 backup/

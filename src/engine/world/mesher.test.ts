@@ -207,3 +207,12 @@ describe('translucent pass', () => {
 		expect(r.translucent!.indices.length).toBe(60);
 	});
 });
+
+describe('meshChunk at height 256', () => {
+	it('meshes a lone block at y=250 in a 256 chunk (6 faces)', () => {
+		const c = new Chunk(0, 0, 256);
+		c.set(5, 250, 5, stone);
+		const result = meshChunk(c, {}, uvStub);
+		expect(result.opaque.indices.length).toBe(36);
+	});
+});

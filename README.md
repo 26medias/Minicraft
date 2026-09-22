@@ -6,7 +6,7 @@ A deliberately minimal, kid-friendly Minecraft-style voxel sandbox for the brows
 
 Minicraft is a single-player, creative-only voxel sandbox. The whole point is what it *doesn't* do. There are no enemies, no health, no hunger, no day/night mechanics, no networking, no crafting tables, no mods. The entire loop is: walk around, mine blocks, place blocks. The game ships as a static web bundle.
 
-Current catalog: 19 hand-written blocks (grass, dirt, stone, cobblestone, sand, oak planks, oak log, glass, 6 wool colors, TNT, lamp, water, lava) plus about 350 solid-cube blocks from Minecraft 1.21.6, picked from an I-key inventory (whole cubes only — no stairs, slabs, doors or flowers). Gameplay toys on top of place/mine: TNT with chain-reaction explosions, coloured lamps that emit point-light illumination, and water/lava with simple block-by-block flow, and a sponge that soaks them back up.
+Current catalog: 19 hand-written blocks (grass, dirt, stone, cobblestone, sand, oak planks, oak log, glass, 6 wool colors, TNT, lamp, water, lava) plus about 350 solid-cube blocks from Minecraft 1.21.6, picked from an I-key inventory (whole cubes only — no stairs, slabs, doors or flowers). Gameplay toys on top of place/mine: TNT with chain-reaction explosions, coloured lamps that emit point-light illumination, and water/lava with simple block-by-block flow, and a sponge that soaks them back up. New worlds (generator v3) have mountains and overhangs, eight biomes with their own trees, three kinds of caves plus ravines, ore veins in vanilla-style depth bands, geodes, a lava sea, and a hill-with-a-view spawn — all deterministic from the seed.
 
 ## Tech Stack
 
@@ -78,6 +78,7 @@ Click the canvas first to capture the mouse pointer.
 - **Space** — jump. Works when grounded, and also while wading (feet in liquid, head above) to clear the shore.
 - **F** — toggle fly mode.
 - **=** / **-** — increase / decrease fly speed (5 tiers; 5 pips above the hotbar show current speed).
+- **F3** — show or hide the performance overlay (fps, frame hitches, chunk counts, memory).
 
 In fly or swim mode: pitch the camera up to ascend, down to descend — W moves in the full 3D look direction. Strafe stays horizontal. Space has no effect during fly/swim. Swim mode engages automatically when the eye is inside a liquid voxel; gravity resumes as soon as the head breaks the surface.
 
@@ -98,8 +99,8 @@ In fly or swim mode: pitch the camera up to ascend, down to descend — W moves 
 
 ## Features
 
-- **Deterministic world generation** from a seed (2D simplex heightmap, flattened to a 10-block amplitude around sea level 28). Columns below sea level fill with water; their top block is sand.
-- **Bounded world:** 32×32 chunks (512×512 blocks), hard walls at the edges. Chunks are 16×64×16.
+- **Deterministic world generation** from a seed (2D simplex heightmap, flattened to a 10-block amplitude around sea level — 120 in new worlds, 28 in worlds created before v3). Columns below sea level fill with water; their top block is sand. New worlds have an unbreakable bedrock floor at y = 0.
+- **Bounded world:** 32×32 chunks (512×512 blocks), hard walls at the edges. Chunks are 16×256×16 in new worlds (16×64×16 in worlds created before v3).
 - **Per-face texture atlas**, built offline and edge-replicated to avoid mipmap bleed.
 - **Build-time texture tinting:** grass top and leaves get plains-biome green, water_still gets plains-biome blue. One line per tint in `scripts/build-atlas.ts`.
 - **Voxel light propagation.** Per-voxel `skyLight` + RGB `blockLight`, packed into a 16-bit per-voxel nibble array. BFS flood-fill attenuates by each block's `lightFilter` value. Sunlight streams down open shafts unattenuated; lamps and lava seed coloured light outward. On every mine/place/TNT edit, an incremental update re-floods only the affected region. Caves go genuinely dark; overlapping lamps of different colours blend per-channel. See [`docs/lighting.md`](docs/lighting.md).
@@ -115,7 +116,7 @@ In fly or swim mode: pitch the camera up to ascend, down to descend — W moves 
 - **Block inventory** (I): every solid-cube block from Minecraft 1.21.6 (~350), grouped; click to fill the selected hotbar slot. Whole cubes only — no stairs, slabs, doors, flowers. 9-slot hotbar saved per world. See [docs/inventory.md](docs/inventory.md).
 - **Auto-save** every ~5s and on window blur / tab hide, to `localStorage`. Only modified chunks are persisted; untouched chunks regenerate from the seed. Lights are recomputed from blocks on load (not stored). Primed-TNT fuse state is intentionally not saved (resets to inert on reload).
 - **Rebindable keys** via the in-game Options menu. Unknown / deprecated keybindings in old save files are silently dropped at load time so stale mappings can't shadow current actions.
-- **Play-time limit** for grown-ups: on the main menu, *Play for* 15–90 minutes, optionally *Then break for* 10–60 minutes. Large `END IN 5 MINUTES` / `END IN 2 MINUTES` warnings, then `TIME'S UP` freezes the game; a break counts down to a `PLAY AGAIN` button, or without a break the game stays locked until a grown-up presses *Unlock* on the menu. Only visible play counts (a closed lid is not play time); breaks are wall-clock. There is no PIN: the Unlock button is on the same menu the kid uses, so this limits an honest kid, not a determined one. A lock always clears itself 12 hours after the game was last touched. To unlock early: reload the game's tab, press *Unlock*, pick the world. See [`docs/playtime.md`](docs/playtime.md).
+- **Play-time limit and schedule** for grown-ups, in the menu's *Grown-ups* section, behind a 4-digit PIN once one is set. Either *Play for* 15–90 minutes with an optional *Then break for*, or lock the menu to one world with a daily *Play for* and *Not before* time: before that time the kid sees only `Play at 7:00` and a disabled button; after it, one session per day. Large `END IN 5 MINUTES` / `END IN 2 MINUTES` warnings, then `TIME'S UP`. Only visible play counts. Forgot the PIN: `localStorage.removeItem('minicraft:v1:pin')` in the browser console on the game's tab, then reload. See [`docs/playtime.md`](docs/playtime.md).
 
 ## Project layout
 
@@ -142,6 +143,8 @@ docs/
   inventory.md            # block inventory, catalog regeneration, 16-bit ids
   lighting.md             # voxel light propagation algorithm + rendering
   liquids.md              # water/lava blocks + flow scheduler
+  worldgen.md             # generator versions, v3 pipeline, determinism, instruments
+  performance.md          # chunk streaming, worker, eviction, F3 overlay, benchmark
   movement.md             # walk / fly / swim state machine
   superpowers/            # per-feature design docs + plans
 ```

@@ -3,8 +3,9 @@ import { DualAdapter } from './dual';
 import { LocalStorageAdapter } from './localStorage';
 import { CloudAdapter, CloudError } from './cloud';
 import type { WorldSave } from './adapter';
-import { BLOCKS_PER_CHUNK } from '../engine/world/coords';
+const BLOCKS_PER_CHUNK = 16 * 64 * 16;
 import { legacyId } from './uuid';
+import { SaveCorrupt, SaveMismatch } from './errors';
 
 const ID = '11111111-1111-4111-8111-111111111111';
 
@@ -32,6 +33,8 @@ function save(over: Partial<WorldSave> = {}): WorldSave {
 	blocks[0] = 3;
 	return {
 		version: 2,
+		height: 64,
+		genVersion: 1,
 		id: ID,
 		seed: 1,
 		name: 'Castle',
@@ -314,6 +317,7 @@ describe('DualAdapter list and delete', () => {
 					createdAt: 1000,
 					updatedAt: 3000,
 					origin: 'cloud' as const,
+					version: 2 as const,
 				},
 			],
 		});
@@ -382,5 +386,56 @@ describe('DualAdapter list and delete', () => {
 
 		await expect(dual.deleteWorld(ID)).rejects.toThrow();
 		expect(await local.loadWorld(ID)).not.toBeNull();
+	});
+});
+
+describe('DualAdapter fail-closed load', () => {
+	function localWith(s: WorldSave | null, corrupt = false) {
+		const storage = new MemStorage();
+		const local = new LocalStorageAdapter(storage as unknown as Storage);
+		if (s) void local.saveWorld(s);
+		if (corrupt) storage.setItem(`minicraft:v2:world:${ID}:chunk:0:0`, JSON.stringify({ blocks: '!!!' }));
+		return local;
+	}
+
+	it('uses the cloud copy when the local copy is corrupt', async () => {
+		const cloud = fakeCloud({ loadWorld: async () => save({ name: 'FromCloud' }) });
+		const d = new DualAdapter(localWith(save(), true), cloud);
+		const got = await d.loadWorld(ID);
+		expect(got!.name).toBe('FromCloud');
+	});
+
+	it('uses the local copy when the cloud copy is corrupt, and flags it for upload', async () => {
+		const cloud = fakeCloud({
+			loadWorld: async () => {
+				throw new SaveCorrupt('bad');
+			},
+		});
+		const d = new DualAdapter(localWith(save({ name: 'Local' })), cloud);
+		const got = await d.loadWorld(ID);
+		expect(got!.name).toBe('Local');
+		expect(d.takeNeedsUpload()).toContain(ID);
+	});
+
+	it('throws when both copies are unusable', async () => {
+		const cloud = fakeCloud({
+			loadWorld: async () => {
+				throw new SaveCorrupt('bad');
+			},
+		});
+		const d = new DualAdapter(localWith(save(), true), cloud);
+		await expect(d.loadWorld(ID)).rejects.toThrow(SaveCorrupt);
+	});
+
+	it('throws SaveMismatch when the copies disagree on height', async () => {
+		const tall = save({
+			version: 3,
+			height: 256,
+			genVersion: 2,
+			chunks: [{ cx: 0, cz: 0, blocks: new Uint16Array(65536) }],
+		});
+		const cloud = fakeCloud({ loadWorld: async () => tall });
+		const d = new DualAdapter(localWith(save()), cloud);
+		await expect(d.loadWorld(ID)).rejects.toThrow(SaveMismatch);
 	});
 });

@@ -56,6 +56,26 @@ old and new chunks. Every chunk still decodes individually, so nothing downstrea
 can tell it is torn — but written last, the meta keeps the *previous*
 `updatedAt`, and the torn copy loses any comparison against a good one.
 
+### v3 (tall worlds)
+
+```
+minicraft:v3:world:{uuid}:meta        (+ height, genVersion)
+minicraft:v3:world:{uuid}:chunk:{cx}:{cz}
+```
+
+Same codec, chunk length 16 × height × 16. Cloud objects live under `worlds3/`
+behind `/v3/worlds*`; the old routes and prefix never see them, so a stale
+bundle cannot open a tall world. A world's version is fixed for life — nothing
+migrates. Load fails closed: a v3 meta without a valid height, any chunk that
+does not decode to the record's length, or local/cloud copies that disagree on
+height, refuse to open (the menu says so; nothing is written). localStorage now
+carries the same shrink guard as the API: a save with fewer than half the stored
+chunks (when more than 4 are stored) writes what it has, prunes nothing, and
+reports "Saved on this device: error" — and keeps reporting it for the rest of
+that session, because the snapshot never grows back until reload. It is not
+data loss: on the next launch every surviving chunk loads and is marked
+modified again, and saves go back to normal.
+
 ### Legacy adoption
 
 A v1 world is adopted under a fresh uuid the first time it is played, recorded in
@@ -128,9 +148,15 @@ region `us-central1`, bucket `gs://minicraft-worlds`. No auth by design.
 | GET | `/worlds/:id` | Returns the world plus its generation |
 | PUT | `/worlds/:id` | Requires `If-Match` or `If-None-Match: *` |
 | DELETE | `/worlds/:id` | Plain delete — leaves a recoverable version |
-| GET | `/health` | Liveness |
+| GET | `/v3/worlds` | Tall worlds (`worlds3/` prefix); `height`/`genVersion` read from custom metadata |
+| GET | `/v3/worlds/:id` | Same as `/worlds/:id`, strict v3 schema (`version: 3`, `height`, `genVersion`) |
+| PUT | `/v3/worlds/:id` | Same preconditions; stores `height` and `genVersion` as custom metadata |
+| DELETE | `/v3/worlds/:id` | Plain delete — leaves a recoverable version |
+| GET | `/health` | Liveness; reports `codec: 3` |
 
-One object per world at `worlds/{uuid}.json`. **There is no index object**: an
+One object per world at `worlds/{uuid}.json` (v2) or `worlds3/{uuid}.json` (v3).
+The old routes never list or open a `worlds3/` object, so a stale bundle cannot
+touch a tall world. **There is no index object**: an
 index would make every save two writes with no transaction between them, and an
 index disagreeing with reality is a world that looks lost. A world whose metadata
 is unreadable is listed as `degraded`, never skipped, for the same reason.

@@ -1,12 +1,12 @@
-import { encodeChunk, BLOCKS_PER_CHUNK } from './codec';
-import type { WorldSaveWire } from './schema';
+import { encodeChunk, LEGACY_BLOCKS_PER_CHUNK } from './codec';
+import type { WorldSaveWire, WorldSaveWireV3 } from './schema';
 
 export const FIXTURE_ID = '11111111-1111-4111-8111-111111111111';
 
-export function chunkBlocks(fill: number): string {
-	const b = new Uint16Array(BLOCKS_PER_CHUNK);
+export function chunkBlocks(fill: number, len = LEGACY_BLOCKS_PER_CHUNK): string {
+	const b = new Uint16Array(len);
 	b.fill(fill);
-	return encodeChunk(b);
+	return encodeChunk(b, len);
 }
 
 export function manyChunks(n: number, fill = 3) {
@@ -29,4 +29,15 @@ export function validWire(over: Partial<WorldSaveWire> = {}): WorldSaveWire {
 		chunks: manyChunks(1),
 		...over,
 	};
+}
+
+export function validWireV3(over: Partial<WorldSaveWireV3> = {}): WorldSaveWireV3 {
+	return {
+		...validWire(),
+		version: 3,
+		height: 256,
+		genVersion: 2,
+		chunks: [{ cx: 0, cz: 0, blocks: chunkBlocks(3, 65536) }],
+		...over,
+	} as WorldSaveWireV3;
 }

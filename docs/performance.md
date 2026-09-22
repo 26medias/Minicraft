@@ -111,7 +111,7 @@ Final run (same machine as the baseline, medians of 5):
 
 | Phase | Before | After |
 |---|---|---|
-| Walking | 3 frames > 50 ms per 10 s | 0 long-task ms; 0 or 1 frame just over 50 ms (flaky, open) |
+| Walking | 3 frames > 50 ms per 10 s | 0 long-task ms; 0 or 1 frame just over 50 ms (flaky, see below) |
 | Flying tier 5 | 444 ms of long tasks, 18 frames > 50 ms | 0 ms, 0 frames |
 | Initial load | worst task 433 ms | none over 50 ms after the world exists |
 | Edits | 130–160 ms freeze | 10 ms interior, 26 ms at a chunk edge |
@@ -120,8 +120,13 @@ Final run (same machine as the baseline, medians of 5):
 The remaining hitches came from the liquid scheduler, not chunk work: generated ocean at the world
 edge read the outside as air and retried ~5 500 phantom flows every tick, and every liquid cell of
 each arriving chunk was rescanned. Outside the map now reads as a wall, and `seedArrival` seeds only
-cells that can act. The walk row's occasional single 50–55 ms frame has no long task behind it and
-is not yet attributed.
+cells that can act.
+
+Open item: in some runs a single frame lands just over 50 ms with no long task behind it (so it is
+render-side or garbage collection, not script work). It has shown up in the walk row in one run and
+in the edit row in another, 0 or 1 per repetition, and is not yet attributed. After the fog change
+(radii 6/7/8) the run gave: walk, fly, load and memory ok; edits work max 28 ms edge / 13 ms
+interior, one such frame in 3 of 5 reps; memory 85 MB with 72 chunks mounted.
 
 ## Out of scope
 

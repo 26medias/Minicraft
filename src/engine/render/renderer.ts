@@ -75,7 +75,25 @@ export class Renderer {
 
 		this.resize();
 		window.addEventListener('resize', () => this.resize());
+		this.precompileChunkMaterials();
 		requestAnimationFrame(this.frame);
+	}
+
+	/**
+	 * Compile the three chunk shader programs now, with this scene's fog, instead of on the first frame a
+	 * liquid or translucent chunk becomes visible (measured: one ~35 ms shader compile mid-walk).
+	 */
+	private precompileChunkMaterials(): void {
+		const geo = new THREE.BufferGeometry();
+		geo.setAttribute('position', new THREE.BufferAttribute(new Float32Array(9), 3));
+		geo.setAttribute('normal', new THREE.BufferAttribute(new Float32Array(9), 3));
+		geo.setAttribute('uv', new THREE.BufferAttribute(new Float32Array(6), 2));
+		geo.setAttribute('color', new THREE.BufferAttribute(new Float32Array(9), 3));
+		const probes = [this.material, this.liquidMaterial, this.translucentMaterial].map((m) => new THREE.Mesh(geo, m));
+		for (const p of probes) this.chunkGroup.add(p);
+		this.gl.compile(this.scene, this.camera);
+		for (const p of probes) this.chunkGroup.remove(p);
+		geo.dispose();
 	}
 
 	onTick(fn: (dt: number) => void) {

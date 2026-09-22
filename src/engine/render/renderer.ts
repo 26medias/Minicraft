@@ -24,6 +24,7 @@ export class Renderer {
 	readonly translucentMaterial: THREE.Material;
 	private tickFn: ((dt: number) => void) | null = null;
 	private last = performance.now();
+	private gpuString: string | null = null;
 
 	constructor(container: HTMLElement, atlas: LoadedAtlas) {
 		this.scene = new THREE.Scene();
@@ -163,6 +164,23 @@ export class Renderer {
 		this.gl.setSize(w, h);
 		this.camera.aspect = w / h;
 		this.camera.updateProjectionMatrix();
+	}
+
+	/** Read by the F3 overlay (spec §3.F). Draw calls and triangles are last frame's `gl.info`. */
+	info(): { calls: number; triangles: number; pixelRatio: number; width: number; height: number; gpu: string } {
+		if (this.gpuString === null) {
+			const ctx = this.gl.getContext();
+			const ext = ctx.getExtension('WEBGL_debug_renderer_info');
+			this.gpuString = ext ? String(ctx.getParameter(ext.UNMASKED_RENDERER_WEBGL)) : 'n/a';
+		}
+		return {
+			calls: this.gl.info.render.calls,
+			triangles: this.gl.info.render.triangles,
+			pixelRatio: this.gl.getPixelRatio(),
+			width: this.gl.domElement.width,
+			height: this.gl.domElement.height,
+			gpu: this.gpuString,
+		};
 	}
 
 	private frame = () => {

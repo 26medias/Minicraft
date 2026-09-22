@@ -90,6 +90,14 @@ export class GameLoop {
 	/** Read by the F3 overlay (Task 7) and the bench (Task 8). Stub in this task; Tasks 4/5/6 fill the fields. */
 	stats = { streamQueue: 0, editQueue: 0, lastEditMs: -1, mounted: 0, data: 0, workerInFlight: 0 };
 
+	/**
+	 * F3 overlay hook (spec §3.F). Called at the end of every tick, paused or not, with the clamped
+	 * `dt`, this tick's main-thread duration and the RAW `performance.now()` delta since the last
+	 * tick (`renderer.frame` clamps `dt` at 100 ms, so a 400 ms hitch would otherwise read as 100).
+	 */
+	onFrame: ((dt: number, tickMs: number, frameMs: number) => void) | null = null;
+	private lastFrameAt = -1;
+
 	constructor(
 		private world: World,
 		private renderer: Renderer,
@@ -275,6 +283,14 @@ export class GameLoop {
 	}
 
 	private tick(dt: number) {
+		const start = performance.now();
+		const frameMs = this.lastFrameAt < 0 ? 0 : start - this.lastFrameAt;
+		this.lastFrameAt = start;
+		this.tickBody(dt);
+		this.onFrame?.(dt, performance.now() - start, frameMs);
+	}
+
+	private tickBody(dt: number) {
 		if (this.paused) {
 			this.cam.sync(this.renderer.camera);
 			this.updateSpeed(dt);

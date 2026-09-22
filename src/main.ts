@@ -10,6 +10,7 @@ import { ChunkJobs, type WorkerLike } from './engine/world/chunk-jobs';
 import { raycastVoxel } from './engine/input/raycast';
 import { placeBlock } from './game/actions';
 import { Hud } from './ui/hud';
+import { PerfOverlay } from './ui/perf-overlay';
 import { MainMenu } from './ui/menu';
 import { OptionsMenu } from './ui/options';
 import { LocalStorageAdapter } from './persistence/localStorage';
@@ -332,6 +333,19 @@ async function main() {
 			syncHotbar();
 		});
 
+		// F3 toggles the performance overlay (spec §3.F). Gated more strictly than Tab on purpose:
+		// nothing while frozen, with the inventory or colour picker open, or with an <input> (the PIN
+		// field) focused. Only the key handler lives here; `loop.onFrame` is assigned after the loop
+		// is constructed below, since `loop` is in its temporal dead zone at this point.
+		const perfOverlay = new PerfOverlay(app);
+		window.addEventListener('keydown', (e) => {
+			if (e.code !== 'F3') return;
+			if (frozen || inventoryOpen || colorPicker.isOpen) return;
+			if ((document.activeElement as HTMLElement | null)?.tagName === 'INPUT') return;
+			e.preventDefault();
+			perfOverlay.toggle();
+		});
+
 		const autosave = new AutoSave(
 			adapter,
 			world,
@@ -384,6 +398,17 @@ async function main() {
 				atlas.uvTable,
 			),
 		);
+		loop.onFrame = (_dt, tickMs, frameMs) => {
+			const now = performance.now();
+			perfOverlay.tick(now, { t: now, frameMs, tickMs }, () => {
+				const mem = (performance as { memory?: { usedJSHeapSize: number } }).memory;
+				return {
+					...loop.stats,
+					...renderer.info(),
+					heapMB: mem ? Math.round(mem.usedJSHeapSize / 1048576) : 'n/a',
+				};
+			});
+		};
 		loop.onBlockBroken = () => autosave.markDirty();
 		loop.onWorldMutated = () => autosave.markDirty();
 		loop.onMiningProgress = (p) => hud.setMiningProgress(p);
@@ -435,7 +460,8 @@ async function main() {
 		loop.start();
 		if (import.meta.env.DEV) {
 			// Debug oracle for manual checks at localhost only; tree-shaken from the build.
-			(window as unknown as { __mc: unknown }).__mc = { world, player, loop };
+			// `apiUrl` lets the bench log which save API the page is wired to (never production).
+			(window as unknown as { __mc: unknown }).__mc = { world, player, loop, apiUrl };
 		}
 
 		window.addEventListener('mousedown', (e) => {

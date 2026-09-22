@@ -252,10 +252,14 @@ Expected: main-thread cost per streamed chunk ≈ generate 2–3 ms + lights
   generated lakes decay out of the frontier and cannot thrash; a
   player-placed source marks its chunk modified and is kept.
 - **Fog** today near 60 / far 200; new **far = `MESH_RADIUS × 16 − 8` = 72,
-  near = 60 % of far ≈ 43**, inside the ≥ 80-block mesh frontier so the
-  unload edge is never visible. Sky colour unchanged. This is a large
-  visual change (today the 64–80-block frontier is barely fogged); gate 2
-  includes a kid-playtest-lens pass on it.
+  near = far − 8 = 64**, inside the ≥ 80-block mesh frontier so the unload
+  edge is never visible. Sky colour unchanged. Gate 2's kid-playtest-lens
+  pass (seed 3, live-set fog, screenshots) found that the 98–138-block
+  "mountain view" was never rendered at today's 4-chunk ring, so 72 loses
+  nothing he sees today; but a 29-block fade (near 43) dissolved the summit
+  of the one peak visible from spawn at exactly 72 blocks, while an 8-block
+  band keeps it legible and reads as Minecraft's render edge. Hence
+  near = far − 8, not 60 %.
 - **`hasLiquid`**: skip the 65 k-voxel liquid-frontier rescan on re-mesh
   when the chunk has no liquid. The flag is set by generation, by any
   liquid write, **and recomputed in `applySave`** — a naturally dry chunk
@@ -366,15 +370,25 @@ Every test names the mutant that turns it red.
    completes — on the chunk boundary nearest `spawnV3(3)` in +x, at surface
    height, 20 stone blocks placed then broken; it reads
    `loop.stats.lastEditMs` after each and gates per §1. **Memory phase**:
-   fly tier 5 for 30 s, idle 2 s, then CDP `HeapProfiler.collectGarbage`
-   followed by `Runtime.getHeapUsage` (`performance.memory` is bucketised
-   and cached without `--enable-precise-memory-info`, so it never gates);
-   also reports mounted and data chunk counts from `loop.stats`. Prints the
+   fly tier 5 for 30 s over land, idle 2 s, then CDP `HeapProfiler.collectGarbage`
+   followed by `Runtime.getHeapUsage`, gating on **`usedSize + backingStorageSize`**
+   — `usedSize` alone excludes typed-array backing stores, i.e. every chunk
+   array and mesh buffer the radii exist to bound (gate 2 measured 0.4 MB
+   used against 425 MB of live typed arrays); `performance.memory` is
+   bucketised and cached without `--enable-precise-memory-info`, so it never
+   gates. Also reports mounted and data chunk counts from `loop.stats`; the
+   data gate is `≤ 225 + world.modifiedChunks().length`, because liquid
+   flow marks chunks `modified` (retained by design) — the bench phases
+   follow the direction with the most land from spawn. Edits: the bench
+   targets the SOLID surface block (`canReplace` refuses air), asserts each
+   `replaceBlock` returned true and `lastEditMs` went from −1 to > 0, and
+   runs 20 edge-column edits (place + break) plus 10 interior ones so both
+   §1 edit rows are measured; `stone` is looked up by name (id 3). Prints the
    §1 table, exits 1 when a primary target is missed. Mutant: a build that
    stalls 60 ms every 30th frame → walking row red.
 6. **Overlay aggregation tests**: rolling fps / avg / worst / count > 50 ms
    from a synthetic frame series (mutant: off-by-one window).
-7. **Gate 2 kid-playtest-lens pass** on the fog change (60/200 → 43/72): the plan is reviewed for what the kid sees at the frontier; not a code test.
+7. **Gate 2 kid-playtest-lens pass** on the fog change (60/200 → 64/72): done at gate 2 (verdict OK with near = far − 8); the eviction test asserts `FOG_NEAR === FOG_FAR − 8`.
 
 ## 7. Deviations from the draft, stated
 "Initial load ≤ 2 s" is dropped as a gate: with a fixed 6 ms budget it is
@@ -408,7 +422,7 @@ today's rendering is not even self-consistent (§2).
 | R-N5 heap row unmeasurable | §1 memory phase (30 s tier-5 flight) |
 | R-N6 Playwright not a dependency | §6.5 devDependency decision |
 | R-N7 6 ms budget never binds while streaming | §3.B says so |
-| R-U1/U2 fog vs load radius; `VIEW_RADIUS` unstated | Header constants; §3.E mesh ring 5, fog 43/72 |
+| R-U1/U2 fog vs load radius; `VIEW_RADIUS` unstated | Header constants; §3.E mesh ring 5, fog 64/72 (gate 2) |
 | R-U3 edits: sync vs bypass vs today | §3.B edit lane, stated as a change |
 | R-U5/U6 "wanted", counter | §3.D |
 | R-U7 F3 gating | §3.F |
@@ -419,3 +433,14 @@ today's rendering is not even self-consistent (§2).
 | C-B4 dropped worker reply leaves stale geometry forever | §3.D invariant (dirty until applied; drop ⇒ re-dirty); §6.3 test |
 | C-B5 edit and heap targets had no instrument | §1 rows name `loop.stats.lastEditMs` and CDP heap; §6.5 names the `main.ts` / `GameLoop.tick` calls, the edge, the block, the GC + heap reader |
 | C-N wanted ≠ evictor predicate; "identical" overclaim; 37 vs 595; 575 ms vs 4.5 s; median of 4; fresh page per load rep; edit lane stacking; overshoot margin; fog formula; re-entry mutant; stride literal; string-keyed shim; `VIEW_RADIUS + n` drift; fog is a big visual change | §3.D wanted = `MESH_RADIUS` ring; §1 scoped to `sunlit`; §2 reconciled with machine labels; 6 keep 5; §6.5; §3.B suppresses the stream budget and states the overshoot; §3.E fog formula; §6.4 seed mutant; §3.A `WORLD_CHUNKS_Z` + shim; header constants; §3.E kid-lens pass at gate 2 |
+
+### Gate 2 (plan review, 3 lenses) — spec-level consequences
+
+| Finding | Action |
+|---|---|
+| K fog 43/72 dissolves the spawn summit; 60/200 view was never rendered | §3.E near = far − 8 = 64; §6.4 asserts it; §6.7 done |
+| R-B2 `Runtime.getHeapUsage().usedSize` excludes typed-array backing stores (0.4 MB vs 425 MB) | §6.5 gates on `usedSize + backingStorageSize` |
+| R-N liquid flow marks chunks `modified`, so `data ≤ 225` is red over water | §6.5 data gate `≤ 225 + modifiedChunks`; phases over land |
+| R-B3 bench edits silently no-op (`canReplace` refuses air; stone id guessed) and the interior row was unmeasured | §6.5 solid-surface edits with return + `lastEditMs` assertions, 20 edge + 10 interior, ids by name |
+| R-B4 load phase clocks across two documents | §6.5 one navigation per repetition, `t0` inside the final document |
+| E-B2 worker meshed with unshadowed neighbours (seams); E-B3 in-flight re-posts; E-U1 partial-neighbour corners | §3.D: axis neighbours shadowed before the snapshot; in-flight indices excluded from the stream ring; on reply, mounted axis neighbours re-dirtied `shadowOnly` |

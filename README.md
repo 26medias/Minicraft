@@ -142,6 +142,7 @@ docs/
   inventory.md            # block inventory, catalog regeneration, 16-bit ids
   lighting.md             # voxel light propagation algorithm + rendering
   liquids.md              # water/lava blocks + flow scheduler
+  worldgen.md             # generator versions, v3 pipeline, determinism, instruments
   movement.md             # walk / fly / swim state machine
   superpowers/            # per-feature design docs + plans
 ```

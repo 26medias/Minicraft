@@ -15,15 +15,16 @@ All in `src/engine/world/radii.ts`, measured in chunks, Chebyshev distance from 
 
 | Constant | Value | Meaning |
 |---|---|---|
-| `MESH_RADIUS` | 5 | Chunks within it are streamed in and meshed. Also the "wanted" test for worker replies. |
-| `UNMOUNT_RADIUS` | 6 | Meshes beyond it are disposed. Peaks at 13×13 = 169 mounted. |
-| `DATA_RADIUS` | 7 | Unmodified chunk data beyond it is dropped. 15×15 = 225 chunks ≈ 72 MB. |
+| `MESH_RADIUS` | 6 | Chunks within it are streamed in and meshed. Also the "wanted" test for worker replies. |
+| `UNMOUNT_RADIUS` | 7 | Meshes beyond it are disposed. Peaks at 15×15 = 225 mounted. |
+| `DATA_RADIUS` | 8 | Unmodified chunk data beyond it is dropped. 17×17 = 289 chunks ≈ 92 MB. |
 
 `VIEW_RADIUS = 4` in the loop is only the physics and walk ring.
 
-Fog hides the unmount edge: `FOG_FAR = MESH_RADIUS × 16 − 8` (72 blocks),
-`FOG_NEAR = FOG_FAR − 8` (64). The thin 8-block band keeps a summit at the edge legible;
-a wider fade dissolved the one peak visible from the seed-3 spawn.
+Fog hides the unmount edge: `FOG_FAR = MESH_RADIUS × 16 − 8` (88 blocks),
+`FOG_NEAR = FOG_FAR − 8` (80). The thin 8-block band keeps a summit at the edge legible;
+a wider fade dissolved the one peak visible from the seed-3 spawn. The radii were 5/6/7 (fog
+72) until the parent found the fog too close; 6/7/8 costs about 40 % more chunks to stream.
 
 ## Chunk index
 
@@ -102,7 +103,8 @@ tier 5 (≤ 5 frames over 50 ms, ≤ 400 ms per 8 s), initial load (no task over
 after the `minicraft:world-ready` mark; the one-time spawn search before it is printed
 separately), 40 edge and 20 interior edits (every edit applied; main-thread work per edit, the
 `lastEditWorkMs` stat, edge ≤ 50 ms and interior ≤ 20 ms; no frame over 50 ms), and memory after 30 s of flight (heap including typed-array
-backing stores ≤ 250 MB, mounted ≤ 169, data ≤ 225 plus modified chunks). fps and p95 are
+backing stores ≤ 250 MB, mounted ≤ (2·`UNMOUNT_RADIUS`+1)², data ≤ (2·`DATA_RADIUS`+1)² plus
+modified chunks). fps and p95 are
 printed but never gate: they swung by 2× between identical runs.
 
 Final run (same machine as the baseline, medians of 5):

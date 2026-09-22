@@ -272,8 +272,15 @@ describe('GameLoop edit lane', () => {
 		}
 		for (let cx = 15; cx <= 17; cx++) for (let cz = 15; cz <= 17; cz++) fillChunkLights(world, world.getChunk(cx, cz)!);
 		// stream the whole MESH_RADIUS ring in (the still budget mounts several chunks per tick)
-		for (let k = 0; k < 200 && (k === 0 || loop.stats.streamQueue > 0); k++) tick(1 / 60);
-		expect(loop.stats.streamQueue).toBe(0);
+		// Settled = the queue stays empty and nothing mounts for 5 ticks in a row: with paced generation, late
+		// neighbour arrivals can re-queue shadowOnly re-meshes after the queue first empties.
+		let quiet = 0;
+		for (let k = 0; k < 600 && quiet < 5; k++) {
+			const m = mounts();
+			tick(1 / 60);
+			quiet = loop.stats.streamQueue === 0 && mounts() === m ? quiet + 1 : 0;
+		}
+		expect(quiet).toBe(5);
 		const before = mounts();
 		// interior voxel (264, 21, 264): lx = lz = 8 → markChunkDirtyAround marks exactly one chunk
 		world.setBlock(264, 21, 264, stone);

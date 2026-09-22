@@ -7,7 +7,7 @@ function clock(costs: number[]) { let t = 0, k = 0; return { now: () => t, mount
 function input(p: Partial<FrameInput>): FrameInput { return { editLane: new Set(), stream: new Set(), playerCx: 10, playerCz: 10, moving: true, initialLoad: false, ...p }; }
 
 describe('chunk scheduler (spec §6.2)', () => {
-	it('radii are the named constants', () => { expect([MESH_RADIUS, UNMOUNT_RADIUS, DATA_RADIUS]).toEqual([5, 6, 7]); });
+	it('radii are the named constants', () => { expect([MESH_RADIUS, UNMOUNT_RADIUS, DATA_RADIUS]).toEqual([6, 7, 8]); });
 
 	it('nearest-first is Chebyshev inside orderStream: (3,3) precedes (4,0) (mutant: Euclidean distance inside orderStream — Cheb 3<4 but Eucl 4.24>4.0 would put (4,0) first)', () => {
 		const s = new Set([I(14, 10), I(13, 13)]); // (4,0) inserted first, (3,3) second

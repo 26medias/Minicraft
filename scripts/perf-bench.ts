@@ -7,6 +7,7 @@
 // seed-3 world per repetition, runs each phase REPS times (first repetition = warm-up, median of
 // the rest), prints the spec §1 table as markdown, writes bench-out/<timestamp>.json and exits 1
 // when a gated target is missed. Exit 2 = the page tried to reach a non-localhost host (aborted).
+import { UNMOUNT_RADIUS, DATA_RADIUS } from '../src/engine/world/radii';
 import { chromium, type Page, type CDPSession } from 'playwright';
 import { spawn } from 'node:child_process';
 import { writeFileSync, mkdirSync } from 'node:fs';
@@ -26,7 +27,8 @@ const GATES = {
 	walkLongTaskMs: 100, walkOver50: 0,
 	flyLongTaskMs: 400, flyOver50: 5,
 	editInteriorMs: 20, editEdgeMs: 50,
-	heapMB: 250, mounted: 169, data: 225 /* + modified, read at run time */,
+	// ring arithmetic from the radii, not tuned numbers: (2r+1)² chunks
+	heapMB: 250, mounted: (2 * UNMOUNT_RADIUS + 1) ** 2, data: (2 * DATA_RADIUS + 1) ** 2 /* + modified, read at run time */,
 	walkMinBlocks: 40, flyMinBlocks: 160,
 };
 const STONE = BLOCK_BY_NAME['stone'].id; // 3 in the frozen base catalog; never guess it

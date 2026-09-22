@@ -15,11 +15,13 @@ import { canReplace, igniteTnt, type PrimedEntry } from './actions';
 import { detonate, tntKey, TNT_CHAIN_FUSE, TNT_PRIME_FUSE } from './tnt';
 import { updateLightsForBlockChange } from '../engine/world/lighting';
 import { LiquidScheduler } from './liquid-scheduler';
-import { chunkIndexOrNeg, WORLD_CHUNKS_Z } from '../engine/world/coords';
+import { chunkIndex, chunkIndexOrNeg, WORLD_CHUNKS_Z } from '../engine/world/coords';
+import { planFrame, MESH_RADIUS } from './chunk-scheduler';
 
 const LAMP_ID = BLOCK_BY_NAME['lamp'].id;
 
-const VIEW_RADIUS = 4; // chunks loaded around the player
+/** Walk/physics ring; the mesh ring is MESH_RADIUS (src/engine/world/radii.ts). */
+export const VIEW_RADIUS = 4;
 const REACH = 6;
 
 type MiningState = {
@@ -37,9 +39,18 @@ export type BlockBrokenEvent = {
 };
 
 export class GameLoop {
-	/** Both keyed by the flat chunk index (coords.chunkIndex); only ever filled through chunkIndexOrNeg. */
-	private dirtyChunks = new Set<number>();
+	/** All keyed by the flat chunk index (coords.chunkIndex); only ever filled through chunkIndexOrNeg. */
+	private streamSet = new Set<number>();
+	private editLane = new Set<number>();
+	/** Chunks dirtied only by shadow invalidation: re-meshed only when their sunlitHash changed (spec §3.E). */
+	private shadowOnly = new Set<number>();
 	private mountedChunks = new Set<number>();
+	private lastPlayerChunk = -1;
+	private lastPlayerPos: [number, number] | null = null;
+	private horizontalSpeed = 0;
+	private initialLoad = true;
+	private moving = false;
+	private editStartedAt = 0;
 	private mining: MiningState | null = null;
 	private aim: VoxelHit | null = null;
 	private leftMouseDown = false;
@@ -80,9 +91,21 @@ export class GameLoop {
 		);
 	}
 
-	markChunkDirty(cx: number, cz: number) {
+	/**
+	 * `edit`: the chunk goes to the budget-exempt edit lane, re-meshed on the next tick before any
+	 * streaming. `shadowOnly`: dirtied only by shadow invalidation; the stream lane re-meshes it only
+	 * when its sunlitHash changed.
+	 */
+	markChunkDirty(cx: number, cz: number, opts?: { edit?: boolean; shadowOnly?: boolean }) {
 		const i = chunkIndexOrNeg(cx, cz);
-		if (i >= 0) this.dirtyChunks.add(i);
+		if (i < 0) return;
+		if (opts?.edit) {
+			this.editLane.add(i);
+			if (!this.editStartedAt) this.editStartedAt = performance.now();
+		} else {
+			this.streamSet.add(i);
+			if (opts?.shadowOnly) this.shadowOnly.add(i);
+		}
 	}
 
 	applyLightUpdate(x: number, y: number, z: number): void {
@@ -90,7 +113,7 @@ export class GameLoop {
 			this.lights?.getColor(lx, ly, lz) ?? null;
 		const touched = updateLightsForBlockChange(this.world, x, y, z, getLampColor);
 		for (const c of touched) {
-			this.markChunkDirty(c.cx, c.cz);
+			this.markChunkDirty(c.cx, c.cz, { edit: true });
 			c.shadowsDirty = true;
 		}
 		// Also flag chunks in the shadow direction (SE of the edit) since a placed/removed
@@ -106,23 +129,27 @@ export class GameLoop {
 			for (const n of seNeighbors) {
 				if (n) {
 					n.shadowsDirty = true;
-					this.markChunkDirty(n.cx, n.cz);
+					this.markChunkDirty(n.cx, n.cz, { shadowOnly: true });
 				}
 			}
 		}
 	}
 
-	/** Mark the chunk containing a world block + any neighbor chunks if the block sits on a chunk edge. */
+	/**
+	 * Mark the chunk containing a world block + any neighbor chunks if the block sits on a chunk
+	 * edge. All go to the edit lane: both sides of a shared face must re-mesh for it to appear.
+	 */
 	markChunkDirtyAround(wx: number, wz: number) {
 		const cx = Math.floor(wx / 16);
 		const cz = Math.floor(wz / 16);
-		this.markChunkDirty(cx, cz);
+		const edit = { edit: true };
+		this.markChunkDirty(cx, cz, edit);
 		const lx = wx - cx * 16,
 			lz = wz - cz * 16;
-		if (lx === 0) this.markChunkDirty(cx - 1, cz);
-		if (lx === 15) this.markChunkDirty(cx + 1, cz);
-		if (lz === 0) this.markChunkDirty(cx, cz - 1);
-		if (lz === 15) this.markChunkDirty(cx, cz + 1);
+		if (lx === 0) this.markChunkDirty(cx - 1, cz, edit);
+		if (lx === 15) this.markChunkDirty(cx + 1, cz, edit);
+		if (lz === 0) this.markChunkDirty(cx, cz - 1, edit);
+		if (lz === 15) this.markChunkDirty(cx, cz + 1, edit);
 	}
 
 	setLeftMouseDown(down: boolean) {
@@ -186,6 +213,7 @@ export class GameLoop {
 	private tick(dt: number) {
 		if (this.paused) {
 			this.cam.sync(this.renderer.camera);
+			this.updateSpeed(dt);
 			this.loadNearbyChunks();
 			this.flushDirtyChunks();
 			this.highlight?.hide();
@@ -214,8 +242,20 @@ export class GameLoop {
 		this.particles?.tick(dt);
 		this.simulate(dt);
 		this.overlay?.tick(dt);
+		this.updateSpeed(dt);
 		this.loadNearbyChunks();
 		this.flushDirtyChunks();
+	}
+
+	/** Horizontal speed (blocks/s) from the player's position delta this tick; feeds the `moving` flag. */
+	private updateSpeed(dt: number) {
+		const p = this.player.position;
+		if (this.lastPlayerPos && dt > 0) {
+			this.horizontalSpeed = Math.hypot(p[0] - this.lastPlayerPos[0], p[2] - this.lastPlayerPos[1]) / dt;
+		} else {
+			this.horizontalSpeed = 0;
+		}
+		this.lastPlayerPos = [p[0], p[2]];
 	}
 
 	private updateMining(dt: number) {
@@ -310,14 +350,18 @@ export class GameLoop {
 		this.particles?.spawnBreak(ox, oy, oz, BLOCK_BY_NAME['tnt'].id);
 	}
 
+	/** Enqueues the MESH_RADIUS ring into the stream set (spec §3.B) and updates the `moving` flag. */
 	private loadNearbyChunks() {
 		const pcx = Math.floor(this.player.position[0] / 16);
 		const pcz = Math.floor(this.player.position[2] / 16);
-		for (let dx = -VIEW_RADIUS; dx <= VIEW_RADIUS; dx++) {
-			for (let dz = -VIEW_RADIUS; dz <= VIEW_RADIUS; dz++) {
+		const pc = chunkIndexOrNeg(pcx, pcz);
+		this.moving = pc !== this.lastPlayerChunk || this.horizontalSpeed > 0.5;
+		this.lastPlayerChunk = pc;
+		for (let dx = -MESH_RADIUS; dx <= MESH_RADIUS; dx++) {
+			for (let dz = -MESH_RADIUS; dz <= MESH_RADIUS; dz++) {
 				const i = chunkIndexOrNeg(pcx + dx, pcz + dz);
 				if (i < 0 || this.mountedChunks.has(i)) continue;
-				this.dirtyChunks.add(i);
+				this.streamSet.add(i);
 			}
 		}
 	}
@@ -343,45 +387,88 @@ export class GameLoop {
 		}
 	}
 
-	private flushDirtyChunks() {
-		if (this.dirtyChunks.size === 0) return;
-		let budget = 2;
-		for (const i of this.dirtyChunks) {
-			if (budget-- <= 0) break;
-			// Indices only ever come from chunkIndexOrNeg, so (cx, cz) is in the world.
-			const cx = Math.floor(i / WORLD_CHUNKS_Z),
-				cz = i % WORLD_CHUNKS_Z;
-			const existed = !!this.world.getChunk(cx, cz);
-			const c = this.world.ensureChunk(cx, cz);
-			if (!existed) this.onChunkArrived(c);
-			// Ensure gen-placed liquids are in the frontier for at least one tick's check.
-			if (c.liquidFrontier.size === 0) {
-				for (let y = 0; y < c.height; y++) {
-					for (let lz = 0; lz < 16; lz++) {
-						for (let lx = 0; lx < 16; lx++) {
-							const idx = y * 16 * 16 + lz * 16 + lx;
-							if (isLiquid(c.blocks[idx])) c.liquidFrontier.add(idx);
-						}
+	/**
+	 * Recomputes a dirty chunk's shadows (ensuring its 3×3 first). Returns false when the chunk was
+	 * dirtied only by shadow invalidation, is already mounted and its sunlit did not change: no
+	 * re-mesh is needed, so it also leaves the stream lane (spec §3.E sunlitHash compare).
+	 */
+	private reshadow(c: Chunk): boolean {
+		const i = chunkIndex(c.cx, c.cz);
+		const before = c.sunlitHash;
+		this.ensureNeighbourhood(c);
+		computeChunkShadows(this.world, c);
+		if (this.shadowOnly.has(i) && before === c.sunlitHash && this.mountedChunks.has(i)) {
+			this.shadowOnly.delete(i);
+			this.streamSet.delete(i);
+			return false;
+		}
+		return true;
+	}
+
+	/** Ensures, shadows and meshes one chunk (synchronous path; both lanes use it in this task). */
+	private mountIndex(i: number): void {
+		// Indices only ever come from chunkIndexOrNeg, so (cx, cz) is in the world.
+		const cx = Math.floor(i / WORLD_CHUNKS_Z),
+			cz = i % WORLD_CHUNKS_Z;
+		const existed = !!this.world.getChunk(cx, cz);
+		const c = this.world.ensureChunk(cx, cz);
+		if (!existed) this.onChunkArrived(c);
+		// Ensure gen-placed liquids are in the frontier for at least one tick's check.
+		if (c.liquidFrontier.size === 0) {
+			for (let y = 0; y < c.height; y++) {
+				for (let lz = 0; lz < 16; lz++) {
+					for (let lx = 0; lx < 16; lx++) {
+						const idx = y * 16 * 16 + lz * 16 + lx;
+						if (isLiquid(c.blocks[idx])) c.liquidFrontier.add(idx);
 					}
 				}
 			}
-			// §3.C.1 precondition: the full 3×3 exists (generated + lit) before a chunk is shadowed;
-			// any neighbour created here is an arrival and re-dirties ITS 3×3 (live for edits / re-entry).
-			this.ensureNeighbourhood(c);
-			if (c.shadowsDirty) computeChunkShadows(this.world, c);
-			// Neighbors may have received shadow changes from edits near chunk boundaries; recompute if dirty.
-			for (const n of Object.values(this.world.neighbors(c))) {
-				if (n && n.shadowsDirty) {
-					this.ensureNeighbourhood(n);
-					computeChunkShadows(this.world, n);
-				}
-			}
-			const result = meshChunk(c, this.world.neighbors(c), this.uvFor);
-			this.renderer.mountChunkMesh(c, result);
-			this.mountedChunks.add(i);
-			this.dirtyChunks.delete(i);
 		}
-		this.stats.streamQueue = this.dirtyChunks.size;
+		// §3.C.1 precondition: the full 3×3 exists (generated + lit) before a chunk is shadowed;
+		// any neighbour created here is an arrival and re-dirties ITS 3×3 (live for edits / re-entry).
+		this.ensureNeighbourhood(c);
+		if (c.shadowsDirty && !this.reshadow(c)) return; // shadows unchanged: no re-mesh
+		this.shadowOnly.delete(i);
+		// Neighbors may have received shadow changes from edits near chunk boundaries; recompute if
+		// dirty. A shadowOnly neighbour whose hash is unchanged leaves the stream lane here.
+		for (const n of Object.values(this.world.neighbors(c))) {
+			if (n && n.shadowsDirty) this.reshadow(n);
+		}
+		const result = meshChunk(c, this.world.neighbors(c), this.uvFor);
+		this.renderer.mountChunkMesh(c, result);
+		this.mountedChunks.add(i);
+	}
+
+	/** Spec §3.B: edit lane first (budget-exempt, suppresses streaming), then nearest-first streaming under the adaptive budget. */
+	private flushDirtyChunks() {
+		if (this.editLane.size > 0 || this.streamSet.size > 0) {
+			const pcx = Math.floor(this.player.position[0] / 16);
+			const pcz = Math.floor(this.player.position[2] / 16);
+			const r = planFrame(
+				{
+					editLane: this.editLane,
+					stream: this.streamSet,
+					playerCx: pcx,
+					playerCz: pcz,
+					moving: this.moving,
+					initialLoad: this.initialLoad,
+				},
+				() => performance.now(),
+				(i) => this.mountIndex(i),
+			);
+			for (const i of r.edits) {
+				this.editLane.delete(i);
+				this.streamSet.delete(i);
+			}
+			for (const i of r.mounts) this.streamSet.delete(i);
+			if (r.edits.length > 0) {
+				this.stats.lastEditMs = performance.now() - this.editStartedAt;
+				this.editStartedAt = 0;
+			}
+		}
+		if (this.initialLoad && this.streamSet.size === 0) this.initialLoad = false;
+		this.stats.streamQueue = this.streamSet.size;
+		this.stats.editQueue = this.editLane.size;
 		this.stats.mounted = this.mountedChunks.size;
 	}
 }

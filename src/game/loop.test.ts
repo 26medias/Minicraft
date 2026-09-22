@@ -1,64 +1,18 @@
 import { describe, it, expect } from 'vitest';
 import * as THREE from 'three';
-import { GameLoop } from './loop';
-import { World } from '../engine/world/world';
-import { FpCamera } from '../engine/render/camera';
+import { makeLoop } from './test-loop';
 import { LightRegistry } from '../engine/render/light-registry';
 import { FaceHighlight, HIGHLIGHT_EPS } from '../engine/render/face-highlight';
-import { Player } from './player';
 import { AIR, BLOCK_BY_NAME } from '../data/blocks.data';
 import { TNT_PRIME_FUSE } from './tnt';
-import type { Renderer } from '../engine/render/renderer';
-import type { Keys } from './player';
 import { indexOf } from '../engine/world/coords';
+import { fillChunkLights } from '../engine/world/lighting';
 
 const tnt = BLOCK_BY_NAME['tnt'].id;
 const stone = BLOCK_BY_NAME['stone'].id;
 const water = BLOCK_BY_NAME['water'].id;
 const lamp = BLOCK_BY_NAME['lamp'].id;
 const dirt = BLOCK_BY_NAME['dirt'].id;
-
-// GameLoop's constructor only builds the LiquidScheduler; it never dereferences
-// the renderer, so a stub keeps this test out of WebGL and off the DOM. The stub
-// captures the tick callback so tests can drive a full tick() headlessly.
-function makeLoop(lights: LightRegistry | null = null, highlight: FaceHighlight | null = null) {
-	const world = new World(1);
-	const chunk = world.ensureChunk(16, 16);
-	chunk.blocks.fill(AIR);
-	chunk.lights.fill(0);
-	chunk.liquidFrontier.clear();
-
-	let tickFn: ((dt: number) => void) | null = null;
-	let mounts = 0;
-	const renderer = {
-		camera: new THREE.PerspectiveCamera(),
-		mountChunkMesh: () => {
-			mounts++;
-		},
-		onTick: (fn: (dt: number) => void) => {
-			tickFn = fn;
-		},
-	} as unknown as Renderer;
-
-	const keys: Keys = { forward: false, back: false, left: false, right: false, jump: false };
-	const player = new Player([260, 40, 260]);
-
-	const loop = new GameLoop(
-		world,
-		renderer,
-		new FpCamera(),
-		player,
-		keys,
-		() => [0, 0, 1, 1],
-		null,
-		null,
-		lights,
-		highlight,
-	);
-	loop.start();
-	const tick = (dt: number) => tickFn!(dt);
-	return { loop, world, player, keys, tick, mounts: () => mounts };
-}
 
 describe('GameLoop.onWorldMutated', () => {
 	it('fires when primed TNT detonates', () => {
@@ -187,7 +141,7 @@ describe('GameLoop.replaceBlock', () => {
 		// update would be lit white. Compare a red lamp against a white one.
 		const lit = (color: string) => {
 			const lights = new LightRegistry(new THREE.Scene());
-			const { loop, world } = makeLoop(lights);
+			const { loop, world } = makeLoop({ lights });
 			world.setBlock(260, 40, 260, stone);
 			const chunk = world.ensureChunk(16, 16);
 			chunk.lights.fill(0);
@@ -204,7 +158,7 @@ describe('GameLoop.replaceBlock', () => {
 
 	it('unregisters a lamp replaced by stone', () => {
 		const lights = new LightRegistry(new THREE.Scene());
-		const { loop, world } = makeLoop(lights);
+		const { loop, world } = makeLoop({ lights });
 		world.setBlock(260, 40, 260, lamp);
 		lights.add(260, 40, 260, '#ff8800');
 		expect(loop.replaceBlock(hit(260, 40, 260), stone, '#ffffff')).toBe(true);
@@ -213,7 +167,7 @@ describe('GameLoop.replaceBlock', () => {
 
 	it('cancels in-progress mining on the replaced cell', () => {
 		const lights = new LightRegistry(new THREE.Scene());
-		const { loop, world, player, tick } = makeLoop(lights);
+		const { loop, world, player, tick } = makeLoop({ lights });
 		// Player at (260, 40, 260), eye y = 41.6, yaw 0 looks toward -z.
 		player.flying = true; // no gravity, so the eye stays put
 		world.setBlock(260, 41, 257, stone);
@@ -244,7 +198,7 @@ describe('GameLoop face highlight', () => {
 
 	it('shows the aimed face within reach and hides it beyond reach or when paused', () => {
 		const { h, group } = makeHighlight();
-		const { loop, world, player, tick } = makeLoop(null, h);
+		const { loop, world, player, tick } = makeLoop({ highlight: h });
 		player.flying = true;
 		// yaw 0 looks toward -z from eye (260, 41.6, 260); reach is 6.
 		world.setBlock(260, 41, 257, stone);
@@ -268,4 +222,31 @@ describe('GameLoop face highlight', () => {
 		tick(0.05);
 		expect(group.visible).toBe(false);
 	});
+});
+
+describe('GameLoop edit lane', () => {
+	it('§6.4 sunlitHash compare: an interior edit dirties 4 chunks (1 edit + 3 SE shadowOnly) and re-meshes exactly 1 over two ticks (mutant: skip the compare → 4)', () => {
+		const { loop, world, tick, mounts } = makeLoop();
+		// interior-flat fixture: 3×3 chunks of flat stone at y 20, player above chunk (16,16)
+		for (let cx = 15; cx <= 17; cx++) for (let cz = 15; cz <= 17; cz++) {
+			const c = world.ensureChunk(cx, cz);
+			c.blocks.fill(AIR);
+			for (let x = 0; x < 16; x++) for (let z = 0; z < 16; z++) c.blocks[indexOf(x, 20, z)] = stone;
+			c.lights.fill(0);
+			c.liquidFrontier.clear();
+		}
+		for (let cx = 15; cx <= 17; cx++) for (let cz = 15; cz <= 17; cz++) fillChunkLights(world, world.getChunk(cx, cz)!);
+		// stream the whole MESH_RADIUS ring in (the still budget mounts several chunks per tick)
+		for (let k = 0; k < 200 && (k === 0 || loop.stats.streamQueue > 0); k++) tick(1 / 60);
+		expect(loop.stats.streamQueue).toBe(0);
+		const before = mounts();
+		// interior voxel (264, 21, 264): lx = lz = 8 → markChunkDirtyAround marks exactly one chunk
+		world.setBlock(264, 21, 264, stone);
+		loop.markChunkDirtyAround(264, 264);
+		loop.applyLightUpdate(264, 21, 264);
+		tick(1 / 60); // edit lane: the edited chunk re-meshes (1)
+		tick(1 / 60); // stream lane: the 3 SE shadowOnly chunks are shadowed; a single block on a flat plain changes no neighbour's sunlit → 0 re-meshes
+		expect(mounts() - before).toBe(1);
+		expect(loop.stats.lastEditMs).toBeGreaterThan(0);
+	}, 30_000);
 });

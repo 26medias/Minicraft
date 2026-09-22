@@ -32,17 +32,17 @@
 
 | Task | Depends on | Can run in parallel with |
 |---|---|---|
-| 1 A: numeric chunk index + bench baseline | — | 7, 8 (scaffold) |
-| 2 C: shadow early-out + load-order independence + `sunlitHash` | 1 | 7, 8 (scaffold) |
-| 3 G: no-allocation mesher (golden recorded first) | 1 only (`shadows.brute.ts` and the indexed World both come from Task 1; the golden is recorded BEFORE Task 2/3 code — see Task 3 step 0) | 2, 7, 8a |
-| 4 B: scheduler + loop wiring + `MESH_RADIUS` ring + edit lane | 2, 3 | 7 |
-| 5 D: worker for shadows + mesh | 4 | 7 |
-| 6 E: eviction, fog, `hasLiquid`, re-entry fixture | 5 | 7 |
-| 7 F: F3 overlay | 1 (reads `loop.stats`, which Task 4 fills — the overlay renders zeros until then) | 2–6 |
+| 1 A: numeric chunk index + bench baseline | — | 8a (after 1 lands) |
+| 2 C: shadow early-out + load-order independence + `sunlitHash` | 1 | 3, 8a |
+| 3 G: no-allocation mesher (golden recorded first) | 1 only (`shadows.brute.ts` and the indexed World both come from Task 1; the golden is recorded BEFORE Task 2/3 code — see Task 3 step 0) | 2, 8a |
+| 4 B: scheduler + loop wiring + `MESH_RADIUS` ring + edit lane + `test-loop.ts` | 2, 3 | 8a |
+| 5 D: worker for shadows + mesh | 4 | 8a |
+| 6 E: eviction, fog, `hasLiquid`, re-entry fixture | 5 | 8a |
+| 7 F: F3 overlay | 6 (shares `renderer.ts` with Task 6, `main.ts` with Task 5, `loop.ts` with Tasks 4–6: it adds `onFrame` and a call site in `tick`) | — |
 | 8 Bench: Playwright + `scripts/perf-bench.ts`; final run | 8a (scaffold + baseline of the still/walk/fly/load phases): 1 — Task 1's `stats` stub provides `streamQueue`; the edit and memory phases need `lastEditMs` (Task 4) and `mounted`/`data` (Task 6) and are recorded only at 8b; 8b (final run, exit criterion): 6, 7 | 8a with 2–6 |
 | 9 Docs | 8 | — |
 
-Tasks 1–6 are sequential on `loop.ts` / `world.ts` / `shadows.ts` / `mesher.ts` (Task 3 may run in a worktree in parallel with Task 2: it touches only `mesher.ts` and its golden test). Task 7 touches only `src/ui/perf-overlay.ts`, `src/ui/ui.css`, `src/main.ts` (one handler) and `src/game/loop.ts` (one `stats` field it shares with Task 4 — Task 4 defines the field, Task 7 only reads it; if Task 7 lands first it defines the field and Task 4 fills it). Task 8's scaffold (devDependency, script skeleton, the **baseline run** recorded into the spec) runs right after Task 1 in a worktree; its final run is the exit criterion after Task 7.
+Tasks 1–6 are sequential on `loop.ts` / `world.ts` / `shadows.ts` / `mesher.ts` (Task 3 may run in a worktree in parallel with Task 2: it touches only `mesher.ts` and its golden test). Task 7 modifies `src/engine/render/renderer.ts` (also Task 6), `src/main.ts` (also Task 5) and `src/game/loop.ts` (also Tasks 4–6: it adds `onFrame` and a call site in `tick`), so it runs AFTER Task 6 in the main tree, never in a parallel worktree. Task 8's scaffold (devDependency, script skeleton, the **baseline run** recorded into the spec) runs right after Task 1 in a worktree; its final run is the exit criterion after Task 7.
 
 **Execution note.** Every task's exit criterion is the FULL `npm test` + `npx tsc --noEmit` + `npm run lint`, so two tasks cannot share a working tree. Parallel tasks run in separate `git worktree`s on their own branches (`task/perf-N`, cut from `perf` at the point their dependencies have merged). A merge step (parent) merges each branch into `perf` in dependency order and re-runs the three commands after every merge. Worktrees have been cut from a stale commit before: `git reset --hard perf` on the fresh branch first, then `npm run build-atlas` (atlas.json is gitignored). Root `package-lock.json` is out of sync with `package.json` (`npm ci` fails on `@emnapi/*`): symlink the main checkout's `node_modules` **and** `api/node_modules` into a worktree instead of installing; never touch the lock file. Task 8 adds `playwright` to `devDependencies` — run `npm install playwright` (not `ci`) in the main checkout and `npx playwright install chromium` once; worktrees inherit through the symlink. `vitest.config.ts` already caps `maxWorkers: 2`.
 
@@ -57,7 +57,7 @@ class World { getChunk(cx, cz): Chunk | undefined /* bounds-checked */; getChunk
 // src/engine/world/shadows.brute.ts (Task 1): export function computeChunkShadowsBrute(world, chunk): void  // verbatim copy of today's caster; tests only
 
 // src/engine/world/chunk.ts (Task 2 adds sunlitHash, Task 5 adds rev + Chunk.over, Task 6 adds hasLiquid)
-class Chunk { rev = 0; sunlitHash = 0; hasLiquid = false; static over(cx, cz, height, blocks: Uint16Array, lights: Uint16Array, sunlit: Uint8Array): Chunk /* no allocation */ }
+class Chunk { rev = 0; sunlitHash = 0; hasLiquid = false; static over(cx, cz, height, blocks: Uint16Array, lights?: Uint16Array | null, sunlit?: Uint8Array | null): Chunk /* wraps the given buffers; allocates ONLY the arrays passed as null/undefined (diagonal neighbours carry blocks only) */ }
 
 // src/engine/world/shadows.ts (Task 2)
 export function computeChunkShadows(world: World, chunk: Chunk): void;   // same signature; requires the 3×3 present (world edge excepted)
@@ -87,7 +87,16 @@ export function planFrame(input: FrameInput, now: () => number, mount: (index: n
 export type WorkerLike = { postMessage(msg: unknown, transfer?: Transferable[]): void; onmessage: ((e: { data: unknown }) => void) | null; terminate(): void };
 export type WorkerFactory = () => WorkerLike;
 export type ChunkJob = { id: number; cx: number; cz: number; chunk: Chunk; rev: number };
+export type JobPayload = { id: number; cx: number; cz: number; height: number; blocks: (Uint16Array | null)[]; lights: (Uint16Array | null)[]; sunlit: (Uint8Array | null)[] };
+export function snapshotFor(world: World, chunk: Chunk): { payload: JobPayload; transfer: ArrayBuffer[] };   // slice() copies of blocks×9, lights×5, sunlit×4
 export class ChunkJobs { constructor(factory: WorkerFactory, uvTable: Float32Array, maxInFlight = 2); post(world: World, chunk: Chunk): boolean; onReply: (job: ChunkJob, sunlit: Uint8Array, mesh: ChunkMeshResult) => void; onDropped: (job: ChunkJob) => void; inFlight(): number; }
+// src/game/loop.ts (Task 5): function axisNeighbours(world: World, c: Chunk): (Chunk | undefined)[]  // [+x, −x, +z, −z] via world.getChunk (no ensure)
+
+// src/game/test-loop.ts (Task 4; Task 5 adds `jobs`) — headless GameLoop harness shared by loop.test.ts, eviction.test.ts and the Task 5 seam/retry tests
+export type MakeLoopOpts = { lights?: LightRegistry | null; highlight?: FaceHighlight | null; seed?: number; jobs?: ChunkJobs | null };
+export function makeLoop(opts?: MakeLoopOpts): { loop: GameLoop; world: World; player: Player; keys: Keys; tick: (dt: number) => void; mounts: () => number; meshes: () => Map<number, ChunkMeshResult> };
+//   seed undefined → today's `new World(1)` (v1, 64-high) with chunk (16,16) cleared and player [260,40,260] (existing loop tests unchanged); seed given → `World.create(seed)` (256-high v3), player [256.5,200,256.5]
+//   renderer stub: mountChunkMesh (counts + records the last mesh per chunk index), unmountChunk (deletes the record), onTick
 // src/engine/world/chunk-jobs.test-utils.ts (Task 5, TEST ONLY — never imported by chunk-jobs.ts): export function inlineWorkerFactory(): WorkerFactory
 // src/engine/render/uv-table.ts (Task 5): export function buildUvTable(atlas: AtlasJson): Float32Array; export function uvFromTable(table: Float32Array): UvFn
 ```
@@ -313,7 +322,7 @@ Claude-Session: https://claude.ai/code/session_01WkqJrcc2U5KmXWvtU969AW"
 Implements spec §3.C and the `sunlitHash` of §3.E (the hash lives with the shadow computation; the compare that uses it is Task 4/6). Tests: §6.1 shadow equivalence (byte-identical, plus the ray counter falling to ≤ 2 % of candidates — mutant: drop the per-start-column early-out → 11.7 %, measured); **stream-equivalence** (red at HEAD by 5 CHUNKS on the 7×7 fixture — the spec's 632 is voxels; mutant: shadow a chunk without ensuring its 3×3). The eviction / re-entry fixture needs `dropChunk` plus the re-dirty on drop and is written in **Task 6**, where the drop happens. The three big fixture tests each take 6–7 s in Node: they carry explicit `30_000` timeouts (vitest default 5 s) and add ≈ 14 s to `npm test` — accepted.
 
 **Files:**
-- Modify: `src/engine/world/shadows.ts` (rewrite `computeChunkShadows`; keep `maxOpaqueY` exported for its existing test; add `hashSunlit`, `SHADOW_STATS`, `ensureShadowNeighbourhood`)
+- Modify: `src/engine/world/shadows.ts` (rewrite `computeChunkShadows`; keep `maxOpaqueY` exported for its existing test; add `hashSunlit`, `SHADOW_STATS`, `ensureShadowNeighbourhood`; DELETE the now-dead private `neighbourhoodMaxOpaqueY` and `rayHitsSolidInLoadedChunks` — `noUnusedLocals` and `no-unused-vars` fail otherwise)
 - Modify: `src/engine/world/chunk.ts` (add `sunlitHash = 0`)
 - Modify: `src/game/loop.ts:345-349` (call `ensureShadowNeighbourhood` before shadowing; re-dirty shadows of the 3×3 when a chunk is first generated)
 - Modify: `src/engine/world/shadows.test.ts` (add the equivalence + counter + stream tests; existing tests unchanged)
@@ -646,7 +655,8 @@ Implements spec §3.B (and the `sunlitHash` compare on the edit path, §3.E thir
 **Files:**
 - Create: `src/engine/world/radii.ts` (the three constants — engine home, see Global Constraints), `src/game/chunk-scheduler.ts` (re-exports them), `src/game/chunk-scheduler.test.ts`
 - Modify: `src/game/loop.ts` (replace `dirtyChunks`/`flushDirtyChunks`/`loadNearbyChunks` with the scheduler; add `streamSet`, `editLane`, `shadowOnly`, `moving`, `initialLoad`, `lastPlayerChunk`, `editStartedAt`; fill the Task 1 `stats` stub; `applyLightUpdate` routes the edited chunk to the edit lane and SE neighbours to the stream set with `shadowOnly = true`)
-- Modify: `src/game/loop.test.ts` (existing tests keep passing; add the corner-edit test)
+- Create: `src/game/test-loop.ts` (the headless `makeLoop` harness moved out of `loop.test.ts`; options object; `meshes()` accessor; `unmountChunk` stub — shared by Tasks 5 and 6)
+- Modify: `src/game/loop.test.ts` (delete its local `makeLoop`, `import { makeLoop } from './test-loop'`, and convert the 11 call sites: `makeLoop(lights)` → `makeLoop({ lights })`, `makeLoop(null, h)` → `makeLoop({ highlight: h })`, `makeLoop()` unchanged; existing tests keep passing; add the interior-edit test)
 
 **Interfaces:**
 - Produces (`chunk-scheduler.ts`):
@@ -752,8 +762,6 @@ export const DATA_RADIUS = 7;
 // src/game/chunk-scheduler.ts
 import { WORLD_CHUNKS_Z } from '../engine/world/coords';
 export { MESH_RADIUS, UNMOUNT_RADIUS, DATA_RADIUS } from '../engine/world/radii';
-import { MESH_RADIUS } from '../engine/world/radii';
-void MESH_RADIUS; // (only if nothing below uses it; otherwise drop this line — noUnusedLocals)
 export const BUDGET_STILL_MS = 30;
 export const BUDGET_MOVING_MS = 6;
 
@@ -801,7 +809,52 @@ In `loop.ts`:
 - `mountIndex(i)`: `const cx = Math.floor(i / WORLD_CHUNKS_Z), cz = i % WORLD_CHUNKS_Z; const c = this.world.ensureChunk(cx, cz); ensureShadowNeighbourhood(this.world, c); /* liquid frontier scan unchanged until Task 6 */ if (c.shadowsDirty) { const before = c.sunlitHash; computeChunkShadows(this.world, c); if (this.shadowOnly.has(i) && before === c.sunlitHash && this.mountedChunks.has(i)) { this.shadowOnly.delete(i); return; /* shadows unchanged: no re-mesh (spec §3.E compare) */ } } this.shadowOnly.delete(i); for (const n of Object.values(this.world.neighbors(c))) if (n && n.shadowsDirty) computeChunkShadows(this.world, n); const result = meshChunk(c, this.world.neighbors(c), this.uvFor); this.renderer.mountChunkMesh(c, result); this.mountedChunks.add(i);`
 - Keep `VIEW_RADIUS = 4` with its comment changed to "walk/physics ring; the mesh ring is MESH_RADIUS".
 
-- [ ] **Step 5: Interior-edit test in `loop.test.ts`**
+- [ ] **Step 5: Move `makeLoop` to `src/game/test-loop.ts`**
+
+```ts
+// src/game/test-loop.ts — headless GameLoop harness for tests (not shipped; nothing under src/ imports it except *.test.ts)
+import * as THREE from 'three';
+import { GameLoop } from './loop';
+import { World } from '../engine/world/world';
+import { FpCamera } from '../engine/render/camera';
+import type { LightRegistry } from '../engine/render/light-registry';
+import type { FaceHighlight } from '../engine/render/face-highlight';
+import { Player, type Keys } from './player';
+import { AIR } from '../data/blocks.data';
+import type { Renderer } from '../engine/render/renderer';
+import type { Chunk } from '../engine/world/chunk';
+import type { ChunkMeshResult } from '../engine/world/mesher';
+import { chunkIndex } from '../engine/world/coords';
+
+export type MakeLoopOpts = { lights?: LightRegistry | null; highlight?: FaceHighlight | null; seed?: number };
+// Task 5 adds `jobs?: ChunkJobs | null` to MakeLoopOpts and passes it as GameLoop's last constructor argument.
+
+export function makeLoop(opts: MakeLoopOpts = {}) {
+	const { lights = null, highlight = null, seed } = opts;
+	// seed undefined → today's fixture: v1 world (64-high) with chunk (16,16) cleared. seed given → World.create(seed): 256-high v3 world.
+	const world = seed === undefined ? new World(1) : World.create(seed);
+	if (seed === undefined) { const c = world.ensureChunk(16, 16); c.blocks.fill(AIR); c.lights.fill(0); c.liquidFrontier.clear(); }
+	let tickFn: ((dt: number) => void) | null = null;
+	let mounts = 0;
+	const meshes = new Map<number, ChunkMeshResult>();
+	const renderer = {
+		camera: new THREE.PerspectiveCamera(),
+		mountChunkMesh: (c: Chunk, m: ChunkMeshResult) => { mounts++; meshes.set(chunkIndex(c.cx, c.cz), m); },
+		unmountChunk: (cx: number, cz: number) => { meshes.delete(chunkIndex(cx, cz)); },
+		onTick: (fn: (dt: number) => void) => { tickFn = fn; },
+	} as unknown as Renderer;
+	const keys: Keys = { forward: false, back: false, left: false, right: false, jump: false };
+	const player = new Player(seed === undefined ? [260, 40, 260] : [256.5, 200, 256.5]);
+	const loop = new GameLoop(world, renderer, new FpCamera(), player, keys, () => [0, 0, 1, 1], null, null, lights, highlight);
+	loop.start();
+	const tick = (dt: number) => tickFn!(dt);
+	return { loop, world, player, keys, tick, mounts: () => mounts, meshes: () => meshes };
+}
+```
+
+In `loop.test.ts`: delete the local `makeLoop`, import it, convert the call sites (`makeLoop(lights)` → `makeLoop({ lights })`; `makeLoop(null, h)` → `makeLoop({ highlight: h })`); the tests' bodies are unchanged. Run `npx vitest run src/game/loop.test.ts` → green.
+
+- [ ] **Step 6: Interior-edit test in `loop.test.ts`**
 
 ```ts
 it('§6.4 sunlitHash compare: an interior edit dirties 4 chunks (1 edit + 3 SE shadowOnly) and re-meshes exactly 1 over two ticks (mutant: skip the compare → 4)', () => {
@@ -824,15 +877,15 @@ it('§6.4 sunlitHash compare: an interior edit dirties 4 chunks (1 edit + 3 SE s
 
 (`makeLoop` already stubs `mountChunkMesh` with a counter; import `fillChunkLights`.)
 
-- [ ] **Step 6: Run everything**
+- [ ] **Step 7: Run everything**
 
 Run: `npx vitest run src/game && npm test && npx tsc --noEmit && npm run lint`
 Expected: green. The existing `loop.test.ts` tests that tick 1–3 frames to mount a chunk still pass because the first stream mount always runs.
 
-- [ ] **Step 7: Commit**
+- [ ] **Step 8: Commit**
 
 ```bash
-git add src/engine/world/radii.ts src/game/chunk-scheduler.ts src/game/chunk-scheduler.test.ts src/game/loop.ts src/game/loop.test.ts
+git add src/engine/world/radii.ts src/game/chunk-scheduler.ts src/game/chunk-scheduler.test.ts src/game/loop.ts src/game/loop.test.ts src/game/test-loop.ts
 git commit -m "perf(loop): pure chunk scheduler — edit lane, nearest-first stream, adaptive budget, MESH_RADIUS ring, stats
 
 Co-Authored-By: Claude Fable 5.1 <noreply@anthropic.com>
@@ -854,6 +907,7 @@ Implements spec §3.D. Tests: §6.3 (identical bytes; detachment; stale dropped 
 - Modify: `src/engine/world/lighting.ts` (`updateLightsForBlockChange` increments `rev` of every touched chunk), `src/engine/world/shadows.ts` (`computeChunkShadows` does NOT bump rev; shadow *invalidation* sites in `loop.ts` do: `n.shadowsDirty = true; n.rev++`)
 - Modify: `src/game/loop.ts` (streaming mounts post to `ChunkJobs`; replies mount; edits stay synchronous; `stats.workerInFlight`; new fields `inFlightIndex: Set<number>`, `jobs: ChunkJobs | null`; `loadNearbyChunks` skips in-flight indices)
 - Modify: `src/main.ts` (construct `ChunkJobs` with the Vite factory and `atlas.uvTable`, pass to `GameLoop`)
+- Modify: `src/game/test-loop.ts` (`MakeLoopOpts` gains `jobs?: ChunkJobs | null`, passed as `GameLoop`'s last argument), `src/game/loop.test.ts` (the seam test and the dropped-reply retry test below)
 
 **Interfaces:**
 - Produces:
@@ -989,25 +1043,52 @@ describe('ChunkJobs (spec §6.3)', () => {
 		expect(jobs.post(w, w.getChunk(...picks[0])!)).toBe(true); expect(jobs.post(w, w.getChunk(...picks[1])!)).toBe(true); expect(jobs.post(w, w.getChunk(...picks[2])!)).toBe(false);
 	});
 
-	it('neighbour seams: a centre posted while its axis neighbours are still unshadowed meshes identically to the sync path (mutant: skip the axis-neighbour shadow pass in mountStream → 0/9 identical)', { timeout: 30_000 }, async () => {
-		// Same as the first test but the reference is built by the LOOP's mountStream order: neighbours unshadowed at post time.
-		// Build via the loop helper of Task 4/5 (makeLoop with jobs) on the 5×5 fixture: mount the 9 picks through the loop with the inline factory, then compare every mounted mesh's colour bytes with the sync path where every neighbour was shadowed first. With the pass present: 9/9; without: 0/9 (gate 2 measured 81/81 chunks differing on a real stream).
-		const { loop, world, tick, meshes } = makeLoop({ jobs: new ChunkJobs(inlineWorkerFactory(), table, 2), seed: 3 });
-		// ...drive tick until the 9 picks are mounted; meshes() returns the last mesh per index from the renderer stub; compare fnvBytes(colors) with the sync reference computed as in the first test.
-		void loop; void world; void tick; void meshes; // executor: fill in per the comment; the assertion is expect(identical).toBe(9)
-	});
 });
+```
 
-// src/game/loop.test.ts (Task 5 adds): dropped reply → chunk re-enters the stream set and is re-mounted
-it('a reply dropped for a rev bump re-dirties the chunk and the next reply is applied (mutant: drop without re-dirty → stale geometry forever)', async () => {
-	const { loop, world, tick, mounts } = makeLoop({ jobs: new ChunkJobs(inlineWorkerFactory(), table, 2), seed: 3 });
-	for (let k = 0; k < 20; k++) { tick(1 / 60); await new Promise((r) => setTimeout(r, 0)); }
-	const c = world.getChunk(21, 12)!; const before = mounts();
-	c.rev++;                                    // invalidate while (possibly) in flight; then dirty it via the stream lane
-	loop.markChunkDirty(21, 12);
-	for (let k = 0; k < 20; k++) { tick(1 / 60); await new Promise((r) => setTimeout(r, 0)); }
-	expect(mounts()).toBeGreaterThan(before);   // a fresh reply was applied after the dropped one
-	expect(loop.stats.streamQueue).toBe(0);
+```ts
+// src/game/loop.test.ts (Task 5 adds; these need the loop, so they live here, not in chunk-jobs.test.ts)
+// extra imports: readFileSync/existsSync, ChunkJobs from '../engine/world/chunk-jobs', inlineWorkerFactory from '../engine/world/chunk-jobs.test-utils',
+// buildUvTable/AtlasJson from '../engine/render/uv-table', chunkIndex from '../engine/world/coords', spawnV3 from '../engine/world/v3/spawn', makeLoop from './test-loop'
+if (!existsSync('public/atlas.json')) throw new Error('public/atlas.json missing: run npm run build-atlas (it is gitignored)');
+const table = buildUvTable(JSON.parse(readFileSync('public/atlas.json', 'utf8')) as AtlasJson);
+const flush = () => new Promise((r) => setTimeout(r, 0));
+function fnvBytes(a: ArrayBufferView): number { const b = new Uint8Array(a.buffer, a.byteOffset, a.byteLength); let h = 2166136261 >>> 0; for (let i = 0; i < b.length; i++) { h ^= b[i]; h = Math.imul(h, 16777619) >>> 0; } return h; }
+/** Tick until the stream set and the worker are both drained (or maxTicks). Each tick is followed by a macrotask turn so the inline worker's microtasks run. */
+async function drain(h: ReturnType<typeof makeLoop>, maxTicks = 600) {
+	for (let k = 0; k < maxTicks; k++) { h.tick(1 / 60); await flush(); if (h.loop.stats.streamQueue === 0 && h.loop.stats.workerInFlight === 0 && k > 5) return; }
+	throw new Error(`stream did not drain in ${maxTicks} ticks`);
+}
+function picksAround(seed: number): number[] {
+	const s = spawnV3(seed); const pcx = Math.floor(s.x / 16), pcz = Math.floor(s.z / 16); const out: number[] = [];
+	for (let dx = -1; dx <= 1; dx++) for (let dz = -1; dz <= 1; dz++) out.push(chunkIndex(pcx + dx, pcz + dz));
+	return out;
+}
+
+describe('worker streaming through the loop (spec §3.D / §6.3)', () => {
+	it('neighbour seams: the worker path meshes the 9 spawn chunks byte-identically to the synchronous path (mutant: skip the axis-neighbour shadow pass in mountStream → 0/9 identical)', { timeout: 60_000 }, async () => {
+		const seed = 3, s = spawnV3(seed), picks = picksAround(seed);
+		const sync = makeLoop({ seed });                                                        // jobs null → mountSync for every chunk
+		const viaWorker = makeLoop({ seed, jobs: new ChunkJobs(inlineWorkerFactory(), table, 2) });
+		for (const h of [sync, viaWorker]) { h.player.position = [s.x + 0.5, s.h + 2, s.z + 0.5]; await drain(h); }
+		expect(picks.every((i) => sync.meshes().has(i) && viaWorker.meshes().has(i))).toBe(true);
+		let identical = 0;
+		for (const i of picks) if (fnvBytes(sync.meshes().get(i)!.opaque.colors) === fnvBytes(viaWorker.meshes().get(i)!.opaque.colors)) identical++;
+		expect(identical).toBe(9);   // gate 2 measured 81/81 chunks differing when the pass is missing (all-zero neighbour sunlit → dark seams)
+	});
+
+	it('a reply dropped for a rev bump re-dirties the chunk and the next reply is applied (mutant: drop without re-dirty → stale geometry forever)', { timeout: 60_000 }, async () => {
+		const seed = 3, s = spawnV3(seed);
+		const h = makeLoop({ seed, jobs: new ChunkJobs(inlineWorkerFactory(), table, 2) });
+		h.player.position = [s.x + 0.5, s.h + 2, s.z + 0.5]; await drain(h);
+		const cx = Math.floor(s.x / 16), cz = Math.floor(s.z / 16); const c = h.world.getChunk(cx, cz)!; const before = h.mounts();
+		h.loop.markChunkDirty(cx, cz);           // stream lane → mountStream posts a job
+		h.tick(1 / 60);                           // posted, in flight
+		c.rev++;                                  // invalidate while in flight → the reply must be dropped and the chunk re-dirtied
+		await drain(h);                           // onDropped re-adds it; the next job's reply is applied
+		expect(h.mounts()).toBeGreaterThan(before);
+		expect(h.loop.stats.streamQueue).toBe(0); expect(h.loop.stats.workerInFlight).toBe(0);
+	});
 });
 ```
 
@@ -1039,12 +1120,9 @@ export function handleMessage(data: unknown, post: (reply: JobReply, transfer: A
 	for (let i = 0; i < 9; i++) {
 		const b = job.blocks[i]; if (!b) continue;
 		const dx = Math.floor(i / 3) - 1, dz = (i % 3) - 1;
-		const c = new Chunk(job.cx + dx, job.cz + dz, job.height as WorldHeight);
-		(c as { blocks: Uint16Array }).blocks = b; // readonly at the type level; the worker owns these buffers
 		const li = i === 4 ? 0 : dx === 1 && dz === 0 ? 1 : dx === -1 && dz === 0 ? 2 : dx === 0 && dz === 1 ? 3 : dx === 0 && dz === -1 ? 4 : -1;
-		if (li >= 0 && job.lights[li]) (c as { lights: Uint16Array }).lights = job.lights[li]!;
-		if (li > 0 && job.sunlit[li - 1]) (c as { sunlit: Uint8Array }).sunlit = job.sunlit[li - 1]!;
-		grid[i] = c;
+		// Chunk.over wraps the received buffers; it allocates only what is missing (lights/sunlit for diagonals) — never the 320 KB × 9 of `new Chunk`.
+		grid[i] = Chunk.over(job.cx + dx, job.cz + dz, job.height as WorldHeight, b, li >= 0 ? job.lights[li] : null, li > 0 ? job.sunlit[li - 1] : null);
 	}
 	const centre = grid[4]!;
 	const world = { height: job.height, getChunk: (cx: number, cz: number) => { const dx = cx - job.cx, dz = cz - job.cz; return dx < -1 || dx > 1 || dz < -1 || dz > 1 ? undefined : grid[(dx + 1) * 3 + dz + 1]; }, chunkInWorld: () => true, ensureChunk: (cx: number, cz: number) => grid[(cx - job.cx + 1) * 3 + (cz - job.cz + 1)]! } as unknown as import('./world').World;
@@ -1067,10 +1145,10 @@ if (typeof self !== 'undefined' && 'postMessage' in self && typeof window === 'u
 
 `loop.ts` streaming path — `mountStream(i)` (stream mounts when `this.jobs` is set; edits keep the synchronous `mountSync(i)` = Task 4's `mountIndex` body):
 1. ensure the chunk + `ensureShadowNeighbourhood`, liquid scan (unchanged);
-2. **shadow the axis neighbours first**: `for (const n of [px, nx, pz, nz] of world.neighbors(c)) if (n && n.shadowsDirty) computeChunkShadows(this.world, n);` — the worker computes only the CENTRE's sunlit and averages the neighbours' `sunlit` into border corners; without this pass a nearest-first stream sends all-zero neighbour sunlit and every chunk edge gets a dark seam (gate 2: 81/81 chunks' colours differ). ≈ 0.7 ms each after Task 2;
+2. **shadow the axis neighbours first**: `for (const n of axisNeighbours(this.world, c)) if (n && n.shadowsDirty) computeChunkShadows(this.world, n);` where `function axisNeighbours(world: World, c: Chunk): (Chunk | undefined)[] { return [world.getChunk(c.cx + 1, c.cz), world.getChunk(c.cx - 1, c.cz), world.getChunk(c.cx, c.cz + 1), world.getChunk(c.cx, c.cz - 1)]; }` (module-level in `loop.ts`; `getChunk`, never `ensureChunk`) — the worker computes only the CENTRE's sunlit and averages the neighbours' `sunlit` into border corners; without this pass a nearest-first stream sends all-zero neighbour sunlit and every chunk edge gets a dark seam (gate 2: 81/81 chunks' colours differ). ≈ 0.7 ms each after Task 2;
 3. `if (this.jobs.post(this.world, c)) { this.inFlightIndex.add(i); this.streamSet.delete(i); return true; } return false;` — `false` tells `planFrame` the worker is full: stop generating halos this frame; the chunk stays in the stream set.
 `loadNearbyChunks` and `orderStream`'s input skip `inFlightIndex` (otherwise a posted-but-unreplied chunk is nearest again next frame and gets posted twice, halving throughput — gate 2 B3). A posted chunk leaves the stream set at post and returns only via `onDropped` or a later `markChunkDirty`.
-`jobs.onReply = (job, sunlit, mesh) => { const idx = chunkIndex(job.cx, job.cz); this.inFlightIndex.delete(idx); if (!this.wanted(idx)) return; /* player left: do not mount what the evictor would drop next frame */ job.chunk.sunlit.set(sunlit); job.chunk.sunlitHash = hashSunlit(sunlit); job.chunk.shadowsDirty = false; this.renderer.mountChunkMesh(job.chunk, mesh); this.mountedChunks.add(idx); /* seams (spec §3.D): mounted axis neighbours sample this chunk's final sunlit at their border corners → re-dirty them shadowOnly; the sunlitHash compare keeps most from re-meshing */ for (const n of axisNeighbours(job.chunk)) if (n && this.mountedChunks.has(chunkIndex(n.cx, n.cz))) { n.shadowsDirty = true; n.rev++; this.markChunkDirty(n.cx, n.cz, { shadowOnly: true }); } }`;
+`jobs.onReply = (job, sunlit, mesh) => { const idx = chunkIndex(job.cx, job.cz); this.inFlightIndex.delete(idx); if (!this.wanted(idx)) return; /* player left: do not mount what the evictor would drop next frame */ job.chunk.sunlit.set(sunlit); job.chunk.sunlitHash = hashSunlit(sunlit); job.chunk.shadowsDirty = false; this.renderer.mountChunkMesh(job.chunk, mesh); this.mountedChunks.add(idx); /* seams (spec §3.D): mounted axis neighbours sample this chunk's final sunlit at their border corners → re-dirty them shadowOnly; the sunlitHash compare keeps most from re-meshing */ for (const n of axisNeighbours(this.world, job.chunk)) if (n && this.mountedChunks.has(chunkIndex(n.cx, n.cz))) { n.shadowsDirty = true; n.rev++; this.markChunkDirty(n.cx, n.cz, { shadowOnly: true }); } }`;
 `jobs.onDropped = (job) => { const idx = chunkIndex(job.cx, job.cz); this.inFlightIndex.delete(idx); if (this.wanted(idx)) this.streamSet.add(idx); }` — **invariant: a chunk stays dirty until a reply is applied; a dropped reply re-dirties it** (spec §3.D). `wanted(idx)` = `chebyshev(idx, playerCx, playerCz) <= MESH_RADIUS` against the CURRENT player chunk (the enqueue ring — evicted ⇒ unwanted, but this is not the evictor's own predicate). `stats.workerInFlight = this.jobs.inFlight()` each frame. `GameLoop` constructor gains an optional `jobs: ChunkJobs | null = null` parameter (last); `main.ts` passes `new ChunkJobs(() => new Worker(new URL('./engine/world/chunk.worker.ts', import.meta.url), { type: 'module' }), atlas.uvTable)` — the URL is relative to `src/main.ts`, so `./engine/...`; `../engine/...` resolves outside `src/` and `npm run build` fails with "Could not resolve entry module" (gate 2 verified both).
 
 - [ ] **Step 5: Run everything, build the worker**
@@ -1081,7 +1159,7 @@ Expected: green; `dist/assets/` contains a `chunk.worker-*.js` of ≈ 90 KB with
 - [ ] **Step 6: Commit**
 
 ```bash
-git add src/engine/render/uv-table.ts src/engine/render/uv-table.test.ts src/engine/render/atlas.ts src/engine/world/chunk.worker.ts src/engine/world/chunk-jobs.ts src/engine/world/chunk-jobs.test-utils.ts src/engine/world/chunk-jobs.test.ts src/engine/world/chunk.ts src/engine/world/lighting.ts src/game/loop.ts src/game/loop.test.ts src/main.ts
+git add src/engine/render/uv-table.ts src/engine/render/uv-table.test.ts src/engine/render/atlas.ts src/engine/world/chunk.worker.ts src/engine/world/chunk-jobs.ts src/engine/world/chunk-jobs.test-utils.ts src/engine/world/chunk-jobs.test.ts src/engine/world/chunk.ts src/engine/world/lighting.ts src/game/loop.ts src/game/loop.test.ts src/game/test-loop.ts src/main.ts
 git commit -m "perf(worker): shadows + meshing off the main thread; Chunk.rev; dropped replies re-dirty
 
 Co-Authored-By: Claude Fable 5.1 <noreply@anthropic.com>
@@ -1097,8 +1175,8 @@ Implements spec §3.E. Tests: §6.4 (paired modified/unmodified eviction — mut
 **Files:**
 - Modify: `src/game/loop.ts` (`evict()` after `simulate`; numeric set cleanup; `hasLiquid` gate on the frontier scan; `stats.data`)
 - Modify: `src/engine/render/renderer.ts` (`unmountChunk(cx, cz)`; fog `new THREE.Fog(0x87ceeb, FOG_NEAR, FOG_FAR)` with `export const FOG_FAR = MESH_RADIUS * 16 - 8; export const FOG_NEAR = FOG_FAR - 8;` — 72 / 64: the gate-2 kid-lens pass measured that a 29-block fade (near 43) dissolves the summit of the one peak visible from spawn while an 8-block band keeps it legible and reads as Minecraft's render edge; `MESH_RADIUS` imported from `../world/radii` (engine → engine))
-- Modify: `src/engine/world/world.ts` (`dropChunk` also re-dirties the 3×3 neighbours' shadows and bumps their `rev`; dev assertion helper `assertWithinData(cx, cz)` used by the loop's scheduler reads in DEV)
-- Modify: `src/game/test-loop.ts` (created here by moving `makeLoop` out of `loop.test.ts`; its renderer stub gains `unmountChunk(cx, cz)` — without it the walk-away test throws `TypeError: unmountChunk is not a function`)
+- Modify: `src/engine/world/world.ts` (`dropChunk` also re-dirties the 3×3 neighbours' shadows and bumps their `rev`)
+- Consumes: `src/game/test-loop.ts` (created in Task 4; its renderer stub already has `unmountChunk(cx, cz)` — without it the walk-away test throws `TypeError: unmountChunk is not a function`)
 - Modify: `src/engine/world/chunk.ts` (`hasLiquid = false`), `src/engine/world/generation.ts` (set `chunk.hasLiquid` after generating: scan once), `src/engine/world/world.ts` (`setBlock`/`setBlockFlow` set `hasLiquid = true` when `isLiquid(id)`), `src/game/apply-save.ts` (recompute `hasLiquid` from `rc.blocks`)
 - Modify: `src/game/liquid-scheduler.ts` (no change to logic; add a DEV assertion that `getBlock` reads stay within `DATA_RADIUS` of the player — pass a `withinData(x, z)` predicate in the constructor, default `() => true`)
 - Create: `src/game/eviction.test.ts`; append to `src/engine/world/shadows.test.ts` the re-entry fixture
@@ -1118,7 +1196,7 @@ import { FOG_FAR, FOG_NEAR } from '../engine/render/renderer';
 import { applySave } from './apply-save';
 import { BLOCK_BY_NAME } from '../data/blocks.data';
 import { indexOf, blocksPerChunk } from '../engine/world/coords';
-// makeLoop moved from loop.test.ts to src/game/test-loop.ts in this task (renderer stub gains unmountChunk)
+// makeLoop lives in src/game/test-loop.ts since Task 4 (renderer stub has unmountChunk and meshes())
 import { makeLoop } from './test-loop';
 
 const water = BLOCK_BY_NAME['water'].id;
@@ -1144,7 +1222,7 @@ describe('eviction (spec §3.E, §6.4)', () => {
 		expect(fnv(w.ensureChunk(10, 10).blocks)).toBe(h);
 	});
 
-	it('an evicted index leaves mountedChunks and a re-entered chunk is re-meshed (mutant: leave the entry)', () => {
+	it('an evicted index leaves mountedChunks and a re-entered chunk is re-meshed (mutant: leave the entry)', { timeout: 60_000 }, () => {
 		const { loop, player, tick, mounts } = makeLoop();
 		player.position = [16 * 16 + 8, 60, 16 * 16 + 8];
 		for (let k = 0; k < 400; k++) tick(1 / 60);             // fill the mesh ring
@@ -1221,7 +1299,7 @@ private evict() {
 
 Liquid scheduler DEV assertion: constructor gains `withinData?: (x: number, z: number) => boolean`; `getBlock` reads in `tick` paths go through `private read(x, y, z)` that asserts in DEV. The loop passes `(x, z) => chebyshev(chunkIndex(x >> 4, z >> 4), pcx, pcz) <= DATA_RADIUS` bound to the current player chunk each tick.
 
-`makeLoop` moves from `loop.test.ts` to `src/game/test-loop.ts` (exported; `loop.test.ts` imports it).
+`makeLoop` (in `src/game/test-loop.ts` since Task 4) needs no change here.
 
 - [ ] **Step 4: Run everything; visual check of the fog**
 
@@ -1231,7 +1309,7 @@ Expected: green. Then port 5174: new world, walk 200 blocks and back; the fronti
 - [ ] **Step 5: Commit**
 
 ```bash
-git add src/game/loop.ts src/game/eviction.test.ts src/game/test-loop.ts src/game/loop.test.ts src/game/liquid-scheduler.ts src/game/apply-save.ts src/engine/render/renderer.ts src/engine/world/world.ts src/engine/world/chunk.ts src/engine/world/generation.ts src/engine/world/radii.ts src/game/chunk-scheduler.ts src/engine/world/shadows.test.ts
+git add src/game/loop.ts src/game/eviction.test.ts src/game/loop.test.ts src/game/liquid-scheduler.ts src/game/apply-save.ts src/engine/render/renderer.ts src/engine/world/world.ts src/engine/world/chunk.ts src/engine/world/generation.ts src/engine/world/radii.ts src/game/chunk-scheduler.ts src/engine/world/shadows.test.ts
 git commit -m "perf(memory): unmount beyond UNMOUNT_RADIUS, drop unmodified data beyond DATA_RADIUS, fog from MESH_RADIUS, hasLiquid
 
 Co-Authored-By: Claude Fable 5.1 <noreply@anthropic.com>
@@ -1246,7 +1324,7 @@ Implements spec §3.F. Tests: §6.6 (rolling aggregation — mutant: off-by-one 
 
 **Files:**
 - Create: `src/ui/perf-stats.ts` (pure aggregator), `src/ui/perf-stats.test.ts`, `src/ui/perf-overlay.ts` (DOM panel)
-- Modify: `src/ui/ui.css` (`#perf-overlay`), `src/main.ts` (F3 handler next to the Tab handler; the `loop.onFrame` assignment placed AFTER `const loop = new GameLoop(...)` (main.ts:367) — the Tab handler at :318 precedes it and a TDZ ReferenceError follows otherwise), `src/game/loop.ts` (add `onFrame: ((dt: number, tickMs: number, frameMs: number) => void) | null` called at the end of `tick` AND in the paused branch — the overlay must not freeze with the inventory open; `frameMs` is a raw `performance.now()` delta kept by the loop, because `renderer.frame` clamps `dt` at 100 ms and a 400 ms hitch would read as 100). `stats` exists since Task 1.
+- Modify: `src/ui/ui.css` (`#perf-overlay`), `src/main.ts` (F3 handler next to the Tab handler; the DEV-only `window.__mc` export (main.ts:430) gains `apiUrl` (the `VITE_MINICRAFT_API_URL` value `main.ts:52` already reads) so the bench can log which API the page is wired to; the `loop.onFrame` assignment placed AFTER `const loop = new GameLoop(...)` (main.ts:367) — the Tab handler at :318 precedes it and a TDZ ReferenceError follows otherwise), `src/game/loop.ts` (add `onFrame: ((dt: number, tickMs: number, frameMs: number) => void) | null` called at the end of `tick` AND in the paused branch — the overlay must not freeze with the inventory open; `frameMs` is a raw `performance.now()` delta kept by the loop, because `renderer.frame` clamps `dt` at 100 ms and a 400 ms hitch would read as 100). `stats` exists since Task 1.
 - Modify: `src/engine/render/renderer.ts` (expose `info()` → `{ calls: this.gl.info.render.calls, triangles: this.gl.info.render.triangles, pixelRatio: this.gl.getPixelRatio(), width, height, gpu: string }`; the GPU string: `const ctx = this.gl.getContext(); const ext = ctx.getExtension('WEBGL_debug_renderer_info'); gpu = ext ? String(ctx.getParameter(ext.UNMASKED_RENDERER_WEBGL)) : 'n/a'`)
 
 **Interfaces:**
@@ -1379,16 +1457,30 @@ async function newWorldTimed(page: Page, cb: (t0: number, t1: number, raw: { fra
 	cb(r.t0, r.t1, r.raw);
 }
 
+let guarded = false;
+function guardRequests(page: Page) {
+	if (guarded) return; guarded = true;
+	page.on('request', (req) => {
+		const host = new URL(req.url()).hostname;
+		if (host !== '127.0.0.1' && host !== 'localhost') {
+			console.error(`perf-bench: ABORT — the page tried to reach ${req.url()} (only 127.0.0.1/localhost are allowed; is a dev server on ${PORT} running without VITE_MINICRAFT_API_URL?)`);
+			void req.abort(); process.exitCode = 2; void page.context().browser()?.close();
+		}
+	});
+}
+
 async function newWorld(page: Page, timed = false) {
+	// Safety guard (gate 2 closure): a stray dev server on this port WITHOUT the env var would point at the production save API,
+	// and the menu fetches the cloud world list BEFORE window.__mc exists, so the guard must be a request hook registered before the first goto —
+	// an in-page `import.meta.env` read is impossible (page.evaluate compiles as a classic script → SyntaxError; Vite substitutes env at build time only).
+	guardRequests(page);
 	await page.goto(`http://localhost:${PORT}/`);
-	// Safety: a stray dev server on this port WITHOUT the env var would point at the production save API.
-	const api = await page.evaluate(() => (import.meta as unknown as { env: Record<string, string> }).env?.VITE_MINICRAFT_API_URL ?? '');
-	if (!api.startsWith('http://127.0.0.1')) throw new Error(`refusing to drive a page whose API is ${api || '(unset → .env.local → PRODUCTION)'}`);
 	await page.evaluate(INSTRUMENT);
 	if (timed) await page.evaluate(() => { (window as unknown as { __benchT0: number }).__benchT0 = performance.now(); });
 	// menu: New world with seed 3 (ids from src/ui/menu.ts: #w-seed input, the New button)
 	await page.click('text=New world'); await page.fill('#w-seed', String(SEED)); await page.click('text=Create');
 	await page.waitForFunction(() => (window as unknown as { __mc?: unknown }).__mc !== undefined);
+	console.log('api:', await page.evaluate(() => (window as unknown as { __mc: { apiUrl?: string } }).__mc.apiUrl ?? '(no apiUrl on __mc: Task 7 adds it)'));  // informational; the request guard above is the safety property
 	await page.waitForFunction(() => { const mc = (window as unknown as { __mc: { loop: { stats: { streamQueue: number } } } }).__mc; return mc.loop.stats.streamQueue === 0; }, null, { timeout: 60_000 });
 }
 
@@ -1450,7 +1542,8 @@ async function edits(page: Page): Promise<PhaseResult & { edge: number[]; interi
 		};
 		const edge: number[] = [], interior: number[] = []; b.reset(); const t0 = performance.now();
 		for (let k = 0; k < 20; k++) await editAt(edgeX - 1, z0 + k, edge);            // 20 on the boundary column (lx = 15): place + break = 40 edits
-		for (let k = 0; k < 10; k++) await editAt(edgeX - 8, z0 + 3 + k, interior);    // 10 interior (≥ 3 blocks from any boundary): 20 edits
+		const zBase = Math.floor(z0 / 16) * 16 + 3;                                       // anchor to the chunk, not to spawn: lz runs 3..12 (gate 2 closure: z0 + 3 + k straddled a z boundary at lz 15/0)
+		for (let k = 0; k < 10; k++) await editAt(edgeX - 8, zBase + k, interior);       // 10 interior (≥ 3 blocks from any boundary): 20 edits
 		const t1 = performance.now(); return { raw: b.take(), t0, t1, edge, interior };
 	}, { edgeX, z0: Math.floor(s.z), STONE }).then(({ raw, t0, t1, edge, interior }) => ({ ...summarise(raw, t0, t1), edge, interior }));
 }
@@ -1585,14 +1678,26 @@ Claude-Session: https://claude.ai/code/session_01WkqJrcc2U5KmXWvtU969AW"
 | R-B3 edits no-op (air refused; stone id wrong); interior row unmeasured | Solid-surface edits asserted to happen; `BLOCK_BY_NAME.stone`; 40 edge + 20 interior with both gates |
 | R-B4 load phase mixes two documents' clocks | One navigation; `t0` set in-page after INSTRUMENT |
 | R-N still() flew; fly through stone; `--reps 1` throws | `move(mode)`: still touches nothing, walk tracks the surface, fly at y 140; `--reps ≥ 2` enforced |
-| R-N stray server on 5174 without the env var would drive production | In-page `VITE_MINICRAFT_API_URL` assert aborts the run |
+| R-N stray server on 5174 without the env var would drive production | `page.on('request')` guard registered before the first `goto` aborts on any non-localhost host (closure: the in-page `import.meta.env` assert was a SyntaxError and too late for the menu's cloud fetch); `__mc.apiUrl` logged |
 | E-N `loop.onFrame` before `const loop` (TDZ); `dt` clamped at 100 ms; overlay frozen while paused; GPU string needs `getParameter` | Assignment after loop construction; raw `frameMs`; `onFrame` in the paused branch; `getParameter(UNMASKED_RENDERER_WEBGL)` |
 | K fog 43/72 dissolves the spawn summit | `FOG_NEAR = FOG_FAR − 8` (64); spec §3.E/§6.4 updated |
+
+## Gate 2 closure (rigour, Tasks 1–3 run verbatim: green, mutants red; finding → action)
+
+| Finding | Action |
+|---|---|
+| B1 in-page `import.meta.env` assert is a compile-time SyntaxError in `page.evaluate` and would abort every run; the menu's cloud fetch precedes `__mc` | Request guard (`page.on('request')`, non-localhost host → abort + exit 2) registered before the first `goto`; Task 7 adds `apiUrl` to `__mc` for logging |
+| B2 "interior" edits at `z0 + 3 + k` straddle a z boundary (lz 15/0 at k 6/7) → the 20 ms gate red on correct code | `zBase = floor(z0/16)*16 + 3`, lz 3..12 |
+| B3 seam and retry tests called an undeclared `makeLoop({ jobs, seed })`; `test-loop.ts` was scheduled in Task 6; bodies were placeholders | `test-loop.ts` created in Task 4 with the options signature, `meshes()` and `unmountChunk`; both tests written in full in `loop.test.ts` (Task 5), compared against a second sync-path loop |
+| N dead `neighbourhoodMaxOpaqueY`/`rayHitsSolidInLoadedChunks` (tsc/lint) | Task 2 Files says delete them |
+| N Task 7 shares `renderer.ts` (6), `main.ts` (5), `loop.ts` (4–6) | Task 7 depends on 6; table and note updated |
+| N dead `import { MESH_RADIUS } … void MESH_RADIUS`; `assertWithinData` never defined; `for … of … of`; worker used `new Chunk`; walk-away test without timeout; `snapshotFor` missing from the shared block | All fixed: lines deleted; `axisNeighbours(world, c)` defined; `Chunk.over` with optional lights/sunlit; `60_000`; shared block extended |
+| N spec §6.4 still described the corner edit | Spec §6.4 rewritten to the interior edit (1 vs 4; mutant "skip the compare" → 4) |
 
 ## Self-review
 
 **Spec coverage.** §3.A → Task 1; §3.C → Task 2 (+ Task 6 re-entry fixture); §3.G → Task 3; §3.B → Task 4; §3.D → Task 5; §3.E → Task 6 (+ `sunlitHash` computed in Task 2, compared in Task 4); §3.F → Task 7; §6.1 hashes (every task's exit), shadow equivalence (Task 2), mesh golden (Task 3); §6.2 → Task 4; §6.3 → Task 5; §6.4 → Tasks 4 (corner edit) and 6 (the rest); §6.5 → Task 8; §6.6 → Task 7; §6.7 → gate 2. No spec test is without a task.
 
-**Placeholders.** None: every step has code or an exact command; the places an executor must look something up (menu selectors in Task 8; the seam-test body in Task 5, whose assertion and construction are stated) name the file and the alternative.
+**Placeholders.** None: every step has code or an exact command; the one place an executor must look something up (menu selectors in Task 8) names the file. The Task 5 seam and retry tests are written in full against `test-loop.ts`'s `makeLoop({ seed, jobs })` and `meshes()`.
 
-**Type consistency.** `chunkIndex`/`chunkIndexOrNeg` live in `coords.ts` (Task 1) and are imported from there by Tasks 2, 4, 5, 6 and the tests (never from `world.ts`); `Chunk.sunlitHash` (Task 2), `Chunk.rev` + `Chunk.over` (Task 5), `Chunk.hasLiquid` (Task 6) match the shared block; `planFrame(input, now, mount: (i) => boolean | void)` in Task 4's test and implementation agree (`FrameInput`/`FrameResult`), and Task 5's `mountStream` returns the boolean; `ChunkJobs` constructor `(factory, uvTable, maxInFlight)` and `post(world, chunk): boolean` are the same in test and loop wiring; `inlineWorkerFactory` is only ever imported from `chunk-jobs.test-utils.ts`; radii are defined once in `src/engine/world/radii.ts` (Task 4), re-exported by `chunk-scheduler.ts`, imported by `renderer.ts` engine-side; `loop.stats` is created in Task 1 with the field set `{ streamQueue, editQueue, lastEditMs (-1), mounted, data, workerInFlight }` that Tasks 4/5/6 fill and Tasks 7/8 read — no task adds a field; `onFrame(dt, tickMs, frameMs)` has three arguments in loop and main; `FOG_NEAR = FOG_FAR - 8` in renderer, eviction test and spec; `computeChunkShadows(world, chunk)` keeps its signature through Tasks 2 and 5 (the worker passes a duck-typed world with `getChunk`/`chunkInWorld`/`ensureChunk`/`height`).
+**Type consistency.** `chunkIndex`/`chunkIndexOrNeg` live in `coords.ts` (Task 1) and are imported from there by Tasks 2, 4, 5, 6 and the tests (never from `world.ts`); `Chunk.sunlitHash` (Task 2), `Chunk.rev` + `Chunk.over` (Task 5), `Chunk.hasLiquid` (Task 6) match the shared block; `planFrame(input, now, mount: (i) => boolean | void)` in Task 4's test and implementation agree (`FrameInput`/`FrameResult`), and Task 5's `mountStream` returns the boolean; `ChunkJobs` constructor `(factory, uvTable, maxInFlight)` and `post(world, chunk): boolean` are the same in test and loop wiring; `inlineWorkerFactory` is only ever imported from `chunk-jobs.test-utils.ts`; `makeLoop(opts?: MakeLoopOpts)` is defined once in `src/game/test-loop.ts` (Task 4: `lights`/`highlight`/`seed`; Task 5 adds `jobs`) and consumed by `loop.test.ts` and `eviction.test.ts` with the object signature everywhere; `Chunk.over(cx, cz, height, blocks, lights?, sunlit?)` allocates only missing arrays; `axisNeighbours(world, c)` is module-level in `loop.ts`; radii are defined once in `src/engine/world/radii.ts` (Task 4), re-exported by `chunk-scheduler.ts`, imported by `renderer.ts` engine-side; `loop.stats` is created in Task 1 with the field set `{ streamQueue, editQueue, lastEditMs (-1), mounted, data, workerInFlight }` that Tasks 4/5/6 fill and Tasks 7/8 read — no task adds a field; `onFrame(dt, tickMs, frameMs)` has three arguments in loop and main; `FOG_NEAR = FOG_FAR - 8` in renderer, eviction test and spec; `computeChunkShadows(world, chunk)` keeps its signature through Tasks 2 and 5 (the worker passes a duck-typed world with `getChunk`/`chunkInWorld`/`ensureChunk`/`height`).

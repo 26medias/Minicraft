@@ -342,8 +342,11 @@ Every test names the mutant that turns it red.
    assert the retained chunk's `sunlit` equals the fully-loaded reference
    (mutant: skip the re-dirty on drop / arrival → red — this fixture, not the
    pure stream, is where that re-dirty is load-bearing); **`sunlitHash`
-   compare**: a corner edit on an interior-flat fixture dirties 6 chunks and
-   re-meshes ≤ 2 (mutant: skip the compare → 6); fog far equals
+   compare**: an INTERIOR edit on an interior-flat fixture dirties 4 chunks
+   (1 edit-lane + 3 SE `shadowOnly`) and re-meshes exactly 1 over two ticks
+   (mutant: skip the compare → 4; a corner edit cannot discriminate because
+   `markChunkDirtyAround` marks 3 edit-lane chunks and `planFrame` returns
+   early on edits — gate 2); fog far equals
    `MESH_RADIUS × 16 − 8` (formula, not a literal); `hasLiquid` after
    `applySave` of a chunk with placed water is true (mutant: flag only from
    generation → red).
@@ -352,7 +355,11 @@ Every test names the mutant that turns it red.
    install chromium`, an explicit ~200 MB decision) against
    `localhost:5174` started with `VITE_MINICRAFT_API_URL=http://127.0.0.1:9099`
    (autosave stays live and fails against the dead port, as the kid's
-   browser does offline; production is never contacted). Seed 3, new
+   browser does offline; production is never contacted — enforced by a
+   Playwright `page.on('request')` guard registered before the first
+   navigation that aborts the run on any non-localhost host, because the
+   menu's cloud list fetch happens before `window.__mc` exists and an
+   in-page `import.meta.env` read is impossible from `page.evaluate`). Seed 3, new
    world, wait for the initial load, then the phases of §1 with a rAF
    frame sampler and a `PerformanceObserver('longtask')`, **driving the
    player by writing `player.position` each frame** (key events measured
@@ -444,3 +451,4 @@ today's rendering is not even self-consistent (§2).
 | R-B3 bench edits silently no-op (`canReplace` refuses air; stone id guessed) and the interior row was unmeasured | §6.5 solid-surface edits with return + `lastEditMs` assertions, 20 edge + 10 interior, ids by name |
 | R-B4 load phase clocks across two documents | §6.5 one navigation per repetition, `t0` inside the final document |
 | E-B2 worker meshed with unshadowed neighbours (seams); E-B3 in-flight re-posts; E-U1 partial-neighbour corners | §3.D: axis neighbours shadowed before the snapshot; in-flight indices excluded from the stream ring; on reply, mounted axis neighbours re-dirtied `shadowOnly` |
+| Gate 2 closure (plan): in-page env assert impossible; interior edits straddled a boundary; seam/retry tests unexecutable | §6.5 request guard; plan Task 8 chunk-anchored interior edits; plan Task 4 `test-loop.ts` + full tests; §6.4 interior-edit wording |

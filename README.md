@@ -78,6 +78,7 @@ Click the canvas first to capture the mouse pointer.
 - **Space** — jump. Works when grounded, and also while wading (feet in liquid, head above) to clear the shore.
 - **F** — toggle fly mode.
 - **=** / **-** — increase / decrease fly speed (5 tiers; 5 pips above the hotbar show current speed).
+- **F3** — show or hide the performance overlay (fps, frame hitches, chunk counts, memory).
 
 In fly or swim mode: pitch the camera up to ascend, down to descend — W moves in the full 3D look direction. Strafe stays horizontal. Space has no effect during fly/swim. Swim mode engages automatically when the eye is inside a liquid voxel; gravity resumes as soon as the head breaks the surface.
 
@@ -143,6 +144,7 @@ docs/
   lighting.md             # voxel light propagation algorithm + rendering
   liquids.md              # water/lava blocks + flow scheduler
   worldgen.md             # generator versions, v3 pipeline, determinism, instruments
+  performance.md          # chunk streaming, worker, eviction, F3 overlay, benchmark
   movement.md             # walk / fly / swim state machine
   superpowers/            # per-feature design docs + plans
 ```

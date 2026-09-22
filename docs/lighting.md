@@ -116,18 +116,20 @@ own; tree shadows would need `shadows.ts` to treat cutouts as casters.
 
 ## Cast shadows
 
-Directional shadows via per-voxel ray-cast toward a fixed sun direction (`[-0.5, 1.0, -0.3]` normalized — upper-NW). Each non-opaque voxel traces a DDA ray up to 32 blocks; if the ray hits an opaque block, the voxel is in shadow.
+Directional shadows via a per-voxel ray toward a fixed sun direction (`[-0.5, 1.0, -0.3]` normalized, upper-NW), up to 32 blocks. If the ray meets an opaque block, the voxel is in shadow. Code: `src/engine/world/shadows.ts`.
 
-Storage: `Chunk.sunlit: Uint8Array` (1 byte per voxel; 16 KB per chunk). Early exits make it cheap:
-- Opaque voxels skip the ray (their own `sunlit` value is never sampled).
-- Voxels with `skyLight === 0` skip the ray (fully enclosed, can't reach sky via any path).
-- Voxels above the highest opaque block of the 3×3 chunk neighbourhood skip the sun raycast (`maxOpaqueY`, recomputed from `blocks` on every call so it can never go stale; the 9-chunk top-down scan costs ~12 ms per chunk on a 256 world, ~1 s over the initial 81-chunk view, and is the price of not caching).
+Storage: `Chunk.sunlit: Uint8Array` (1 byte per voxel) plus `Chunk.sunlitHash`, an FNV-1a hash of that array written after every computation.
 
-Computed lazily at mesh time (before `meshChunk` runs), not at chunk generation — this avoids recursive chunk generation when the ray crosses a chunk boundary. When the ray exits the loaded region, it's treated as "no hit" (sunlit).
+How it stays cheap (16 ms per 256-high chunk before the performance project, ≈ 0.7 ms after, byte-identical output):
+- **One constant path.** Every ray starts at a voxel centre with the same direction, so its voxel path is one precomputed table (`PATH`, relative offsets). The walk indexes the 3×3 chunk neighbourhood directly; there is no per-step chunk lookup.
+- **Per-start-column early-out.** A 48×48 highest-opaque heightmap of the 3×3 gives, for each start column, `START_MAX` = the highest start y whose path can still hit anything. A voxel above it is sunlit without casting.
+- **Sky early-outs.** Opaque voxels are skipped (their own value is never sampled); voxels at or above the column's first sky-lit height are sunlit.
 
-Mesher integration: `sampleCornerShadow` averages `sunlit` across the 4 voxels at each face corner (same geometry as `sampleCornerLight`), producing a 0..1 fraction. Each vertex RGB is multiplied by `SHADOW_FLOOR + (1 - SHADOW_FLOOR) * fraction`, with `SHADOW_FLOOR = 0.5`.
+**Load-order independence.** `ensureShadowNeighbourhood` loads the full 3×3 before a chunk is shadowed, so `sunlit` is a pure function of those nine chunks' blocks and never depends on which chunks happened to be loaded first. Only at the world edge do rays leave the map; they count as sunlit, deterministically. The stream-equivalence test compares a simulated nearest-first stream against a fully loaded reference.
 
-Invalidation: on any block change, `GameLoop.applyLightUpdate` flags the containing chunk and the three SE neighbors as `shadowsDirty`. The next mesh pass recomputes.
+Mesher integration: `sampleCornerShadow` averages `sunlit` across the 4 voxels at each face corner (same geometry as `sampleCornerLight`), producing a 0..1 fraction. Each vertex RGB is multiplied by `SHADOW_FLOOR + (1 - SHADOW_FLOOR) * fraction`, with `SHADOW_FLOOR = 0.5`. The mesher reads the 4 axis neighbours' `sunlit` at chunk borders, which is why the chunk worker receives them (see `docs/performance.md`).
+
+Invalidation: a block change flags the containing chunk and its three SE neighbours `shadowsDirty`. A neighbour dirtied only by shadows is re-meshed only if its `sunlitHash` changed, so most edits re-mesh one chunk, not four. A chunk's shadows are also re-dirtied when a 3×3 neighbour arrives or is evicted.
 
 ## Renderer integration
 

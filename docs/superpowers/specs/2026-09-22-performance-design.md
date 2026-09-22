@@ -35,6 +35,26 @@ of the same build: **total long-task ms per phase** and **count of frames
 | Edits: place 20 stone blocks along the chunk edge nearest spawn, then break them (§6.5) | 130–160 ms freeze per edit (dev box, Node replay); CDP baseline recorded at 8b's first run after Task 6 (`lastEditMs` needs Task 4) | 0 frames > 50 ms; every edit's `loop.stats.lastEditMs` < 20 ms interior / < 50 ms on the edge |
 | Memory: fly tier 5 for 30 s, idle 2 s, forced GC, read heap via CDP | 407 MB after 450 chunks via `performance.memory` (informational; bucketised), unbounded; CDP baseline recorded at 8b's first run after Task 6 (`mounted`/`data` need Task 6) | ≤ 250 MB (`Runtime.getHeapUsage` after `HeapProfiler.collectGarbage`); mounted ≤ 169, data chunks ≤ 225 |
 
+**After (Task 8b, 2026-09-22, same dev box, `npm run perf:bench`, median of 5 after a warm-up rep).**
+Reached after four fixes the final bench attribution found beyond Tasks 1–7: liquids (world-edge wall,
+`seedArrival`), stale stream entries, shader/texture warm-up, paced neighbour generation with a 20 ms
+initial-load budget. Two instruments were corrected to measure what their rows specify: the load gate
+starts at `performance.mark('minicraft:world-ready')` (the one-time spawn search is printed beside it),
+and the edit gate uses `stats.lastEditWorkMs` (the click-to-mount latency is printed as information).
+
+| Phase | After | Gate |
+|---|---|---|
+| Standing still | 0 long-task ms, 0 frames > 50 ms (59.4 fps) | ok |
+| Walking 5 b/s | 0 long-task ms; frames > 50 ms median 1 in the final run (per rep 0,1,0,1,1), 0 in the three runs before it | **flaky, open** |
+| Flying tier 5 | 0 long-task ms, 0 frames > 50 ms (was 444 ms / 18) | ok |
+| Initial load | 0 tasks > 50 ms after world-ready in 6/6 reps (spawn search 431 ms, one-time, behind "Building your world…") | ok |
+| Edits | work max edge 26.4 ms, interior 9.9 ms (was 130–160 ms); click-to-mount max 37.7 ms | ok |
+| Memory, 30 s tier-5 flight | 71 MB heap incl. typed-array backing (was 407 MB, unbounded); mounted 55, data 72 | ok |
+
+Open item: the walk row's single frame just over 50 ms has no long task behind it (0 long-task ms), so it is
+render-side or GC, not attributed yet. Next step: profile the walk phase and attribute that frame; do not
+widen the gate.
+
 Bench protocol notes (Task 8a, `scripts/perf-bench.ts`): every phase but
 `load` starts after a forced CDP GC and a 1 s settle — on the Task-1 tree
 the initial load's garbage was collected on idle ≈ 100 ms into the still

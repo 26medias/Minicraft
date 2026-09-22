@@ -88,7 +88,11 @@ export class GameLoop {
 	paused = false;
 
 	/** Read by the F3 overlay (Task 7) and the bench (Task 8). Stub in this task; Tasks 4/5/6 fill the fields. */
-	stats = { streamQueue: 0, editQueue: 0, lastEditMs: -1, mounted: 0, data: 0, workerInFlight: 0 };
+	/**
+	 * `lastEditMs`: click-to-mounted latency, including the wait for the next tick (informational).
+	 * `lastEditWorkMs`: main-thread time spent re-meshing the edit lane in that tick (the bench's edit gate).
+	 */
+	stats = { streamQueue: 0, editQueue: 0, lastEditMs: -1, lastEditWorkMs: -1, mounted: 0, data: 0, workerInFlight: 0 };
 
 	/**
 	 * F3 overlay hook (spec §3.F). Called at the end of every tick, paused or not, with the clamped
@@ -585,6 +589,7 @@ export class GameLoop {
 				for (const i of this.streamSet) if (!this.inFlightIndex.has(i)) stream.add(i);
 			}
 			this.refusedIndex = -1;
+			let editWorkMs = 0;
 			const r = planFrame(
 				{
 					editLane: this.editLane,
@@ -595,7 +600,14 @@ export class GameLoop {
 					initialLoad: this.initialLoad,
 				},
 				() => performance.now(),
-				(i) => (this.jobs && !this.editLane.has(i) ? this.mountStream(i) : this.mountSync(i)),
+				(i) => {
+					if (this.jobs && !this.editLane.has(i)) return this.mountStream(i);
+					if (!this.editLane.has(i)) return this.mountSync(i);
+					const w0 = performance.now();
+					const ok = this.mountSync(i);
+					editWorkMs += performance.now() - w0;
+					return ok;
+				},
 			);
 			for (const i of r.edits) {
 				this.editLane.delete(i);
@@ -604,6 +616,7 @@ export class GameLoop {
 			for (const i of r.mounts) if (i !== this.refusedIndex) this.streamSet.delete(i);
 			if (r.edits.length > 0) {
 				this.stats.lastEditMs = performance.now() - this.editStartedAt;
+				this.stats.lastEditWorkMs = editWorkMs;
 				this.editStartedAt = 0;
 			}
 		}

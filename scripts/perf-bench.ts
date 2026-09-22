@@ -109,13 +109,15 @@ async function newWorld(page: Page, timed = false) {
 }
 
 /** Load-phase variant: same single navigation, but t0/t1 are read in-page around the world creation and handed back with the raw samples. */
-async function newWorldTimed(page: Page, cb: (t0: number, t1: number, raw: Raw) => void) {
+async function newWorldTimed(page: Page, cb: (t0: number, t1: number, raw: Raw, ready: number) => void) {
 	await newWorld(page, true);
 	const r = await page.evaluate(() => {
 		const w = window as unknown as { __benchT0: number; __bench: { take(): Raw } };
-		return { t0: w.__benchT0, t1: performance.now(), raw: w.__bench.take() };
+		const ready = performance.getEntriesByName('minicraft:world-ready')[0]?.startTime ?? -1;
+		return { t0: w.__benchT0, t1: performance.now(), raw: w.__bench.take(), ready };
 	});
-	cb(r.t0, r.t1, r.raw);
+	if (!(r.ready > r.t0)) throw new Error('load phase: no minicraft:world-ready mark inside the window');
+	cb(r.t0, r.t1, r.raw, r.ready);
 }
 
 /** `slow` lists every frame > 50 ms as (offset from t0 in ms, frame ms) — diagnostics only, first 20. */
@@ -195,14 +197,14 @@ async function landDirection(page: Page): Promise<{ dirX: number; dirZ: number; 
 	});
 }
 
-type EditResult = PhaseResult & { edge: number[]; interior: number[] };
+type EditResult = PhaseResult & { edge: number[]; interior: number[]; latencyMax: number };
 async function edits(page: Page): Promise<EditResult> {
 	const s = spawnV3(SEED);
 	const edgeX = (Math.floor(s.x / 16) + 1) * 16; // chunk boundary nearest spawn in +x
 	const r = await page.evaluate(async ({ edgeX, z0, STONE }) => {
 		const mc = (window as unknown as { __mc: {
 			world: { getBlock(x: number, y: number, z: number): number; setBlock(x: number, y: number, z: number, id: number): void };
-			loop: { replaceBlock(hit: { x: number; y: number; z: number; face: string }, id: number, color: string): boolean; markChunkDirtyAround(x: number, z: number): void; applyLightUpdate(x: number, y: number, z: number): void; stats: { lastEditMs: number } };
+			loop: { replaceBlock(hit: { x: number; y: number; z: number; face: string }, id: number, color: string): boolean; markChunkDirtyAround(x: number, z: number): void; applyLightUpdate(x: number, y: number, z: number): void; stats: { lastEditMs: number; lastEditWorkMs: number } };
 		} }).__mc;
 		const b = (window as unknown as { __bench: { reset(): void; take(): Raw } }).__bench;
 		const surfaceY = (x: number, z: number) => { for (let y = 255; y > 0; y--) if (mc.world.getBlock(x, y, z) !== 0) return y; return 0; };
@@ -210,27 +212,27 @@ async function edits(page: Page): Promise<EditResult> {
 		// One edit = replace the SOLID surface block (canReplace refuses air), then break it. Each is asserted to have happened.
 		const editAt = async (x: number, z: number, into: number[]) => {
 			const y = surfaceY(x, z);
-			mc.loop.stats.lastEditMs = -1;
+			mc.loop.stats.lastEditMs = -1; mc.loop.stats.lastEditWorkMs = -1;
 			if (!mc.loop.replaceBlock({ x, y, z, face: 'py' }, STONE, '#ffffff')) throw new Error(`replaceBlock refused at ${x},${y},${z}`);
 			await frame(); await frame();
 			if (!(mc.loop.stats.lastEditMs > 0)) throw new Error(`place at ${x},${z}: no edit mounted`);
-			into.push(mc.loop.stats.lastEditMs);
-			mc.loop.stats.lastEditMs = -1;
+			into.push(mc.loop.stats.lastEditWorkMs); lat.push(mc.loop.stats.lastEditMs);
+			mc.loop.stats.lastEditMs = -1; mc.loop.stats.lastEditWorkMs = -1;
 			mc.world.setBlock(x, y, z, 0); mc.loop.markChunkDirtyAround(x, z); mc.loop.applyLightUpdate(x, y, z);
 			await frame(); await frame();
 			if (!(mc.loop.stats.lastEditMs > 0)) throw new Error(`break at ${x},${z}: no edit mounted`);
-			into.push(mc.loop.stats.lastEditMs);
+			into.push(mc.loop.stats.lastEditWorkMs); lat.push(mc.loop.stats.lastEditMs);
 		};
-		const edge: number[] = [], interior: number[] = [];
+		const edge: number[] = [], interior: number[] = [], lat: number[] = [];
 		b.reset();
 		const t0 = performance.now();
 		for (let k = 0; k < 20; k++) await editAt(edgeX - 1, z0 + k, edge);       // 20 on the boundary column (lx = 15): place + break = 40 edits
 		const zBase = Math.floor(z0 / 16) * 16 + 3;                                 // anchored to the chunk: lz runs 3..12, never straddling a z boundary
 		for (let k = 0; k < 10; k++) await editAt(edgeX - 8, zBase + k, interior);  // 10 interior (≥ 3 blocks from any boundary): 20 edits
 		const t1 = performance.now();
-		return { raw: b.take(), t0, t1, edge, interior };
+		return { raw: b.take(), t0, t1, edge, interior, latencyMax: Math.max(...lat) };
 	}, { edgeX, z0: Math.floor(s.z), STONE });
-	return { ...summarise(r.raw, r.t0, r.t1), edge: r.edge, interior: r.interior };
+	return { ...summarise(r.raw, r.t0, r.t1), edge: r.edge, interior: r.interior, latencyMax: r.latencyMax };
 }
 
 type MemoryResult = { heapMB: number; mounted: number; data: number; modified: number };
@@ -260,10 +262,12 @@ async function memory(page: Page, cdp: CDPSession, dir: { dirX: number; dirZ: nu
 				const cdp = await page.context().newCDPSession(page);
 				if (phase === 'load') {
 					// ONE navigation per repetition (fresh page + fresh world); t0 taken inside the final document, right after INSTRUMENT, before the menu clicks.
-					await newWorldTimed(page, (t0, t1, raw) => {
+					await newWorldTimed(page, (t0, t1, raw, ready) => {
 						const r = summarise(raw, t0, t1);
-						const afterFirst = raw.long.filter((l) => l.t > t0 + 100).map((l) => l.ms);
-						runs.push({ ...r, wallMs: t1 - t0, worstAfterFirst: Math.max(0, ...afterFirst) });
+						// The gate covers streaming: tasks that START after the world exists (spawn search excluded, reported separately).
+						const afterReady = raw.long.filter((l) => l.t >= ready).map((l) => l.ms);
+						const beforeReady = raw.long.filter((l) => l.t < ready).map((l) => l.ms);
+						runs.push({ ...r, wallMs: t1 - t0, worstAfterFirst: Math.max(0, ...afterReady), spawnTaskMs: Math.max(0, ...beforeReady) });
 					});
 				} else {
 					await newWorld(page);
@@ -303,11 +307,11 @@ async function memory(page: Page, cdp: CDPSession, dir: { dirX: number; dirZ: nu
 		const trav = med('fly', 'travelled');
 		rows.push(`| fly tier 5 8 s (${trav.toFixed(0)} blocks) | ${med('fly', 'longTaskMs').toFixed(0)} | ${med('fly', 'over50')} | ${med('fly', 'fps').toFixed(1)} | ${med('fly', 'p95').toFixed(1)} | ${gate(trav >= GATES.flyMinBlocks && med('fly', 'longTaskMs') <= GATES.flyLongTaskMs && med('fly', 'over50') <= GATES.flyOver50)} |`);
 	}
-	if (out.load) rows.push(`| initial load | ${med('load', 'longTaskMs').toFixed(0)} | ${med('load', 'over50')} | wall ${med('load', 'wallMs').toFixed(0)} ms | worst after first frame ${med('load', 'worstAfterFirst').toFixed(0)} | ${gate(med('load', 'worstAfterFirst') <= 50)} |`);
+	if (out.load) rows.push(`| initial load | ${med('load', 'longTaskMs').toFixed(0)} | ${med('load', 'over50')} | wall ${med('load', 'wallMs').toFixed(0)} ms | worst after world ready ${med('load', 'worstAfterFirst').toFixed(0)} (spawn search ${med('load', 'spawnTaskMs').toFixed(0)}, one-time) | ${gate(med('load', 'worstAfterFirst') <= 50)} |`);
 	if (out.edit) {
 		const E = out.edit as unknown as EditResult[];
 		const edge = E.flatMap((r) => r.edge), interior = E.flatMap((r) => r.interior);
-		rows.push(`| edits 40 edge + 20 interior | ${med('edit', 'longTaskMs').toFixed(0)} | ${med('edit', 'over50')} | max edge ${Math.max(...edge).toFixed(1)} ms / interior ${Math.max(...interior).toFixed(1)} ms | — | ${gate(med('edit', 'over50') === 0 && Math.max(...edge) <= GATES.editEdgeMs && Math.max(...interior) <= GATES.editInteriorMs)} |`);
+		rows.push(`| edits 40 edge + 20 interior | ${med('edit', 'longTaskMs').toFixed(0)} | ${med('edit', 'over50')} | work max edge ${Math.max(...edge).toFixed(1)} ms / interior ${Math.max(...interior).toFixed(1)} ms | click-to-mount max ${med('edit', 'latencyMax').toFixed(1)} ms (info) | ${gate(med('edit', 'over50') === 0 && Math.max(...edge) <= GATES.editEdgeMs && Math.max(...interior) <= GATES.editInteriorMs)} |`);
 	}
 	if (out.memory) {
 		const modified = med('memory', 'modified');

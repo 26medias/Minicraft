@@ -180,6 +180,8 @@ async function main() {
 		// something to stand on. New worlds spawn on the generated surface (v2: ~120),
 		// saved ones near where they left off.
 		player.position = findSafeSpawn(world, savedSpawn ?? v3Spawn ?? [256.5, world.height - 1, 256.5]);
+		// Streaming starts here: everything before (spawn search behind "Building your world…") is a one-time cost.
+		performance.mark('minicraft:world-ready');
 
 		// Nine slots, saved per world. Saves from before the inventory hold the
 		// whole block pool and get the default bar (see resolveHotbar).

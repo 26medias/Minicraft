@@ -279,6 +279,9 @@ describe('GameLoop edit lane', () => {
 		tick(1 / 60); // stream lane: the 3 SE shadowOnly chunks are shadowed; a single block on a flat plain changes no neighbour's sunlit → 0 re-meshes
 		expect(mounts() - before).toBe(1);
 		expect(loop.stats.lastEditMs).toBeGreaterThan(0);
+		// work-only time of the edit lane (the bench gate): positive, and never more than the click-to-mount latency
+		expect(loop.stats.lastEditWorkMs).toBeGreaterThan(0);
+		expect(loop.stats.lastEditWorkMs).toBeLessThanOrEqual(loop.stats.lastEditMs);
 	}, 30_000);
 });
 

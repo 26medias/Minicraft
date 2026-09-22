@@ -48,7 +48,7 @@ export class PerfOverlay {
 			`calls ${v.calls ?? 'n/a'}  tris ${v.triangles ?? 'n/a'}`,
 			`mounted ${v.mounted ?? 'n/a'}  data ${v.data ?? 'n/a'}`,
 			`stream ${v.streamQueue ?? 'n/a'}  edit ${v.editQueue ?? 'n/a'}  worker ${v.workerInFlight ?? 'n/a'}`,
-			`lastEdit ${v.lastEditMs ?? 'n/a'} ms`,
+			`lastEdit ${v.lastEditMs ?? 'n/a'} ms (work ${v.lastEditWorkMs ?? 'n/a'} ms)`,
 			`heap ${v.heapMB ?? 'n/a'} MB`,
 			`dpr ${v.pixelRatio ?? 'n/a'}  ${v.width ?? '?'}x${v.height ?? '?'}`,
 			`gpu ${v.gpu ?? 'n/a'}`,

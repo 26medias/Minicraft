@@ -22,8 +22,8 @@ All in `src/engine/world/radii.ts`, measured in chunks, Chebyshev distance from 
 `VIEW_RADIUS = 4` in the loop is only the physics and walk ring.
 
 Fog hides the unmount edge: `FOG_FAR = MESH_RADIUS × 16 − 8` (88 blocks),
-`FOG_NEAR = FOG_FAR − 8` (80). The thin 8-block band keeps a summit at the edge legible;
-a wider fade dissolved the one peak visible from the seed-3 spawn. The radii were 5/6/7 (fog
+`FOG_NEAR = 40`, a 48-block progressive fade. An 8-block band kept a distant summit crisp but read
+as a wall of fog appearing, so the parent asked for a gradual fade; distant hills now look hazy. The radii were 5/6/7 (fog
 72) until the parent found the fog too close; 6/7/8 costs about 40 % more chunks to stream.
 
 ## Chunk index

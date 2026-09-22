@@ -45,8 +45,8 @@ describe('eviction (spec §3.E, §6.4)', () => {
 		expect(loop.stats.mounted).toBeLessThanOrEqual((2 * UNMOUNT_RADIUS + 1) ** 2);
 	});
 
-	it('fog far is the formula MESH_RADIUS*16-8 = 88 and near is far - 8 = 80 (parent play-test: 72 felt too close; kid-lens gate 2: an 8-block band keeps a summit legible)', () => {
-		expect(FOG_FAR).toBe(6 * 16 - 8); expect(FOG_NEAR).toBe(FOG_FAR - 8);
+	it('fog far is the formula MESH_RADIUS*16-8 = 88 and near is 40, a 48-block fade (parent play-test: the 8-block band looked like a wall appearing)', () => {
+		expect(FOG_FAR).toBe(6 * 16 - 8); expect(FOG_NEAR).toBe(40);
 	});
 
 	it('hasLiquid is recomputed by applySave for a chunk with placed water (mutant: flag only from generation)', () => {

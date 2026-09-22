@@ -5,11 +5,12 @@ import type { LoadedAtlas } from './atlas';
 import { MESH_RADIUS } from '../world/radii';
 
 /**
- * Fog from the mesh ring (spec §3.E): far sits inside the ≥ 80-block mesh frontier so the unload edge is
- * never visible; an 8-block band (not 60 %) keeps the spawn summit legible (gate-2 kid-lens pass).
+ * Fog from the mesh ring (spec §3.E): far sits inside the mesh frontier (≥ MESH_RADIUS × 16 blocks) so the
+ * unload edge is never visible. Near is 40: a 48-block progressive fade. The earlier 8-block band kept a
+ * distant summit crisp but read as a wall of fog appearing (parent play-test); distant hills now read hazy.
  */
 export const FOG_FAR = MESH_RADIUS * 16 - 8;
-export const FOG_NEAR = FOG_FAR - 8;
+export const FOG_NEAR = 40;
 
 export class Renderer {
 	readonly scene: THREE.Scene;

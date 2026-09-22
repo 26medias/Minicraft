@@ -14,6 +14,7 @@ import { canReplace, igniteTnt, type PrimedEntry } from './actions';
 import { detonate, tntKey, TNT_CHAIN_FUSE, TNT_PRIME_FUSE } from './tnt';
 import { updateLightsForBlockChange } from '../engine/world/lighting';
 import { LiquidScheduler } from './liquid-scheduler';
+import { chunkIndexOrNeg, WORLD_CHUNKS_Z } from '../engine/world/coords';
 
 const LAMP_ID = BLOCK_BY_NAME['lamp'].id;
 
@@ -35,8 +36,9 @@ export type BlockBrokenEvent = {
 };
 
 export class GameLoop {
-	private dirtyChunks = new Set<string>();
-	private mountedChunks = new Set<string>();
+	/** Both keyed by the flat chunk index (coords.chunkIndex); only ever filled through chunkIndexOrNeg. */
+	private dirtyChunks = new Set<number>();
+	private mountedChunks = new Set<number>();
 	private mining: MiningState | null = null;
 	private aim: VoxelHit | null = null;
 	private leftMouseDown = false;
@@ -54,6 +56,9 @@ export class GameLoop {
 	 * Chunks keep loading so a world opened straight into a break is not empty sky.
 	 */
 	paused = false;
+
+	/** Read by the F3 overlay (Task 7) and the bench (Task 8). Stub in this task; Tasks 4/5/6 fill the fields. */
+	stats = { streamQueue: 0, editQueue: 0, lastEditMs: -1, mounted: 0, data: 0, workerInFlight: 0 };
 
 	constructor(
 		private world: World,
@@ -75,7 +80,8 @@ export class GameLoop {
 	}
 
 	markChunkDirty(cx: number, cz: number) {
-		this.dirtyChunks.add(`${cx},${cz}`);
+		const i = chunkIndexOrNeg(cx, cz);
+		if (i >= 0) this.dirtyChunks.add(i);
 	}
 
 	applyLightUpdate(x: number, y: number, z: number): void {
@@ -308,12 +314,9 @@ export class GameLoop {
 		const pcz = Math.floor(this.player.position[2] / 16);
 		for (let dx = -VIEW_RADIUS; dx <= VIEW_RADIUS; dx++) {
 			for (let dz = -VIEW_RADIUS; dz <= VIEW_RADIUS; dz++) {
-				const cx = pcx + dx,
-					cz = pcz + dz;
-				if (!this.world.chunkInWorld(cx, cz)) continue;
-				const k = `${cx},${cz}`;
-				if (this.mountedChunks.has(k)) continue;
-				this.dirtyChunks.add(k);
+				const i = chunkIndexOrNeg(pcx + dx, pcz + dz);
+				if (i < 0 || this.mountedChunks.has(i)) continue;
+				this.dirtyChunks.add(i);
 			}
 		}
 	}
@@ -321,15 +324,11 @@ export class GameLoop {
 	private flushDirtyChunks() {
 		if (this.dirtyChunks.size === 0) return;
 		let budget = 2;
-		for (const k of this.dirtyChunks) {
+		for (const i of this.dirtyChunks) {
 			if (budget-- <= 0) break;
-			const [cxStr, czStr] = k.split(',');
-			const cx = Number(cxStr),
-				cz = Number(czStr);
-			if (!this.world.chunkInWorld(cx, cz)) {
-				this.dirtyChunks.delete(k);
-				continue;
-			}
+			// Indices only ever come from chunkIndexOrNeg, so (cx, cz) is in the world.
+			const cx = Math.floor(i / WORLD_CHUNKS_Z),
+				cz = i % WORLD_CHUNKS_Z;
 			const c = this.world.ensureChunk(cx, cz);
 			// Ensure gen-placed liquids are in the frontier for at least one tick's check.
 			if (c.liquidFrontier.size === 0) {
@@ -349,9 +348,11 @@ export class GameLoop {
 			}
 			const result = meshChunk(c, this.world.neighbors(c), this.uvFor);
 			this.renderer.mountChunkMesh(c, result);
-			this.mountedChunks.add(k);
-			this.dirtyChunks.delete(k);
+			this.mountedChunks.add(i);
+			this.dirtyChunks.delete(i);
 		}
+		this.stats.streamQueue = this.dirtyChunks.size;
+		this.stats.mounted = this.mountedChunks.size;
 	}
 }
 

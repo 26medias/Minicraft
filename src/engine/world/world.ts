@@ -1,11 +1,9 @@
 import type { BlockId } from '../../data/blocks.data';
 import { AIR, isLiquid } from '../../data/blocks.data';
 import { Chunk } from './chunk';
-import { WORLD_CHUNKS_X, WORLD_CHUNKS_Z, LEGACY_HEIGHT, inBounds, worldToChunk, indexOf, type WorldHeight } from './coords';
+import { WORLD_CHUNKS_X, WORLD_CHUNKS_Z, LEGACY_HEIGHT, inBounds, worldToChunk, indexOf, chunkIndexOrNeg, type WorldHeight } from './coords';
 import { generateChunk, worldProfile, NEWEST_GEN_VERSION } from './generation';
 import { fillChunkLights } from './lighting';
-
-const key = (cx: number, cz: number) => `${cx},${cz}`;
 
 export type WorldOptions = { height?: WorldHeight; genVersion?: number; saveVersion?: 2 | 3 };
 
@@ -14,7 +12,9 @@ export class World {
 	readonly height: WorldHeight;
 	readonly genVersion: number;
 	readonly saveVersion: 2 | 3;
-	private chunks = new Map<string, Chunk>();
+	/** Flat, indexed by exactly cx * WORLD_CHUNKS_Z + cz (spec §3.A). */
+	private chunks: (Chunk | undefined)[] = new Array(WORLD_CHUNKS_X * WORLD_CHUNKS_Z);
+	private count = 0;
 
 	constructor(seed: number, opts: WorldOptions = {}) {
 		this.seed = seed;
@@ -34,20 +34,45 @@ export class World {
 		return inBounds(x, y, z, this.height);
 	}
 
+	/** Bounds-checked: hot paths call this with out-of-range coordinates (DDA steps, neighbour scans). */
 	getChunk(cx: number, cz: number): Chunk | undefined {
-		return this.chunks.get(key(cx, cz));
+		if (cx < 0 || cx >= WORLD_CHUNKS_X || cz < 0 || cz >= WORLD_CHUNKS_Z) return undefined;
+		return this.chunks[cx * WORLD_CHUNKS_Z + cz];
+	}
+
+	getChunkByIndex(i: number): Chunk | undefined {
+		return i < 0 || i >= this.chunks.length ? undefined : this.chunks[i];
 	}
 
 	ensureChunk(cx: number, cz: number): Chunk {
-		const k = key(cx, cz);
-		let c = this.chunks.get(k);
+		// Unchecked index on purpose: every caller passes chunkInWorld. The guard below is
+		// live under vitest (import.meta.env.DEV === true) — an assertion, not dead code.
+		if (import.meta.env?.DEV && (cx < 0 || cx >= WORLD_CHUNKS_X || cz < 0 || cz >= WORLD_CHUNKS_Z)) {
+			throw new RangeError(`ensureChunk(${cx},${cz}) is outside the world`);
+		}
+		const i = cx * WORLD_CHUNKS_Z + cz;
+		let c = this.chunks[i];
 		if (!c) {
 			c = new Chunk(cx, cz, this.height);
 			generateChunk(c, this.seed, this.genVersion);
-			this.chunks.set(k, c);
+			this.chunks[i] = c;
+			this.count++;
 			fillChunkLights(this, c);
 		}
 		return c;
+	}
+
+	/** Eviction (spec §3.E). Returns false when nothing was there. */
+	dropChunk(cx: number, cz: number): boolean {
+		const i = chunkIndexOrNeg(cx, cz);
+		if (i < 0 || !this.chunks[i]) return false;
+		this.chunks[i] = undefined;
+		this.count--;
+		return true;
+	}
+
+	get chunkCount(): number {
+		return this.count;
 	}
 
 	chunkInWorld(cx: number, cz: number): boolean {
@@ -113,12 +138,12 @@ export class World {
 	}
 
 	*allChunks(): Iterable<Chunk> {
-		for (const c of this.chunks.values()) yield c;
+		for (const c of this.chunks) if (c) yield c;
 	}
 
 	modifiedChunks(): Chunk[] {
 		const out: Chunk[] = [];
-		for (const c of this.chunks.values()) if (c.modified) out.push(c);
+		for (const c of this.chunks) if (c && c.modified) out.push(c);
 		return out;
 	}
 

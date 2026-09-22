@@ -35,3 +35,14 @@ export function worldToChunk(x: number, z: number): { cx: number; cz: number; lx
 export function inBounds(x: number, y: number, z: number, height: number): boolean {
 	return x >= 0 && x < WORLD_SIZE_X && y >= 0 && y < height && z >= 0 && z < WORLD_SIZE_Z;
 }
+
+/** Flat chunk index; NO bounds check — callers that may be out of range use chunkIndexOrNeg. */
+export function chunkIndex(cx: number, cz: number): number {
+	return cx * WORLD_CHUNKS_Z + cz;
+}
+
+/** -1 when (cx, cz) is outside the world. An unguarded cx*32+cz aliases (1,-1) onto (0,31). */
+export function chunkIndexOrNeg(cx: number, cz: number): number {
+	if (cx < 0 || cx >= WORLD_CHUNKS_X || cz < 0 || cz >= WORLD_CHUNKS_Z) return -1;
+	return cx * WORLD_CHUNKS_Z + cz;
+}

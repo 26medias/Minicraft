@@ -68,6 +68,12 @@ export class World {
 		if (i < 0 || !this.chunks[i]) return false;
 		this.chunks[i] = undefined;
 		this.count--;
+		// A dropped neighbour makes every retained chunk's shadows stale (spec §3.C.1 / §3.E): the caster
+		// walks the 3×3, so re-dirty them and bump rev so an in-flight worker reply is discarded.
+		for (let dx = -1; dx <= 1; dx++) for (let dz = -1; dz <= 1; dz++) {
+			const n = this.getChunk(cx + dx, cz + dz);
+			if (n) { n.shadowsDirty = true; n.rev++; }
+		}
 		return true;
 	}
 
@@ -91,6 +97,7 @@ export class World {
 		const { cx, cz, lx, lz } = worldToChunk(x, z);
 		const c = this.ensureChunk(cx, cz);
 		c.set(lx, y, lz, id);
+		if (isLiquid(id)) c.hasLiquid = true;
 		// Regular writes (player placement, world-gen, scheduler-AIR) carry no flow state:
 		// any stale entry must go so the cell is treated as a source / non-liquid next tick.
 		c.clearFluidMeta(lx, y, lz);
@@ -114,6 +121,7 @@ export class World {
 		const { cx, cz, lx, lz } = worldToChunk(x, z);
 		const c = this.ensureChunk(cx, cz);
 		c.set(lx, y, lz, id);
+		if (isLiquid(id)) c.hasLiquid = true;
 		c.setFluidMeta(lx, y, lz, distance);
 		c.modified = true;
 

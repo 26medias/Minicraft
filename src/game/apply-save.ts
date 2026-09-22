@@ -1,6 +1,7 @@
 import { World } from '../engine/world/world';
 import { blocksPerChunk, WORLD_CHUNKS_X, WORLD_CHUNKS_Z } from '../engine/world/coords';
 import { fillChunkLights } from '../engine/world/lighting';
+import { anyLiquid } from '../engine/world/generation';
 import type { WorldSave } from '../persistence/adapter';
 import { SaveCorrupt } from '../persistence/errors';
 
@@ -27,6 +28,8 @@ export function applySave(world: World, save: WorldSave): void {
 		if (rc.fluidMeta) for (const [idx, packed] of rc.fluidMeta) c.fluidMeta.set(idx, packed);
 		c.modified = true;
 		c.dirty = true;
+		// A naturally dry chunk the kid poured water into is loaded, not generated: recompute (spec §3.E R-N4).
+		c.hasLiquid = anyLiquid(c.blocks);
 	}
 	// Lights were computed at ensureChunk from generated blocks; recompute on the saved ones.
 	for (const rc of save.chunks) {

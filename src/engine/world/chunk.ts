@@ -22,6 +22,8 @@ export class Chunk {
 	 * rev it was posted with (spec §3.D).
 	 */
 	rev = 0;
+	/** True when any voxel is liquid: set by generation, by every liquid write and recomputed in applySave (spec §3.E). A dry chunk skips the 65 k-voxel liquid-frontier rescan on mount. */
+	hasLiquid = false;
 
 	constructor(
 		cx: number,

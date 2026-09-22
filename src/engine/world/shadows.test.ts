@@ -178,6 +178,7 @@ import { computeChunkShadowsBrute } from './shadows.brute';
 import { hashSunlit, SHADOW_STATS, ensureShadowNeighbourhood } from './shadows';
 import { spawnV3 } from './v3/spawn';
 import type { Chunk } from './chunk';
+import { markChunkArrived } from '../../game/loop';
 
 function fnv8(a: Uint8Array): number { let h = 2166136261 >>> 0; for (let i = 0; i < a.length; i++) { h ^= a[i]; h = Math.imul(h, 16777619) >>> 0; } return h; }
 
@@ -249,5 +250,24 @@ describe('shadows are independent of load order (spec §3.C.1; red at HEAD: 5 of
 		let diff = 0;
 		for (const [cx, cz] of ref.order) if (fnv8(w.getChunk(cx, cz)!.sunlit) !== refHash.get(`${cx},${cz}`)) diff++;
 		expect(diff).toBe(0);
+	});
+});
+
+describe('eviction / re-entry shadows (spec §6.4, Task 6)', () => {
+	it('§6.4 eviction / re-entry: a retained chunk\'s sunlit equals the fully-loaded reference after a neighbour is dropped and re-entered (mutant: skip the re-dirty on drop/arrival)', { timeout: 30_000 }, () => {
+		const ref = fullyLoaded(3, 2);
+		const [cx, cz] = ref.order[0]; const c = ref.w.getChunk(cx, cz)!;
+		computeChunkShadowsBrute(ref.w, c); const want = fnv8(c.sunlit);
+		const w = World.create(3);
+		for (const [x, z] of ref.order) w.ensureChunk(x, z);
+		for (let dx = -1; dx <= 1; dx++) for (let dz = -1; dz <= 1; dz++) if (w.chunkInWorld(cx + dx, cz + dz)) w.ensureChunk(cx + dx, cz + dz);
+		const t = w.getChunk(cx, cz)!; computeChunkShadows(w, t);
+		w.dropChunk(cx - 1, cz - 1);              // the NW neighbour the sun ray reaches
+		expect(t.shadowsDirty).toBe(true);        // re-dirtied on drop
+		if (t.shadowsDirty) computeChunkShadows(w, t); // partial answer while the neighbour is gone
+		markChunkArrived(w, w.ensureChunk(cx - 1, cz - 1)); // re-entry, the way loop.prepareChunk does it (the hook is NOT in ensureChunk: gate 2)
+		expect(t.shadowsDirty).toBe(true);        // re-dirtied on arrival
+		computeChunkShadows(w, t);
+		expect(fnv8(t.sunlit)).toBe(want);
 	});
 });

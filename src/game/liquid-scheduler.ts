@@ -34,7 +34,14 @@
 import type { World } from '../engine/world/world';
 import type { Chunk } from '../engine/world/chunk';
 import { AIR, OBSIDIAN, WATER, LAVA, SPONGE, WET_SPONGE, isLiquid } from '../data/blocks.data';
-import { CHUNK_SIZE_X, CHUNK_SIZE_Z } from '../engine/world/coords';
+import { CHUNK_SIZE_X, CHUNK_SIZE_Z, worldToChunk } from '../engine/world/coords';
+
+/**
+ * What a read returns for a voxel in a chunk that is outside the data ring AND not loaded (spec §3.E):
+ * never AIR (spread would write there and regenerate the chunk), never a liquid (BFS would cross).
+ * Retained (modified) chunks beyond the ring are still read for real.
+ */
+export const UNKNOWN_BLOCK = -1;
 
 const TICK_INTERVAL = 0.5;
 const WATER_BUDGET = 4;
@@ -59,7 +66,26 @@ export class LiquidScheduler {
 		private world: World,
 		private onChunkDirty: (cx: number, cz: number) => void,
 		private onBlockChanged: (x: number, y: number, z: number) => void = () => {},
+		/**
+		 * The data ring (spec §3.E): inside it reads go through World.getBlock as before (ensureChunk on a
+		 * never-generated chunk is fine, the evictor keeps it). Outside it a read must NEVER create a chunk —
+		 * World.getBlock → ensureChunk would regenerate an evicted chunk silently, and the drain step's
+		 * source-reachability BFS walks a whole connected sea, so it does reach that far. Default: no ring.
+		 */
+		private withinData: (x: number, z: number) => boolean = () => true,
 	) {}
+
+	/** Every block read of a tick goes through here: inside the ring = World.getBlock; outside = loaded chunks only, else UNKNOWN_BLOCK. */
+	private read(x: number, y: number, z: number): number {
+		if (this.withinData(x, z) || !this.world.inBounds(x, y, z)) return this.world.getBlock(x, y, z);
+		const { cx, cz, lx, lz } = worldToChunk(x, z);
+		const c = this.world.getChunk(cx, cz);
+		if (import.meta.env?.DEV && c === undefined && this.world.chunkInWorld(cx, cz)) this.outsideRingMisses++;
+		return c === undefined ? UNKNOWN_BLOCK : c.get(lx, y, lz);
+	}
+
+	/** DEV counter: reads that landed on a dropped chunk outside the ring (answered UNKNOWN_BLOCK, never regenerated). */
+	outsideRingMisses = 0;
 
 	tick(dt: number): boolean {
 		this.accumulator += dt;
@@ -114,7 +140,7 @@ export class LiquidScheduler {
 				const k = `${x},${y},${z}`;
 				if (visited.has(k)) continue;
 				visited.add(k);
-				if (this.world.getBlock(x, y, z) !== SPONGE) continue;
+				if (this.read(x, y, z) !== SPONGE) continue;
 				this.absorbFrom(x, y, z);
 			}
 		}
@@ -137,7 +163,7 @@ export class LiquidScheduler {
 				const k = `${nx},${ny},${nz}`;
 				if (seen.has(k)) continue;
 				seen.add(k);
-				if (!isLiquid(this.world.getBlock(nx, ny, nz))) continue;
+				if (!isLiquid(this.read(nx, ny, nz))) continue;
 				absorbed.push({ x: nx, y: ny, z: nz });
 				queue.push({ x: nx, y: ny, z: nz, hops: n.hops + 1 });
 			}
@@ -162,7 +188,7 @@ export class LiquidScheduler {
 	private applySpreadStep(snapshot: Coord[], drainedThisTick: Set<string>): void {
 		const pending: PendingWrite[] = [];
 		for (const { x, y, z } of snapshot) {
-			const here = this.world.getBlock(x, y, z);
+			const here = this.read(x, y, z);
 			if (!isLiquid(here)) continue;
 			// Orphan flow (no source reachable) is being peeled by drain; it must not
 			// spread into holes — e.g. a sponge's — or the puddle never settles.
@@ -174,9 +200,9 @@ export class LiquidScheduler {
 
 			// Fall rule: if the cell directly below is air, propagate downward.
 			if (y > 0) {
-				const below = this.world.getBlock(x, y - 1, z);
+				const below = this.read(x, y - 1, z);
 				if (below === AIR && !drainedThisTick.has(`${x},${y - 1},${z}`)) {
-					const above = this.world.getBlock(x, y + 1, z);
+					const above = this.read(x, y + 1, z);
 					const sameTypeAbove = above === here;
 					pending.push({ x, y: y - 1, z, id: here, flowDistance: distance });
 					// Source never vacates. Flow vacates UNLESS fed by a same-type column above
@@ -195,7 +221,7 @@ export class LiquidScheduler {
 				];
 				for (const [dx, dz] of sideDirs) {
 					const nx = x + dx, nz = z + dz;
-					if (this.world.getBlock(nx, y, nz) !== AIR) continue;
+					if (this.read(nx, y, nz) !== AIR) continue;
 					if (drainedThisTick.has(`${nx},${y},${nz}`)) continue;  // don't refill what we just drained
 					pending.push({ x: nx, y, z: nz, id: here, flowDistance: distance + 1 });
 				}
@@ -228,14 +254,14 @@ export class LiquidScheduler {
 				if (visited.has(k)) continue;
 				visited.add(k);
 
-				if (this.world.getBlock(x, y, z) !== LAVA) continue;
+				if (this.read(x, y, z) !== LAVA) continue;
 				// Found lava: check for any adjacent water voxel.
 				const lavaWaterPairs: Coord[] = [];
 				for (const [ddx, ddy, ddz] of [
 					[1, 0, 0], [-1, 0, 0], [0, 1, 0], [0, -1, 0], [0, 0, 1], [0, 0, -1],
 				] as [number, number, number][]) {
 					const wx = x + ddx, wy = y + ddy, wz = z + ddz;
-					if (this.world.getBlock(wx, wy, wz) === WATER) {
+					if (this.read(wx, wy, wz) === WATER) {
 						lavaWaterPairs.push({ x: wx, y: wy, z: wz });
 					}
 				}
@@ -248,7 +274,7 @@ export class LiquidScheduler {
 
 		const touchedChunks = new Set<string>();
 		for (const w of reactionWrites) {
-			if (this.world.getBlock(w.x, w.y, w.z) === w.id) continue;
+			if (this.read(w.x, w.y, w.z) === w.id) continue;
 			this.world.setBlock(w.x, w.y, w.z, w.id);
 			this.changed = true;
 			this.onBlockChanged(w.x, w.y, w.z);
@@ -312,7 +338,7 @@ export class LiquidScheduler {
 				const nx = n.x + dx, ny = n.y + dy, nz = n.z + dz;
 				const k = `${nx},${ny},${nz}`;
 				if (reachable.has(k)) continue;
-				if (this.world.getBlock(nx, ny, nz) !== n.id) continue;
+				if (this.read(nx, ny, nz) !== n.id) continue;
 				reachable.add(k);
 				queue.push({ x: nx, y: ny, z: nz, id: n.id });
 			}
@@ -340,7 +366,7 @@ export class LiquidScheduler {
 					const nx = n.x + dx, ny = n.y + dy, nz = n.z + dz;
 					const k = `${nx},${ny},${nz}`;
 					if (localSeen.has(k)) continue;
-					if (this.world.getBlock(nx, ny, nz) !== cand.id) continue;
+					if (this.read(nx, ny, nz) !== cand.id) continue;
 					localSeen.add(k);
 					if (!this.isFlowAt(nx, ny, nz)) {
 						foundSource = true;
@@ -420,18 +446,19 @@ export class LiquidScheduler {
 			for (const idx of c.liquidFrontier) {
 				const { lx, y, lz } = unpackIndex(idx);
 				const x = baseX + lx, z = baseZ + lz;
-				if (!isLiquid(this.world.getBlock(x, y, z))) {
+				if (!isLiquid(this.read(x, y, z))) {
 					toRemove.push(idx);
 					continue;
 				}
 				const neighbours = [
-					this.world.getBlock(x + 1, y, z),
-					this.world.getBlock(x - 1, y, z),
-					this.world.getBlock(x, y - 1, z),
-					this.world.getBlock(x, y, z + 1),
-					this.world.getBlock(x, y, z - 1),
+					this.read(x + 1, y, z),
+					this.read(x - 1, y, z),
+					this.read(x, y - 1, z),
+					this.read(x, y, z + 1),
+					this.read(x, y, z - 1),
 				];
-				const hasAir = neighbours.some((n) => n === AIR);
+				// An UNKNOWN neighbour (dropped chunk beyond the ring) may be air once re-entered: keep the cell.
+				const hasAir = neighbours.some((n) => n === AIR || n === UNKNOWN_BLOCK);
 				if (hasAir) continue;
 				// A liquid cell touching a dry sponge must stay in the frontier so the
 				// sponge phase can see it next tick. Five sides are already in
@@ -439,7 +466,7 @@ export class LiquidScheduler {
 				// resting on water is a legitimate trigger).
 				const touchesSponge =
 					neighbours.some((n) => n === SPONGE) ||
-					this.world.getBlock(x, y + 1, z) === SPONGE;
+					this.read(x, y + 1, z) === SPONGE;
 				if (!touchesSponge) toRemove.push(idx);
 			}
 			for (const i of toRemove) c.liquidFrontier.delete(i);
@@ -467,7 +494,7 @@ export class LiquidScheduler {
 		for (const [k, w] of map) {
 			const [xs, ys, zs] = k.split(',');
 			const x = Number(xs), y = Number(ys), z = Number(zs);
-			const current = this.world.getBlock(x, y, z);
+			const current = this.read(x, y, z);
 			if (current === w.id && !isLiquid(w.id)) continue;
 			if (w.flowDistance === null) {
 				this.world.setBlock(x, y, z, w.id);

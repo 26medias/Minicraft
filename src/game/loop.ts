@@ -17,13 +17,21 @@ import { detonate, tntKey, TNT_CHAIN_FUSE, TNT_PRIME_FUSE } from './tnt';
 import { updateLightsForBlockChange } from '../engine/world/lighting';
 import { LiquidScheduler } from './liquid-scheduler';
 import { chunkIndex, chunkIndexOrNeg, WORLD_CHUNKS_Z } from '../engine/world/coords';
-import { planFrame, chebyshev, MESH_RADIUS } from './chunk-scheduler';
+import { planFrame, chebyshev, MESH_RADIUS, UNMOUNT_RADIUS, DATA_RADIUS } from './chunk-scheduler';
 
 const LAMP_ID = BLOCK_BY_NAME['lamp'].id;
 
 /** Walk/physics ring; the mesh ring is MESH_RADIUS (src/engine/world/radii.ts). */
 export const VIEW_RADIUS = 4;
 const REACH = 6;
+
+/** Spec §3.C.1: a chunk that just came into existence makes every already-shadowed 3×3 neighbour stale. The loop's arrival hook (not World.ensureChunk: gate 2). */
+export function markChunkArrived(world: World, c: Chunk): void {
+	for (let dx = -1; dx <= 1; dx++) for (let dz = -1; dz <= 1; dz++) {
+		const n = world.getChunk(c.cx + dx, c.cz + dz);
+		if (n && n !== c) n.shadowsDirty = true;
+	}
+}
 
 /** [+x, −x, +z, −z] via getChunk (never ensureChunk). */
 function axisNeighbours(world: World, c: Chunk): (Chunk | undefined)[] {
@@ -99,6 +107,11 @@ export class GameLoop {
 			this.world,
 			(cx, cz) => this.markChunkDirty(cx, cz),
 			(x, y, z) => this.applyLightUpdate(x, y, z),
+			// DEV assertion (spec §3.E): no scheduler read may reach beyond the data ring of the CURRENT player chunk.
+			(x, z) => {
+				const pcx = Math.floor(this.player.position[0] / 16), pcz = Math.floor(this.player.position[2] / 16);
+				return Math.max(Math.abs(Math.floor(x / 16) - pcx), Math.abs(Math.floor(z / 16) - pcz)) <= DATA_RADIUS;
+			},
 		);
 		if (this.jobs) {
 			this.jobs.onReply = (job, sunlit, mesh) => this.onJobReply(job.chunk, sunlit, mesh);
@@ -267,6 +280,7 @@ export class GameLoop {
 			this.updateSpeed(dt);
 			this.loadNearbyChunks();
 			this.flushDirtyChunks();
+			this.evict();
 			this.highlight?.hide();
 			return;
 		}
@@ -292,10 +306,39 @@ export class GameLoop {
 		this.onFlyStateChange?.(this.player.flying ? this.player.flySpeedTier : null);
 		this.particles?.tick(dt);
 		this.simulate(dt);
+		this.evict();
 		this.overlay?.tick(dt);
 		this.updateSpeed(dt);
 		this.loadNearbyChunks();
 		this.flushDirtyChunks();
+	}
+
+	/**
+	 * Spec §3.E, after `simulate` (so no scheduler read of this tick lands on a dropped chunk): unmount
+	 * meshes beyond UNMOUNT_RADIUS and clear every numeric set of the index (an entry left in
+	 * mountedChunks would block the re-mesh on re-entry); drop UNMODIFIED data beyond DATA_RADIUS —
+	 * modified chunks stay for the session (autosave.snapshot() is exactly world.modifiedChunks()).
+	 */
+	private evict() {
+		const pcx = Math.floor(this.player.position[0] / 16), pcz = Math.floor(this.player.position[2] / 16);
+		for (const i of this.mountedChunks) {
+			if (chebyshev(i, pcx, pcz) > UNMOUNT_RADIUS) {
+				const cx = Math.floor(i / WORLD_CHUNKS_Z), cz = i % WORLD_CHUNKS_Z;
+				this.renderer.unmountChunk(cx, cz);
+				this.mountedChunks.delete(i);
+				this.streamSet.delete(i);
+				this.shadowOnly.delete(i);
+			}
+		}
+		for (const c of this.world.allChunks()) {
+			if (!c.modified && Math.max(Math.abs(c.cx - pcx), Math.abs(c.cz - pcz)) > DATA_RADIUS) {
+				const i = chunkIndex(c.cx, c.cz);
+				if (this.inFlightIndex.has(i)) continue; // its reply is still owed; onJobReply's wanted() discards it
+				this.world.dropChunk(c.cx, c.cz);
+			}
+		}
+		this.stats.mounted = this.mountedChunks.size;
+		this.stats.data = this.world.chunkCount;
 	}
 
 	/** Horizontal speed (blocks/s) from the player's position delta this tick; feeds the `moving` flag. */
@@ -417,12 +460,8 @@ export class GameLoop {
 		}
 	}
 
-	/** Spec §3.C.1: a chunk that just came into existence makes every already-shadowed 3×3 neighbour stale. */
 	private onChunkArrived(c: Chunk): void {
-		for (let dx = -1; dx <= 1; dx++) for (let dz = -1; dz <= 1; dz++) {
-			const n = this.world.getChunk(c.cx + dx, c.cz + dz);
-			if (n && n !== c) n.shadowsDirty = true;
-		}
+		markChunkArrived(this.world, c);
 	}
 
 	/** `ensureShadowNeighbourhood` plus the arrival re-dirty for every neighbour it created. */
@@ -464,8 +503,8 @@ export class GameLoop {
 		const existed = !!this.world.getChunk(cx, cz);
 		const c = this.world.ensureChunk(cx, cz);
 		if (!existed) this.onChunkArrived(c);
-		// Ensure gen-placed liquids are in the frontier for at least one tick's check.
-		if (c.liquidFrontier.size === 0) {
+		// Ensure gen-placed liquids are in the frontier for at least one tick's check (dry chunks skip the 65 k scan: spec §3.E hasLiquid).
+		if (c.hasLiquid && c.liquidFrontier.size === 0) {
 			for (let y = 0; y < c.height; y++) {
 				for (let lz = 0; lz < 16; lz++) {
 					for (let lx = 0; lx < 16; lx++) {

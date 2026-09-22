@@ -1,4 +1,5 @@
 import type { Chunk } from './chunk';
+import { isLiquid } from '../../data/blocks.data';
 import type { WorldHeight } from './coords';
 import { generateChunkV1, SEA_LEVEL_V1 } from './generation.v1';
 import { generateChunkV2 } from './generation.v2';
@@ -23,4 +24,11 @@ export function generateChunk(chunk: Chunk, seed: number, genVersion = 1): void 
 	if (genVersion === 1) generateChunkV1(chunk, seed);
 	else if (genVersion === 2) generateChunkV2(chunk, seed);
 	else generateChunkV3(chunk, seed);
+	chunk.hasLiquid = anyLiquid(chunk.blocks);
+}
+
+/** One pass over the chunk (≈ 0.1 ms); the flag gates the liquid-frontier rescan (spec §3.E). */
+export function anyLiquid(blocks: Uint16Array): boolean {
+	for (let i = 0; i < blocks.length; i++) if (isLiquid(blocks[i])) return true;
+	return false;
 }

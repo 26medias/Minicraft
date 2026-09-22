@@ -2,6 +2,14 @@ import * as THREE from 'three';
 import type { Chunk } from '../world/chunk';
 import type { ChunkMesh, ChunkMeshResult } from '../world/mesher';
 import type { LoadedAtlas } from './atlas';
+import { MESH_RADIUS } from '../world/radii';
+
+/**
+ * Fog from the mesh ring (spec §3.E): far sits inside the ≥ 80-block mesh frontier so the unload edge is
+ * never visible; an 8-block band (not 60 %) keeps the spawn summit legible (gate-2 kid-lens pass).
+ */
+export const FOG_FAR = MESH_RADIUS * 16 - 8;
+export const FOG_NEAR = FOG_FAR - 8;
 
 export class Renderer {
 	readonly scene: THREE.Scene;
@@ -20,7 +28,7 @@ export class Renderer {
 	constructor(container: HTMLElement, atlas: LoadedAtlas) {
 		this.scene = new THREE.Scene();
 		this.scene.background = new THREE.Color(0x87ceeb); // sky blue
-		this.scene.fog = new THREE.Fog(0x87ceeb, 60, 200);
+		this.scene.fog = new THREE.Fog(0x87ceeb, FOG_NEAR, FOG_FAR);
 
 		this.camera = new THREE.PerspectiveCamera(75, 1, 0.1, 500);
 		this.camera.position.set(8, 70, 8);
@@ -123,6 +131,18 @@ export class Renderer {
 			m.position.set(chunk.cx * 16, 0, chunk.cz * 16);
 			this.chunkGroup.add(m);
 			this.translucentMeshes.set(k, m);
+		}
+	}
+
+	/** Eviction (spec §3.E): remove and dispose the chunk's three meshes; a no-op when nothing is mounted. */
+	unmountChunk(cx: number, cz: number): void {
+		const k = `${cx},${cz}`;
+		for (const map of [this.chunkMeshes, this.liquidMeshes, this.translucentMeshes]) {
+			const m = map.get(k);
+			if (!m) continue;
+			this.chunkGroup.remove(m);
+			(m.geometry as THREE.BufferGeometry).dispose();
+			map.delete(k);
 		}
 	}
 

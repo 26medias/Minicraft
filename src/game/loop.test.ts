@@ -1,6 +1,7 @@
 import { describe, it, expect } from 'vitest';
 import * as THREE from 'three';
 import { makeLoop } from './test-loop';
+import { DATA_RADIUS as DATA_RADIUS_T } from '../engine/world/radii';
 import { LightRegistry } from '../engine/render/light-registry';
 import { FaceHighlight, HIGHLIGHT_EPS } from '../engine/render/face-highlight';
 import { AIR, BLOCK_BY_NAME } from '../data/blocks.data';
@@ -317,4 +318,27 @@ describe('worker streaming through the loop (spec §3.D / §6.3)', () => {
 		expect(h.loop.stats.streamQueue).toBe(0);
 		expect(h.loop.stats.workerInFlight).toBe(0);
 	});
+});
+
+describe('stale stream entries (perf gate-1 follow-up)', () => {
+	it('chunks queued near an old position are never generated once the player has left their ring', () => {
+		const { world, player, tick } = makeLoop();
+		tick(1 / 60); tick(1 / 60); // queue the ring around (260, 260); only a few mount
+		// leave: 15 chunks east, far outside MESH_RADIUS of the old ring
+		player.position = [31 * 16 + 8, 40, 260];
+		const orig = world.ensureChunk.bind(world);
+		const far: string[] = [];
+		world.ensureChunk = (cx: number, cz: number) => {
+			const created = !world.getChunk(cx, cz);
+			const c = orig(cx, cz);
+			const pcx = Math.floor(player.position[0] / 16), pcz = Math.floor(player.position[2] / 16);
+			// Legitimate creation reaches DATA_RADIUS (a ring-5 mount ensures its 3×3 at 6; re-shadowing a ring-6
+			// chunk ensures ITS 3×3 at 7). Beyond DATA_RADIUS the evictor drops the chunk again: pure waste.
+			// Before the fix, stale queue entries created 447 chunks at distance 7..17 here.
+			if (created && Math.max(Math.abs(cx - pcx), Math.abs(cz - pcz)) > DATA_RADIUS_T) far.push(`${cx},${cz}`);
+			return c;
+		};
+		for (let k = 0; k < 40; k++) tick(1 / 60);
+		expect(far).toEqual([]);
+	}, 30_000);
 });

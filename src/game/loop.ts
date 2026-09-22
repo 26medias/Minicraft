@@ -352,6 +352,10 @@ export class GameLoop {
 				this.shadowOnly.delete(i);
 			}
 		}
+		// Queued work the player has left behind: an entry outside MESH_RADIUS is unwanted (same test as a worker
+		// reply's wanted()). Mounting it would regenerate its whole 3×3, up to 17 chunks away, for nothing.
+		for (const i of this.streamSet) if (chebyshev(i, pcx, pcz) > MESH_RADIUS) this.streamSet.delete(i);
+		for (const i of this.shadowOnly) if (chebyshev(i, pcx, pcz) > MESH_RADIUS) this.shadowOnly.delete(i);
 		for (const c of this.world.allChunks()) {
 			if (!c.modified && Math.max(Math.abs(c.cx - pcx), Math.abs(c.cz - pcz)) > DATA_RADIUS) {
 				const i = chunkIndex(c.cx, c.cz);

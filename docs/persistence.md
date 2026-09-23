@@ -152,7 +152,7 @@ region `us-central1`, bucket `gs://minicraft-worlds`. No auth by design.
 | GET | `/v3/worlds/:id` | Same as `/worlds/:id`, strict v3 schema (`version: 3`, `height`, `genVersion`) |
 | PUT | `/v3/worlds/:id` | Same preconditions; stores `height` and `genVersion` as custom metadata |
 | DELETE | `/v3/worlds/:id` | Plain delete — leaves a recoverable version |
-| GET | `/health` | Liveness; reports `codec: 3` |
+| GET | `/health` | Liveness; reports `codec: 3` and `playerExtras: 1` (crafting fields + old-client guard) |
 
 One object per world at `worlds/{uuid}.json` (v2) or `worlds3/{uuid}.json` (v3).
 The old routes never list or open a `worlds3/` object, so a stale bundle cannot
@@ -163,6 +163,24 @@ is unreadable is listed as `degraded`, never skipped, for the same reason.
 
 **Never issue a generation-targeted delete** — that destroys the version
 permanently. Use `ifGenerationMatch` as a precondition on a plain delete.
+
+### Crafting fields and the old-client guard
+
+Both namespaces accept three optional fields (crafting spec §10):
+`player.inventory` (block name → integer ≥ 0, at most 2000 keys),
+`player.tools` (`owned`: up to 16 tiers, each 0–15; `equipped`: 0–15) and the
+top-level `mustMine` (boolean). The bounds are loose on purpose, so a later
+pickaxe tier needs no redeploy. v3 stays strict: any other unknown key is refused.
+
+A bundle from before crafting sends none of them, and a PUT replaces the object
+whole. So on an `If-Match` PUT the handler reads the stored object first (the
+read the shrink guard already did), and each field the save **omits** is carried
+over from it when the stored value is itself valid. A field that is sent always
+wins, `{}` and `false` included. The read fails closed. Any download error
+other than a 404 answers **503**, which the client retries. Treating an error
+as "nothing stored", as the shrink guard used to, would let the stale bundle's
+save wipe the counts. A stored body that does not parse is overwritten, as
+before. `If-None-Match: *` (a new world) never reads.
 
 ## Size
 
@@ -193,3 +211,15 @@ broken build.
 
 **`deploy.sh` never touches `gs://noah.leap-forward.ca`.** The website is
 deployed by hand, separately.
+
+**Order for a release that adds save fields (crafting):**
+1. The API first: `./deploy.sh`, then `./deploy.sh --verify`, which must print
+   `ok: …/health -> playerExtras 1`. A new bundle against the old API gets its
+   v3 saves refused (the strict schema rejects `mustMine`) and its counts
+   stripped from v2 saves. The dev server at `localhost:5173` talks to the same
+   API, so it is affected too.
+2. The site, by hand, with cache-control set on the objects. Upload `atlas.json`
+   and the atlas image **before or with** the bundle: a new bundle with a stale
+   atlas fails to start with `Atlas missing tile`.
+3. Purge Cloudflare's `/minicraft/` cache.
+4. Hard-refresh on Noah's laptop.

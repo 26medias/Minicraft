@@ -108,6 +108,13 @@ assert c.get("numNewerVersions")==10, c
 			echo "  FAIL: ${uri}/health -> '${body}' (expected {\"ok\":true,\"codec\":3}; old codec still deployed?)"
 			failures=$((failures + 1))
 		fi
+		# Crafting save fields + old-client guard (crafting spec §10).
+		if echo "${body}" | grep -q '"playerExtras":1'; then
+			echo "  ok: ${uri}/health -> playerExtras 1"
+		else
+			echo "  FAIL: ${uri}/health -> '${body}' (expected \"playerExtras\":1; pre-crafting API still deployed?)"
+			failures=$((failures + 1))
+		fi
 	fi
 
 	if [[ ${failures} -gt 0 ]]; then

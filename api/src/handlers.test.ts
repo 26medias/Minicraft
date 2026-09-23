@@ -187,7 +187,7 @@ describe('worlds API', () => {
 	});
 
 	it('health check responds', async () => {
-		await request(app).get('/health').expect(200, { ok: true, codec: 3 });
+		await request(app).get('/health').expect(200, { ok: true, codec: 3, playerExtras: 1 });
 	});
 });
 
@@ -294,4 +294,121 @@ describe('crafting fields through the API (crafting spec §10)', () => {
 			expect('mustMine' in got.body).toBe(false);
 		});
 	}
+});
+describe('old-client guard (crafting spec §10)', () => {
+	let bucket: FakeBucket;
+	let app: ReturnType<typeof createApp>;
+	beforeEach(() => {
+		bucket = new FakeBucket();
+		app = createApp(bucket as unknown as BucketLike);
+	});
+
+	const STORED_EXTRAS = {
+		inventory: { stone: 7, dirt: 0 },
+		tools: { owned: [0, 2], equipped: 2 },
+	};
+
+	for (const route of [
+		{ name: 'v2', prefix: '/worlds', object: 'worlds/', make: () => validWire() as Record<string, unknown> },
+		{ name: 'v3', prefix: '/v3/worlds', object: 'worlds3/', make: () => validWireV3() as unknown as Record<string, unknown> },
+	]) {
+		const objectName = `${route.object}${FIXTURE_ID}.json`;
+
+		/** Writes a stored world directly (bypassing the handler) and returns its generation. */
+		function seed(player: object, top: object = {}): string {
+			const base = route.make();
+			bucket.putRaw(
+				objectName,
+				JSON.stringify({ ...base, ...top, player: { ...(base.player as object), ...player } }),
+				{},
+			);
+			return String(bucket.entries.get(objectName)!.generation);
+		}
+		const stored = () => JSON.parse(bucket.entries.get(objectName)!.contents);
+		const put = (body: unknown, gen: string) =>
+			request(app).put(`${route.prefix}/${FIXTURE_ID}`).set({ 'If-Match': gen }).send(body as object);
+
+		it(`${route.name}: a save without the fields keeps the stored ones`, async () => {
+			// Catches: no guard (a stale cached bundle wipes counts, tools and the mode on
+			// its next autosave), and a guard wired to one route only.
+			const gen = seed(STORED_EXTRAS, { mustMine: true });
+			await put(route.make(), gen).expect(200);
+			expect(stored().player.inventory).toEqual(STORED_EXTRAS.inventory);
+			expect(stored().player.tools).toEqual(STORED_EXTRAS.tools);
+			expect(stored().mustMine).toBe(true);
+		});
+
+		it(`${route.name}: fields that are sent win, even {} and false`, async () => {
+			// Catches: a truthiness/emptiness test (`!inv || !Object.keys(inv).length`,
+			// `!world.mustMine`) that would resurrect used-up counts or re-enable must-mine.
+			const gen = seed(STORED_EXTRAS, { mustMine: true });
+			const base = route.make();
+			const body = {
+				...base,
+				mustMine: false,
+				player: { ...(base.player as object), inventory: {}, tools: { owned: [0], equipped: 0 } },
+			};
+			await put(body, gen).expect(200);
+			expect(stored().player.inventory).toEqual({});
+			expect(stored().player.tools).toEqual({ owned: [0], equipped: 0 });
+			expect(stored().mustMine).toBe(false);
+		});
+
+		it(`${route.name}: each omitted field is kept on its own`, async () => {
+			// Catches: an all-or-nothing guard keyed on one field.
+			const gen = seed(STORED_EXTRAS, { mustMine: true });
+			const base = route.make();
+			const body = { ...base, player: { ...(base.player as object), inventory: { stone: 1 } } };
+			await put(body, gen).expect(200);
+			expect(stored().player.inventory).toEqual({ stone: 1 });
+			expect(stored().player.tools).toEqual(STORED_EXTRAS.tools);
+			expect(stored().mustMine).toBe(true);
+		});
+
+		it(`${route.name}: an invalid stored value is not carried over`, async () => {
+			// Catches: copying stored values blind (a bad record would be re-written forever).
+			const gen = seed({ inventory: { stone: -1 }, tools: 'x' }, { mustMine: 'yes' });
+			await put(route.make(), gen).expect(200);
+			expect('inventory' in stored().player).toBe(false);
+			expect('tools' in stored().player).toBe(false);
+			expect('mustMine' in stored()).toBe(false);
+		});
+
+		it(`${route.name}: a download error answers 503 and leaves the stored object alone`, async () => {
+			// Catches: reusing shrinkGuard's `catch { return null }`, which treats a failed
+			// read as "nothing stored" and lets the old client's save wipe the fields.
+			const gen = seed(STORED_EXTRAS, { mustMine: true });
+			const before = bucket.entries.get(objectName)!.contents;
+			bucket.failOnDownload = true; // throws a plain Error with no 404 code
+			const r = await put(route.make(), gen);
+			expect(r.status).toBe(503);
+			bucket.failOnDownload = false;
+			expect(bucket.entries.get(objectName)!.contents).toBe(before);
+		});
+
+		it(`${route.name}: a stored body that does not parse is overwritten, not refused`, async () => {
+			// Catches: a read that throws on JSON.parse, which would 503 that world forever.
+			bucket.putRaw(objectName, 'not json', {});
+			const gen = String(bucket.entries.get(objectName)!.generation);
+			await put(route.make(), gen).expect(200);
+			expect(stored().name).toBe('Castle');
+		});
+
+		it(`${route.name}: a missing object is a 409 on If-Match, not a 503`, async () => {
+			// Catches: treating the 404 from the guard's read as a failure.
+			await put(route.make(), '1').expect(409);
+		});
+
+		it(`${route.name}: creating a world never reads the stored object`, async () => {
+			// Catches: running the guard read on the If-None-Match path, where a flaky
+			// read would 503 every new world.
+			bucket.failOnDownload = true;
+			await request(app).put(`${route.prefix}/${FIXTURE_ID}`).set(NEW).send(route.make()).expect(200);
+		});
+	}
+
+	it('health reports the crafting build', async () => {
+		// Catches: deploying an API without the guard; deploy.sh --verify greps this.
+		await request(app).get('/health').expect(200, { ok: true, codec: 3, playerExtras: 1 });
+	});
 });

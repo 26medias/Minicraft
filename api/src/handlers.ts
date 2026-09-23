@@ -2,6 +2,8 @@ import express, { type Express, type Request, type Response, type NextFunction }
 import type { z } from 'zod';
 import { decodeChunk, decodeFluidMeta, LEGACY_BLOCKS_PER_CHUNK } from './codec';
 import {
+	inventorySchema,
+	toolsSchema,
 	worldSaveWireSchema,
 	worldSaveWireSchemaV3,
 	WORLD_ID_RE,
@@ -142,7 +144,9 @@ export function createApp(bucket: BucketLike): Express {
 	app.use(express.json({ limit: '64mb' }));
 
 	app.get('/health', (_req, res) => {
-		res.json({ ok: true, codec: 3 });
+		// playerExtras: this build stores inventory/tools/mustMine and runs the
+		// old-client guard. `deploy.sh --verify` asserts it.
+		res.json({ ok: true, codec: 3, playerExtras: 1 });
 	});
 
 	registerWorldRoutes(app, bucket, {
@@ -304,11 +308,21 @@ function registerWorldRoutes<W extends WireBase>(
 		const file = bucket.file(objectName(id));
 
 		if (precondition !== 0) {
-			const shrink = await shrinkGuard(file, world);
+			let stored: StoredWorld | null;
+			try {
+				stored = await readStored(file);
+			} catch (err) {
+				// Never guess: saving without the stored object could wipe the counts
+				// an old client does not send. The client retries a 503.
+				fail(res, 503, 'UNAVAILABLE', `could not read the stored world: ${(err as Error).message}`);
+				return;
+			}
+			const shrink = shrinkGuard(stored, world);
 			if (shrink) {
 				fail(res, 400, 'SUSPICIOUS_SHRINK', shrink);
 				return;
 			}
+			keepStoredExtras(stored, world);
 		}
 
 		try {
@@ -371,22 +385,63 @@ function registerWorldRoutes<W extends WireBase>(
 	});
 }
 
+/** The stored object as read back, trusted for nothing until each field is checked. */
+type StoredWorld = { chunks?: unknown; player?: { inventory?: unknown; tools?: unknown }; mustMine?: unknown };
+
+/**
+ * The stored object, or `null` when there is none. Only a real 404 means "nothing
+ * stored": any other download error THROWS, and the PUT answers 503. Turning an error
+ * into "nothing stored" (what shrinkGuard used to do) would let an old client's save
+ * drop the stored counts, tools and mode. A body that downloads but does not parse
+ * reads as `{}`: nothing in it can be kept, and refusing would wedge the world.
+ */
+async function readStored(file: FileLike): Promise<StoredWorld | null> {
+	let buf: Buffer;
+	try {
+		[buf] = await file.download();
+	} catch (err) {
+		if (isNotFound(err)) return null;
+		throw err;
+	}
+	try {
+		const parsed: unknown = JSON.parse(buf.toString());
+		return typeof parsed === 'object' && parsed !== null ? (parsed as StoredWorld) : {};
+	} catch {
+		return {};
+	}
+}
+
 /**
  * Whole-world replacement is only safe because the client marks every loaded chunk
  * modified. A structurally perfect world with almost no chunks would otherwise
  * silently truncate the stored one.
  */
-async function shrinkGuard(file: FileLike, incoming: WireBase): Promise<string | null> {
-	let stored: WireBase;
-	try {
-		const [buf] = await file.download();
-		stored = JSON.parse(buf.toString()) as WireBase;
-	} catch {
-		return null;
-	}
-	const before = stored.chunks?.length ?? 0;
+function shrinkGuard(stored: StoredWorld | null, incoming: WireBase): string | null {
+	const before = Array.isArray(stored?.chunks) ? stored.chunks.length : 0;
 	if (before > 4 && incoming.chunks.length < before * 0.5) {
 		return `refusing to shrink ${before} chunks to ${incoming.chunks.length}`;
 	}
 	return null;
+}
+
+/**
+ * Old-client guard (crafting spec §10). A bundle from before crafting sends no
+ * inventory, tools or mustMine, and a PUT replaces the object whole, so a stale
+ * cached bundle would wipe them. Each field the save OMITS is carried over from the
+ * stored object, if the stored value is itself valid. A field that is sent always
+ * wins, including an empty inventory `{}` and `mustMine: false`.
+ */
+function keepStoredExtras(stored: StoredWorld | null, world: WireBase): void {
+	if (!stored) return;
+	if (world.player.inventory === undefined) {
+		const inv = inventorySchema.safeParse(stored.player?.inventory);
+		if (inv.success) world.player.inventory = inv.data;
+	}
+	if (world.player.tools === undefined) {
+		const tools = toolsSchema.safeParse(stored.player?.tools);
+		if (tools.success) world.player.tools = tools.data;
+	}
+	if (world.mustMine === undefined && typeof stored.mustMine === 'boolean') {
+		world.mustMine = stored.mustMine;
+	}
 }

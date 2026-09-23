@@ -20,6 +20,8 @@ import { chunkIndex, chunkIndexOrNeg, WORLD_CHUNKS_Z } from '../engine/world/coo
 import { planFrame, chebyshev, budgetFor, MESH_RADIUS, UNMOUNT_RADIUS, DATA_RADIUS } from './chunk-scheduler';
 
 const LAMP_ID = BLOCK_BY_NAME['lamp'].id;
+/** Crafting spec §7: break particles for at most this many cells of one removeBlocks batch. */
+const REMOVE_PARTICLE_CAP = 16;
 
 /** Walk/physics ring; the mesh ring is MESH_RADIUS (src/engine/world/radii.ts). */
 export const VIEW_RADIUS = 4;
@@ -89,6 +91,11 @@ export class GameLoop {
 	private scheduler: LiquidScheduler;
 
 	onBlockBroken: ((ev: BlockBrokenEvent) => void) | null = null;
+	/**
+	 * Crafting spec §2/§7: the blocks one batch removed. Fired by a TNT detonation (without the detonating TNT's own cell;
+	 * chain-primed TNT is never removed by a blast) and by area mining. Single-block mining keeps onBlockBroken.
+	 */
+	onBlocksRemoved: ((removed: BlockBrokenEvent[]) => void) | null = null;
 	onWorldMutated: (() => void) | null = null;
 	onMiningProgress: ((progress: number) => void) | null = null;
 	onFlyStateChange: ((tier: number | null) => void) | null = null;
@@ -105,7 +112,8 @@ export class GameLoop {
 	 * `lastEditMs`: click-to-mounted latency, including the wait for the next tick (informational).
 	 * `lastEditWorkMs`: main-thread time spent re-meshing the edit lane in that tick (the bench's edit gate).
 	 */
-	stats = { streamQueue: 0, editQueue: 0, bulkQueue: 0, lastEditMs: -1, lastEditWorkMs: -1, mounted: 0, data: 0, workerInFlight: 0 };
+	/** `lightMs`: cumulative main-thread light work (removeBlocks + applyLightUpdate), read per frame by the bench. */
+	stats = { streamQueue: 0, editQueue: 0, bulkQueue: 0, lastEditMs: -1, lastEditWorkMs: -1, mounted: 0, data: 0, workerInFlight: 0, lightMs: 0 };
 
 	/**
 	 * F3 overlay hook (spec §3.F). Called at the end of every tick, paused or not, with the clamped
@@ -203,7 +211,9 @@ export class GameLoop {
 	applyLightUpdate(x: number, y: number, z: number): void {
 		const getLampColor = (lx: number, ly: number, lz: number): string | null =>
 			this.lights?.getColor(lx, ly, lz) ?? null;
+		const t0 = performance.now();
 		const touched = updateLightsForBlockChange(this.world, x, y, z, getLampColor);
+		this.stats.lightMs += performance.now() - t0;
 		for (const c of touched) {
 			this.markChunkDirty(c.cx, c.cz, { edit: true });
 			c.shadowsDirty = true;
@@ -273,11 +283,79 @@ export class GameLoop {
 	 * spawn. Shared by mining completion and shift-to-replace. Call before the
 	 * world write.
 	 */
-	private clearBlockEffects(x: number, y: number, z: number, oldId: BlockId): void {
+	private clearBlockEffects(x: number, y: number, z: number, oldId: BlockId, particles = true): void {
 		const k = tntKey(x, y, z);
 		if (this.primedTnt.delete(k)) this.overlay?.remove(x, y, z);
 		if (oldId === LAMP_ID) this.lights?.remove(x, y, z);
-		this.particles?.spawnBreak(x, y, z, oldId);
+		if (particles) this.particles?.spawnBreak(x, y, z, oldId);
+	}
+
+	/**
+	 * Crafting spec §7: remove a batch of blocks — a TNT blast, an area break. Out-of-bounds, air, liquid and hardness-0
+	 * cells (bedrock) are skipped here. Per cell, in order: clearBlockEffects (a primed fuse, a lamp's light; particles for
+	 * the first REMOVE_PARTICLE_CAP cells only), world.setBlock(AIR) — never chunk.set: setBlock wakes liquids and sets
+	 * `modified` — and updateLightsForBlockChange called DIRECTLY. applyLightUpdate would send every chunk the light
+	 * touched to the synchronous edit lane. Light stays per block: exact and cheap, where a bounding-box relight misses
+	 * sunlight columns below the box.
+	 *
+	 * Routing, with the rev/shadowsDirty bumps applyLightUpdate makes: only the anchor's chunk (the aimed block, the TNT
+	 * origin) goes to the edit lane. Every other chunk the batch touched — each cell's chunk and its edge neighbours, every
+	 * chunk the light touched — goes to the bulk lane. The south-east shadow neighbours stay shadow-only (stream lane with
+	 * the sunlitHash skip), as for a single edit. Single-block mine, place and replace never come here. The caller applies
+	 * counts from `removed`.
+	 */
+	removeBlocks(cells: Array<{ x: number; y: number; z: number }>, anchor: { x: number; y: number; z: number }): { removed: BlockBrokenEvent[] } {
+		const removed: BlockBrokenEvent[] = [];
+		const dirty = new Set<number>(); // blocks or light changed, or a removed cell sits on its border
+		const shadow = new Map<number, Chunk>(); // south-east shadow neighbours of each removed cell's chunk
+		const getLampColor = (lx: number, ly: number, lz: number): string | null => this.lights?.getColor(lx, ly, lz) ?? null;
+		for (const { x, y, z } of cells) {
+			if (!this.world.inBounds(x, y, z)) continue;
+			const id = this.world.getBlock(x, y, z);
+			if (!isSolid(id) || !((BLOCKS[id]?.hardness ?? 0) > 0)) continue;
+			this.clearBlockEffects(x, y, z, id, removed.length < REMOVE_PARTICLE_CAP);
+			this.world.setBlock(x, y, z, AIR);
+			removed.push({ x, y, z, blockId: id });
+			const t0 = performance.now();
+			const touched = updateLightsForBlockChange(this.world, x, y, z, getLampColor);
+			this.stats.lightMs += performance.now() - t0;
+			for (const c of touched) {
+				c.shadowsDirty = true;
+				c.rev++;
+				dirty.add(chunkIndex(c.cx, c.cz));
+			}
+			const cx = Math.floor(x / 16), cz = Math.floor(z / 16);
+			const lx = x - cx * 16, lz = z - cz * 16;
+			dirty.add(chunkIndex(cx, cz));
+			for (const [ex, ez, on] of [[cx - 1, cz, lx === 0], [cx + 1, cz, lx === 15], [cx, cz - 1, lz === 0], [cx, cz + 1, lz === 15]] as const) {
+				const i = on ? chunkIndexOrNeg(ex, ez) : -1;
+				if (i >= 0) dirty.add(i);
+			}
+			const edited = this.world.getChunk(cx, cz)!;
+			edited.shadowsDirty = true;
+			edited.rev++;
+			for (const n of [this.world.getChunk(cx + 1, cz), this.world.getChunk(cx, cz + 1), this.world.getChunk(cx + 1, cz + 1)]) {
+				if (!n) continue;
+				n.shadowsDirty = true;
+				n.rev++;
+				shadow.set(chunkIndex(n.cx, n.cz), n);
+			}
+		}
+		if (removed.length === 0) return { removed };
+		const a = chunkIndexOrNeg(Math.floor(anchor.x / 16), Math.floor(anchor.z / 16));
+		for (const i of dirty) {
+			// It must re-mesh whatever its sunlit does: a shadowOnly flag would let the sunlitHash skip drop it.
+			this.shadowOnly.delete(i);
+			if (i === a) {
+				this.editLane.add(i);
+				if (!this.editStartedAt) this.editStartedAt = performance.now();
+			} else {
+				this.bulkLane.add(i);
+				this.streamSet.delete(i);
+			}
+		}
+		for (const [i, n] of shadow) if (!dirty.has(i)) this.markChunkDirty(n.cx, n.cz, { shadowOnly: true });
+		return { removed };
 	}
 
 	/**
@@ -475,12 +553,11 @@ export class GameLoop {
 		const result = detonate(this.world, ox, oy, oz, (x, y, z) =>
 			this.primedTnt.has(tntKey(x, y, z)),
 		);
-		for (const { x, y, z } of result.destroyed) {
-			if (this.world.getBlock(x, y, z) === LAMP_ID) this.lights?.remove(x, y, z);
-			this.world.setBlock(x, y, z, AIR);
-			this.markChunkDirtyAround(x, z);
-			this.applyLightUpdate(x, y, z);
-		}
+		// Crafting spec §7: one batch anchored at the origin (edit lane); the rest of the blast goes to the bulk lane.
+		const { removed } = this.removeBlocks(result.destroyed, { x: ox, y: oy, z: oz });
+		// The detonating TNT's own cell is not a mined block (spec §2: a lone TNT adds 0 TNT).
+		const mined = removed.filter((r) => r.x !== ox || r.y !== oy || r.z !== oz);
+		if (mined.length > 0) this.onBlocksRemoved?.(mined);
 		for (const { x, y, z } of result.primed) {
 			this.primedTnt.set(tntKey(x, y, z), { x, y, z, fuse: TNT_CHAIN_FUSE });
 			this.overlay?.add(x, y, z);

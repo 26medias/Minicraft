@@ -1,14 +1,24 @@
 // Crafting spec §7 / §11: the bulk lane, spread re-meshing and neighbourhood freshness, driven through the loop.
-import { describe, it, expect } from 'vitest';
+import { describe, it, expect, vi } from 'vitest';
 import { readFileSync, existsSync } from 'node:fs';
 import { makeLoop } from './test-loop';
-import { AIR, BLOCKS, isSolid } from '../data/blocks.data';
+import { AIR, BLOCKS, BLOCK_BY_NAME, isSolid } from '../data/blocks.data';
 import { chunkIndex, indexOf } from '../engine/world/coords';
 import { ChunkJobs } from '../engine/world/chunk-jobs';
 import { manualWorkerFactory } from '../engine/world/chunk-jobs.test-utils';
 import { meshChunk } from '../engine/world/mesher';
 import { buildUvTable, type AtlasJson } from '../engine/render/uv-table';
 import { spawnV3 } from '../engine/world/v3/spawn';
+import { TNT_PRIME_FUSE } from './tnt';
+import type { GameLoop } from './loop';
+
+// Counts every meshChunk call. The manual worker's handleMessage meshes through the same module, but only inside
+// deliver(), never inside a tick, so the count taken around one tick is the main thread's.
+const mesh = vi.hoisted(() => ({ calls: 0 }));
+vi.mock('../engine/world/mesher', async (importOriginal) => {
+	const m = await importOriginal<typeof import('../engine/world/mesher')>();
+	return { ...m, meshChunk: (...a: Parameters<typeof m.meshChunk>) => { mesh.calls++; return m.meshChunk(...a); } };
+});
 
 if (!existsSync('public/atlas.json')) throw new Error('public/atlas.json missing: run npm run build-atlas (it is gitignored)');
 const table = buildUvTable(JSON.parse(readFileSync('public/atlas.json', 'utf8')) as AtlasJson);
@@ -79,5 +89,89 @@ describe('neighbourhood freshness through the loop (crafting spec §7)', () => {
 		const want = meshChunk(B, world.neighbors(B), () => [0, 0, 1, 1]);
 		expect(fnvBytes(h.meshes().get(chunkIndex(B.cx, B.cz))!.opaque.positions)).toBe(fnvBytes(want.opaque.positions));
 		expect(dropped).toContain(chunkIndex(B.cx, B.cz));
+	}, 60_000);
+});
+type Lanes = { editLane: Set<number>; bulkLane?: Set<number>; shadowOnly: Set<number> };
+const lanes = (loop: GameLoop) => loop as unknown as Lanes;
+const TNT = BLOCK_BY_NAME['tnt'].id;
+/** A real TNT at the corner of chunks (21..22, 12..13) (lx = lz = 0 of chunk (22, 13)), two below the surface. */
+function cornerBlast(h: Harness): { anchor: number; others: number[] } {
+	const x = 22 * 16, z = 13 * 16;
+	let y = h.world.height - 1;
+	while (y > 0 && !isSolid(h.world.getBlock(x, y, z))) y--;
+	y -= 2;
+	h.world.setBlock(x, y, z, TNT);
+	const L = lanes(h.loop);
+	L.editLane.clear(); L.bulkLane?.clear(); L.shadowOnly.clear();
+	expect(h.loop.ignite({ x, y, z, face: 'py', distance: 1 })).toBe(true);
+	h.loop.simulate(TNT_PRIME_FUSE + 0.1);
+	expect(h.world.getBlock(x, y, z)).toBe(AIR);
+	const anchor = chunkIndex(22, 13);
+	const others = [...new Set([...L.editLane, ...(L.bulkLane ?? [])])].filter((i) => i !== anchor);
+	for (const i of [chunkIndex(21, 12), chunkIndex(21, 13), chunkIndex(22, 12)]) expect(others).toContain(i);
+	return { anchor, others };
+}
+/** Indices whose mounted mesh object changed across `fn` (the renderer stub stores the last mesh per index). */
+function mountedDuring(h: Harness, fn: () => void): number[] {
+	const before = new Map(h.meshes());
+	fn();
+	return [...h.meshes()].filter(([i, m]) => before.get(i) !== m).map(([i]) => i).sort((a, b) => a - b);
+}
+
+describe('spread re-meshing (crafting spec §7)', () => {
+	it('lane assignment: after a chunk-corner TNT blast only the anchor chunk is in the edit lane; the other touched chunks are in the bulk lane, and none of them is flagged shadow-only (catches routing through applyLightUpdate, which puts every touched chunk in the edit lane — today\'s build)', () => {
+		const { h } = seededManual();
+		const { anchor, others } = cornerBlast(h);
+		const L = lanes(h.loop);
+		expect([...L.editLane]).toEqual([anchor]);
+		for (const i of others) {
+			expect(L.bulkLane!.has(i)).toBe(true);
+			expect(L.shadowOnly.has(i)).toBe(false);
+		}
+	}, 60_000);
+
+	it('the edit frame meshes the anchor only: one meshChunk call on the main thread, one mount, the rest posted (catches "everything in the edit lane", today\'s build: 4 synchronous meshes in one frame)', () => {
+		const { h, mw } = seededManual();
+		const { anchor, others } = cornerBlast(h);
+		const calls = mesh.calls;
+		const mounted = mountedDuring(h, () => h.tick(1 / 60));
+		expect(mesh.calls - calls).toBe(1);
+		expect(mounted).toEqual([anchor]);
+		expect(mw.queued()).toBe(2); // the worker's two slots took the nearest bulk chunks
+		for (const i of others) expect(mounted).not.toContain(i);
+		drainManual(h, mw);
+		for (const i of others) expect(lanes(h.loop).bulkLane!.has(i)).toBe(false);
+	}, 60_000);
+
+	it('without a worker, at most one bulk chunk is meshed per frame, and all of them within bulk-count + 1 frames (catches draining the bulk lane synchronously in one frame)', () => {
+		const h = makeLoop({ seed: 3 });
+		const s = spawnV3(3);
+		h.player.position = [s.x + 0.5, s.h + 2, s.z + 0.5];
+		for (let k = 0; k < 800 && !(k > 5 && h.loop.stats.streamQueue === 0 && h.loop.stats.editQueue === 0); k++) h.tick(1 / 60);
+		const { anchor, others } = cornerBlast(h);
+		const seen = new Set<number>();
+		for (let frame = 0; frame <= others.length + 1; frame++) {
+			const mounted = mountedDuring(h, () => h.tick(1 / 60));
+			if (frame === 0) expect(mounted).toContain(anchor);
+			const bulkNow = mounted.filter((i) => others.includes(i));
+			expect(bulkNow.length).toBeLessThanOrEqual(1);
+			for (const i of bulkNow) seen.add(i);
+		}
+		expect([...seen].sort((a, b) => a - b)).toEqual([...others].sort((a, b) => a - b));
+	}, 120_000);
+
+	it('single-block mining at lx = 15 still mounts both chunks in the frame the block breaks (catches the bulk lane leaking into single edits)', () => {
+		const mw = manualWorkerFactory();
+		const h = makeLoop({ jobs: new ChunkJobs(mw.factory, table, 2) });
+		// makeLoop() clears chunk (16,16); x = 271 is its lx = 15, so (17,16) must re-mesh too. Yaw 0 looks −z.
+		h.player.flying = true;
+		h.player.position = [271.5, 40, 270.5];
+		h.world.setBlock(271, 41, 267, BLOCK_BY_NAME['stone'].id);
+		h.loop.setLeftMouseDown(true);
+		let mounted: number[] = [];
+		for (let k = 0; k < 200 && h.world.getBlock(271, 41, 267) !== AIR; k++) mounted = mountedDuring(h, () => h.tick(0.05));
+		expect(h.world.getBlock(271, 41, 267)).toBe(AIR);
+		expect(mounted).toContain(chunkIndex(16, 16));
+		expect(mounted).toContain(chunkIndex(17, 16));
 	}, 60_000);
 });

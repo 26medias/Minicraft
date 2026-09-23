@@ -8,10 +8,12 @@ const flat = (id: string) => {
 const LOGS = 'oak_log|birch_log|spruce_log|acacia_log|cherry_log';
 
 describe('RECIPES (spec §4 tables)', () => {
-	it('has the 7 pickaxes and 3 TNT rows, ids unique, one recipe per pickaxe tier 1–7 (catches a dropped or duplicated row)', () => {
+	it('has the 7 pickaxes, 3 TNT rows and 5 blast toys, ids unique, one recipe per pickaxe tier 1–7 (catches a dropped or duplicated row)', () => {
 		expect(RECIPES.map((r) => r.id)).toEqual([
 			'wood_pickaxe', 'stone_pickaxe', 'copper_pickaxe', 'iron_pickaxe', 'gold_pickaxe', 'diamond_pickaxe', 'emerald_pickaxe', 'tnt', 'big_tnt', 'mega_tnt',
+			'tunnel_tnt', 'flatten_tnt', 'lake_tnt', 'block_bomb', 'fireworks',
 		]);
+		expect(new Set(RECIPES.map((r) => r.id)).size).toBe(RECIPES.length);
 		const tiers = RECIPES.flatMap((r) => (r.output.kind === 'pickaxe' ? [r.output.tier] : []));
 		expect(tiers).toEqual([1, 2, 3, 4, 5, 6, 7]);
 	});
@@ -30,5 +32,13 @@ describe('RECIPES (spec §4 tables)', () => {
 		expect(flat('tnt')).toEqual({ output: { kind: 'block', name: 'tnt', count: 2 }, needs: [['sand', 5], ['coal_ore|deepslate_coal_ore', 4]] });
 		expect(flat('big_tnt')).toEqual({ output: { kind: 'block', name: 'big_tnt', count: 1 }, needs: [['tnt', 2], ['redstone_ore|deepslate_redstone_ore', 4]] });
 		expect(flat('mega_tnt')).toEqual({ output: { kind: 'block', name: 'mega_tnt', count: 1 }, needs: [['big_tnt', 2], ['lapis_ore|deepslate_lapis_ore', 4]] });
+	});
+	it('blast toy rows match toys spec §3 and sit in the Boom tab (catches a wrong count, Fireworks making 1 instead of 3, or a toy row in no tab)', () => {
+		expect(flat('fireworks')).toEqual({ output: { kind: 'block', name: 'fireworks', count: 3 }, needs: [['sand', 1], ['coal_ore|deepslate_coal_ore', 2]] });
+		expect(flat('tunnel_tnt')).toEqual({ output: { kind: 'block', name: 'tunnel_tnt', count: 1 }, needs: [['tnt', 2], ['iron_ore|deepslate_iron_ore', 8]] });
+		expect(flat('block_bomb')).toEqual({ output: { kind: 'block', name: 'block_bomb', count: 1 }, needs: [['tnt', 2], ['sand', 8]] });
+		expect(flat('flatten_tnt')).toEqual({ output: { kind: 'block', name: 'flatten_tnt', count: 1 }, needs: [['big_tnt', 2], ['stone', 16]] });
+		expect(flat('lake_tnt')).toEqual({ output: { kind: 'block', name: 'lake_tnt', count: 1 }, needs: [['tnt', 2], ['ice', 4]] });
+		for (const id of ['fireworks', 'tunnel_tnt', 'block_bomb', 'flatten_tnt', 'lake_tnt']) expect(RECIPES.find((r) => r.id === id)!.tab, id).toBe('boom');
 	});
 });

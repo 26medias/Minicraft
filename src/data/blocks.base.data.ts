@@ -26,7 +26,8 @@ export type BlockDef = {
 	// Slot kept so BLOCKS[id] stays aligned; never shown, never placeable.
 	retired?: true;
 	// Present exactly on TNT blocks: blast radius (blocks) and kid-ignited fuse (seconds). Spec §6.
-	tnt?: { radius: number; fuse: number };
+	// `shape` (toys spec §4): what the blast does; absent means 'sphere', today's TNT.
+	tnt?: { radius: number; fuse: number; shape?: 'sphere' | 'tunnel' | 'flatten' | 'lake' | 'dome' | 'firework' };
 };
 
 export const AIR: BlockId = 0;

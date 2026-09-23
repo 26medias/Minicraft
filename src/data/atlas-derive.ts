@@ -17,7 +17,23 @@ export const DERIVED_TEXTURES: Record<string, { source: string; tint: Rgb }> = {
 	mega_tnt_top: { source: 'tnt_top', tint: [0xa8, 0x3c, 0xff] },
 	mega_tnt_bottom: { source: 'tnt_bottom', tint: [0xa8, 0x3c, 0xff] },
 	mega_tnt_side: { source: 'tnt_side', tint: [0xa8, 0x3c, 0xff] },
+	...toyTints(),
 };
+
+/** Toys spec §2: each blast toy is TNT, greyed, then tinted. Block Bomb is white (achromatic), the rest ≥ 20° of hue apart. */
+function toyTints(): Record<string, { source: string; tint: Rgb }> {
+	const tints: Record<string, Rgb> = {
+		tunnel_tnt: [0x3c, 0xdc, 0x3c],   // green
+		flatten_tnt: [0x28, 0xdc, 0xe6],  // cyan
+		lake_tnt: [0x3c, 0x64, 0xff],     // blue
+		block_bomb: [0xff, 0xff, 0xff],   // white
+		fireworks: [0xff, 0x3c, 0xc8],    // magenta
+	};
+	const out: Record<string, { source: string; tint: Rgb }> = {};
+	for (const [name, tint] of Object.entries(tints)) for (const face of ['top', 'bottom', 'side'])
+		out[`${name}_${face}`] = { source: `tnt_${face}`, tint };
+	return out;
+}
 
 /** RGBA in, RGBA out, same length: luminance (Rec. 601) × gain × tint / 255, clamped; alpha kept. */
 export function greyTint(raw: Uint8Array, tint: Rgb, gain = TINT_GAIN): Uint8Array {

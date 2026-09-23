@@ -30,10 +30,11 @@ describe('extra blocks (spec §6)', () => {
 	it('BLOCKS stays dense and id-aligned up to the extras; the gap is tombstones', () => {
 		// Catches dense() being fed without EXTRA_BLOCKS (BLOCK_BY_NAME.big_tnt undefined)
 		// and a gap filled with anything that could render or be picked.
-		expect(BLOCKS.length).toBe(1002);
+		expect(BLOCKS.length).toBe(1009);
 		for (let i = 0; i < BLOCKS.length; i++) expect(BLOCKS[i].id).toBe(i);
 		expect(BLOCKS[1000].name).toBe('big_tnt');
 		expect(BLOCKS[1001].name).toBe('mega_tnt');
+		expect(BLOCKS.slice(1004, 1009).map((b) => b.name)).toEqual(['fireworks', 'tunnel_tnt', 'block_bomb', 'flatten_tnt', 'lake_tnt']);
 		const maxCatalog = Math.max(...Object.values(catalogIds));
 		for (let i = maxCatalog + 1; i < EXTRA_ID_START; i++) {
 			expect(BLOCKS[i].retired).toBe(true);
@@ -48,6 +49,29 @@ describe('extra blocks (spec §6)', () => {
 		expect(BLOCK_BY_NAME['big_tnt'].tnt).toEqual({ radius: 5, fuse: 4 });
 		expect(BLOCK_BY_NAME['mega_tnt'].tnt).toEqual({ radius: 8, fuse: 6 });
 		const withTnt = BLOCKS.filter((b) => b.tnt).map((b) => b.name).sort();
-		expect(withTnt).toEqual(['big_tnt', 'mega_tnt', 'tnt']);
+		expect(withTnt).toEqual(['big_tnt', 'block_bomb', 'fireworks', 'flatten_tnt', 'lake_tnt', 'mega_tnt', 'tnt', 'tunnel_tnt']);
+	});
+
+	it('the blast toys: ids 1004–1008, basics, hardness 0.5, the spec §3 tnt values and shapes, derived <name>_top/_bottom/_side textures', () => {
+		// Catches a renumbered toy (saves store ids), a toy without a shape (it would go off as a sphere),
+		// a toy with today's radius-3 default, and a texture name build-atlas cannot find.
+		const rows: Array<[string, number, { radius: number; fuse: number; shape: string }]> = [
+			['fireworks', 1004, { radius: 0, fuse: 1, shape: 'firework' }],
+			['tunnel_tnt', 1005, { radius: 0, fuse: 3, shape: 'tunnel' }],
+			['block_bomb', 1006, { radius: 5, fuse: 3, shape: 'dome' }],
+			['flatten_tnt', 1007, { radius: 6, fuse: 3, shape: 'flatten' }],
+			['lake_tnt', 1008, { radius: 4, fuse: 3, shape: 'lake' }],
+		];
+		for (const [name, id, tnt] of rows) {
+			const b = BLOCK_BY_NAME[name];
+			expect(b.id, name).toBe(id);
+			expect(b.group, name).toBe('basics');
+			expect(b.hardness, name).toBe(0.5);
+			expect(b.solid, name).toBe(true);
+			expect(b.tnt, name).toEqual(tnt);
+			expect(b.textures, name).toEqual({ kind: 'top-bottom-side', top: `${name}_top`, bottom: `${name}_bottom`, side: `${name}_side` });
+		}
+		// Today's tiers stay spheres: no shape field at all, so tntSpec and every saved radius are unchanged.
+		for (const n of ['tnt', 'big_tnt', 'mega_tnt']) expect(BLOCK_BY_NAME[n].tnt!.shape, n).toBeUndefined();
 	});
 });

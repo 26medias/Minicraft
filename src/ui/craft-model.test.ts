@@ -67,14 +67,15 @@ describe('hotbar badges (spec §3)', () => {
 });
 
 describe('craft cards (spec §9)', () => {
-	it('10 cards: 7 pickaxes then 3 TNT, in recipe order', () => {
+	it('15 cards: 7 pickaxes, 3 TNT, then the 5 blast toys, in recipe order', () => {
 		// Catches a card list built from PICKAXES alone (no TNT cards) or including the Hand.
 		const cards = craftCards(RECIPES, {}, HAND);
-		expect(cards.length).toBe(10);
+		expect(cards.length).toBe(15);
 		expect(cards.map((c) => c.recipeId)).toEqual(RECIPES.map((r) => r.id));
 		expect(cards.filter((c) => c.picture.kind === 'icon').length).toBe(7);
 		expect(cards.find((c) => c.recipeId === blockRecipe('tnt').id)!.countLabel).toBe('×2');
-		expect(cards.map((c) => c.outputKey)).toEqual([...[1, 2, 3, 4, 5, 6, 7].map((t) => `pickaxe:${t}`), 'block:tnt', 'block:big_tnt', 'block:mega_tnt']);
+		expect(cards.map((c) => c.outputKey)).toEqual([...[1, 2, 3, 4, 5, 6, 7].map((t) => `pickaxe:${t}`), 'block:tnt', 'block:big_tnt', 'block:mega_tnt',
+			'block:tunnel_tnt', 'block:flatten_tnt', 'block:lake_tnt', 'block:block_bomb', 'block:fireworks']);
 	});
 
 	it('have sums every accepted variant; the bar fills to have/need and caps at 1', () => {

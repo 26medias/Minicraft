@@ -75,6 +75,46 @@ describe('derived TNT textures (spec §6)', () => {
 	});
 });
 
+describe('blast toy tints (toys spec §2)', () => {
+	const TOYS = ['tunnel_tnt', 'flatten_tnt', 'lake_tnt', 'fireworks'] as const;
+	const avg = async (name: string): Promise<Rgb> => {
+		const d = DERIVED_TEXTURES[name];
+		expect(d, name).toBeDefined();
+		return averageRgb(greyTint(await tile(d.source), d.tint));
+	};
+
+	it('every toy face is derived from the matching tnt_* face (catches a toy tinted from the wrong source or a missing face row)', () => {
+		for (const toy of [...TOYS, 'block_bomb']) for (const face of ['top', 'bottom', 'side'])
+			expect(DERIVED_TEXTURES[`${toy}_${face}`]?.source, `${toy}_${face}`).toBe(`tnt_${face}`);
+	});
+
+	it('Tunnel, Flatten, Lake and Fireworks are ≥ 20° of hue from each other and from plain, Big and Mega TNT, per face (catches two toys sharing a tint, or a toy the kid cannot tell from Big or Mega)', async () => {
+		for (const face of ['top', 'bottom', 'side']) {
+			const named: Array<[string, number]> = [['tnt', hue(averageRgb(await tile(`tnt_${face}`)))]];
+			for (const n of ['big_tnt', 'mega_tnt', ...TOYS]) named.push([n, hue(await avg(`${n}_${face}`))]);
+			for (let i = 0; i < named.length; i++) for (let j = i + 1; j < named.length; j++)
+				expect(hueGap(named[i][1], named[j][1]), `${face}: ${named[i][0]} vs ${named[j][0]}`).toBeGreaterThanOrEqual(20);
+			for (const n of TOYS) {
+				const c = await avg(`${n}_${face}`);
+				expect(c[0] + c[1] + c[2], `${n}_${face} bright enough`).toBeGreaterThan(200);
+			}
+		}
+	});
+
+	it('Block Bomb is the white one: no hue at all, and brighter than every tinted toy (catches a Block Bomb left red like plain TNT)', async () => {
+		// White has no hue, so the ≥ 20° rule cannot apply to it; it is told apart by being achromatic instead.
+		for (const face of ['top', 'bottom', 'side']) {
+			const w = await avg(`block_bomb_${face}`);
+			expect(Math.max(...w) - Math.min(...w), face).toBeLessThan(2);
+			const plain = averageRgb(await tile(`tnt_${face}`));
+			expect(Math.max(...plain) - Math.min(...plain), `plain tnt_${face} is chromatic`).toBeGreaterThan(20);
+			for (const n of TOYS) {
+				const c = await avg(`${n}_${face}`);
+				expect(w[0] + w[1] + w[2], `${face}: block_bomb vs ${n}`).toBeGreaterThan(c[0] + c[1] + c[2]);
+			}
+		}
+	});
+});
 describe('pickaxe icons (spec §5)', () => {
 	it('one 16×16 RGBA icon per tier 0..7, transparent corners, named pickaxe_<tier>', () => {
 		// Catches a missing tier (the HUD would show no icon for it) and an opaque background.

@@ -41,8 +41,8 @@ describe('WORLDGEN_BLOCKS (spec §3)', () => {
 });
 
 describe('CRAFTED_ONLY', () => {
-	it('is exactly Big and Mega TNT; plain tnt is not crafted-only (catches plain TNT becoming unplaceable in unlimited worlds)', () => {
-		expect([...CRAFTED_ONLY]).toEqual(['big_tnt', 'mega_tnt']);
+	it('is Big and Mega TNT plus the five blast toys; plain tnt is not crafted-only (catches plain TNT becoming unplaceable in unlimited worlds, and a toy placeable for free)', () => {
+		expect([...CRAFTED_ONLY]).toEqual(['big_tnt', 'mega_tnt', 'fireworks', 'tunnel_tnt', 'block_bomb', 'flatten_tnt', 'lake_tnt']);
 	});
 });
 

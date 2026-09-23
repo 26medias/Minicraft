@@ -14,6 +14,13 @@ export const EXTRA_BLOCKS: BlockDef[] = [
 	{ id: 1001, name: 'mega_tnt', label: 'Mega TNT', solid: true, transparent: false, translucent: false, group: 'basics', hardness: 0.5,
 		lightLevel: 0, lightFilter: 15, liquid: 'none', tnt: { radius: 8, fuse: 6 },
 		textures: { kind: 'top-bottom-side', top: 'mega_tnt_top', bottom: 'mega_tnt_bottom', side: 'mega_tnt_side' } },
+	// Toys spec §3.1–3.2: pads are plain solid blocks; Player.update reads `pad` from the block under his feet.
+	{ id: 1002, name: 'slime_pad', label: 'Slime Pad', solid: true, transparent: false, translucent: false, group: 'basics', hardness: 0.5,
+		lightLevel: 0, lightFilter: 15, liquid: 'none', pad: 'slime',
+		textures: { kind: 'uniform', all: 'slime_block' } },
+	{ id: 1003, name: 'launch_pad', label: 'Launch Pad', solid: true, transparent: false, translucent: false, group: 'basics', hardness: 0.5,
+		lightLevel: 0, lightFilter: 15, liquid: 'none', pad: 'launch',
+		textures: { kind: 'uniform', all: 'launch_pad' } },
 	// Toys spec §3.3–3.7: the blast toys. 1002/1003 are the pads (phase P). Never renumber.
 	{ id: 1004, name: 'fireworks', label: 'Fireworks', solid: true, transparent: false, translucent: false, group: 'basics', hardness: 0.5,
 		lightLevel: 0, lightFilter: 15, liquid: 'none', tnt: { radius: 0, fuse: 1, shape: 'firework' },

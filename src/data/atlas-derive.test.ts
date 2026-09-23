@@ -154,3 +154,18 @@ describe('built atlas (npm run build-atlas)', () => {
 		for (const t of PICKAXE_TIERS) expect(tiles[pickaxeIconName(t)], pickaxeIconName(t)).toBeDefined();
 	});
 });
+
+describe('launch pad texture (toys spec §2)', () => {
+	it('launch_pad is slime_block turned red; slime_pad keeps the real slime file', async () => {
+		// Catches a launch pad with no derived row (build-atlas would look for launch_pad.png and fail),
+		// one derived from TNT instead of slime, and a tint too close to slime green to tell apart.
+		expect(DERIVED_TEXTURES['launch_pad']?.source).toBe('slime_block');
+		expect(DERIVED_TEXTURES['slime_block']).toBeUndefined();
+		const slime = averageRgb(await tile('slime_block'));
+		const launch = averageRgb(greyTint(await tile('slime_block'), DERIVED_TEXTURES['launch_pad'].tint));
+		expect(launch[0]).toBeGreaterThan(launch[1]);
+		expect(launch[0]).toBeGreaterThan(launch[2]);
+		expect(hueGap(hue(launch), hue(slime))).toBeGreaterThanOrEqual(90);
+		expect(launch[0] + launch[1] + launch[2]).toBeGreaterThan(200);
+	});
+});

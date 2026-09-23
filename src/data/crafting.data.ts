@@ -33,7 +33,7 @@ export const WORLDGEN_BLOCKS: readonly string[] = Object.freeze([
 ]);
 
 /** Spec §3: blocks that only crafting makes. They need a count to place in every world. */
-export const CRAFTED_ONLY: readonly string[] = Object.freeze(['big_tnt', 'mega_tnt', 'fireworks', 'tunnel_tnt', 'block_bomb', 'flatten_tnt', 'lake_tnt']);
+export const CRAFTED_ONLY: readonly string[] = Object.freeze(['big_tnt', 'mega_tnt', 'fireworks', 'tunnel_tnt', 'block_bomb', 'flatten_tnt', 'lake_tnt', 'slime_pad', 'launch_pad']);
 
 export type PickaxeTier = 0 | 1 | 2 | 3 | 4 | 5 | 6 | 7;
 /** `bonus` is a fraction (0.15 = +15 %). `area`: w × h on the hit face, `d` cells deep away from the player. */

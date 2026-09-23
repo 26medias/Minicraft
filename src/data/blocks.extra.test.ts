@@ -75,3 +75,21 @@ describe('extra blocks (spec §6)', () => {
 		for (const n of ['tnt', 'big_tnt', 'mega_tnt']) expect(BLOCK_BY_NAME[n].tnt!.shape, n).toBeUndefined();
 	});
 });
+
+describe('pad blocks (toys spec §2, §3.1, §3.2)', () => {
+	it('slime_pad is 1002 and launch_pad is 1003, with a pad field and no tnt', () => {
+		// Catches the pads numbered after the blast toys (1009/1010), a missing `pad` field (Player
+		// would never bounce or launch), and a pad given a `tnt` field (ignitable and chain-primed).
+		expect(BLOCKS[1002]).toMatchObject({ name: 'slime_pad', pad: 'slime', solid: true, group: 'basics', hardness: 0.5 });
+		expect(BLOCKS[1003]).toMatchObject({ name: 'launch_pad', pad: 'launch', solid: true, group: 'basics', hardness: 0.5 });
+		expect(BLOCKS[1002].tnt).toBeUndefined();
+		expect(BLOCKS[1003].tnt).toBeUndefined();
+		expect(BLOCKS[1002].textures).toEqual({ kind: 'uniform', all: 'slime_block' });
+		expect(BLOCKS[1003].textures).toEqual({ kind: 'uniform', all: 'launch_pad' });
+	});
+
+	it('exactly the two pads carry a pad field', () => {
+		// Catches a stray pad field on another row (every landing on it would bounce or launch him).
+		expect(BLOCKS.filter((b) => b.pad).map((b) => [b.name, b.pad])).toEqual([['slime_pad', 'slime'], ['launch_pad', 'launch']]);
+	});
+});

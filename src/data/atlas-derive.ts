@@ -17,6 +17,8 @@ export const DERIVED_TEXTURES: Record<string, { source: string; tint: Rgb }> = {
 	mega_tnt_top: { source: 'tnt_top', tint: [0xa8, 0x3c, 0xff] },
 	mega_tnt_bottom: { source: 'tnt_bottom', tint: [0xa8, 0x3c, 0xff] },
 	mega_tnt_side: { source: 'tnt_side', tint: [0xa8, 0x3c, 0xff] },
+	// Toys spec §2: the Launch Pad is the Slime Pad's texture turned red.
+	launch_pad: { source: 'slime_block', tint: [0xff, 0x38, 0x28] },
 	...toyTints(),
 };
 

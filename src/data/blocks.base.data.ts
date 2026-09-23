@@ -28,6 +28,8 @@ export type BlockDef = {
 	// Present exactly on TNT blocks: blast radius (blocks) and kid-ignited fuse (seconds). Spec §6.
 	// `shape` (toys spec §4): what the blast does; absent means 'sphere', today's TNT.
 	tnt?: { radius: number; fuse: number; shape?: 'sphere' | 'tunnel' | 'flatten' | 'lake' | 'dome' | 'firework' };
+	// Present exactly on the two pads (toys spec §3.1–3.2): what landing on or standing on it does.
+	pad?: 'slime' | 'launch';
 };
 
 export const AIR: BlockId = 0;

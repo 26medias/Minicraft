@@ -522,7 +522,7 @@ async function memory(page: Page, cdp: CDPSession, dir: { dirX: number; dirZ: nu
 			// Spec §8: no frame over 50 ms in ANY repetition, so gate on the worst, never the median.
 			const over = Math.max(...rs.map((x) => x.over50)), light = Math.max(...rs.map((x) => x.lightMax)), bulk = Math.max(...rs.map((x) => x.bulkMax));
 			const ok = over === 0 && light < GATES.craftLightMs && bulk <= GATES.craftBulkFrames;
-			const thin = mf > GATES.craftFrameMs * GATES.craftMargin || light > GATES.craftLightMs * GATES.craftMargin || bulk > GATES.craftBulkFrames * GATES.craftMargin;
+			const thin = worst > GATES.craftFrameMs * GATES.craftMargin || light > GATES.craftLightMs * GATES.craftMargin || bulk > GATES.craftBulkFrames * GATES.craftMargin;
 			const bulkCell = rs[0].bulkLane ? String(bulk) : '— (no bulk lane)';
 			rows.push(`| ${def.name} | ${mf.toFixed(1)} / ${worst.toFixed(1)} | ${over} | ${light.toFixed(1)} | ${bulkCell} | ${rs[0].removed} | ${gate(ok)}${ok && thin ? ' (thin)' : ''} |`);
 		}

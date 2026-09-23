@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { shouldHandleKey, buildKeyToAction } from './input-gate';
+import { shouldHandleKey, buildKeyToAction, sneakKeyChange } from './input-gate';
 import { DEFAULT_KEYBINDINGS } from '../data/keybindings.data';
 
 const free = { frozen: false, inventoryOpen: false, pickerOpen: false };
@@ -44,5 +44,29 @@ describe('buildKeyToAction', () => {
 		expect(Object.values(map)).not.toContain('cyclePickaxe');
 		expect(map['KeyP']).toBeUndefined();
 		expect(map['KeyI']).toBe('inventory');
+	});
+});
+
+describe('sneakKeyChange (toys spec §4: Shift is the sneak key)', () => {
+	it('either Shift key sets sneak on keydown and clears it on keyup; no other key touches it', () => {
+		// Catches only ShiftLeft wired (a right-handed Shift would do nothing), and e.key 'Shift' or KeyS used as the code.
+		for (const code of ['ShiftLeft', 'ShiftRight']) {
+			expect(sneakKeyChange(code, true, free)).toBe(true);
+			expect(sneakKeyChange(code, false, free)).toBe(false);
+		}
+		for (const code of ['Shift', 'KeyS', 'ControlLeft', 'Space', '']) {
+			expect(sneakKeyChange(code, true, free)).toBeNull();
+			expect(sneakKeyChange(code, false, free)).toBeNull();
+		}
+	});
+
+	it('a keydown behind the freeze or the I screen is dropped; a keyup always clears sneak', () => {
+		// Catches an ungated keydown (Shift pressed in the I screen would stop his next bounce), and a gated
+		// keyup (Shift released while frozen would leave sneak stuck on: no pad would ever work again).
+		for (const s of [{ ...free, frozen: true }, { ...free, inventoryOpen: true }]) {
+			expect(sneakKeyChange('ShiftLeft', true, s)).toBeNull();
+			expect(sneakKeyChange('ShiftLeft', false, s)).toBe(false);
+		}
+		expect(sneakKeyChange('ShiftRight', true, { ...free, pickerOpen: true })).toBe(true); // movement keys work behind the picker too
 	});
 });

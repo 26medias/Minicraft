@@ -44,7 +44,7 @@ import { hotbarBadges, keycapLabel } from './ui/craft-model';
 import { playCraft, playNope } from './ui/sfx';
 import { resolveHotbar } from './game/hotbar';
 import { playerSave, resolvePlayerExtras } from './game/player-extras';
-import { shouldHandleKey, buildKeyToAction } from './game/input-gate';
+import { shouldHandleKey, buildKeyToAction, sneakKeyChange } from './game/input-gate';
 import { nextOwnedTier } from './game/tools';
 
 const REACH = 6;
@@ -220,6 +220,7 @@ async function main() {
 			left: false,
 			right: false,
 			jump: false,
+			sneak: false,
 		};
 		// One `paused` with two owners. `loop` is declared below; these closures
 		// run only after it exists (same pattern as the ignite handler).
@@ -229,7 +230,7 @@ async function main() {
 			loop.paused = frozen || inventoryOpen;
 		};
 		const resetKeys = () => {
-			keys.forward = keys.back = keys.left = keys.right = keys.jump = false;
+			keys.forward = keys.back = keys.left = keys.right = keys.jump = keys.sneak = false;
 		};
 		const inventory = new Inventory(app, atlas, BLOCKS, RECIPES);
 		/** Every HUD + I-screen view of hotbar, counts and tools. Call after ANY change to them. */
@@ -376,6 +377,14 @@ async function main() {
 		};
 		window.addEventListener('keydown', onKey(true));
 		window.addEventListener('keyup', onKey(false));
+		// Toys spec §4: Shift is sneak (it stops pads). Its own listener, because onKey returns early for a key
+		// with no action. Shift-replace reads e.shiftKey on the click and Shift+Tab reads it on Tab: no clash.
+		const onSneak = (down: boolean) => (e: KeyboardEvent) => {
+			const v = sneakKeyChange(e.code, down, { frozen, inventoryOpen, pickerOpen: colorPicker.isOpen });
+			if (v !== null) keys.sneak = v;
+		};
+		window.addEventListener('keydown', onSneak(true));
+		window.addEventListener('keyup', onSneak(false));
 
 		// Tab / Shift+Tab cycle through the hotbar. Not remappable via Options
 		// because the keybinding system captures only e.code (no modifier combos).
@@ -521,7 +530,7 @@ async function main() {
 		if (import.meta.env.DEV) {
 			// Debug oracle for manual checks at localhost only; tree-shaken from the build.
 			// `apiUrl` lets the bench log which save API the page is wired to (never production).
-			(window as unknown as { __mc: unknown }).__mc = { world, player, loop, apiUrl, cam, highlight, mustMine, syncHotbar };
+			(window as unknown as { __mc: unknown }).__mc = { world, player, loop, apiUrl, cam, highlight, mustMine, syncHotbar, keys };
 		}
 
 		window.addEventListener('mousedown', (e) => {

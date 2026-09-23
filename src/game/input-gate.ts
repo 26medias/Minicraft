@@ -27,3 +27,18 @@ export function buildKeyToAction(bindings: Record<Action, string>): Record<strin
 	}
 	return out;
 }
+
+/** Physical codes of the sneak key (toys spec §4). Not an Action: it is not rebindable, like Tab. */
+const SNEAK_CODES: ReadonlySet<string> = new Set(['ShiftLeft', 'ShiftRight']);
+
+/**
+ * The new value of `keys.sneak` for this key event, or null to leave it alone. main.ts needs its own listener
+ * for this because onKey returns early for keys with no action. Keyup always clears (like shouldHandleKey);
+ * keydown is dropped behind the freeze and the I screen.
+ */
+export function sneakKeyChange(code: string, down: boolean, s: GateState): boolean | null {
+	if (!SNEAK_CODES.has(code)) return null;
+	if (!down) return false;
+	if (s.frozen || s.inventoryOpen) return null;
+	return true;
+}

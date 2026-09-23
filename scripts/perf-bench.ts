@@ -251,13 +251,18 @@ async function edits(page: Page): Promise<EditResult> {
  * `real: false` is the radius-8 STAND-IN while no radius-8 block exists: the bench computes detonate()'s cell set
  * itself (origin + every solid, hardness > 0, non-TNT cell within `radius`) and removes it through the build's removal
  * path, one origin every TNT_CHAIN_FUSE (0.1 s), the chain's real rhythm. Phase D switches MEGA to the real block.
+ * `shape: 'flatten'` (toys spec §3.6, §6) expects the Flattening TNT's cylinder (dx² + dz² ≤ r², origin y to y + 12)
+ * instead of the sphere. `depth` (default 2) is how far below the surface the origin sits: the buried Flatten row (13)
+ * fills its whole 13-high cylinder with ground, the worst case (1,464 cells at seed 3, against Mega r8 interior's 1,219).
  */
 type CraftRowDef =
-	| { name: string; kind: 'tnt'; dcx: number; dcz: number; corner: boolean; radius: number; count: number; step: [number, number]; real: boolean; blockId: number }
+	| { name: string; kind: 'tnt'; dcx: number; dcz: number; corner: boolean; radius: number; count: number; step: [number, number]; real: boolean; blockId: number; shape?: 'sphere' | 'flatten'; depth?: number }
 	| { name: string; kind: 'area'; dcx: number; dcz: number; corner: boolean; swings: number; everyMs: number };
 const PLAIN_TNT = BLOCK_BY_NAME['tnt'].id;
 /** Radius-8 rows. Stand-in until a radius-8 block exists (Phase D: `real: true, blockId: BLOCK_BY_NAME['mega_tnt'].id`). */
 const MEGA = { radius: 8, real: true, blockId: BLOCK_BY_NAME['mega_tnt'].id };
+/** Toys spec §6: Flattening TNT against Mega (no heavier). Its sites are clear of every other row's. */
+const FLATTEN = { radius: 6, real: true, blockId: BLOCK_BY_NAME['flatten_tnt'].id, shape: 'flatten' as const };
 const CRAFT_ROWS: CraftRowDef[] = [
 	{ name: 'TNT r3 interior', kind: 'tnt', dcx: -3, dcz: -3, corner: false, radius: 3, count: 1, step: [0, 0], real: true, blockId: PLAIN_TNT },
 	{ name: 'TNT r3 corner', kind: 'tnt', dcx: -3, dcz: 0, corner: true, radius: 3, count: 1, step: [0, 0], real: true, blockId: PLAIN_TNT },
@@ -267,6 +272,8 @@ const CRAFT_ROWS: CraftRowDef[] = [
 	{ name: 'Mega r8 corner', kind: 'tnt', dcx: 3, dcz: 0, corner: true, count: 1, step: [0, 0], ...MEGA },
 	{ name: 'Mega r8 chain ×4 interior', kind: 'tnt', dcx: -5, dcz: -2, corner: false, count: 4, step: [0, 6], ...MEGA },
 	{ name: 'Mega r8 chain ×4 corner', kind: 'tnt', dcx: -1, dcz: 4, corner: true, count: 4, step: [6, 0], ...MEGA },
+	{ name: 'Flatten r6 buried interior', kind: 'tnt', dcx: 4, dcz: 4, corner: false, count: 1, step: [0, 0], ...FLATTEN, depth: 13 },
+	{ name: 'Flatten r6 corner', kind: 'tnt', dcx: -4, dcz: -4, corner: true, count: 1, step: [0, 0], ...FLATTEN },
 ];
 /** detonate()'s and removeBlocks' rule: solid with hardness > 0 (skips air, liquids, bedrock). */
 const REMOVABLE = BLOCKS.map((b) => !!b && isSolid(b.id) && b.hardness > 0);
@@ -324,6 +331,18 @@ async function crafting(page: Page): Promise<CraftResult> {
 				}
 				return out;
 			};
+			// Toys spec §3.6: the Flattening TNT's cylinder, from the origin's y up to y + 12.
+			const cylinder = (o: Cell, r: number) => {
+				const out: Cell[] = [];
+				for (let dy = 0; dy <= 12; dy++) for (let dz = -r; dz <= r; dz++) for (let dx = -r; dx <= r; dx++) {
+					if (dx * dx + dz * dz > r * r) continue;
+					const x = o.x + dx, y = o.y + dy, z = o.z + dz;
+					if (x < 0 || x > 511 || z < 0 || z > 511 || y < 0 || y > 255) continue;
+					out.push({ x, y, z });
+				}
+				return out;
+			};
+			const shapeCells = (o: Cell, r: number) => (def.kind === 'tnt' && def.shape === 'flatten' ? cylinder(o, r) : sphere(o, r));
 			const cx = pcx + def.dcx, cz = pcz + def.dcz;
 			const bx = cx * 16 + (def.corner ? 0 : 8), bz = cz * 16 + (def.corner ? 0 : 8);
 			// events[k] = the frame of the k-th blast or swing; `due(frame, now)` runs the emulated ones inside a rAF callback.
@@ -336,11 +355,11 @@ async function crafting(page: Page): Promise<CraftResult> {
 				const origins: Cell[] = [];
 				for (let k = 0; k < def.count; k++) {
 					const x = bx + def.step[0] * k, z = bz + def.step[1] * k;
-					origins.push({ x, y: top(x, z) - 2, z });
+					origins.push({ x, y: top(x, z) - (def.depth ?? 2), z });
 				}
 				for (const o of origins) { world.setBlock(o.x, o.y, o.z, def.blockId); loop.markChunkDirtyAround(o.x, o.z); loop.applyLightUpdate(o.x, o.y, o.z); }
 				const seen = new Set<string>();
-				for (const o of origins) for (const c of sphere(o, def.radius)) {
+				for (const o of origins) for (const c of shapeCells(o, def.radius)) {
 					const k = `${c.x},${c.y},${c.z}`;
 					if (seen.has(k)) continue;
 					seen.add(k);
@@ -358,7 +377,7 @@ async function crafting(page: Page): Promise<CraftResult> {
 						if (t0 < 0) t0 = now;
 						while (events.length < origins.length && now - t0 >= 100 * events.length) {
 							const o = origins[events.length];
-							const cells = sphere(o, def.radius).filter((c) => (c.x === o.x && c.y === o.y && c.z === o.z) || (world.getBlock(c.x, c.y, c.z) !== def.blockId && REMOVABLE[world.getBlock(c.x, c.y, c.z)]));
+							const cells = shapeCells(o, def.radius).filter((c) => (c.x === o.x && c.y === o.y && c.z === o.z) || (world.getBlock(c.x, c.y, c.z) !== def.blockId && REMOVABLE[world.getBlock(c.x, c.y, c.z)]));
 							remove(cells, o);
 							events.push(frame);
 						}

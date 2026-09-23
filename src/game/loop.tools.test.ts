@@ -175,7 +175,7 @@ describe('area mining (spec §5, §11 loop)', () => {
 		expect(h.world.getBlock(1, 30, 300)).toBe(stone); // not in a −x area
 	});
 });
-it('Emerald area at the top of a 64-high world skips out-of-bounds cells without throwing (catches areaCells results passed unfiltered to setBlock)', () => {
+it('guard: Emerald area at the top of a 64-high world skips out-of-bounds cells without throwing (a guard: World already ignores out-of-bounds reads/writes, so no mutant turns it red)', () => {
 	const h = fixture(7); // makeLoop() default: a 64-high v1 world
 	const stone = BLOCK_BY_NAME['stone'].id;
 	fill(h, [262, 266], [61, 63], [262, 266], stone);
@@ -184,4 +184,10 @@ it('Emerald area at the top of a 64-high world skips out-of-bounds cells without
 	const { removed } = h.loop.removeBlocks(cells, { x: 264, y: 62, z: 264 });
 	expect(removed.every((c) => c.y <= 63)).toBe(true);
 	expect(removed.length).toBe(5 * 5 * 2); // y 62 and 63, each 5×5
+});
+it('the held zone follows the tunnel: the third held swing is still 0.25 s (catches a held zone set once per press and never moved)', () => {
+	const h = afterFirstIronBreak();           // swing 1 broke the z 267 face; the z 266 layer is next
+	fill(h, [263, 265], [40, 42], [265, 265], glass);
+	mineUntilAir(h, 264, 41, 266);            // swing 2, held
+	expect(measure(h)).toBeCloseTo(0.25, 6);  // swing 3, still held, at z 265
 });

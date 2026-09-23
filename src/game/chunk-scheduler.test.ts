@@ -75,6 +75,16 @@ describe('chunk scheduler (spec §6.2)', () => {
 		expect(r.mounts).toEqual([]); // the edit still suppresses streaming
 	});
 
+	it('a chunk in both the edit lane and the bulk lane is meshed once, in the edit lane (catches posting it to the worker too: two TNT or an area break and a blast in one tick put a chunk in both lanes; gate 2)', () => {
+		const log: string[] = [];
+		planFrame(
+			input({ editLane: new Set([I(10, 10)]), bulk: new Set([I(10, 10), I(11, 10)]), moving: false }),
+			() => 0,
+			(i, l) => { log.push(`${l}:${i}`); },
+		);
+		expect(log).toEqual([`edit:${I(10, 10)}`, `bulk:${I(11, 10)}`]);
+	});
+
 	it('bulkMax caps the bulk lane (1 per frame without a worker) and streaming still runs in a frame with no edit (catches draining the whole bulk lane synchronously in one frame)', () => {
 		const log: string[] = [];
 		const r = planFrame(

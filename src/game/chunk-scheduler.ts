@@ -67,6 +67,8 @@ export function planFrame(
 	const bulk: number[] = [];
 	const bulkMax = input.bulkMax ?? Infinity;
 	for (const i of orderStream(input.bulk, input.playerCx, input.playerCz)) {
+		// Also in the edit lane this frame: already meshed synchronously above; posting it too wastes a worker slot.
+		if (input.editLane.has(i)) continue;
 		if (bulk.length >= bulkMax) break;
 		if (mount(i, 'bulk') === false) return { edits, bulk, mounts: [], elapsedMs: now() - start };
 		bulk.push(i);

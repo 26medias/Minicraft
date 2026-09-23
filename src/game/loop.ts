@@ -325,7 +325,7 @@ export class GameLoop {
 	/**
 	 * Crafting spec §7: remove a batch of blocks — a TNT blast, an area break. Out-of-bounds, air, liquid and hardness-0
 	 * cells (bedrock) are skipped here. Per cell, in order: clearBlockEffects (a primed fuse, a lamp's light; particles for
-	 * the first REMOVE_PARTICLE_CAP cells only), world.setBlock(AIR) — never chunk.set: setBlock wakes liquids and sets
+	 * at most REMOVE_PARTICLE_CAP cells, spread over the batch), world.setBlock(AIR) — never chunk.set: setBlock wakes liquids and sets
 	 * `modified` — and updateLightsForBlockChange called DIRECTLY. applyLightUpdate would send every chunk the light
 	 * touched to the synchronous edit lane. Light stays per block: exact and cheap, where a bounding-box relight misses
 	 * sunlight columns below the box.
@@ -338,6 +338,8 @@ export class GameLoop {
 	 */
 	removeBlocks(cells: Array<{ x: number; y: number; z: number }>, anchor: { x: number; y: number; z: number }): { removed: BlockBrokenEvent[] } {
 		const removed: BlockBrokenEvent[] = [];
+		const stride = Math.max(1, Math.ceil(cells.length / REMOVE_PARTICLE_CAP));
+		let k = 0;
 		const dirty = new Set<number>(); // blocks or light changed, or a removed cell sits on its border
 		const shadow = new Map<number, Chunk>(); // south-east shadow neighbours of each removed cell's chunk
 		const getLampColor = (lx: number, ly: number, lz: number): string | null => this.lights?.getColor(lx, ly, lz) ?? null;
@@ -345,7 +347,8 @@ export class GameLoop {
 			if (!this.world.inBounds(x, y, z)) continue;
 			const id = this.world.getBlock(x, y, z);
 			if (!isSolid(id) || !((BLOCKS[id]?.hardness ?? 0) > 0)) continue;
-			this.clearBlockEffects(x, y, z, id, removed.length < REMOVE_PARTICLE_CAP);
+			// Spread the capped particles over the whole batch: detonate() lists cells bottom-up, so the first 16 are buried.
+			this.clearBlockEffects(x, y, z, id, k++ % stride === 0);
 			this.world.setBlock(x, y, z, AIR);
 			removed.push({ x, y, z, blockId: id });
 			const t0 = performance.now();

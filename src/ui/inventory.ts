@@ -1,40 +1,79 @@
 import { AIR, GROUP_ORDER, type BlockDef, type BlockId } from '../data/blocks.data';
 import type { Inventory as Counts, PlayerTools } from '../data/crafting.data';
-import type { LoadedAtlas } from '../engine/render/atlas';
-import { blockTileView, type HotbarBadge } from './craft-model';
-
-/** What the I screen shows counts from; pushed by main.ts on every change. */
-export type InventoryState = { inv: Counts; tools: PlayerTools; mustMine: boolean };
+import type { Recipe } from '../data/recipes.data';
+import type { LoadedAtlas, TileRect } from '../engine/render/atlas';
+import {
+	blockTileView, craftCards, pickaxeRow,
+	type CraftCardView, type HotbarBadge, type InventoryTab, type Picture,
+} from './craft-model';
 
 const TILE_PX = 48;
 
+/** What the I screen shows counts and cards from; pushed by main.ts on every change. */
+export type InventoryState = { inv: Counts; tools: PlayerTools; mustMine: boolean };
+
 /**
- * Full-screen block picker. Click a tile → onPick(id) for the selected slot;
- * the strip at the bottom mirrors the HUD hotbar. Built once; scroll position
- * survives open/close so "back to the pink ones" is fast.
+ * Full-screen I screen with two tabs (spec §9). Blocks: the pickaxe row (click to
+ * equip) over today's block grid, with count badges, must-mine dimming and
+ * crafted-only blocks hidden at 0. Craft: one card per recipe. The strip at the
+ * bottom mirrors the HUD hotbar. Built once per game; the tab and the grid's
+ * scroll position survive open/close for the session.
  */
 export class Inventory {
 	private root: HTMLDivElement;
+	private tabButtons = new Map<InventoryTab, HTMLButtonElement>();
+	private blocksPanel: HTMLDivElement;
+	private craftPanel: HTMLDivElement;
+	private pickRow: HTMLDivElement;
 	private grid: HTMLDivElement;
+	private tiles: Array<{ def: BlockDef; el: HTMLButtonElement; badge: HTMLSpanElement }> = [];
+	private groupHeads: Array<{ el: HTMLDivElement; members: HTMLButtonElement[] }> = [];
 	private nameEl: HTMLDivElement;
 	private strip: HTMLDivElement;
 	private slotEls: HTMLDivElement[] = [];
-	private labels = new Map<BlockId, string>();
-	private tiles: Array<{ def: BlockDef; el: HTMLButtonElement; badge: HTMLSpanElement }> = [];
-	private groupHeads: Array<{ el: HTMLDivElement; members: HTMLButtonElement[] }> = [];
 	private slotBadges: HTMLSpanElement[] = [];
+	private labels = new Map<BlockId, string>();
+	private tab: InventoryTab = 'blocks';
 	private state: InventoryState = { inv: {}, tools: { owned: [0], equipped: 0 }, mustMine: false };
+	private cardEls = new Map<string, HTMLDivElement>();
 	onPick: ((id: BlockId) => void) | null = null;
 	onSelectSlot: ((slot: number) => void) | null = null;
 	onClose: (() => void) | null = null;
+	/** Returns true when the craft happened (main.ts re-checks canCraft). */
+	onCraft: ((recipeId: string) => boolean) | null = null;
+	onEquip: ((tier: number) => void) | null = null;
 
-	constructor(container: HTMLElement, private atlas: LoadedAtlas, blocks: BlockDef[]) {
+	constructor(container: HTMLElement, private atlas: LoadedAtlas, blocks: BlockDef[], private recipes: readonly Recipe[]) {
 		this.root = document.createElement('div');
 		this.root.id = 'inventory-root';
 		this.root.classList.add('hidden');
 
 		const card = document.createElement('div');
 		card.className = 'inventory-card';
+
+		const tabs = document.createElement('div');
+		tabs.className = 'inventory-tabs';
+		for (const [tab, text] of [['blocks', 'Blocks'], ['craft', 'Craft']] as const) {
+			const b = document.createElement('button');
+			b.className = 'inventory-tab';
+			b.dataset.tab = tab;
+			b.textContent = text;
+			b.tabIndex = -1;
+			b.addEventListener('click', (e) => {
+				e.stopPropagation();
+				b.blur();
+				this.setTab(tab);
+			});
+			tabs.appendChild(b);
+			this.tabButtons.set(tab, b);
+		}
+		card.appendChild(tabs);
+
+		this.blocksPanel = document.createElement('div');
+		this.blocksPanel.className = 'inventory-panel';
+		this.pickRow = document.createElement('div');
+		this.pickRow.className = 'pickaxe-row';
+		this.blocksPanel.appendChild(this.pickRow);
 
 		for (const b of blocks) this.labels.set(b.id, b.label);
 		this.grid = document.createElement('div');
@@ -56,7 +95,7 @@ export class Inventory {
 				tile.title = b.label;
 				tile.dataset.block = b.name;
 				tile.tabIndex = -1; // a focused tile would re-fire on Space (his jump reflex)
-				this.paintTile(tile, b.id);
+				this.paintBlock(tile, b.id, TILE_PX);
 				const badge = document.createElement('span');
 				badge.className = 'count-badge';
 				tile.appendChild(badge);
@@ -72,7 +111,12 @@ export class Inventory {
 			}
 			this.groupHeads.push({ el: h, members });
 		}
-		card.appendChild(this.grid);
+		this.blocksPanel.appendChild(this.grid);
+		card.appendChild(this.blocksPanel);
+
+		this.craftPanel = document.createElement('div');
+		this.craftPanel.className = 'inventory-panel craft-grid';
+		card.appendChild(this.craftPanel);
 
 		this.nameEl = document.createElement('div');
 		this.nameEl.className = 'inventory-name';
@@ -91,38 +135,92 @@ export class Inventory {
 			this.onClose?.();
 		});
 		container.appendChild(this.root);
+		this.setTab('blocks');
 	}
 
-	private paintTile(el: HTMLElement, id: BlockId) {
-		const rect = id === AIR ? null : this.atlas.tileRect(id, 'nz');
+	private paintRect(el: HTMLElement, rect: TileRect | null, px: number) {
 		if (!rect) {
 			el.style.backgroundImage = '';
 			return;
 		}
-		const scale = TILE_PX / this.atlas.tileSize;
+		const scale = px / this.atlas.tileSize;
 		el.style.backgroundImage = `url(${this.atlas.pngUrl})`;
 		el.style.backgroundSize = `${this.atlas.size * scale}px ${this.atlas.size * scale}px`;
 		el.style.backgroundPosition = `-${rect.u * scale}px -${rect.v * scale}px`;
+	}
+
+	private paintBlock(el: HTMLElement, id: BlockId, px: number) {
+		this.paintRect(el, id === AIR ? null : this.atlas.tileRect(id, 'nz'), px);
+	}
+
+	private paintPicture(el: HTMLElement, p: Picture, px: number) {
+		if (p.kind === 'block') this.paintBlock(el, p.id, px);
+		else this.paintRect(el, this.atlas.tileRectByName(p.name), px);
 	}
 
 	get isOpen(): boolean {
 		return !this.root.classList.contains('hidden');
 	}
 
+	get activeTab(): InventoryTab {
+		return this.tab;
+	}
+
 	open(): void {
 		this.root.classList.remove('hidden');
-		this.renderBlocks();
+		this.render();
+	}
+
+	close(): void {
+		this.root.classList.add('hidden');
+	}
+
+	setTab(tab: InventoryTab): void {
+		this.tab = tab;
+		for (const [t, b] of this.tabButtons) b.classList.toggle('active', t === tab);
+		this.blocksPanel.classList.toggle('hidden', tab !== 'blocks');
+		this.craftPanel.classList.toggle('hidden', tab !== 'craft');
+		this.render();
 	}
 
 	/** New counts/tools/mode. Re-renders only while open; open() renders anyway. */
 	setState(state: InventoryState): void {
 		this.state = state;
-		if (this.isOpen) this.renderBlocks();
+		if (this.isOpen) this.render();
 	}
 
-	/** Crafted-only blocks hidden at 0, count badges, must-mine dimming (spec §9). */
+	/** A short sparkle on a card, after a successful craft (spec §9). */
+	sparkle(recipeId: string): void {
+		const el = this.cardEls.get(recipeId);
+		if (!el) return;
+		el.classList.remove('sparkle');
+		void el.offsetWidth; // restart the animation
+		el.classList.add('sparkle');
+	}
+
+	private render(): void {
+		if (this.tab === 'blocks') this.renderBlocks();
+		else this.renderCraft();
+	}
+
 	private renderBlocks(): void {
-		const { inv, mustMine } = this.state;
+		const { inv, tools, mustMine } = this.state;
+		this.pickRow.replaceChildren();
+		for (const p of pickaxeRow(tools)) {
+			const b = document.createElement('button');
+			b.className = 'pickaxe-button';
+			b.classList.toggle('equipped', p.equipped);
+			b.dataset.tier = String(p.tier);
+			b.title = p.label;
+			b.tabIndex = -1;
+			this.paintRect(b, this.atlas.tileRectByName(p.icon), 40);
+			b.addEventListener('click', (e) => {
+				e.stopPropagation();
+				b.blur();
+				this.onEquip?.(p.tier);
+			});
+			this.pickRow.appendChild(b);
+		}
 		for (const t of this.tiles) {
 			const v = blockTileView(t.def, inv, mustMine);
 			t.el.classList.toggle('hidden', !v.visible);
@@ -132,8 +230,78 @@ export class Inventory {
 		for (const g of this.groupHeads) g.el.classList.toggle('hidden', g.members.every((m) => m.classList.contains('hidden')));
 	}
 
-	close(): void {
-		this.root.classList.add('hidden');
+	private renderCraft(): void {
+		const { inv, tools } = this.state;
+		this.craftPanel.replaceChildren();
+		this.cardEls.clear();
+		for (const c of craftCards(this.recipes, inv, tools)) {
+			const el = this.buildCard(c);
+			this.cardEls.set(c.recipeId, el);
+			this.craftPanel.appendChild(el);
+		}
+	}
+
+	private buildCard(c: CraftCardView): HTMLDivElement {
+		const card = document.createElement('div');
+		card.className = `craft-card ${c.state}`;
+		card.dataset.recipe = c.recipeId;
+		card.dataset.output = c.outputKey;
+
+		const head = document.createElement('div');
+		head.className = 'craft-head';
+		const pic = document.createElement('div');
+		pic.className = 'craft-pic';
+		this.paintPicture(pic, c.picture, 40);
+		const title = document.createElement('div');
+		title.className = 'craft-title';
+		title.textContent = c.countLabel ? `${c.title} ${c.countLabel}` : c.title;
+		head.append(pic, title);
+		card.appendChild(head);
+
+		for (const i of c.ingredients) {
+			const row = document.createElement('div');
+			row.className = 'craft-ing';
+			row.classList.toggle('short', i.short);
+			row.title = i.title;
+			const icon = document.createElement('div');
+			icon.className = 'craft-ing-icon';
+			this.paintPicture(icon, i.picture, 24);
+			const text = document.createElement('div');
+			text.className = 'craft-ing-text';
+			text.textContent = `${i.have} / ${i.need}`;
+			const bar = document.createElement('div');
+			bar.className = 'craft-bar';
+			const fill = document.createElement('div');
+			fill.className = 'craft-bar-fill';
+			fill.style.width = `${Math.round(i.fill * 100)}%`;
+			bar.appendChild(fill);
+			row.append(icon, text, bar);
+			card.appendChild(row);
+		}
+
+		if (c.state === 'owned') {
+			const done = document.createElement('div');
+			done.className = 'craft-owned';
+			done.textContent = '✔';
+			card.appendChild(done);
+		} else {
+			const btn = document.createElement('button');
+			btn.className = 'craft-button';
+			btn.disabled = c.state !== 'ready';
+			btn.tabIndex = -1;
+			const bpic = document.createElement('div');
+			bpic.className = 'craft-pic';
+			this.paintPicture(bpic, c.picture, 32);
+			btn.appendChild(bpic);
+			btn.addEventListener('click', (e) => {
+				e.stopPropagation();
+				btn.blur();
+				if (btn.disabled) return;
+				if (this.onCraft?.(c.recipeId)) this.sparkle(c.recipeId);
+			});
+			card.appendChild(btn);
+		}
+		return card;
 	}
 
 	/** Mirrors Hud.setHotbar; `flashSlot` pulses that slot (every pick, even a repeat). */
@@ -157,7 +325,7 @@ export class Inventory {
 			const el = this.slotEls[i];
 			el.classList.toggle('selected', i === selected);
 			el.title = ids[i] === AIR ? '' : (this.labels.get(ids[i]) ?? '');
-			this.paintTile(el, ids[i]);
+			this.paintBlock(el, ids[i], TILE_PX);
 			const b = badges?.[i] ?? null;
 			this.slotBadges[i].textContent = b ? b.text : '';
 			el.classList.toggle('grey', b?.grey === true);

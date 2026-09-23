@@ -2,6 +2,7 @@ import type { BlockId } from '../data/blocks.data';
 import { BLOCKS } from '../data/blocks.data';
 import type { LoadedAtlas } from '../engine/render/atlas';
 import type { HotbarBadge } from './craft-model';
+import { pickaxeIconName } from '../data/atlas-derive';
 
 const SVG_NS = 'http://www.w3.org/2000/svg';
 const RING_RADIUS = 16;
@@ -14,6 +15,10 @@ export class Hud {
 	private hotbarEl: HTMLDivElement;
 	private slotEls: HTMLDivElement[] = [];
 	private slotBadges: HTMLSpanElement[] = [];
+	private pickaxeEl: HTMLDivElement;
+	private keycapEl: HTMLSpanElement;
+	/** Click on the HUD pickaxe icon: main.ts opens the I screen (spec §5). */
+	onPickaxeClick: (() => void) | null = null;
 	private miningSvg: SVGSVGElement;
 	private miningArc: SVGCircleElement;
 	private atlas: LoadedAtlas;
@@ -56,6 +61,18 @@ export class Hud {
 		this.hotbarEl = document.createElement('div');
 		this.hotbarEl.id = 'hud-hotbar';
 		this.root.appendChild(this.hotbarEl);
+
+		// Left of slot 1, inside the hotbar strip; the only HUD element that takes clicks.
+		this.pickaxeEl = document.createElement('div');
+		this.pickaxeEl.id = 'hud-pickaxe';
+		this.keycapEl = document.createElement('span');
+		this.keycapEl.className = 'keycap';
+		this.pickaxeEl.appendChild(this.keycapEl);
+		this.pickaxeEl.addEventListener('click', (e) => {
+			e.stopPropagation();
+			this.onPickaxeClick?.();
+		});
+		this.hotbarEl.appendChild(this.pickaxeEl);
 
 		this.flyEl = document.createElement('div');
 		this.flyEl.id = 'hud-fly-speed';
@@ -105,6 +122,22 @@ export class Hud {
 			this.slotBadges[i].textContent = b ? b.text : '';
 			slot.classList.toggle('grey', b?.grey === true);
 		}
+	}
+
+	/** The equipped tier's icon, with the cyclePickaxe key on a small keycap ('' hides it). */
+	setPickaxe(tier: number, keycap: string) {
+		const rect = this.atlas.tileRectByName(pickaxeIconName(tier));
+		const scale = SLOT_PX / this.atlas.tileSize;
+		this.pickaxeEl.dataset.tier = String(tier);
+		if (rect) {
+			this.pickaxeEl.style.backgroundImage = `url(${this.atlas.pngUrl})`;
+			this.pickaxeEl.style.backgroundSize = `${this.atlas.size * scale}px ${this.atlas.size * scale}px`;
+			this.pickaxeEl.style.backgroundPosition = `-${rect.u * scale}px -${rect.v * scale}px`;
+		} else {
+			this.pickaxeEl.style.backgroundImage = '';
+		}
+		this.keycapEl.textContent = keycap;
+		this.keycapEl.classList.toggle('hidden', keycap === '');
 	}
 
 	setMiningProgress(progress: number) {

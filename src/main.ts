@@ -38,7 +38,10 @@ import { activeLimits, canStartNow, formatStartTime } from './game/schedule';
 import { PlaytimeOverlay } from './ui/playtime-overlay';
 import { TICK_MS } from './data/playtime.data';
 import { Inventory } from './ui/inventory';
-import { hotbarBadges } from './ui/craft-model';
+import { RECIPES } from './data/recipes.data';
+import { applyCraft } from './game/craft-apply';
+import { hotbarBadges, keycapLabel } from './ui/craft-model';
+import { playCraft, playNope } from './ui/sfx';
 import { resolveHotbar } from './game/hotbar';
 import { playerSave, resolvePlayerExtras } from './game/player-extras';
 import { shouldHandleKey, buildKeyToAction } from './game/input-gate';
@@ -207,6 +210,9 @@ async function main() {
 		const mustMine = extras.mustMine;
 		// First paint of the bar, now that counts and the mode are known (the badges need both).
 		hud.setHotbar(player.hotbar, player.selected, hotbarBadges(player.hotbar, player.inventory, mustMine));
+		// The HUD pickaxe shows the cyclePickaxe key; an unbound action ('') hides the keycap.
+		const pickaxeKeycap = keycapLabel(opts.keybindings.cyclePickaxe);
+		hud.setPickaxe(player.tools.equipped, pickaxeKeycap);
 
 		const keys: Keys = {
 			forward: false,
@@ -225,11 +231,12 @@ async function main() {
 		const resetKeys = () => {
 			keys.forward = keys.back = keys.left = keys.right = keys.jump = false;
 		};
-		const inventory = new Inventory(app, atlas, BLOCKS);
+		const inventory = new Inventory(app, atlas, BLOCKS, RECIPES);
 		/** Every HUD + I-screen view of hotbar, counts and tools. Call after ANY change to them. */
 		const syncHotbar = (flashSlot?: number) => {
 			const badges = hotbarBadges(player.hotbar, player.inventory, mustMine);
 			hud.setHotbar(player.hotbar, player.selected, badges);
+			hud.setPickaxe(player.tools.equipped, pickaxeKeycap);
 			inventory.setHotbar(player.hotbar, player.selected, flashSlot, badges);
 			inventory.setState({ inv: player.inventory, tools: player.tools, mustMine });
 		};
@@ -257,6 +264,18 @@ async function main() {
 			syncHotbar(player.selected);
 			autosave.markDirty();
 		};
+		// The Craft button (spec §9). applyCraft owns the rules and the markDirty; here: sound, refresh.
+		inventory.onCraft = (recipeId) => {
+			const recipe = RECIPES.find((r) => r.id === recipeId);
+			if (!recipe) return false;
+			const out = applyCraft(player, recipe, () => autosave.markDirty());
+			if (!out.ok) return false;
+			if (out.kind === 'pickaxe') loop.onPickaxeChanged(); // a crafted pickaxe is equipped: re-arm the floor
+			playCraft();
+			syncHotbar(out.kind === 'block' ? out.slot : undefined);
+			return true;
+		};
+		hud.onPickaxeClick = () => openInventory();
 		inventory.onSelectSlot = (slot) => {
 			player.selected = slot;
 			syncHotbar();
@@ -272,8 +291,10 @@ async function main() {
 			if (tier === player.tools.equipped || !player.tools.owned.includes(tier)) return;
 			player.tools = { owned: player.tools.owned, equipped: tier };
 			loop.onPickaxeChanged();
+			syncHotbar(); // HUD pickaxe icon + the framed pickaxe in the I screen's row
 			autosave.markDirty();
 		};
+		inventory.onEquip = equipPickaxe; // the pickaxe row goes through the one equip path (C10)
 
 		const onKey = (down: boolean) => (e: KeyboardEvent) => {
 			const a = keyToAction[e.code];
@@ -519,6 +540,7 @@ async function main() {
 				// replaceBlock fire onWorldMutated, which marks the save dirty.
 				const placed = tryPlace({ loop, world, player, hit, shift: e.shiftKey, mustMine, lampColor: opts.currentLightColor });
 				if (placed.ok) syncHotbar(); // a place that needed a count spent one; markDirty comes from onWorldMutated
+				else if (placed.reason === 'no-count') playNope(); // spec §3's soft "nope"
 			}
 		});
 

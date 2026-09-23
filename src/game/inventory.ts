@@ -77,3 +77,33 @@ export function onPlaced(inv: Inventory, blockId: BlockId, mustMine: boolean, st
 export function onReplaced(inv: Inventory, placedId: BlockId, oldId: BlockId, mustMine: boolean, start: number = STARTING_COUNT): Inventory {
 	return onRemoved(onPlaced(inv, placedId, mustMine, start), [oldId], start).inv;
 }
+/**
+ * Spec §3 auto-hotbar, must-mine worlds only. For each id in `rose` that is a counted block and is
+ * not already on the bar, take the first slot other than `selected` that is (1) empty, else
+ * (2) a counted block with no inventory key, else (3) a counted block at 0. Free blocks and slots
+ * with a count are never replaced. Returns the new bar, or null when nothing moved.
+ */
+export function autoHotbar(
+	hotbar: BlockId[],
+	selected: number,
+	inv: Inventory,
+	rose: BlockId[],
+	mustMine: boolean,
+	start: number = STARTING_COUNT,
+): BlockId[] | null {
+	if (!mustMine) return null;
+	const bar = [...hotbar];
+	let changed = false;
+	const countedId = (id: BlockId) => id !== AIR && nameOf(id) !== undefined && isCounted(nameOf(id)!);
+	for (const id of rose) {
+		if (!countedId(id) || bar.includes(id)) continue;
+		const pick = (ok: (slotId: BlockId) => boolean) => bar.findIndex((s, i) => i !== selected && ok(s));
+		let slot = pick((s) => s === AIR);
+		if (slot < 0) slot = pick((s) => countedId(s) && inv[nameOf(s)!] === undefined);
+		if (slot < 0) slot = pick((s) => countedId(s) && countOf(inv, nameOf(s)!, start) === 0);
+		if (slot < 0) continue;
+		bar[slot] = id;
+		changed = true;
+	}
+	return changed ? bar : null;
+}

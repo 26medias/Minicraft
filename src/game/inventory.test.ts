@@ -1,13 +1,13 @@
 import { describe, it, expect } from 'vitest';
-import { BLOCK_BY_NAME } from '../data/blocks.data';
+import { AIR, BLOCK_BY_NAME } from '../data/blocks.data';
 import { RECIPES } from '../data/recipes.data';
 import { WORLDGEN_BLOCKS } from '../data/crafting.data';
-import { countOf, isCounted, needsCount, needsCountName, canPlace, onRemoved, onPlaced, onReplaced } from './inventory';
+import { countOf, isCounted, needsCount, needsCountName, canPlace, onRemoved, onPlaced, onReplaced, autoHotbar } from './inventory';
 import { resolvePlayerExtras } from './player-extras';
 import type { PlayerSave } from '../persistence/adapter';
 
 const id = (name: string) => BLOCK_BY_NAME[name].id;
-const stone = id('stone'), dirt = id('dirt'), tnt = id('tnt'), coal = id('coal_ore'), iron = id('iron_ore');
+const stone = id('stone'), dirt = id('dirt'), sand = id('sand'), tnt = id('tnt'), coal = id('coal_ore'), iron = id('iron_ore');
 const cobble = id('cobblestone'), planks = id('oak_planks'), glass = id('glass'), lamp = id('lamp'), water = id('water');
 
 describe('counted set (spec §3)', () => {
@@ -94,5 +94,53 @@ describe('onRemoved / onPlaced / onReplaced (spec §2)', () => {
 		expect(onRemoved({}, [coal, coal, coal, coal, coal]).rose).toEqual([coal]);
 		expect(onRemoved({ coal_ore: 0, iron_ore: 2 }, [iron, coal, coal]).rose).toEqual([coal]);
 		expect(onRemoved({ coal_ore: 1 }, [coal]).rose).toEqual([]);
+	});
+});
+describe('autoHotbar (spec §3)', () => {
+	// slot:   0      1       2       3     4      5      6      7      8
+	const bar = () => [stone, cobble, dirt, sand, AIR, planks, glass, lamp, iron];
+
+	it('a TNT-sized rise 0 → 5 puts the block in the first empty slot (catches a trigger keyed to count === 1)', () => {
+		const { inv, rose } = onRemoved({ stone: 4, dirt: 0 }, [coal, coal, coal, coal, coal]);
+		expect(autoHotbar(bar(), 0, inv, rose, true)).toEqual([stone, cobble, dirt, sand, coal, planks, glass, lamp, iron]);
+	});
+
+	it('slot order is empty → untouched → at 0 (catches taking the first counted slot whatever its state)', () => {
+		const noEmpty = [stone, cobble, dirt, sand, planks, planks, glass, lamp, iron];
+		// sand (slot 3) untouched, dirt (slot 2) at 0: untouched wins even though dirt comes first
+		expect(autoHotbar(noEmpty, 0, { stone: 4, dirt: 0, iron_ore: 1, coal_ore: 1 }, [coal], true)).toEqual(
+			[stone, cobble, dirt, coal, planks, planks, glass, lamp, iron],
+		);
+		// nothing untouched: the counted slot at 0
+		expect(autoHotbar(noEmpty, 0, { stone: 4, dirt: 0, sand: 3, iron_ore: 1, coal_ore: 1 }, [coal], true)).toEqual(
+			[stone, cobble, coal, sand, planks, planks, glass, lamp, iron],
+		);
+	});
+
+	it('never fills the selected slot (catches a candidate search that includes it)', () => {
+		const onlySelectedEmpty = [stone, cobble, dirt, sand, AIR, planks, glass, lamp, iron];
+		expect(autoHotbar(onlySelectedEmpty, 4, { stone: 4, dirt: 2, sand: 1, iron_ore: 1, coal_ore: 1 }, [coal], true)).toBeNull();
+	});
+
+	it('never replaces a free block or a slot with a count > 0 (catches "first non-selected slot")', () => {
+		const full = [stone, cobble, dirt, sand, planks, planks, glass, lamp, iron];
+		expect(autoHotbar(full, 0, { stone: 1, dirt: 1, sand: 1, iron_ore: 1, coal_ore: 1 }, [coal], true)).toBeNull();
+	});
+
+	it('a block already on the hotbar does not move (catches a second copy in another slot)', () => {
+		expect(autoHotbar(bar(), 0, { stone: 1 }, [stone], true)).toBeNull();
+		expect(autoHotbar(bar(), 3, { sand: 1 }, [sand], true)).toBeNull();
+	});
+
+	it('is a no-op in unlimited worlds and for free blocks (catches the rule leaking into existing worlds)', () => {
+		expect(autoHotbar(bar(), 0, { coal_ore: 1 }, [coal], false)).toBeNull();
+		expect(autoHotbar(bar(), 0, { cobblestone: 1 }, [cobble], true)).toBeNull();
+	});
+
+	it('two rises in one blast fill two slots in order', () => {
+		const two = [stone, cobble, AIR, sand, AIR, planks, glass, lamp, iron];
+		expect(autoHotbar(two, 0, { stone: 1, sand: 1, iron_ore: 1, coal_ore: 1, gold_ore: 1 }, [coal, id('gold_ore')], true)).toEqual(
+			[stone, cobble, coal, sand, id('gold_ore'), planks, glass, lamp, iron],
+		);
 	});
 });

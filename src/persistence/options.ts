@@ -27,11 +27,20 @@ export function loadOptions(): Options {
 		// valid Actions (e.g. stale 'flyUp' / 'flyDown' from older saves). Without
 		// this filter, a stale key like { flyUp: 'Space' } would overwrite the
 		// jump binding during keyToAction construction in main.ts.
-		const saved = parsed.keybindings ?? {};
+		const saved = (parsed.keybindings ?? {}) as Record<string, unknown>;
+		// A default for an action missing from the save (one added since, like cyclePickaxe) is
+		// used only if no saved binding already holds that key; otherwise the new action loads
+		// unbound (''), so the key keeps doing what the player chose (spec §11).
+		const taken = new Set<string>();
+		for (const action of ACTIONS) {
+			const code = saved[action];
+			if (typeof code === 'string' && code !== '') taken.add(code);
+		}
 		const filteredBindings = {} as Record<Action, string>;
 		for (const action of ACTIONS) {
-			filteredBindings[action] =
-				(saved as Record<string, string>)[action] ?? DEFAULT_KEYBINDINGS[action];
+			const code = saved[action];
+			if (typeof code === 'string') filteredBindings[action] = code;
+			else filteredBindings[action] = taken.has(DEFAULT_KEYBINDINGS[action]) ? '' : DEFAULT_KEYBINDINGS[action];
 		}
 		return {
 			keybindings: filteredBindings,

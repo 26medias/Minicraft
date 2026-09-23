@@ -18,7 +18,8 @@ export type Action =
 	| 'flySpeedDown'
 	| 'ignite'
 	| 'pickLightColor'
-	| 'inventory';
+	| 'inventory'
+	| 'cyclePickaxe';
 
 export const ACTIONS: Action[] = [
 	'forward',
@@ -41,6 +42,7 @@ export const ACTIONS: Action[] = [
 	'ignite',
 	'pickLightColor',
 	'inventory',
+	'cyclePickaxe',
 ];
 
 export const ACTION_LABEL: Record<Action, string> = {
@@ -64,6 +66,7 @@ export const ACTION_LABEL: Record<Action, string> = {
 	ignite: 'Ignite TNT',
 	pickLightColor: 'Pick Light Color',
 	inventory: 'Open Inventory',
+	cyclePickaxe: 'Switch Pickaxe',
 };
 
 export const DEFAULT_KEYBINDINGS: Record<Action, string> = {
@@ -87,6 +90,7 @@ export const DEFAULT_KEYBINDINGS: Record<Action, string> = {
 	ignite: 'KeyE',
 	pickLightColor: 'KeyC',
 	inventory: 'KeyI',
+	cyclePickaxe: 'KeyP',
 };
 
 export type Options = {

@@ -1,6 +1,11 @@
 import { ACTIONS, ACTION_LABEL, DEFAULT_KEYBINDINGS, type Options } from '../data/keybindings.data';
 import { loadOptions, saveOptions } from '../persistence/options';
 
+/** A binding as the Options screen shows it: the unbound value '' reads as a dash (spec §11). */
+export function bindingLabel(code: string): string {
+	return code === '' ? '—' : code;
+}
+
 export class OptionsMenu {
 	private root: HTMLDivElement;
 	private onClose: (() => void) | null = null;
@@ -38,7 +43,7 @@ export class OptionsMenu {
 			label.textContent = ACTION_LABEL[action];
 			const btn = document.createElement('button');
 			btn.style.width = '120px';
-			btn.textContent = this.current.keybindings[action];
+			btn.textContent = bindingLabel(this.current.keybindings[action]);
 			btn.onclick = () => {
 				btn.textContent = 'Press a key…';
 				const capture = (e: KeyboardEvent) => {

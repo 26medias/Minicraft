@@ -1,5 +1,6 @@
 import { describe, it, expect } from 'vitest';
-import { shouldHandleKey } from './input-gate';
+import { shouldHandleKey, buildKeyToAction } from './input-gate';
+import { DEFAULT_KEYBINDINGS } from '../data/keybindings.data';
 
 const free = { frozen: false, inventoryOpen: false, pickerOpen: false };
 
@@ -27,5 +28,21 @@ describe('shouldHandleKey', () => {
 	});
 	it('handles everything when free', () => {
 		for (const a of ['forward', 'inventory', 'slot1', 'ignite'] as const) expect(shouldHandleKey(true, a, free)).toBe(true);
+	});
+	it('drops cyclePickaxe while the colour picker, the I screen or the freeze is open (catches a P that switches pickaxes behind a modal; the picker case is the one today\'s gate lets through)', () => {
+		for (const s of [{ ...free, pickerOpen: true }, { ...free, inventoryOpen: true }, { ...free, frozen: true }])
+			expect(shouldHandleKey(true, 'cyclePickaxe', s)).toBe(false);
+		expect(shouldHandleKey(true, 'cyclePickaxe', free)).toBe(true);
+		expect(shouldHandleKey(false, 'cyclePickaxe', { ...free, pickerOpen: true })).toBe(true);
+	});
+});
+
+describe('buildKeyToAction', () => {
+	it('skips the unbound value \'\' (catches main.ts\'s old loop, which maps \'\' to the action, so any key whose e.code is \'\' would cycle the pickaxe)', () => {
+		const map = buildKeyToAction({ ...DEFAULT_KEYBINDINGS, cyclePickaxe: '' });
+		expect('' in map).toBe(false);
+		expect(Object.values(map)).not.toContain('cyclePickaxe');
+		expect(map['KeyP']).toBeUndefined();
+		expect(map['KeyI']).toBe('inventory');
 	});
 });

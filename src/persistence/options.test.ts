@@ -123,4 +123,22 @@ describe('loadOptions', () => {
 		const { loadOptions } = await import('./options');
 		expect(loadOptions().keybindings.inventory).toBe('KeyI');
 	});
+	it('a saved binding already on KeyP keeps it; cyclePickaxe loads unbound as \'\' (catches last-binding-wins: the new action taking KeyP from a player who had moved ignite there)', async () => {
+		// An options blob written before cyclePickaxe existed, with ignite rebound to P.
+		const before: Record<string, string> = { ...DEFAULT_KEYBINDINGS, ignite: 'KeyP' };
+		delete before.cyclePickaxe;
+		store['minicraft:v1:options'] = JSON.stringify({ keybindings: before });
+		const { loadOptions } = await import('./options');
+		const { buildKeyToAction } = await import('../game/input-gate');
+		const opts = loadOptions();
+		expect(opts.keybindings.ignite).toBe('KeyP');
+		expect(opts.keybindings.cyclePickaxe).toBe('');
+		expect(buildKeyToAction(opts.keybindings)['KeyP']).toBe('ignite');
+	});
+
+	it('keeps a saved unbound \'\' across a reload (guard, not a spec test: catches a load that treats \'\' as missing and re-defaults it)', async () => {
+		store['minicraft:v1:options'] = JSON.stringify({ keybindings: { ...DEFAULT_KEYBINDINGS, cyclePickaxe: '' } });
+		const { loadOptions } = await import('./options');
+		expect(loadOptions().keybindings.cyclePickaxe).toBe('');
+	});
 });

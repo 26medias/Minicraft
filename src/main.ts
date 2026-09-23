@@ -40,7 +40,8 @@ import { TICK_MS } from './data/playtime.data';
 import { Inventory } from './ui/inventory';
 import { resolveHotbar } from './game/hotbar';
 import { playerSave, resolvePlayerExtras } from './game/player-extras';
-import { shouldHandleKey } from './game/input-gate';
+import { shouldHandleKey, buildKeyToAction } from './game/input-gate';
+import { nextOwnedTier } from './game/tools';
 
 const REACH = 6;
 
@@ -256,9 +257,19 @@ async function main() {
 			player.selected = slot;
 			syncHotbar();
 		};
-		const keyToAction: Record<string, Action> = {};
-		for (const [action, code] of Object.entries(opts.keybindings))
-			keyToAction[code] = action as Action;
+		const keyToAction: Record<string, Action> = buildKeyToAction(opts.keybindings);
+		/**
+		 * Spec §5: the one equip path (P here; the I screen's pickaxe row in Phase D). An owned tier
+		 * other than the equipped one: equip it, re-arm the mining floor and restart any mine in
+		 * progress, mark the save dirty. `loop` and `autosave` are declared below; this runs only
+		 * from input handlers, after both exist (same pattern as the ignite handler).
+		 */
+		const equipPickaxe = (tier: number) => {
+			if (tier === player.tools.equipped || !player.tools.owned.includes(tier)) return;
+			player.tools = { owned: player.tools.owned, equipped: tier };
+			loop.onPickaxeChanged();
+			autosave.markDirty();
+		};
 
 		const onKey = (down: boolean) => (e: KeyboardEvent) => {
 			const a = keyToAction[e.code];
@@ -322,6 +333,10 @@ async function main() {
 						if (inventoryOpen) closeInventory();
 						else openInventory();
 					}
+					break;
+				case 'cyclePickaxe':
+					// Spec §5: next owned tier, wrapping. shouldHandleKey already dropped it behind any modal.
+					if (down && !e.repeat) equipPickaxe(nextOwnedTier(player.tools));
 					break;
 				default: {
 					if (down && a.startsWith('slot')) {

@@ -29,7 +29,7 @@ liquids, TNT), `src/ui/`, `src/persistence/`, `src/data/` (`*.data.ts` are pure
 data). `api/` holds the Cloud Function for cloud saves and deploys separately.
 
 Per-subsystem docs live in `docs/`: `lighting.md`, `liquids.md`, `movement.md`, `worldgen.md`, `performance.md`,
-`persistence.md`. `docs/specs.md` is the source of truth for the tech stack.
+`persistence.md`, `inventory.md`, `crafting.md`. `docs/specs.md` is the source of truth for the tech stack.
 
 ⚠ **The kid's real worlds live in the localStorage of
 `https://noah.leap-forward.ca` and in `gs://minicraft-worlds`. Never point tests
@@ -46,7 +46,7 @@ The extraction source was `~/.minecraft/versions/1.21.6/1.21.6.jar` under `asset
 
 The README commits to "easy to extend." In practice this means new work should:
 - Treat the block catalog as data, not hardcoded enums — adding a block should be adding a row, not editing ten files.
-- Keep crafting recipes as data too (no crafting table UI; recipes resolve from inventory).
+- Keep crafting recipes as data too (crafting is a tab in the inventory screen; recipes are data in `src/data/recipes.data.ts`).
 - Keep persistence behind a narrow interface so the Phase 1 (`localStorage`) → Phase 2 (remote API) swap is local.
 - The block catalog is a hand-written base (`blocks.base.data.ts`, ids 0–19 frozen) plus a generated, committed catalog (`npm run gen-catalog`) with frozen ids; never renumber.
 

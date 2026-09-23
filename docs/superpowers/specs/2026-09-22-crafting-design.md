@@ -229,9 +229,12 @@ blocks from spawn. Numbers get tuned after the first play session.
 - Area removal skips: air, liquids, hardness-0 blocks, out-of-bounds cells.
   TNT in the area is removed (counted), not ignited; a primed TNT in the area
   loses its fuse, as single mining does today.
-- **Highlight:** one box outlining the area's full shape (including air
-  cells). It is white for a single-cell tier and orange for a multi-block
-  tier.
+- **Highlight:** the aimed face keeps its outline, white for a single-cell
+  tier and orange for a multi-block tier. With a multi-block tier, every
+  block the break will remove gets a faint self-lit orange tint (the same
+  rule as `removeBlocks`: no glow on air, liquids or bedrock), depth-tested
+  so only visible faces glow. This replaced the wireframe box after the
+  playtest: the box was unreadable, worst in the dark.
 
 ## 6. TNT tiers
 

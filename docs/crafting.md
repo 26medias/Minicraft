@@ -68,7 +68,8 @@ clicking one in the Blocks tab's pickaxe row, or the HUD pickaxe icon (which
 opens I), works too.
 
 Mining time is `hardness / (1 + bonus)` of the aimed block. From Copper up
-(multi-block tiers) the highlight is an orange box around the whole area, and a
+(multi-block tiers) every block the break will remove gets a faint self-lit orange
+glow (air, liquids and bedrock in the area get none; it shows in caves too), and a
 break takes at least 0.4 s when armed (button press, pickaxe switch, or aim
 leaving the last area) and 0.25 s when held inside the last area.
 

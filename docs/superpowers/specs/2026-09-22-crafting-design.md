@@ -1,6 +1,6 @@
 # Crafting — design
 
-Date: 2026-09-22 · Branch: `crafting` (from `main` at aa57368) · Status: rev 2 (gate-1 repairs), pre-re-gate
+Date: 2026-09-22 · Branch: `crafting` (from `main` at aa57368) · Status: rev 3 (gate-1 re-gate repairs)
 
 ## 1. Intent
 
@@ -26,8 +26,9 @@ reads a little, and **take nothing away** from worlds he already plays.
 - All 7 pickaxe tiers; area grows with tier. The player **switches between
   owned pickaxes** (P, or click in the I screen).
 - No build protection; TNT destroys what it destroys. Mining warns by
-  **highlighting the whole area** (orange when > 1 block), and a multi-block
-  break never takes less than 0.4 s.
+  **highlighting the whole area** (orange for multi-block tiers), and the
+  first multi-block break of each click takes at least 0.4 s.
+- Placing lowers a count only when placing that block needed a count.
 - In must-mine worlds a newly mined block **joins the hotbar** (Minecraft-like).
 - Unlimited worlds may farm counts (place an ore at 0, mine it back) — this is
   also how old v1/v2 worlds (no ores or trees) reach high tiers. Accepted.
@@ -68,9 +69,12 @@ differ from the block mined (grass gives grass), recipes for decorative blocks.
     *mining* (single or area) is counted like any block.
   - Not counted: liquid changes (sponge→wet sponge, obsidian formation,
     spread/drain).
-- **−1** (floor 0) when a block is placed.
-- **Shift-replace:** −1 of the placed block, +1 of the replaced block, and it
-  is refused exactly when a plain place would be refused (§3).
+- **−1** (floor 0) when a block is placed **and placing it needed a count**
+  (`needsCount(block, world)`, §3). Free placements never touch counts, so a
+  crafted TNT placed in an unlimited world is not spent by accident.
+- **Shift-replace:** −1 of the placed block under the same rule, +1 of the
+  replaced block always, and it is refused exactly when a plain place would be
+  refused (§3).
 - Deepslate ores are separate entries; recipes accept either variant (§4).
 - Every count change calls `autosave.markDirty()`.
 
@@ -89,23 +93,41 @@ testable headless.
 - New World screen: checkbox "Must mine blocks to build", unchecked. Wired
   menu checkbox → `MenuAction {type:'new', mustMine}` → `startGame` →
   `AutoSave` meta → `snapshot()`.
-- **Counted blocks** = the set of block names worldgen v3 can produce
-  (exported from `src/engine/world/v3/blocks.ts` `NAMES`, minus `air`,
-  `water`, `lava`, `bedrock`), plus the crafted-only blocks. Computed once in
-  `src/data/crafting.data.ts`.
-- In a must-mine world, placing a **counted** block at count 0 does nothing
-  and plays a soft "nope". Non-counted blocks (planks, glass, wool, lamps,
-  liquids…) are placed freely, as today.
+- **Counted blocks** = the blocks worldgen v3 **actually writes** (not the
+  whole `NAMES` list: `cobblestone`, `mossy_cobblestone` and `red_sandstone`
+  are listed there but never generated; gate 1 measured this), minus
+  `water`, `lava`, `bedrock`; **plus every recipe output that is a block**
+  (`tnt`, `big_tnt`, `mega_tnt`). Written as an explicit list,
+  `WORLDGEN_BLOCKS`, in `src/data/crafting.data.ts`. A test generates fixed
+  seeds (enough chunks to include mountains and deep layers), then asserts
+  two things: every block written, apart from the three exclusions, is in
+  the list, and every listed block appears in the sample. The only
+  exceptions are ores that appear only in their deepslate variant
+  (`diamond_ore`, `redstone_ore`), which are allowed as recipe
+  alternatives.
+- `needsCount(block, world)` = the block is crafted-only (anywhere), or the
+  world is must-mine and the block is counted.
+- In a must-mine world, placing a block that needs a count at count 0 does
+  nothing and plays a soft "nope". Other blocks (cobblestone, planks, glass,
+  wool, lamps, liquids…) are placed freely, as today.
 - **Crafted-only blocks** (Big TNT, Mega TNT) need a count to place in
   **every** world, and appear in the Blocks tab only when count > 0. Plain
-  TNT: counted in must-mine worlds (it is craftable), free in unlimited ones.
-- **Hotbar badges:** a slot shows its count when the block needs a count to
-  place in this world (counted block in must-mine, or crafted-only anywhere).
-  At 0 such a slot is greyed. Other slots show no badge.
-- **Auto-hotbar (must-mine only):** when a counted block's count goes 0 → 1
-  and that block is not on the hotbar, it goes into the first slot that is
-  empty (AIR) or holds a block whose count is 0 and that needs a count. If
-  none, nothing changes. Marks the save dirty.
+  TNT needs a count in must-mine worlds and is free in unlimited ones.
+- **Hotbar badges:** a slot shows its count when its block `needsCount`. At 0
+  such a slot is greyed. Other slots show no badge.
+- **Auto-hotbar (must-mine only):**
+  - Trigger: a counted block's count goes from 0 to more than 0 through
+    mining (single, area or TNT; one blast can take it 0 → 5).
+  - If the block is already on the hotbar, nothing moves: its slot just
+    un-greys.
+  - Otherwise it goes into the first slot, in this order, that:
+    1. is empty;
+    2. holds a counted block with no inventory key (never touched);
+    3. holds a counted block at 0.
+  - It **never** fills the selected slot and never replaces a free block.
+    With no candidate, nothing happens. Marks the save dirty.
+  - Crafting does not trigger it; §9's placement rule for crafted TNT
+    applies instead.
 - Fly (F) and swimming work as today in every world.
 
 ## 4. Recipes (data)
@@ -126,7 +148,8 @@ Resolution (`src/game/crafting.ts`, pure):
   count across `anyOf` is short, or the output pickaxe is already owned.
 - `craft(...)` returns new inventory and tools; takes from `anyOf` in listed
   order (plain before deepslate); never below 0; adds output count.
-- Test-time validation: every ingredient name is a counted block (§3).
+- Test-time validation: every ingredient name is a counted block (§3), and
+  `tnt` is counted.
 
 **Pickaxes** (independent: any tier craftable without the ones below).
 
@@ -169,9 +192,15 @@ blocks from spawn. Numbers get tuned after the first play session.
 - HUD: a pickaxe icon beside the hotbar shows the equipped tier with a small
   "P" keycap; clicking it opens the I screen. Icons are simple original pixel
   art, one per tier, drawn to atlas cells at build time.
-- **Mining time** = `max(hardness(target) / (1 + bonus), area > 1 ? 0.4 : 0)`.
-  Only the aimed block's hardness counts (aiming at dirt breaks a 5×5×5 of
-  stone at dirt speed — accepted).
+- "**Multi-block tier**" means the equipped tier's area is larger than one
+  cell (Copper and up), whatever the aimed spot holds. That single
+  definition drives both the floor and the orange highlight.
+- **Mining time** = `hardness(target) / (1 + bonus)`, raised to at least
+  **0.4 s for the first break after the button is pressed** with a
+  multi-block tier. Later breaks while the button stays held run at the real
+  speed, because the warning has already been seen. Releasing the button
+  re-arms the floor. Only the aimed block's hardness counts: aiming at dirt
+  breaks a 5×5×5 of stone at dirt speed, and that is accepted.
 - **Area cells:** with hit-face normal `n` (one of ±x, ±y, ±z), the face-plane
   extent is centred on the target, and depth runs **away from the player**,
   i.e. from the target along `−n`, `depth` cells including the target.
@@ -181,7 +210,8 @@ blocks from spawn. Numbers get tuned after the first play session.
   TNT in the area is removed (counted), not ignited; a primed TNT in the area
   loses its fuse, as single mining does today.
 - **Highlight:** one box outlining the area's full shape (including air
-  cells), white when the area is 1 block, orange when larger.
+  cells). It is white for a single-cell tier and orange for a multi-block
+  tier.
 
 ## 6. TNT tiers
 
@@ -212,27 +242,51 @@ Measured today (gate 1, dev box): TNT light work is small (1.7 ms at r3,
 12 ms at r8); the cost is **synchronous edit-lane re-meshing** (21 ms for one
 chunk, 72 ms for a chunk-corner r3 blast, 86 ms for r8 across 5 chunks).
 
-**`GameLoop.removeBlocks(cells, cause)`**, used by TNT and area mining:
-1. For each cell in order: `clearBlockEffects` (primed fuse, lamp light,
-   particles — particles capped at 16 per batch), then `world.setBlock(AIR)`
-   (never `chunk.set`: `setBlock` wakes liquids and sets `modified`), then the
-   existing exact per-block light update. Light stays per block because it is
-   exact and cheap; a bbox relight is wrong for sunlight columns (measured:
-   405 voxels changed below a bbox margin).
-2. Collect the affected chunk indices (each cell's chunk plus edge
-   neighbours) and mark each dirty once.
+**`GameLoop.removeBlocks(cells, anchor)`**, used **only** by TNT and area
+mining. Single-block mine, place and replace keep today's path unchanged,
+including synchronous re-meshing of both chunks at a chunk edge.
+1. For each cell in order:
+   - `clearBlockEffects`: primed fuse, lamp light, and particles, capped at
+     16 per batch.
+   - `world.setBlock(AIR)`. Never `chunk.set`: `setBlock` wakes liquids and
+     sets `modified`.
+   - `updateLightsForBlockChange`, called **directly**, never through
+     `applyLightUpdate`. `applyLightUpdate` marks every chunk the light
+     touched as `{edit:true}`, which would send them all to the synchronous
+     lane.
+
+   Light stays per block because that is exact and cheap. A bounding-box
+   relight is wrong for sunlight columns: gate 1 measured 405 voxels
+   changed below the box margin.
+2. Collect every chunk the batch touched: each cell's chunk and its edge
+   neighbours, every chunk the light touched, and their south-east shadow
+   neighbours, with the same `rev`/`shadowsDirty` bumps
+   `applyLightUpdate` does today. Only the **anchor's** chunk (the aimed
+   block, or the TNT origin) goes to the edit lane; every other chunk goes
+   to the **bulk lane**.
 3. Return `removed: Array<{x,y,z,blockId}>`; the caller applies counts.
 
-**Spread re-meshing.** Big edits must not be re-meshed synchronously all in
-one frame:
-- An edit touching **one** chunk keeps today's path (sync, immediate).
-- An edit touching **several** chunks: the chunk containing the edit's anchor
-  (the aimed block, or the TNT origin) is re-meshed synchronously this frame;
-  the others go to a new **bulk lane**, drained ahead of streaming, through
-  the worker when available, otherwise sync at most one per frame.
-- A chunk already in flight to the worker when it is edited again must not
-  mount the stale reply (re-post, or discard the reply by edit generation).
-- Visual cost accepted: a far edge of a big hole may appear 1–3 frames late.
+**Bulk lane.**
+- `planFrame` drains it after the edit lane and before streaming, even in a
+  frame where the edit lane ran (today `planFrame` returns early after
+  edits, chunk-scheduler.ts:73).
+- It skips chunks in `inFlightIndex`, as the stream set does.
+- With `jobs`, bulk chunks are posted to the worker; when the worker is full
+  they wait for the next frame. They never fall back to synchronous meshing.
+  Without `jobs` (tests, fallback), at most one bulk chunk is meshed
+  synchronously per frame.
+- Accepted visual cost: the far edge of a big hole may appear a few frames
+  late. Bound: every bulk chunk is mounted within 10 frames (asserted in
+  §8).
+
+**Neighbourhood freshness (fixes an existing bug too).**
+- The worker meshes a chunk from a copy of its 3×3 neighbourhood, but a
+  reply is checked only against its own chunk's `rev`.
+- Gate 1 reproduced the failure: chunk B in flight, a border edit in
+  neighbour A in the dark (B's rev unchanged), then the stale reply mounts
+  with a face missing, and the hole persists.
+- Fix: a job records the revs of all 9 chunks it copied, and a reply is
+  dropped unless all of them are unchanged.
 
 ## 8. Perf gate
 
@@ -244,8 +298,9 @@ expected cells were actually removed:
 - one Mega TNT;
 - a chain of 4 Mega TNT (report each detonation frame).
 
-Pass = no frame over 50 ms. Light work is also reported per row (must stay
-under 15 ms). Fallbacks in order: reduce Mega's radius to 7, then 6.
+Pass = no frame over 50 ms, light work per row under 15 ms, and every bulk
+chunk mounted within 10 frames of its edit. The plain-TNT chunk-corner row
+fails on today's build (72 ms), which shows the gate can go red. Fallbacks in order: reduce Mega's radius to 7, then 6.
 Results recorded in `docs/performance.md`. The dev box is faster than
 Noah's laptop — keep a 20 % margin.
 
@@ -278,13 +333,23 @@ Client, every place that must carry them:
 - Load-time defaulting beside `resolveHotbar`: unknown block names, negative
   or non-integer counts, unknown tiers dropped; `equipped` not owned → highest
   owned; `0` always owned.
-- `dual.ts sameContent` also compares `mustMine` and canonical JSON of
-  `player.inventory` and `player.tools`; a difference is a divergence
-  (forks, per dual.ts rule 2) — offline crafting is never silently dropped.
+- `dual.ts` load merge. Both copies are first run through the load-time
+  defaulting, so a missing field equals its default.
+  - **Identical chunks, different player/mode:** no fork. The copy with the
+    newer `updatedAt` wins whole.
+    - If the local copy wins, it is stamped with the cloud generation just
+      loaded and marked `needsUpload`. It is not `markUnsynced`, which
+      would 409 on every retry.
+    - Today every offline save clears the local stamp, so without this rule
+      each P press made offline would fork a "(copy from this device)"
+      world on the next reload.
+  - **Different chunks:** fork, as today.
+  - Accepted: crafting on two machines at once, without mining, is
+    newest-wins.
 
 API (`api/src/schema.ts`, handlers):
 - v2 and v3 `player`: `inventory` (record of string → int ≥ 0, ≤ 2000 keys)
-  and `tools` (`owned`: int 0–15 array, `equipped`: int 0–15), both
+  and `tools` (`owned`: int 0–15 array, max 16 entries, `equipped`: int 0–15), both
   `.optional()`. Loose bounds so a later tier needs no API redeploy.
 - v3 top level: `mustMine: z.boolean().optional()`. v2 top level too, for
   symmetry (new worlds are always v3); the "v2 frozen" comments are updated
@@ -293,7 +358,10 @@ API (`api/src/schema.ts`, handlers):
   `player.tools` or `mustMine`, and the stored object has them, the handler
   keeps the stored values (the `If-Match` path already reads the stored
   object). A stale cached bundle therefore cannot wipe counts, tools or the
-  mode.
+  mode. The guard's read **refuses with 503** on any download error. The
+  client already retries on 503. Only a real 404 counts as "nothing stored":
+  `shrinkGuard` today turns errors into `null`, and reusing that as-is would
+  let the wipe through.
 
 **Deploy order:** `./deploy.sh`, `./deploy.sh --verify`; then the site by hand
 with cache-control, with `atlas.json`/atlas image uploaded **before or with**
@@ -311,49 +379,101 @@ that merely fail to compile on the old build do not count as "red on the old
 build" — the named wrong implementation is what they must catch.
 
 **Unit (vitest)**
-- `inventory.ts`: +1/−1, floor 0, replace (both sides), must-mine refusal for
-  place *and* replace, non-counted blocks always placeable, crafted-only
-  blocks refused at 0 in unlimited worlds; `startingCount` injected as 5
-  (catches a hard-coded 0) and a touched-to-0 key stays 0 after save/load.
-- Auto-hotbar: 0→1 fills an empty slot; fills a 0-count slot; never replaces
-  a slot with count > 0 or a free block; no-op when full; unlimited worlds
-  no-op.
+- `inventory.ts`:
+  - +1 and −1, floor 0, and replace on both sides.
+  - Must-mine refusal for place *and* replace.
+  - Non-counted blocks are always placeable.
+  - Crafted-only blocks are refused at 0 in unlimited worlds.
+  - A free place (TNT in an unlimited world) leaves the count unchanged.
+    Catches an unconditional −1.
+  - `startingCount` injected as 5. Catches a hard-coded 0.
+  - A key touched down to 0 stays 0 after save/load.
+- Counted set: the fixed-seed worldgen sample test (§3); `tnt` counted;
+  `cobblestone` not counted.
+- Auto-hotbar:
+  - A TNT blast taking a count 0 → 5 triggers it. Catches `=== 1`.
+  - Slot choice follows the order empty → untouched → at 0.
+  - It never fills the selected slot, and never replaces a free block or
+    a slot with count > 0.
+  - A block already on the hotbar does not move.
+  - No-op when no slot qualifies, and in unlimited worlds.
+  - Crafting does not trigger it.
 - `crafting.ts`: either ore variant; short by one refused; plain consumed
   before deepslate; owned pickaxe refused; outputs added; never negative.
-- Mining time per tier incl. the 0.4 s floor (catches a floor applied to
-  single-block mining).
+- Mining time per tier, including the 0.4 s floor. The floor applies on
+  the first break after press, not on a held second break, and it re-arms
+  on release. It does not apply to single-cell tiers even when the tier's
+  area covers only air. Catches a floor on every break, and a floor keyed
+  to the count of solid cells.
 - Area cells: exact lists per tier for `+x` and `−y` hits (catches depth
   running toward the player); bedrock/air/liquid/out-of-bounds skipped.
 - TNT: radius and fuse per tier; radius fixed at priming; a chain explodes
   each TNT with its own radius; a lone TNT blast in air adds **0** TNT to
   counts; a chain of two adds 0 (catches counting `detonate()`'s own cell).
-- `removeBlocks` equivalence with the old per-block path, compared over
-  **every loaded chunk** (not a bbox): blocks, light, `modified`, liquid
-  frontier, and the set of chunks marked dirty. Fixtures: interior,
-  chunk corner, a lamp in a neighbour chunk shining into the hole (catches
-  whole-chunk relight dropping cross-chunk light), a blast opening the roof of
-  a ≥ 30-deep sealed shaft (catches bbox relight), a lamp inside the blast.
-- Spread re-meshing: a multi-chunk edit mounts the anchor chunk the same frame
-  and the rest within N frames; a stale worker reply after a second edit is
-  not mounted.
+- `removeBlocks` equivalence with the old per-block path. The old path is
+  a **frozen copy of today's `detonateAt` loop kept inside the test file**,
+  because production code will no longer contain it.
+  - Compared over **every loaded chunk**, not a bounding box: blocks,
+    light, `modified`, and the liquid frontier. It also compares the union
+    of chunks queued (edit + bulk + shadow-only lanes) against the old
+    path's edit set.
+  - Fixtures:
+    - interior;
+    - chunk corner;
+    - a lamp in a neighbour chunk shining into the hole (catches a
+      whole-chunk relight dropping cross-chunk light);
+    - a blast opening the roof of a sealed shaft at least 30 deep (catches
+      a bounding-box relight);
+    - a lamp inside the blast.
+- Lane assignment: after a multi-chunk `removeBlocks`, only the anchor
+  chunk is in the edit lane. Catches routing through `applyLightUpdate`.
+- Spread re-meshing:
+  - In the edit frame, the main thread meshes the anchor only; every other
+    touched chunk is **not** mounted that frame. The test counts mesh calls
+    and mounts in that tick. Catches "everything in the edit lane", which
+    today's build does.
+  - All bulk chunks are mounted within 10 frames.
+  - Without `jobs`, at most one bulk chunk is meshed per frame.
+- Edge mining unchanged: a single-block mine at `lx=15` mounts both chunks
+  in the same frame. Catches the bulk lane leaking into single edits.
+- Neighbourhood freshness, using gate 1's reproduction:
+  1. Post chunk B to the worker.
+  2. Remove a block in neighbour A at B's border, in the dark, so B's rev
+     is unchanged.
+  3. Deliver B's reply. It must be dropped and B re-meshed. This fails on
+     today's build.
 - `assignIds` refuses an id ≥ 1000; catalog/extra ids don't collide.
 - Save defaulting: old save without fields; junk counts/tiers; equipped not
   owned.
-- `dual.ts`: same chunks, different inventory → fork (catches chunks-only
-  `sameContent`).
+- `dual.ts`:
+  - Same chunks, newer local with crafted tools, older cloud → local is
+    kept, no fork, stamped with the cloud generation, `needsUpload` set.
+    Catches both a chunks-only compare that takes the cloud copy and a
+    fork on every player difference.
+  - P pressed offline, then reload → no fork.
+  - A cloud copy without `inventory` vs local `{}` → treated as equal.
+  - Different chunks → fork, as today.
 - `input-gate`: `cyclePickaxe` blocked with the picker, the I screen and
   freeze open.
-- Options: a saved options object without `cyclePickaxe` gets `KeyP`; a
-  saved binding already on `KeyP` keeps it and `cyclePickaxe` is left
-  unbound (older binding wins).
+- Options: unbound is the empty string `''`.
+  - The key-to-action map ignores `''`.
+  - The Options screen shows it as "—".
+  - Test: a saved binding already on `KeyP` keeps it, and `cyclePickaxe`
+    loads as `''`. Catches last-binding-wins. The "missing action gets its
+    default" case is already covered by `loadOptions` and is not counted
+    as a new test.
 
 **API**
 - Save through the handler with `inventory`, `tools`, `mustMine`, read back,
   assert **equality** of stored values (a separate probe shows the current
   schema strips them, proving the test can go red).
 - Old v2/v3 payloads without the fields still accepted.
-- Old-client guard: a save without the fields over a stored object that has
-  them keeps the stored values.
+- Old-client guard, on both the v2 and v3 routes:
+  - A save without the fields, over a stored object that has them, keeps
+    the stored values.
+  - A save carrying an empty inventory `{}` is stored as `{}`.
+  - When the stored-object download throws, the save gets a 503. Catches
+    reuse of `shrinkGuard`'s error → `null`.
 - v3 top level still rejects unknown keys.
 
 **Loop (`test-loop.ts`)**
@@ -390,7 +510,9 @@ bulk lane); CLAUDE.md "no crafting table UI; recipes resolve from inventory"
 3. Counts: `inventory.ts`, `place.ts` extraction, mine/area/TNT/place hooks,
    `markDirty`. (No UI yet; counts invisible.)
 4. Tools: mining time, area cells, highlight, `cyclePickaxe`, HUD icon.
-5. TNT tiers: extra ids, derived textures, radius/fuse per block, crafted-only
-   placement rule. Bench.
+5. TNT tiers: extra ids, derived textures, radius and fuse per block, the
+   crafted-only placement rule, and the Blocks-tab filter that hides
+   crafted-only blocks at count 0, all in this step so it can ship alone.
+   Bench. The site deploy for this step follows the atlas-first rule (§10).
 6. I-screen tabs, Craft tab, badges, must-mine checkbox, auto-hotbar.
 7. Browser smoke, docs, CLAUDE.md.

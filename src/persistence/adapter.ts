@@ -72,6 +72,14 @@ export type WorldSave = {
 	lastSyncedGeneration?: string | null;
 };
 
+/**
+ * What DualAdapter.loadWorld returns. `localWon` is true only when the copies had
+ * identical chunks, differed in player or mode, and the newer local copy was kept:
+ * the cloud has not seen it yet, so the caller must schedule an upload
+ * (`autosave.markDirty()`). Crafting spec §10.
+ */
+export type LoadedWorld = WorldSave & { localWon?: boolean };
+
 export interface PersistenceAdapter {
 	loadWorld(id: string): Promise<WorldSave | null>;
 	saveWorld(save: WorldSave, pre?: EncodedChunk[]): Promise<SaveResult>;

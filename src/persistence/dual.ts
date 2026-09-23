@@ -1,5 +1,6 @@
 import type {
 	EncodedChunk,
+	LoadedWorld,
 	PersistenceAdapter,
 	SaveResult,
 	WorldSave,
@@ -9,6 +10,7 @@ import type { LocalStorageAdapter } from './localStorage';
 import type { CloudAdapter } from './cloud';
 import { SaveCorrupt, SaveMismatch } from './errors';
 import { isLegacyId, newWorldId } from './uuid';
+import { resolvePlayerExtras } from '../game/player-extras';
 
 function sameContent(a: EncodedChunk[], b: EncodedChunk[]): boolean {
 	if (a.length !== b.length) return false;
@@ -21,6 +23,52 @@ function sameContent(a: EncodedChunk[], b: EncodedChunk[]): boolean {
 		if ((other.fluidMeta ?? '') !== (c.fluidMeta ?? '')) return false;
 	}
 	return true;
+}
+
+function sameNumbers(a: readonly number[], b: readonly number[]): boolean {
+	return a.length === b.length && a.every((v, i) => v === b[i]);
+}
+
+/**
+ * Player and mode, compared after load-time defaulting, so a copy written before
+ * crafting (no inventory/tools/mustMine) equals one holding the defaults. `lights`
+ * are deliberately not compared (crafting spec §10).
+ */
+function samePlayerAndMode(a: WorldSave, b: WorldSave): boolean {
+	const pa = a.player;
+	const pb = b.player;
+	if (!pa || !pb) return pa === pb;
+	if (pa.x !== pb.x || pa.y !== pb.y || pa.z !== pb.z) return false;
+	if (pa.yaw !== pb.yaw || pa.pitch !== pb.pitch || pa.selected !== pb.selected) return false;
+	if (!sameNumbers(pa.hotbar ?? [], pb.hotbar ?? [])) return false;
+	const ea = resolvePlayerExtras(pa, a.mustMine);
+	const eb = resolvePlayerExtras(pb, b.mustMine);
+	if (ea.mustMine !== eb.mustMine) return false;
+	if (ea.tools.equipped !== eb.tools.equipped || !sameNumbers(ea.tools.owned, eb.tools.owned)) return false;
+	const keys = Object.keys(ea.inventory);
+	if (keys.length !== Object.keys(eb.inventory).length) return false;
+	return keys.every((k) => Object.hasOwn(eb.inventory, k) && ea.inventory[k] === eb.inventory[k]);
+}
+
+/**
+ * Client-side mirror of the API's old-client guard. A local copy written by a
+ * bundle from before crafting has no inventory, tools or mustMine. Each field the
+ * RAW local copy lacks is taken from the cloud copy, before any defaulting, so
+ * the old bundle's copy can still win on what it did change (it walked, it
+ * built) without wiping counts, pickaxes or the mode. A field the local copy
+ * carries is kept as is, `{}` and `false` included.
+ */
+function fillMissingFrom(localCopy: WorldSave, cloudCopy: WorldSave): WorldSave {
+	const player = { ...localCopy.player };
+	if (player.inventory === undefined && cloudCopy.player?.inventory !== undefined) {
+		player.inventory = cloudCopy.player.inventory;
+	}
+	if (player.tools === undefined && cloudCopy.player?.tools !== undefined) {
+		player.tools = cloudCopy.player.tools;
+	}
+	const out: WorldSave = { ...localCopy, player };
+	if (localCopy.mustMine === undefined && cloudCopy.mustMine !== undefined) out.mustMine = cloudCopy.mustMine;
+	return out;
 }
 
 /**
@@ -102,7 +150,7 @@ export class DualAdapter implements PersistenceAdapter {
 		}
 	}
 
-	async loadWorld(id: string): Promise<WorldSave | null> {
+	async loadWorld(id: string): Promise<LoadedWorld | null> {
 		// Each leg may fail on its own (spec §4). A copy that cannot be fully parsed
 		// is never opened, never forked from, and never overwrites the good one.
 		let localCopy: WorldSave | null = null;
@@ -185,6 +233,20 @@ export class DualAdapter implements PersistenceAdapter {
 		// and each duplicate was itself unstamped, so it forked again. Compare the
 		// content before concluding anything was lost.
 		if (sameContent(this.encode(localCopy), this.encode(cloudCopy))) {
+			// Same chunks. Crafting, a pickaxe switch or a walk changes only the player
+			// or the mode: never a fork. The newer updatedAt wins whole; a tie goes to
+			// the cloud (crafting spec §10).
+			// Filled BEFORE the compare, so fields an old bundle never wrote are not a
+			// difference on their own.
+			const filled = fillMissingFrom(localCopy, cloudCopy);
+			if (!samePlayerAndMode(filled, cloudCopy) && filled.updatedAt > cloudCopy.updatedAt) {
+				// NOT adopted: a local copy stamped with the cloud's generation reads as
+				// "in sync" and would lose to the cloud on the next reload. The cloud leg
+				// already holds the generation it just loaded, so the upload the caller
+				// schedules goes out with If-Match on it, and saveWorld stamps the local
+				// copy only once that PUT has succeeded.
+				return { ...filled, localWon: true };
+			}
 			this.adopt(cloudCopy);
 			return cloudCopy;
 		}

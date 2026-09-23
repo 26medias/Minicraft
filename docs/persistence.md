@@ -134,7 +134,33 @@ Every PUT carries a precondition; the server rejects one that does not (428).
   as a divergence and the menu fills with duplicates.
 
 Ordering uses the GCS generation, never `Date.now()`: a tablet with a drifted
-clock must not win or lose an arbitration. `updatedAt` is for display.
+clock must not win or lose an arbitration. `updatedAt` is for display, with one
+exception.
+
+The exception is two copies with **identical chunks** but a different player or
+mode: a craft, a pickaxe switch or a walk. They are compared after load-time
+defaulting, and `lights` are not compared. There is nothing to fork, so the copy
+with the newer `updatedAt` wins whole, and a tie goes to the cloud. When two
+machines craft at once, clock skew decides which copy wins; that is accepted
+(crafting spec §10).
+
+When the local copy wins:
+- It is **not** re-stamped. A local copy carrying the cloud's stamp reads as
+  "in sync" and would lose to the cloud on the next reload.
+- Any of `player.inventory`, `player.tools` or `mustMine` that the raw local copy
+  lacks is taken from the cloud copy, before the compare. This mirrors the API's
+  old-client guard: a copy an old cached bundle wrote offline can still win on
+  what it changed without wiping counts, pickaxes or the mode. Fields the local
+  copy carries, `{}` and `false` included, are kept.
+- `loadWorld` returns it with `localWon: true`. `main.ts` then calls
+  `autosave.markDirty()` right after building `AutoSave`, so the copy uploads
+  even if nothing else happens. The PUT carries `If-Match` on the generation the
+  cloud leg loaded, and the local copy is stamped only after that PUT succeeds.
+
+`localWon` is never set on a fork, an offline load or a corrupt cloud copy.
+Those paths already mark the world unsynced. Without this rule, every offline
+save clears the local stamp, so each pickaxe switch made offline would fork a
+"(copy from this device)" world on the next reload.
 
 ## Save cadence
 

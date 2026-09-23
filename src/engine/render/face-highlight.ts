@@ -9,12 +9,15 @@ const FILL_OPACITY = 0.2;
 const BORDER_OPACITY = 0.85;
 /** Face border for a single-cell pickaxe tier (today's look). */
 export const HIGHLIGHT_WHITE = 0xffffff;
-/** Face border and area box for a multi-block tier (spec §5). */
+/** Face border for a multi-block tier (spec §5). */
 export const HIGHLIGHT_AREA = 0xff8c1a;
-/** The area box sits this far outside the cells so its edges do not z-fight with block edges. */
-export const AREA_BOX_PAD = 0.01;
-/** Thickness of the area box's edge beams, in blocks. WebGL ignores line width, so 1 px lines vanish on snow (gate 2). */
-export const AREA_EDGE = 0.06;
+/** Warm glow laid over each block an area break will remove. */
+export const GLOW_COLOR = 0xffa033;
+const GLOW_OPACITY = 0.35;
+/** Slightly larger than a block so its faces sit in front of the block's own faces (no z-fight). */
+const GLOW_SIZE = 1.01;
+/** Emerald's 5×5×5, the largest area. */
+export const MAX_GLOW_CELLS = 125;
 
 type Transform = { offset: readonly [number, number, number]; euler: readonly [number, number, number] };
 
@@ -58,8 +61,14 @@ function material(color: number, opacity: number, renderOrder: number) {
 export class FaceHighlight {
 	private group = new THREE.Group();
 	private borderMaterial: THREE.MeshBasicMaterial;
-	/** Outline of the whole area (air cells included) for a multi-block tier: 12 thick edge beams. Hidden for single-cell tiers. */
-	private box = new THREE.Object3D();
+	/**
+	 * A faint self-lit glow on each block the area break will remove (playtest: a wireframe of the whole area
+	 * shape was unreadable, worst in the dark). Unlit so it shows in caves; a translucent tint (not additive,
+	 * which washes out to white on snow) so the texture stays readable; depth-tested so only the faces he can
+	 * see light up, never blocks through a wall.
+	 */
+	private glow: THREE.InstancedMesh;
+	private glowKey = '';
 
 	constructor(scene: THREE.Scene) {
 		const side = 1 - 2 * INSET;
@@ -89,45 +98,45 @@ export class FaceHighlight {
 		this.group.visible = false;
 		scene.add(this.group);
 
-		// Drawn over terrain (no depth test): the part of the area inside the wall is exactly what
-		// the warning is about. 12 unit-cube beams, placed and stretched by setArea.
-		const beamGeo = new THREE.BoxGeometry(1, 1, 1);
-		const beamMat = new THREE.MeshBasicMaterial({ color: HIGHLIGHT_AREA, transparent: true, opacity: 0.9, depthTest: false, depthWrite: false, fog: false });
-		for (let i = 0; i < 12; i++) {
-			const beam = new THREE.Mesh(beamGeo, beamMat);
-			beam.renderOrder = 4;
-			this.box.add(beam);
-		}
-		this.box.name = 'area-box';
-		this.box.visible = false;
-		scene.add(this.box);
+		this.glow = new THREE.InstancedMesh(
+			new THREE.BoxGeometry(GLOW_SIZE, GLOW_SIZE, GLOW_SIZE),
+			new THREE.MeshBasicMaterial({
+				color: GLOW_COLOR,
+				transparent: true,
+				opacity: GLOW_OPACITY,
+				depthTest: true,
+				depthWrite: false,
+				fog: false,
+			}),
+			MAX_GLOW_CELLS,
+		);
+		this.glow.name = 'area-glow';
+		this.glow.count = 0;
+		this.glow.frustumCulled = false; // instances sit far from the geometry's own bounds
+		this.glow.renderOrder = 4;
+		this.glow.visible = false;
+		scene.add(this.glow);
 	}
 
 	/**
-	 * The equipped tier's area around the aimed block, as inclusive integer corners (tools.areaBounds).
-	 * `multi` false: today's white face outline only. `multi` true: orange face outline plus the box.
+	 * The blocks the equipped tier's break will remove (loop.removableCells). `multi` false: today's white
+	 * face outline and no glow. `multi` true: orange face outline plus a glow on each cell.
 	 */
-	setArea(min: readonly [number, number, number], max: readonly [number, number, number], multi: boolean): void {
+	setCells(cells: ReadonlyArray<{ x: number; y: number; z: number }>, multi: boolean): void {
 		this.borderMaterial.color.setHex(multi ? HIGHLIGHT_AREA : HIGHLIGHT_WHITE);
-		this.box.visible = multi && this.group.visible;
-		if (!multi) return;
-		// Outer corners of the padded box; each beam runs along one axis between two of them.
-		const lo = [min[0] - AREA_BOX_PAD, min[1] - AREA_BOX_PAD, min[2] - AREA_BOX_PAD];
-		const hi = [max[0] + 1 + AREA_BOX_PAD, max[1] + 1 + AREA_BOX_PAD, max[2] + 1 + AREA_BOX_PAD];
-		let n = 0;
-		for (let axis = 0; axis < 3; axis++) {
-			const a = (axis + 1) % 3, b = (axis + 2) % 3;
-			for (const ea of [lo[a], hi[a]]) for (const eb of [lo[b], hi[b]]) {
-				const beam = this.box.children[n++];
-				const pos = [0, 0, 0], scale = [AREA_EDGE, AREA_EDGE, AREA_EDGE];
-				pos[axis] = (lo[axis] + hi[axis]) / 2;
-				scale[axis] = hi[axis] - lo[axis] + AREA_EDGE; // overlap at the corners so they close
-				pos[a] = ea;
-				pos[b] = eb;
-				beam.position.set(pos[0], pos[1], pos[2]);
-				beam.scale.set(scale[0], scale[1], scale[2]);
-			}
+		const n = multi ? Math.min(cells.length, MAX_GLOW_CELLS) : 0;
+		this.glow.visible = n > 0 && this.group.visible;
+		let key = '';
+		for (let i = 0; i < n; i++) key += `${cells[i].x},${cells[i].y},${cells[i].z};`;
+		if (key === this.glowKey) return; // same cells as last frame: nothing to upload
+		this.glowKey = key;
+		const m = new THREE.Matrix4();
+		for (let i = 0; i < n; i++) {
+			m.makeTranslation(cells[i].x + 0.5, cells[i].y + 0.5, cells[i].z + 0.5);
+			this.glow.setMatrixAt(i, m);
 		}
+		this.glow.count = n;
+		this.glow.instanceMatrix.needsUpdate = true;
 	}
 
 	show(x: number, y: number, z: number, face: Face): void {
@@ -139,6 +148,6 @@ export class FaceHighlight {
 
 	hide(): void {
 		this.group.visible = false;
-		this.box.visible = false;
+		this.glow.visible = false;
 	}
 }

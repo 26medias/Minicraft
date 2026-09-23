@@ -106,24 +106,43 @@ describe('P mid-mine (spec §5)', () => {
 	}, 30_000);
 });
 
-describe('area highlight (spec §5)', () => {
-	it('receives the equipped tier\'s area bounds, multi true from Copper up (catches a highlight fed the aimed cell only)', () => {
-		const calls: Array<[number[], number[], boolean]> = [];
+describe('area highlight (spec §5; playtest: glow on the blocks that will break)', () => {
+	type C = { x: number; y: number; z: number };
+	const key = (c: C) => `${c.x},${c.y},${c.z}`;
+	function stubbed(tier: PickaxeTier) {
+		const calls: Array<{ cells: string[]; multi: boolean }> = [];
 		const stub = {
 			show: () => {},
 			hide: () => {},
-			setArea: (min: readonly number[], max: readonly number[], multi: boolean) => { calls.push([[...min], [...max], multi]); },
+			setCells: (cells: readonly C[], multi: boolean) => { calls.push({ cells: cells.map(key).sort(), multi }); },
 		} as unknown as FaceHighlight;
-		const h = fixture(4, stub);
+		return { h: fixture(tier, stub), calls };
+	}
+
+	it('glows exactly the cells the break removes: air, water and bedrock in the area get no glow (catches a glow over the whole area shape)', () => {
+		const { h, calls } = stubbed(4); // Iron: 3×3 on the face
+		fill(h, [263, 265], [40, 42], [267, 267], stone);
+		h.world.setBlock(263, 40, 267, AIR);
+		h.world.setBlock(265, 40, 267, water);
+		h.world.setBlock(263, 42, 267, bedrock);
+		h.tick(0.01);
+		const glowed = calls.at(-1)!;
+		expect(glowed.multi).toBe(true);
+		expect(glowed.cells).toHaveLength(6);
+		for (const c of ['263,40,267', '265,40,267', '263,42,267']) expect(glowed.cells).not.toContain(c);
+		// The same cells break.
+		let removed: string[] = [];
+		h.loop.onBlocksRemoved = (r) => { removed = r.map(key).sort(); };
+		h.loop.setLeftMouseDown(true);
+		mineUntilAir(h, 264, 41, 267);
+		expect(removed).toEqual(glowed.cells);
+	}, 30_000);
+
+	it('single-cell tiers get no glow and the white outline (catches a glow drawn for the hand)', () => {
+		const { h, calls } = stubbed(0);
 		h.world.setBlock(264, 41, 267, glass);
 		h.tick(0.01);
-		expect(calls.at(-1)).toEqual([[263, 40, 267], [265, 42, 267], true]);
-		h.player.tools = { owned: [0, 4, 6], equipped: 6 };
-		h.tick(0.01);
-		expect(calls.at(-1)).toEqual([[263, 40, 265], [265, 42, 267], true]);
-		h.player.tools = { owned: [0, 4, 6], equipped: 0 };
-		h.tick(0.01);
-		expect(calls.at(-1)).toEqual([[264, 41, 267], [264, 41, 267], false]);
+		expect(calls.at(-1)).toEqual({ cells: [], multi: false });
 	}, 30_000);
 });
 

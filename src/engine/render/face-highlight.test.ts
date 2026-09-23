@@ -1,6 +1,6 @@
 import { describe, it, expect } from 'vitest';
 import * as THREE from 'three';
-import { faceTransform, HIGHLIGHT_EPS, FaceHighlight, HIGHLIGHT_AREA, HIGHLIGHT_WHITE, AREA_BOX_PAD, AREA_EDGE } from './face-highlight';
+import { faceTransform, HIGHLIGHT_EPS, FaceHighlight, HIGHLIGHT_AREA, HIGHLIGHT_WHITE } from './face-highlight';
 import type { Face } from '../../data/blocks.data';
 
 const NORMALS: Record<Face, [number, number, number]> = {
@@ -40,56 +40,68 @@ describe('FaceHighlight', () => {
 		expect(scene.children.filter((c) => c instanceof THREE.Group)).toHaveLength(1);
 	});
 });
-describe('FaceHighlight.setArea (spec §5)', () => {
+describe('FaceHighlight.setCells: a faint glow on exactly the blocks that will break (playtest: the wireframe box was unreadable in the dark)', () => {
 	function parts() {
 		const scene = new THREE.Scene();
 		const h = new FaceHighlight(scene);
 		const group = scene.children.find((c) => c instanceof THREE.Group) as THREE.Group;
-		const box = scene.children.find((c) => c.name === 'area-box')!;
+		const glow = scene.children.find((c) => c.name === 'area-glow') as THREE.InstancedMesh;
 		const border = (group.children[1] as THREE.Mesh).material as THREE.MeshBasicMaterial;
-		return { h, group, box, border };
+		return { scene, h, glow, border };
 	}
+	const cells = [{ x: 10, y: 20, z: 30 }, { x: 10, y: 21, z: 30 }, { x: 9, y: 20, z: 30 }];
 
-	it('multi-block: orange border and one box over the whole area, air included (catches a white or face-only warning)', () => {
-		const { h, box, border } = parts();
+	it('multi-block: orange border and one glow instance per cell, centred on it (catches a glow over the whole area shape, air included)', () => {
+		const { h, glow, border } = parts();
 		h.show(10, 20, 30, 'px');
-		h.setArea([8, 19, 29], [10, 21, 31], true);
-		expect(box.visible).toBe(true);
+		h.setCells(cells, true);
 		expect(border.color.getHex()).toBe(HIGHLIGHT_AREA);
-		// 12 edge beams whose outer bounds wrap cells 8..10 × 19..21 × 29..31.
-		expect(box.children).toHaveLength(12);
-		const b = new THREE.Box3().setFromObject(box);
-		const out = AREA_BOX_PAD + AREA_EDGE / 2;
-		for (const [got, want] of [[b.min.x, 8 - out], [b.min.y, 19 - out], [b.min.z, 29 - out], [b.max.x, 11 + out], [b.max.y, 22 + out], [b.max.z, 32 + out]]) {
-			expect(got).toBeCloseTo(want, 6);
+		expect(glow.visible).toBe(true);
+		expect(glow.count).toBe(3);
+		const m = new THREE.Matrix4(), p = new THREE.Vector3();
+		for (let i = 0; i < cells.length; i++) {
+			glow.getMatrixAt(i, m);
+			p.setFromMatrixPosition(m);
+			expect(p.toArray()).toEqual([cells[i].x + 0.5, cells[i].y + 0.5, cells[i].z + 0.5]);
 		}
 	});
 
-	it('the area edges are thick beams, not 1-pixel lines (catches LineSegments: WebGL ignores linewidth, and gate 2 found a 1 px orange line disappears on snow)', () => {
-		const { h, box } = parts();
-		h.show(10, 20, 30, 'px');
-		h.setArea([8, 19, 29], [10, 21, 31], true);
-		expect(box.children).toHaveLength(12);
-		for (const beam of box.children as THREE.Mesh[]) {
-			expect(beam).toBeInstanceOf(THREE.Mesh);
-			expect(Math.min(beam.scale.x, beam.scale.y, beam.scale.z)).toBeCloseTo(AREA_EDGE, 6);
-		}
+	it('the glow is a self-lit translucent tint, depth-tested (catches a lit material that goes black in caves, additive blending that washes out to white on snow, and one drawn through walls)', () => {
+		const { glow } = parts();
+		const mat = glow.material as THREE.MeshBasicMaterial;
+		expect(mat).toBeInstanceOf(THREE.MeshBasicMaterial);
+		expect(mat.blending).toBe(THREE.NormalBlending);
+		expect(mat.transparent).toBe(true);
+		expect(mat.depthTest).toBe(true);
+		expect(mat.depthWrite).toBe(false);
+		expect(mat.fog).toBe(false);
+		expect(glow.frustumCulled).toBe(false); // instance positions are not in the geometry's bounds
 	});
 
-	it('single-cell tier: today\'s white face outline and no box (catches a box drawn for the hand, which changes every existing world\'s look)', () => {
-		const { h, box, border } = parts();
+	it('holds Emerald\'s full 5×5×5 (catches a buffer too small for the top tier)', () => {
+		const { h, glow } = parts();
+		const all = [];
+		for (let x = 0; x < 5; x++) for (let y = 0; y < 5; y++) for (let z = 0; z < 5; z++) all.push({ x, y, z });
+		h.show(2, 2, 4, 'pz');
+		h.setCells(all, true);
+		expect(glow.count).toBe(125);
+	});
+
+	it('single-cell tier: today\'s white face outline and no glow (catches a glow drawn for the hand, which changes every existing world\'s look)', () => {
+		const { h, glow, border } = parts();
 		h.show(10, 20, 30, 'px');
-		h.setArea([8, 19, 29], [10, 21, 31], true);
-		h.setArea([10, 20, 30], [10, 20, 30], false);
-		expect(box.visible).toBe(false);
+		h.setCells(cells, true);
+		h.setCells([], false);
+		expect(glow.visible).toBe(false);
 		expect(border.color.getHex()).toBe(HIGHLIGHT_WHITE);
 	});
 
-	it('hide() hides the box too (catches an orange box left floating when the aim leaves reach)', () => {
-		const { h, box } = parts();
+	it('hide() hides the glow too, and no wireframe box is left in the scene (catches a glow left floating when the aim leaves reach)', () => {
+		const { scene, h, glow } = parts();
 		h.show(10, 20, 30, 'px');
-		h.setArea([8, 19, 29], [10, 21, 31], true);
+		h.setCells(cells, true);
 		h.hide();
-		expect(box.visible).toBe(false);
+		expect(glow.visible).toBe(false);
+		expect(scene.children.find((c) => c.name === 'area-box')).toBeUndefined();
 	});
 });

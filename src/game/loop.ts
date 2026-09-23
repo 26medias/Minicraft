@@ -59,6 +59,18 @@ export type BlockBrokenEvent = {
 	blockId: BlockId;
 };
 
+/** removeBlocks' rule for one cell: in bounds, solid, and breakable (hardness > 0 — bedrock never is). */
+export function isRemovable(world: World, x: number, y: number, z: number): boolean {
+	if (!world.inBounds(x, y, z)) return false;
+	const id = world.getBlock(x, y, z);
+	return isSolid(id) && (BLOCKS[id]?.hardness ?? 0) > 0;
+}
+
+/** The cells of `cells` that removeBlocks would actually remove: what the area highlight glows. */
+export function removableCells(world: World, cells: ReadonlyArray<{ x: number; y: number; z: number }>): Array<{ x: number; y: number; z: number }> {
+	return cells.filter((c) => isRemovable(world, c.x, c.y, c.z));
+}
+
 /** Time a new chunk needs (generate + light, measured ≈ 7.5 ms median on v3): don't start one with less left. */
 const CHUNK_GEN_RESERVE_MS = 10;
 
@@ -358,9 +370,8 @@ export class GameLoop {
 		const shadow = new Map<number, Chunk>(); // south-east shadow neighbours of each removed cell's chunk
 		const getLampColor = (lx: number, ly: number, lz: number): string | null => this.lights?.getColor(lx, ly, lz) ?? null;
 		for (const { x, y, z } of cells) {
-			if (!this.world.inBounds(x, y, z)) continue;
+			if (!isRemovable(this.world, x, y, z)) continue;
 			const id = this.world.getBlock(x, y, z);
-			if (!isSolid(id) || !((BLOCKS[id]?.hardness ?? 0) > 0)) continue;
 			// Spread the capped particles over the whole batch: detonate() lists cells bottom-up, so the first 16 are buried.
 			this.clearBlockEffects(x, y, z, id, k++ % stride === 0);
 			this.world.setBlock(x, y, z, AIR);
@@ -484,8 +495,9 @@ export class GameLoop {
 		if (this.aim) {
 			this.highlight?.show(this.aim.x, this.aim.y, this.aim.z, this.aim.face);
 			const tier = this.equippedTier();
-			const b = areaBounds(this.aim, this.aim.face, tier);
-			this.highlight?.setArea(b.min, b.max, isMultiBlock(tier));
+			const multi = isMultiBlock(tier);
+			// Glow exactly the cells the break will remove (same rule as removeBlocks), never the air in the area.
+			this.highlight?.setCells(multi ? removableCells(this.world, areaCells(this.aim, this.aim.face, tier)) : [], multi);
 		} else this.highlight?.hide();
 
 		this.updateMining(dt);

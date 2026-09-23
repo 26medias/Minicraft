@@ -79,7 +79,7 @@ type Mc = {
 	player: { position: number[]; hotbar: number[]; selected: number; inventory: Record<string, number>; tools: { owned: number[]; equipped: number } };
 	loop: { setLeftMouseDown(d: boolean): void; markChunkDirtyAround(x: number, z: number): void; applyLightUpdate(x: number, y: number, z: number): void };
 	cam: { pitch: number; yaw: number };
-	highlight: { setArea(min: number[], max: number[], multi: boolean): void };
+	highlight: { setCells(cells: Array<{ x: number; y: number; z: number }>, multi: boolean): void };
 	mustMine: boolean;
 	syncHotbar(): void;
 };
@@ -230,10 +230,10 @@ for (const sig of ['SIGINT', 'SIGTERM', 'SIGHUP'] as const) process.on(sig, () =
 
 		// 8. Iron (multi-block tier) → the highlight becomes the orange 3×3 area.
 		await page.evaluate(() => {
-			const w = window as unknown as { __mc: Mc; __area?: { min: number[]; max: number[]; multi: boolean } };
+			const w = window as unknown as { __mc: Mc; __area?: { cells: number[][]; multi: boolean } };
 			const h = w.__mc.highlight;
-			const orig = h.setArea.bind(h);
-			h.setArea = (min, max, multi) => { w.__area = { min: [...min], max: [...max], multi }; orig(min, max, multi); };
+			const orig = h.setCells.bind(h);
+			h.setCells = (cells, multi) => { w.__area = { cells: cells.map((c) => [c.x, c.y, c.z]), multi }; orig(cells, multi); };
 			w.__mc.cam.pitch = -Math.PI / 2 + 0.01;
 		});
 		await page.keyboard.press('Escape'); // no-op if already closed
@@ -242,11 +242,12 @@ for (const sig of ['SIGINT', 'SIGTERM', 'SIGHUP'] as const) process.on(sig, () =
 		await page.keyboard.press('Escape');
 		check(await mc(page, (m) => m.player.tools.equipped) === 4, 'Iron crafted and equipped');
 		await page.waitForFunction(() => (window as unknown as { __area?: { multi: boolean } }).__area?.multi === true, null, { timeout: 5_000 }).catch(() => undefined);
-		const area = await page.evaluate(() => (window as unknown as { __area?: { min: number[]; max: number[]; multi: boolean } }).__area ?? null);
+		const area = await page.evaluate(() => (window as unknown as { __area?: { cells: number[][]; multi: boolean } }).__area ?? null);
 		check(area !== null && area.multi, 'highlight got a multi-block (orange) area at Iron');
 		if (area) {
-			const ext = area.max.map((v, i) => v - area.min[i]).sort((a, b) => a - b);
-			check(ext[1] === ext[2] && ext[2] > ext[0], `area is square across the face and thinner in depth (extents ${ext.join('×')})`);
+			// Iron glows the solid blocks of a 3×3 layer: at most 9 cells, all in one plane.
+			const ext = [0, 1, 2].map((k) => Math.max(...area.cells.map((c) => c[k])) - Math.min(...area.cells.map((c) => c[k]))).sort((a, b) => a - b);
+			check(area.cells.length >= 1 && area.cells.length <= 9 && ext[0] === 0 && ext[2] <= 2, `glow covers the blocks of one 3×3 layer (${area.cells.length} cells, extents ${ext.join('×')})`);
 		}
 		await page.screenshot({ path: `${OUT}/iron-highlight.png` });
 		console.log(`save API requests blocked: ${blockedApiCalls}`);

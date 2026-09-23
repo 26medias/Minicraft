@@ -13,6 +13,8 @@ export const HIGHLIGHT_WHITE = 0xffffff;
 export const HIGHLIGHT_AREA = 0xff8c1a;
 /** The area box sits this far outside the cells so its edges do not z-fight with block edges. */
 export const AREA_BOX_PAD = 0.01;
+/** Thickness of the area box's edge beams, in blocks. WebGL ignores line width, so 1 px lines vanish on snow (gate 2). */
+export const AREA_EDGE = 0.06;
 
 type Transform = { offset: readonly [number, number, number]; euler: readonly [number, number, number] };
 
@@ -56,8 +58,8 @@ function material(color: number, opacity: number, renderOrder: number) {
 export class FaceHighlight {
 	private group = new THREE.Group();
 	private borderMaterial: THREE.MeshBasicMaterial;
-	/** Outline of the whole area (air cells included) for a multi-block tier; hidden for single-cell tiers. */
-	private box: THREE.LineSegments;
+	/** Outline of the whole area (air cells included) for a multi-block tier: 12 thick edge beams. Hidden for single-cell tiers. */
+	private box = new THREE.Object3D();
 
 	constructor(scene: THREE.Scene) {
 		const side = 1 - 2 * INSET;
@@ -88,12 +90,15 @@ export class FaceHighlight {
 		scene.add(this.group);
 
 		// Drawn over terrain (no depth test): the part of the area inside the wall is exactly what
-		// the warning is about. Unit cube edges, scaled and moved by setArea.
-		this.box = new THREE.LineSegments(
-			new THREE.EdgesGeometry(new THREE.BoxGeometry(1, 1, 1)),
-			new THREE.LineBasicMaterial({ color: HIGHLIGHT_AREA, transparent: true, opacity: 0.9, depthTest: false, depthWrite: false, fog: false }),
-		);
-		this.box.renderOrder = 4;
+		// the warning is about. 12 unit-cube beams, placed and stretched by setArea.
+		const beamGeo = new THREE.BoxGeometry(1, 1, 1);
+		const beamMat = new THREE.MeshBasicMaterial({ color: HIGHLIGHT_AREA, transparent: true, opacity: 0.9, depthTest: false, depthWrite: false, fog: false });
+		for (let i = 0; i < 12; i++) {
+			const beam = new THREE.Mesh(beamGeo, beamMat);
+			beam.renderOrder = 4;
+			this.box.add(beam);
+		}
+		this.box.name = 'area-box';
 		this.box.visible = false;
 		scene.add(this.box);
 	}
@@ -106,9 +111,23 @@ export class FaceHighlight {
 		this.borderMaterial.color.setHex(multi ? HIGHLIGHT_AREA : HIGHLIGHT_WHITE);
 		this.box.visible = multi && this.group.visible;
 		if (!multi) return;
-		const sx = max[0] - min[0] + 1, sy = max[1] - min[1] + 1, sz = max[2] - min[2] + 1;
-		this.box.position.set(min[0] + sx / 2, min[1] + sy / 2, min[2] + sz / 2);
-		this.box.scale.set(sx + 2 * AREA_BOX_PAD, sy + 2 * AREA_BOX_PAD, sz + 2 * AREA_BOX_PAD);
+		// Outer corners of the padded box; each beam runs along one axis between two of them.
+		const lo = [min[0] - AREA_BOX_PAD, min[1] - AREA_BOX_PAD, min[2] - AREA_BOX_PAD];
+		const hi = [max[0] + 1 + AREA_BOX_PAD, max[1] + 1 + AREA_BOX_PAD, max[2] + 1 + AREA_BOX_PAD];
+		let n = 0;
+		for (let axis = 0; axis < 3; axis++) {
+			const a = (axis + 1) % 3, b = (axis + 2) % 3;
+			for (const ea of [lo[a], hi[a]]) for (const eb of [lo[b], hi[b]]) {
+				const beam = this.box.children[n++];
+				const pos = [0, 0, 0], scale = [AREA_EDGE, AREA_EDGE, AREA_EDGE];
+				pos[axis] = (lo[axis] + hi[axis]) / 2;
+				scale[axis] = hi[axis] - lo[axis] + AREA_EDGE; // overlap at the corners so they close
+				pos[a] = ea;
+				pos[b] = eb;
+				beam.position.set(pos[0], pos[1], pos[2]);
+				beam.scale.set(scale[0], scale[1], scale[2]);
+			}
+		}
 	}
 
 	show(x: number, y: number, z: number, face: Face): void {

@@ -195,8 +195,10 @@ for (const sig of ['SIGINT', 'SIGTERM', 'SIGHUP'] as const) process.on(sig, () =
 		const before = await mc(page, (m) => ({ hotbar: m.player.hotbar.slice(), selected: m.player.selected }));
 		await craftVia(page, 'block:big_tnt');
 		const after = await mc(page, (m) => m.player.hotbar.slice());
-		const expectSlot = before.hotbar.indexOf(0) >= 0 ? before.hotbar.indexOf(0) : before.selected;
-		check(after[expectSlot] === BIG, `crafted Big TNT went to slot ${expectSlot} (first empty, else selected)`);
+		// §9 rule (gate 2): holding → first empty → first other greyed (counted, at 0) slot → selected.
+		// A new must-mine world's bar is full of greyed blocks, so the selected slot must be left alone.
+		const changed = after.findIndex((b, i) => b !== before.hotbar[i]);
+		check(changed >= 0 && after[changed] === BIG && changed !== before.selected, `crafted Big TNT went to slot ${changed}, not the selected slot ${before.selected}`);
 		await seed(page, recipeFor('block:big_tnt'));
 		await seed(page, recipeFor('block:big_tnt'));
 		await page.click('.craft-card[data-output="block:big_tnt"] .craft-button');

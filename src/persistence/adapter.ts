@@ -1,5 +1,6 @@
 import type { BlockId } from '../data/blocks.data';
 import type { WorldHeight } from '../engine/world/coords';
+import type { Inventory, PlayerTools } from '../data/crafting.data';
 
 export type PlayerSave = {
 	x: number;
@@ -9,6 +10,10 @@ export type PlayerSave = {
 	pitch: number;
 	hotbar: BlockId[];
 	selected: number;
+	/** Crafting counts by block name. Absent in saves from before crafting. */
+	inventory?: Inventory;
+	/** Owned and equipped pickaxe tiers. Absent in saves from before crafting. */
+	tools?: PlayerTools;
 };
 
 export type WorldSummary = {
@@ -61,6 +66,8 @@ export type WorldSave = {
 	player: PlayerSave;
 	chunks: RawChunk[]; // decoded on load, encoded by the adapter on save
 	lights?: LightSave[];
+	/** "Must mine to build". Fixed for the life of a world; absent = false. */
+	mustMine?: boolean;
 	/** GCS generation this copy was derived from; null when never synced. */
 	lastSyncedGeneration?: string | null;
 };

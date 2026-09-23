@@ -1,6 +1,6 @@
 // scripts/perf-bench.ts — the browser benchmark of the performance spec (§6.5).
 //
-//   npm run perf:bench [-- --reps 6] [--phases still,walk,fly,load,edit,memory] [--port 5174]
+//   npm run perf:bench [-- --reps 6] [--phases still,walk,fly,load,edit,memory,craft] [--port 5174]
 //
 // Starts a Vite dev server on --port with VITE_MINICRAFT_API_URL pointed at a dead local port
 // (never the production save API), drives a headed Chromium through Playwright, creates a new
@@ -12,7 +12,7 @@ import { chromium, type Page, type CDPSession } from 'playwright';
 import { spawn } from 'node:child_process';
 import { writeFileSync, mkdirSync } from 'node:fs';
 import { spawnV3 } from '../src/engine/world/v3/spawn';
-import { BLOCK_BY_NAME } from '../src/data/blocks.data';
+import { BLOCK_BY_NAME, BLOCKS, isSolid, isLiquid } from '../src/data/blocks.data';
 
 function arg(name: string, def: string) {
 	const i = process.argv.indexOf(name);
@@ -21,7 +21,7 @@ function arg(name: string, def: string) {
 
 const PORT = Number(arg('--port', '5174'));
 const REPS = Number(arg('--reps', '6'));
-const PHASES = arg('--phases', 'still,walk,fly,load,edit,memory').split(',');
+const PHASES = arg('--phases', 'still,walk,fly,load,edit,memory,craft').split(',');
 const SEED = 3;
 const GATES = {
 	walkLongTaskMs: 100, walkOver50: 0,
@@ -30,6 +30,10 @@ const GATES = {
 	// ring arithmetic from the radii, not tuned numbers: (2r+1)² chunks
 	heapMB: 250, mounted: (2 * UNMOUNT_RADIUS + 1) ** 2, data: (2 * DATA_RADIUS + 1) ** 2 /* + modified, read at run time */,
 	walkMinBlocks: 40, flyMinBlocks: 160,
+	// Crafting rows (crafting spec §8): no frame over 50 ms, light work under 15 ms per frame, every bulk chunk
+	// mounted within 16 frames of its edit. The dev box is faster than Noah's laptop: a value past the margin
+	// (80 % of the gate) prints "thin" beside "ok".
+	craftFrameMs: 50, craftLightMs: 15, craftBulkFrames: 16, craftMargin: 0.8,
 };
 const STONE = BLOCK_BY_NAME['stone'].id; // 3 in the frozen base catalog; never guess it
 if (!(REPS >= 2)) throw new Error('--reps must be ≥ 2 (first repetition is warm-up)');
@@ -237,6 +241,193 @@ async function edits(page: Page): Promise<EditResult> {
 	return { ...summarise(r.raw, r.t0, r.t1), edge: r.edge, interior: r.interior, latencyMax: r.latencyMax };
 }
 
+/**
+ * Crafting rows (crafting spec §8). Each row is a blast or an area-mining run at a fixed site near the seed-3 spawn, run
+ * once per repetition in a fresh world. Sites are chunk offsets from the spawn chunk, 2–6 chunks out (inside the mounted
+ * ring, clear of the player and of each other). `corner` puts the origin on a chunk corner (lx = lz = 0) or, for the
+ * tunnel, the 5-wide cross-section across a z boundary.
+ *
+ * `real: true` places `blockId` at every origin and ignites the first with loop.ignite: the game's own TNT path.
+ * `real: false` is the radius-8 STAND-IN while no radius-8 block exists: the bench computes detonate()'s cell set
+ * itself (origin + every solid, hardness > 0, non-TNT cell within `radius`) and removes it through the build's removal
+ * path, one origin every TNT_CHAIN_FUSE (0.1 s), the chain's real rhythm. Phase D switches MEGA to the real block.
+ */
+type CraftRowDef =
+	| { name: string; kind: 'tnt'; dcx: number; dcz: number; corner: boolean; radius: number; count: number; step: [number, number]; real: boolean; blockId: number }
+	| { name: string; kind: 'area'; dcx: number; dcz: number; corner: boolean; swings: number; everyMs: number };
+const PLAIN_TNT = BLOCK_BY_NAME['tnt'].id;
+/** Radius-8 rows. Stand-in until a radius-8 block exists (Phase D: `real: true, blockId: BLOCK_BY_NAME['mega_tnt'].id`). */
+const MEGA = { radius: 8, real: false, blockId: PLAIN_TNT };
+const CRAFT_ROWS: CraftRowDef[] = [
+	{ name: 'TNT r3 interior', kind: 'tnt', dcx: -3, dcz: -3, corner: false, radius: 3, count: 1, step: [0, 0], real: true, blockId: PLAIN_TNT },
+	{ name: 'TNT r3 corner', kind: 'tnt', dcx: -3, dcz: 0, corner: true, radius: 3, count: 1, step: [0, 0], real: true, blockId: PLAIN_TNT },
+	{ name: 'area 5×5×5 ×10 held interior', kind: 'area', dcx: 3, dcz: 2, corner: false, swings: 10, everyMs: 250 },
+	{ name: 'area 5×5×5 ×10 held corner', kind: 'area', dcx: 3, dcz: -3, corner: true, swings: 10, everyMs: 250 },
+	{ name: 'Mega r8 interior', kind: 'tnt', dcx: -3, dcz: 3, corner: false, count: 1, step: [0, 0], ...MEGA },
+	{ name: 'Mega r8 corner', kind: 'tnt', dcx: 3, dcz: 0, corner: true, count: 1, step: [0, 0], ...MEGA },
+	{ name: 'Mega r8 chain ×4 interior', kind: 'tnt', dcx: -5, dcz: -2, corner: false, count: 4, step: [0, 6], ...MEGA },
+	{ name: 'Mega r8 chain ×4 corner', kind: 'tnt', dcx: -1, dcz: 4, corner: true, count: 4, step: [6, 0], ...MEGA },
+];
+/** detonate()'s and removeBlocks' rule: solid with hardness > 0 (skips air, liquids, bedrock). */
+const REMOVABLE = BLOCKS.map((b) => !!b && isSolid(b.id) && b.hardness > 0);
+const LIQUID = BLOCKS.map((b) => !!b && isLiquid(b.id));
+
+type CraftRow = PhaseResult & { name: string; maxFrame: number; lightMax: number; bulkMax: number; bulkLane: boolean; removed: number; expected: number; events: number[]; eventMs: number[] };
+type CraftResult = { rows: CraftRow[] };
+
+async function crafting(page: Page): Promise<CraftResult> {
+	const s = spawnV3(SEED);
+	const pcx = Math.floor(s.x / 16), pcz = Math.floor(s.z / 16);
+	const rows: CraftRow[] = [];
+	for (const def of CRAFT_ROWS) {
+		const r = await page.evaluate(async ({ def, pcx, pcz, REMOVABLE, LIQUID }) => {
+			type Cell = { x: number; y: number; z: number };
+			const mc = (window as unknown as { __mc: {
+				world: { getBlock(x: number, y: number, z: number): number; setBlock(x: number, y: number, z: number, id: number): void };
+				loop: {
+					ignite(hit: { x: number; y: number; z: number; face: string; distance: number }): boolean;
+					markChunkDirtyAround(x: number, z: number): void;
+					applyLightUpdate(x: number, y: number, z: number): void;
+					removeBlocks?: (cells: Cell[], anchor: Cell) => { removed: unknown[] };
+					bulkLane?: Set<number>;
+					stats: { editQueue: number; lightMs?: number };
+				};
+			} }).__mc;
+			const b = (window as unknown as { __bench: { reset(): void; take(): Raw } }).__bench;
+			const { world, loop } = mc;
+			const raf = () => new Promise<number>((res) => requestAnimationFrame(res));
+			// Light work: Phase A keeps a cumulative stats.lightMs; before it, every removal went through applyLightUpdate.
+			let lightAcc = 0;
+			if (loop.stats.lightMs === undefined) {
+				const orig = loop.applyLightUpdate.bind(loop);
+				loop.applyLightUpdate = (x, y, z) => { const t = performance.now(); orig(x, y, z); lightAcc += performance.now() - t; };
+			}
+			const lightNow = () => loop.stats.lightMs ?? lightAcc;
+			// The build's batched removal path: removeBlocks when it exists, else today's detonateAt loop verbatim.
+			const remove = (cells: Cell[], anchor: Cell) => {
+				if (loop.removeBlocks) { loop.removeBlocks(cells, anchor); return; }
+				for (const c of cells) {
+					if (!REMOVABLE[world.getBlock(c.x, c.y, c.z)]) continue;
+					world.setBlock(c.x, c.y, c.z, 0);
+					loop.markChunkDirtyAround(c.x, c.z);
+					loop.applyLightUpdate(c.x, c.y, c.z);
+				}
+			};
+			const top = (x: number, z: number) => { for (let y = 255; y > 0; y--) { const id = world.getBlock(x, y, z); if (id !== 0 && !LIQUID[id]) return y; } return 0; };
+			const sphere = (o: Cell, r: number) => {
+				const out: Cell[] = [];
+				for (let dy = -r; dy <= r; dy++) for (let dz = -r; dz <= r; dz++) for (let dx = -r; dx <= r; dx++) {
+					if (dx * dx + dy * dy + dz * dz > r * r) continue;
+					const x = o.x + dx, y = o.y + dy, z = o.z + dz;
+					if (x < 0 || x > 511 || z < 0 || z > 511 || y < 0 || y > 255) continue;
+					out.push({ x, y, z });
+				}
+				return out;
+			};
+			const cx = pcx + def.dcx, cz = pcz + def.dcz;
+			const bx = cx * 16 + (def.corner ? 0 : 8), bz = cz * 16 + (def.corner ? 0 : 8);
+			// events[k] = the frame of the k-th blast or swing; `due(frame, now)` runs the emulated ones inside a rAF callback.
+			const events: number[] = [];
+			const expected: Cell[] = [];
+			let due: (frame: number, now: number) => void = () => {};
+			let done: () => boolean = () => true;
+			let arm: () => void = () => {};
+			if (def.kind === 'tnt') {
+				const origins: Cell[] = [];
+				for (let k = 0; k < def.count; k++) {
+					const x = bx + def.step[0] * k, z = bz + def.step[1] * k;
+					origins.push({ x, y: top(x, z) - 2, z });
+				}
+				for (const o of origins) { world.setBlock(o.x, o.y, o.z, def.blockId); loop.markChunkDirtyAround(o.x, o.z); loop.applyLightUpdate(o.x, o.y, o.z); }
+				const seen = new Set<string>();
+				for (const o of origins) for (const c of sphere(o, def.radius)) {
+					const k = `${c.x},${c.y},${c.z}`;
+					if (seen.has(k)) continue;
+					seen.add(k);
+					const id = world.getBlock(c.x, c.y, c.z);
+					if (REMOVABLE[id]) expected.push(c);
+				}
+				const gone = (o: Cell) => world.getBlock(o.x, o.y, o.z) !== def.blockId;
+				done = () => origins.every(gone);
+				if (def.real) {
+					arm = () => { if (!loop.ignite({ ...origins[0], face: 'py', distance: 1 })) throw new Error(`${def.name}: ignite refused`); };
+					due = (frame) => { while (events.length < origins.length && gone(origins[events.length])) events.push(frame); };
+				} else {
+					let t0 = -1;
+					due = (frame, now) => {
+						if (t0 < 0) t0 = now;
+						while (events.length < origins.length && now - t0 >= 100 * events.length) {
+							const o = origins[events.length];
+							const cells = sphere(o, def.radius).filter((c) => (c.x === o.x && c.y === o.y && c.z === o.z) || (world.getBlock(c.x, c.y, c.z) !== def.blockId && REMOVABLE[world.getBlock(c.x, c.y, c.z)]));
+							remove(cells, o);
+							events.push(frame);
+						}
+					};
+				}
+			} else {
+				// Tunnel along −x (depth runs away from a player standing at +x), 5 wide in z, 5 high, 10 swings.
+				let minTop = 255;
+				for (let x = bx - 5 * def.swings; x <= bx; x++) minTop = Math.min(minTop, top(x, bz));
+				const yc = minTop - 12;
+				const boxes: { cells: Cell[]; anchor: Cell }[] = [];
+				for (let k = 0; k < def.swings; k++) {
+					const x1 = bx - 5 * k, cells: Cell[] = [];
+					for (let x = x1; x > x1 - 5; x--) for (let y = yc - 2; y <= yc + 2; y++) for (let z = bz - 2; z <= bz + 2; z++) cells.push({ x, y, z });
+					boxes.push({ cells, anchor: { x: x1, y: yc, z: bz } });
+					for (const c of cells) if (REMOVABLE[world.getBlock(c.x, c.y, c.z)]) expected.push(c);
+				}
+				let t0 = -1;
+				due = (frame, now) => {
+					if (t0 < 0) t0 = now;
+					if (events.length < boxes.length && now - t0 >= def.everyMs * events.length) {
+						const { cells, anchor } = boxes[events.length];
+						remove(cells, anchor);
+						events.push(frame);
+					}
+				};
+				done = () => events.length === boxes.length;
+			}
+			// Settle the placement edits before the window opens.
+			for (let k = 0; k < 30; k++) await raf();
+			b.reset();
+			const t0 = performance.now();
+			arm();
+			let frame = 0, lastLight = lightNow(), lightMax = 0, bulkMax = 0, quiet = 0, prevNow = -1;
+			const enter = new Map<number, number>();
+			const deltas: number[] = [];
+			for (;;) {
+				const now = await raf();
+				frame++;
+				deltas[frame] = prevNow < 0 ? 0 : now - prevNow;
+				prevNow = now;
+				due(frame, now);
+				const l = lightNow();
+				lightMax = Math.max(lightMax, l - lastLight);
+				lastLight = l;
+				const lane = loop.bulkLane; // Phase A's bulk lane (a private field; absent before Phase A)
+				if (lane) {
+					for (const i of lane) if (!enter.has(i)) enter.set(i, frame);
+					for (const [i, f] of enter) if (!lane.has(i)) { bulkMax = Math.max(bulkMax, frame - f); enter.delete(i); }
+				}
+				const idle = (!lane || lane.size === 0) && loop.stats.editQueue === 0;
+				quiet = done() && idle ? quiet + 1 : 0;
+				if (quiet >= 10) break;
+				if (performance.now() - t0 > 20_000) throw new Error(`${def.name}: did not finish in 20 s (${events.length} events)`);
+			}
+			for (const [, f] of enter) bulkMax = Math.max(bulkMax, frame - f);
+			const t1 = performance.now();
+			const removed = expected.filter((c) => { const id = world.getBlock(c.x, c.y, c.z); return id === 0 || LIQUID[id]; }).length;
+			// The frame a blast or swing lands in, and the two after it (the loop's tick may run before or after this callback).
+			const eventMs = events.map((f) => Math.max(deltas[f] ?? 0, deltas[f + 1] ?? 0, deltas[f + 2] ?? 0));
+			return { raw: b.take(), t0, t1, lightMax, bulkMax, bulkLane: !!loop.bulkLane, removed, expected: expected.length, events, eventMs };
+		}, { def, pcx, pcz, REMOVABLE, LIQUID });
+		if (r.removed !== r.expected) throw new Error(`${def.name}: ${r.expected - r.removed} of ${r.expected} cells were not removed`);
+		const sum = summarise(r.raw, r.t0, r.t1);
+		const maxFrame = r.raw.frames.filter((f) => f.t >= r.t0 && f.t <= r.t1).reduce((m, f) => Math.max(m, f.ms), 0);
+		rows.push({ ...sum, name: def.name, maxFrame, lightMax: r.lightMax, bulkMax: r.bulkMax, bulkLane: r.bulkLane, removed: r.removed, expected: r.expected, events: r.events, eventMs: r.eventMs });
+	}
+	return { rows };
+}
 type MemoryResult = { heapMB: number; mounted: number; data: number; modified: number };
 async function memory(page: Page, cdp: CDPSession, dir: { dirX: number; dirZ: number }): Promise<MemoryResult> {
 	await move(page, 'fly', dir.dirX, dir.dirZ, 25, 30);
@@ -285,8 +476,9 @@ async function memory(page: Page, cdp: CDPSession, dir: { dirX: number; dirZ: nu
 					if (phase === 'fly') runs.push(await move(page, 'fly', dir.dirX, dir.dirZ, 25, 8));
 					if (phase === 'edit') runs.push(await edits(page));
 					if (phase === 'memory') runs.push(await memory(page, cdp, dir));
+					if (phase === 'craft') runs.push(await crafting(page));
 				}
-				console.log(`# ${phase} rep ${rep}${rep === 0 ? ' (warm-up)' : ''}: ${JSON.stringify(runs[runs.length - 1], (k, v) => (k === 'edge' || k === 'interior' || k === 'slow' ? undefined : typeof v === 'number' ? Math.round(v * 10) / 10 : v))}`);
+				console.log(`# ${phase} rep ${rep}${rep === 0 ? ' (warm-up)' : ''}: ${JSON.stringify(runs[runs.length - 1], (k, v) => (k === 'edge' || k === 'interior' || k === 'slow' || k === 'events' || k === 'eventMs' ? undefined : typeof v === 'number' ? Math.round(v * 10) / 10 : v))}`);
 				await page.close();
 			}
 			out[phase] = runs.slice(1); // first repetition is warm-up
@@ -318,6 +510,26 @@ async function memory(page: Page, cdp: CDPSession, dir: { dirX: number; dirZ: nu
 	if (out.memory) {
 		const modified = med('memory', 'modified');
 		rows.push(`| memory after 30 s tier-5 flight | heap ${med('memory', 'heapMB')} MB (used + backing) | mounted ${med('memory', 'mounted')} | data ${med('memory', 'data')} (modified ${modified}) | — | ${gate(med('memory', 'heapMB') <= GATES.heapMB && med('memory', 'mounted') <= GATES.mounted && med('memory', 'data') <= GATES.data + modified)} |`);
+	}
+	if (out.craft) {
+		const C = out.craft as unknown as CraftResult[];
+		rows.push('', '| Crafting row | max frame ms (median / worst) | frames > 50 ms | light ms, worst frame | bulk frames, worst chunk | cells removed | gate |', '|---|---|---|---|---|---|---|');
+		for (const def of CRAFT_ROWS) {
+			const rs = C.map((c) => c.rows.find((x) => x.name === def.name)!);
+			const mf = median(rs.map((x) => x.maxFrame)), worst = Math.max(...rs.map((x) => x.maxFrame));
+			const over = median(rs.map((x) => x.over50)), light = median(rs.map((x) => x.lightMax)), bulk = Math.max(...rs.map((x) => x.bulkMax));
+			const ok = over === 0 && light < GATES.craftLightMs && bulk <= GATES.craftBulkFrames;
+			const thin = mf > GATES.craftFrameMs * GATES.craftMargin || light > GATES.craftLightMs * GATES.craftMargin || bulk > GATES.craftBulkFrames * GATES.craftMargin;
+			const bulkCell = rs[0].bulkLane ? String(bulk) : '— (no bulk lane)';
+			rows.push(`| ${def.name} | ${mf.toFixed(1)} / ${worst.toFixed(1)} | ${over} | ${light.toFixed(1)} | ${bulkCell} | ${rs[0].removed} | ${gate(ok)}${ok && thin ? ' (thin)' : ''} |`);
+		}
+		// Spec §8: the chain rows report each detonation's frame (worst repetition per detonation).
+		for (const def of CRAFT_ROWS) {
+			if (def.kind !== 'tnt' || def.count < 2) continue;
+			const rs = C.map((c) => c.rows.find((x) => x.name === def.name)!);
+			const per = rs[0].eventMs.map((_, k) => Math.max(...rs.map((x) => x.eventMs[k] ?? 0)).toFixed(1));
+			rows.push(`${def.name}: detonation frames ${per.join(' / ')} ms`);
+		}
 	}
 	console.log(rows.join('\n'));
 	process.exit(failed ? 1 : 0);

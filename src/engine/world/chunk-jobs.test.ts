@@ -100,4 +100,42 @@ describe('ChunkJobs (spec §6.3)', () => {
 		expect(jobs.post(w, w.getChunk(...picks[1])!)).toBe(true);
 		expect(jobs.post(w, w.getChunk(...picks[2])!)).toBe(false);
 	});
+	it('a reply is dropped when a NEIGHBOUR in the 3×3 changed and the chunk itself did not (catches today\'s check of the chunk\'s own rev only: the stale mesh would mount; crafting spec §7)', async () => {
+		const { w, picks } = world12();
+		const c = w.getChunk(...picks[4])!; // the spawn chunk: its whole 3×3 is loaded
+		const jobs = new ChunkJobs(inlineWorkerFactory(), table, 2);
+		const applied: number[] = [], dropped: number[] = [];
+		jobs.onReply = (j) => applied.push(j.id);
+		jobs.onDropped = (j) => dropped.push(j.id);
+		const own = c.rev;
+		jobs.post(w, c);
+		w.getChunk(c.cx + 1, c.cz - 1)!.rev++; // a DIAGONAL neighbour: the worker copied only its blocks
+		while (jobs.inFlight() > 0) await flush();
+		expect(c.rev).toBe(own);
+		expect(dropped).toHaveLength(1);
+		expect(applied).toHaveLength(0);
+		jobs.post(w, c); // nothing changed since this post → applied (catches dropping every reply)
+		while (jobs.inFlight() > 0) await flush();
+		expect(applied).toHaveLength(1);
+	});
+
+	it('a neighbour evicted and regenerated at the same rev while the job is in flight → dropped (catches slots compared by rev alone: a regenerated chunk starts again at a low rev)', async () => {
+		const { w, picks } = world12();
+		const c = w.getChunk(...picks[4])!;
+		const jobs = new ChunkJobs(inlineWorkerFactory(), table, 2);
+		const applied: number[] = [], dropped: number[] = [];
+		jobs.onReply = (j) => applied.push(j.id);
+		jobs.onDropped = (j) => dropped.push(j.id);
+		const revs = new Map<string, number>();
+		for (let dx = -1; dx <= 1; dx++) for (let dz = -1; dz <= 1; dz++) revs.set(`${dx},${dz}`, w.getChunk(c.cx + dx, c.cz + dz)!.rev);
+		jobs.post(w, c);
+		const old = w.getChunk(c.cx - 1, c.cz)!;
+		w.dropChunk(old.cx, old.cz);
+		expect(w.ensureChunk(old.cx, old.cz)).not.toBe(old);
+		// dropChunk bumps every rev of the 3×3; put them all back so ONLY the identity of one slot differs.
+		for (let dx = -1; dx <= 1; dx++) for (let dz = -1; dz <= 1; dz++) w.getChunk(c.cx + dx, c.cz + dz)!.rev = revs.get(`${dx},${dz}`)!;
+		while (jobs.inFlight() > 0) await flush();
+		expect(dropped).toHaveLength(1);
+		expect(applied).toHaveLength(0);
+	});
 });

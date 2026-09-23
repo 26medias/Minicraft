@@ -59,9 +59,13 @@ thread because its flood fill writes into neighbouring chunks.
   samples neighbour `sunlit` at border corners; without it no chunk matched the sync path.
   The copies' buffers are transferred, never the World's own arrays. About 0.3 ms per job.
 - **UV table**: a pure `Float32Array` built from `atlas.json` (`uv-table.ts`), posted once.
-- **Staleness**: each job records the chunk object and `Chunk.rev`. A reply is applied only if
-  the world still holds that same object at the same `rev`, and only if the chunk is still
-  within `MESH_RADIUS`. `rev` increases on block writes, light updates and shadow invalidation.
+- **Staleness**: each job records the chunk object and `Chunk.rev` of all 9 chunks of the 3×3
+  it copied. A reply is applied only if the world still holds every one of those objects at
+  the same `rev`, and only if the chunk is still within `MESH_RADIUS`. `rev` increases on block
+  writes, light updates and shadow invalidation. Checking the neighbours matters because a
+  border edit in the dark leaves the centre's `rev` alone. The stale reply would then mount
+  over the edit with a face missing, and nothing would re-mesh it. Checking identity catches a
+  neighbour that was evicted and regenerated at a low `rev`.
 - **Dropped replies re-dirty** the chunk so the next frame posts it again.
 - At most 2 jobs in flight. In-flight chunks are skipped by the stream lane.
 - The `Worker` is built through an injectable factory. Tests use an inline factory in
@@ -116,6 +120,43 @@ Final run (same machine as the baseline, medians of 5):
 | Initial load | worst task 433 ms | none over 50 ms after the world exists |
 | Edits | 130–160 ms freeze | 10 ms interior, 26 ms at a chunk edge |
 | Memory | 407 MB, unbounded | 71 MB |
+
+### Crafting rows
+
+The `craft` phase (crafting spec §8) measures batched removal:
+- plain TNT (radius 3);
+- a 5×5×5 area break held along a tunnel, 10 swings, one every 0.25 s;
+- one radius-8 blast;
+- a chain of four radius-8 blasts, 0.1 s apart.
+
+Each runs once in a chunk's interior and once on a chunk corner, at fixed sites near the seed-3 spawn. Every row asserts
+that each cell it should remove is gone.
+
+Gates:
+- no frame over 50 ms;
+- light work under 15 ms in any frame;
+- every bulk chunk mounted within 16 frames of its edit.
+
+The dev box is faster than Noah's laptop, so a value within 20 % of a gate prints "thin".
+
+Until the Mega TNT block exists, the radius-8 rows are a stand-in. The bench computes `detonate()`'s cell set itself
+and removes it through the game's removal path. `MEGA` in the bench switches them to the real block.
+
+Baseline, before batched removal (2026-09-23, medians of 3):
+
+| Crafting row | max frame ms (median / worst) | frames > 50 ms | light ms, worst frame | bulk frames, worst chunk | cells removed | gate |
+|---|---|---|---|---|---|---|
+| TNT r3 interior | 43.4 / 43.7 | 0 | 1.2 | — (no bulk lane) | 122 | ok (thin) |
+| TNT r3 corner | 50.4 / 51.5 | 1 | 0.6 | — (no bulk lane) | 122 | FAIL |
+| area 5×5×5 ×10 held interior | 35.9 / 55.4 | 0 | 0.7 | — (no bulk lane) | 1250 | ok |
+| area 5×5×5 ×10 held corner | 39.3 / 41.3 | 0 | 0.3 | — (no bulk lane) | 521 | ok |
+| Mega r8 interior | 46.3 / 48.5 | 0 | 5.7 | — (no bulk lane) | 1219 | ok (thin) |
+| Mega r8 corner | 53.8 / 54.0 | 1 | 7.2 | — (no bulk lane) | 1315 | FAIL |
+| Mega r8 chain ×4 interior | 70.7 / 74.5 | 2 | 8.5 | — (no bulk lane) | 3675 | FAIL |
+| Mega r8 chain ×4 corner | 52.7 / 53.9 | 1 | 8.7 | — (no bulk lane) | 3738 | FAIL |
+
+Mega r8 chain ×4 interior: detonation frames 50.0 / 33.3 / 16.8 / 33.3 ms
+Mega r8 chain ×4 corner: detonation frames 33.3 / 16.8 / 33.4 / 33.3 ms
 
 The remaining hitches came from the liquid scheduler, not chunk work: generated ocean at the world
 edge read the outside as air and retried ~5 500 phantom flows every tick, and every liquid cell of

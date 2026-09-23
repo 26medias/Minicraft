@@ -4,7 +4,7 @@ import { moveWithCollisions } from '../engine/physics/collision';
 import type { BlockId } from '../data/blocks.data';
 import { isLiquid } from '../data/blocks.data';
 import type { Inventory, PlayerTools } from '../data/crafting.data';
-import { GRAVITY, JUMP_SPEED } from './pads';
+import { GRAVITY, JUMP_SPEED, MIN_BOUNCE_VY, padResponse, padUnderFeet } from './pads';
 
 const WALK_SPEED = 5; // blocks/sec
 const SIZE: [number, number, number] = [0.6, 1.8, 0.6];
@@ -48,6 +48,8 @@ export type Keys = {
 	left: boolean;
 	right: boolean;
 	jump: boolean;
+	/** Shift (toys spec §4): stops pads. Optional so every existing Keys literal stays valid; absent = not held. */
+	sneak?: boolean;
 };
 
 /**
@@ -224,6 +226,8 @@ export class Player {
 		const sx = vx / steps,
 			sy = vyStep / steps,
 			sz = vz / steps;
+		// Toys spec §3.1: the speed he lands with, read before collision zeroes it.
+		const landingVy = this.vy;
 		let grounded = false;
 		for (let i = 0; i < steps; i++) {
 			const r = moveWithCollisions(world, this.position, SIZE, [sx, sy, sz]);
@@ -231,6 +235,15 @@ export class Player {
 			grounded = grounded || r.grounded;
 			if (r.vy === 0) this.vy = 0;
 			if (r.vx === 0 && r.vz === 0 && r.vy === 0) break;
+		}
+		// Slime Pad: a real landing bounces. Not grounded, so next frame's jump line cannot overwrite the bounce
+		// (gate 1 measured a 19.7 bounce cut to 8.0). A soft landing, or sneak, leaves him standing.
+		if (!this.flying && !this.swimming && grounded && landingVy < -MIN_BOUNCE_VY && padUnderFeet(world, this.position) === 'slime') {
+			const up = padResponse(landingVy, 'slime', keys.jump, keys.sneak === true);
+			if (up > 0) {
+				this.vy = up;
+				grounded = false;
+			}
 		}
 
 		// Keep the player inside the world. Leaving it horizontally means there is no

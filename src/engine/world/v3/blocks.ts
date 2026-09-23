@@ -1,6 +1,7 @@
 import { BLOCK_BY_NAME } from '../../../data/blocks.data';
 
-const NAMES = [
+/** Every block name worldgen v3 may write, in id-resolution order. Exported for the crafting counted-set test (spec §3). */
+export const NAMES = [
 	'air', 'grass_block', 'dirt', 'stone', 'cobblestone', 'sand', 'water', 'lava', 'bedrock', 'deepslate',
 	'granite', 'diorite', 'andesite', 'tuff', 'calcite', 'gravel', 'clay', 'sandstone', 'red_sand', 'red_sandstone',
 	'terracotta', 'orange_terracotta', 'yellow_terracotta', 'white_terracotta', 'red_terracotta', 'brown_terracotta', 'light_gray_terracotta',

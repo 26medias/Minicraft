@@ -357,7 +357,10 @@ Noah's laptop — keep a 20 % margin.
   instead of the button.
 - **After crafting:** a short sound and a sparkle on the card. Crafted TNT
   goes to the hotbar slot already holding that block, else the first empty
-  slot, else the selected slot. A crafted pickaxe is equipped.
+  slot, else the first other slot whose block needs a count and is at 0 (a
+  greyed slot), else the selected slot. A crafted pickaxe is equipped.
+- A new must-mine world starts with the default hotbar, greyed at 0 (parent's
+  decision at gate 2).
 
 ## 10. Saves and API — never break saves
 

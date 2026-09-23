@@ -13,7 +13,8 @@ import type { PrimedOverlay } from '../engine/render/primed-overlay';
 import type { LightRegistry } from '../engine/render/light-registry';
 import type { FaceHighlight } from '../engine/render/face-highlight';
 import { canReplace, igniteTnt, placeBlock, type PrimedEntry } from './actions';
-import { detonate, tntKey, TNT_CHAIN_FUSE } from './tnt';
+import { tntKey, TNT_CHAIN_FUSE } from './tnt';
+import { detonate } from './blast-shapes';
 import { updateLightsForBlockChange } from '../engine/world/lighting';
 import { LiquidScheduler } from './liquid-scheduler';
 import { chunkIndex, chunkIndexOrNeg, WORLD_CHUNKS_Z } from '../engine/world/coords';
@@ -648,9 +649,7 @@ export class GameLoop {
 	/** Radius comes from the entry (fixed at priming), never from what sits at the origin now. */
 	private detonateAt(entry: PrimedEntry): void {
 		const { x: ox, y: oy, z: oz } = entry;
-		const result = detonate(this.world, ox, oy, oz, entry.radius, (x, y, z) =>
-			this.primedTnt.has(tntKey(x, y, z)),
-		);
+		const result = detonate(this.world, ox, oy, oz, (x, y, z) => this.primedTnt.has(tntKey(x, y, z)), entry.radius);
 		// Crafting spec §7: one batch anchored at the origin (edit lane); the rest of the blast goes to the bulk lane.
 		const { removed } = this.removeBlocks(result.destroyed, { x: ox, y: oy, z: oz });
 		// The detonating TNT's own cell is not a mined block (spec §2: a lone TNT adds 0 TNT).

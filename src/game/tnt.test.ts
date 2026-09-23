@@ -1,7 +1,12 @@
 import { describe, it, expect } from 'vitest';
 import { World } from '../engine/world/world';
 import { BLOCK_BY_NAME } from '../data/blocks.data';
-import { detonate, tntSpec, TNT_RADIUS } from './tnt';
+import { tntSpec, TNT_RADIUS } from './tnt';
+import { detonate as shapeDetonate } from './blast-shapes';
+
+/** Today's argument order, over the toys spec §4 dispatch (a sphere when no shape is given). */
+const detonate = (w: World, x: number, y: number, z: number, radius: number, alreadyPrimed: (x: number, y: number, z: number) => boolean) =>
+	shapeDetonate(w, x, y, z, alreadyPrimed, radius);
 
 const tntId = BLOCK_BY_NAME['tnt'].id;
 const stoneId = BLOCK_BY_NAME['stone'].id;

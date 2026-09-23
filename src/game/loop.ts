@@ -534,10 +534,14 @@ export class GameLoop {
 		this.aim = raycastVoxel(this.world, eye, [fwd.x, fwd.y, fwd.z], REACH);
 		if (this.aim) {
 			this.highlight?.show(this.aim.x, this.aim.y, this.aim.z, this.aim.face);
-			const tier = this.equippedTier();
-			const multi = isMultiBlock(tier);
-			// Glow exactly the cells the break will remove (same rule as removeBlocks), never the air in the area.
-			this.highlight?.setCells(multi ? removableCells(this.world, areaCells(this.aim, this.aim.face, tier)) : [], multi);
+			const tunnel = this.tunnelPreview(this.aim);
+			if (tunnel) this.highlight?.setCells(tunnel, true);
+			else {
+				const tier = this.equippedTier();
+				const multi = isMultiBlock(tier);
+				// Glow exactly the cells the break will remove (same rule as removeBlocks), never the air in the area.
+				this.highlight?.setCells(multi ? removableCells(this.world, areaCells(this.aim, this.aim.face, tier)) : [], multi);
+			}
 		} else this.highlight?.hide();
 
 		this.updateMining(dt);
@@ -550,6 +554,16 @@ export class GameLoop {
 		this.updateSpeed(dt);
 		this.loadNearbyChunks();
 		this.flushDirtyChunks();
+	}
+
+	/**
+	 * Toys spec §3.4: aimed at a primed Tunnel TNT, the cells its blast will remove (the origin first), in its stored
+	 * direction; null for anything else. Nothing is primed by a preview (alreadyPrimed answers true for every cell).
+	 */
+	private tunnelPreview(hit: VoxelHit): Array<{ x: number; y: number; z: number }> | null {
+		const e = this.primedTnt.get(tntKey(hit.x, hit.y, hit.z));
+		if (!e?.dir) return null;
+		return detonate(this.world, e.x, e.y, e.z, () => true, e.radius, { shape: 'tunnel', dir: e.dir }).destroyed;
 	}
 
 	/**

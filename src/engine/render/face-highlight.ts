@@ -16,8 +16,8 @@ export const GLOW_COLOR = 0xffa033;
 const GLOW_OPACITY = 0.35;
 /** Slightly larger than a block so its faces sit in front of the block's own faces (no z-fight). */
 const GLOW_SIZE = 1.01;
-/** Emerald's 5×5×5, the largest area. */
-export const MAX_GLOW_CELLS = 125;
+/** The largest glow: a Tunnel TNT's preview, 3 × 3 × 24 (toys spec §3.4). Emerald's 5×5×5 area is 125. */
+export const MAX_GLOW_CELLS = 216;
 
 type Transform = { offset: readonly [number, number, number]; euler: readonly [number, number, number] };
 

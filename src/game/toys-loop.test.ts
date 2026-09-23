@@ -9,6 +9,7 @@ import { TNT_CHAIN_FUSE } from './tnt';
 import { detonate } from './blast-shapes';
 import type { World } from '../engine/world/world';
 import type { ParticleSystem } from '../engine/render/particles';
+import type { FaceHighlight } from '../engine/render/face-highlight';
 
 const tnt = BLOCK_BY_NAME['tnt'].id, stone = BLOCK_BY_NAME['stone'].id, water = BLOCK_BY_NAME['water'].id, glass = BLOCK_BY_NAME['glass'].id;
 const tunnel = BLOCK_BY_NAME['tunnel_tnt'].id, flatten = BLOCK_BY_NAME['flatten_tnt'].id, lake = BLOCK_BY_NAME['lake_tnt'].id;
@@ -306,4 +307,56 @@ describe('Fireworks effect (toys spec §3.3)', () => {
 		for (const [x, z] of [[O.x, O.z], [O.x - 2, O.z], [O.x, O.z + 2], [O.x, O.z + 10], [O.x + 3, O.z + 10]]) expect(h.world.getBlock(x, O.y, z), `${x},${z}`).toBe(AIR);
 		expect(primed()).toBe(0);
 	});
+});
+
+describe('Tunnel preview (toys spec §3.4)', () => {
+	type C = { x: number; y: number; z: number };
+	const k = (c: C) => `${c.x},${c.y},${c.z}`;
+	const T = { x: 264, y: 31, z: 264 };
+	/** Flying at (264.5, 30, 268.5), eye y 31.6; yaw 0 looks −z straight at T, 4.5 blocks away. */
+	function previewLoop() {
+		const calls: Array<{ cells: string[]; multi: boolean }> = [];
+		const highlight = {
+			show: () => undefined,
+			hide: () => undefined,
+			setCells: (cells: readonly C[], multi: boolean) => { calls.push({ cells: cells.map(k), multi }); },
+		} as unknown as FaceHighlight;
+		const h = makeLoop({ highlight });
+		for (let cx = 14; cx <= 18; cx++) for (let cz = 14; cz <= 18; cz++) {
+			const c = h.world.ensureChunk(cx, cz);
+			c.blocks.fill(AIR);
+			c.lights.fill(0);
+			c.liquidFrontier.clear();
+		}
+		h.player.flying = true;
+		h.player.position = [264.5, 30, 268.5];
+		return { h, calls };
+	}
+
+	it('aimed at a primed Tunnel TNT, the glow is exactly the tunnel it will dig, in its direction (catches no preview, or a preview that ignores the stored direction)', () => {
+		const { h, calls } = previewLoop();
+		h.world.setBlock(T.x, T.y, T.z, tunnel);
+		fill(h.world, T.x - 1, T.x + 1, T.y, T.y + 2, T.z - 23, T.z - 1, stone); // the nz tunnel: 23 × 9 stone
+		h.world.setBlock(T.x + 2, T.y, T.z, stone); // px of the TNT: outside an nz tunnel
+		expect(h.loop.ignite(at(T), 0)).toBe(true); // yaw 0 → nz, away from the player
+		h.tick(0.01);
+		const last = calls.at(-1)!;
+		expect(last.multi).toBe(true);
+		expect(last.cells).toHaveLength(1 + 23 * 9);
+		expect(last.cells[0]).toBe(k(T));
+		expect(last.cells).toContain(`${T.x},${T.y + 2},${T.z - 23}`);
+		expect(last.cells).not.toContain(`${T.x + 2},${T.y},${T.z}`);
+	}, 30_000);
+
+	it('an unlit Tunnel TNT, or a lit plain TNT, gets the hand\'s plain highlight and no glow (catches a preview before the fuse, or on every TNT)', () => {
+		const { h, calls } = previewLoop();
+		h.world.setBlock(T.x, T.y, T.z, tunnel);
+		fill(h.world, T.x - 1, T.x + 1, T.y, T.y + 2, T.z - 23, T.z - 1, stone);
+		h.tick(0.01);
+		expect(calls.at(-1)).toEqual({ cells: [], multi: false });
+		h.world.setBlock(T.x, T.y, T.z, tnt);
+		expect(h.loop.ignite(at(T), 0)).toBe(true);
+		h.tick(0.01);
+		expect(calls.at(-1)).toEqual({ cells: [], multi: false });
+	}, 30_000);
 });

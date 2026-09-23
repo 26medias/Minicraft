@@ -87,6 +87,15 @@ describe('FaceHighlight.setCells: a faint glow on exactly the blocks that will b
 		expect(glow.count).toBe(125);
 	});
 
+	it('holds a whole Tunnel TNT preview, 3 × 3 × 24 = 216 cells (toys spec §3.4; catches the far end of the tunnel cut off at 125)', () => {
+		const { h, glow } = parts();
+		const all = [];
+		for (let l = 0; l < 24; l++) for (let y = 0; y < 3; y++) for (let w = 0; w < 3; w++) all.push({ x: l, y, z: w });
+		h.show(0, 0, 1, 'pz');
+		h.setCells(all, true);
+		expect(glow.count).toBe(216);
+	});
+
 	it('single-cell tier: today\'s white face outline and no glow (catches a glow drawn for the hand, which changes every existing world\'s look)', () => {
 		const { h, glow, border } = parts();
 		h.show(10, 20, 30, 'px');

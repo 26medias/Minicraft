@@ -2,7 +2,7 @@ import type { World } from '../engine/world/world';
 import type { VoxelHit } from '../engine/input/raycast';
 import type { BlockId } from '../data/blocks.data';
 import { AIR, BLOCKS, isSolid } from '../data/blocks.data';
-import { tntKey, tntSpec } from './tnt';
+import { tntKey, tntSpec, type TunnelDir } from './tnt';
 
 const FACE_NORMAL: Record<string, [number, number, number]> = {
 	px: [1, 0, 0],
@@ -50,21 +50,27 @@ export function canReplace(world: World, hit: VoxelHit, block: BlockId): boolean
 	return existing !== block;
 }
 
-/** A lit TNT. `radius` and `blockId` are fixed at priming (spec §6); `fuse` counts down. */
-export type PrimedEntry = { x: number; y: number; z: number; fuse: number; radius: number; blockId: BlockId };
+/**
+ * A lit TNT. `radius` and `blockId` are fixed at priming (spec §6); `fuse` counts down. `dir` (toys spec §3.4): a Tunnel's
+ * direction, fixed at priming; present only on Tunnel entries. Nothing here is saved.
+ */
+export type PrimedEntry = { x: number; y: number; z: number; fuse: number; radius: number; blockId: BlockId; dir?: TunnelDir };
 
-/** Primes the aimed TNT of any tier with its own fuse and radius. False on non-TNT or already primed. */
+/** Primes the aimed TNT of any tier with its own fuse and radius; a Tunnel also keeps `dir`. False on non-TNT or already primed. */
 export function igniteTnt(
 	world: World,
 	hit: VoxelHit,
 	registry: Map<string, PrimedEntry>,
+	dir: TunnelDir = 'px',
 ): boolean {
 	const id = world.getBlock(hit.x, hit.y, hit.z);
-	const spec = tntSpec(id);
-	if (!spec) return false;
+	const spec = BLOCKS[id]?.tnt;
+	if (!tntSpec(id) || !spec) return false;
 	const k = tntKey(hit.x, hit.y, hit.z);
 	if (registry.has(k)) return false;
-	registry.set(k, { x: hit.x, y: hit.y, z: hit.z, fuse: spec.fuse, radius: spec.radius, blockId: id });
+	const entry: PrimedEntry = { x: hit.x, y: hit.y, z: hit.z, fuse: spec.fuse, radius: spec.radius, blockId: id };
+	if (spec.shape === 'tunnel') entry.dir = dir;
+	registry.set(k, entry);
 	return true;
 }
 

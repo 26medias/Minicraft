@@ -151,7 +151,7 @@ describe('TNT through removeBlocks (crafting spec §2, §7)', () => {
 		loop.onBlocksRemoved = (removed) => calls.push(removed);
 		world.setBlock(260, 40, 260, tnt);
 		world.setBlock(261, 40, 260, stone);
-		expect(loop.ignite({ x: 260, y: 40, z: 260, face: 'py', distance: 1 })).toBe(true);
+		expect(loop.ignite({ x: 260, y: 40, z: 260, face: 'py', distance: 1 }, 0)).toBe(true);
 		loop.simulate(TNT_PRIME_FUSE + 0.1);
 		expect(world.getBlock(260, 40, 260)).toBe(AIR);
 		expect(calls).toHaveLength(1);
@@ -165,7 +165,7 @@ describe('TNT through removeBlocks (crafting spec §2, §7)', () => {
 		world.setBlock(260, 40, 260, tnt);
 		world.setBlock(262, 40, 260, tnt);
 		world.setBlock(265, 40, 260, stone); // 5 from the first, 3 from the second
-		loop.ignite({ x: 260, y: 40, z: 260, face: 'py', distance: 1 });
+		loop.ignite({ x: 260, y: 40, z: 260, face: 'py', distance: 1 }, 0);
 		loop.simulate(TNT_PRIME_FUSE + 0.1);
 		expect(world.getBlock(262, 40, 260)).toBe(tnt);
 		expect(ids).toEqual([]);
@@ -182,7 +182,7 @@ describe('TNT through removeBlocks (crafting spec §2, §7)', () => {
 		world.setBlock(262, 40, 260, bedrock);
 		world.setBlock(263, 40, 260, tnt);
 		world.setBlock(266, 40, 260, stone); // 3 from the TNT: a leaked fuse would remove it
-		expect(loop.ignite({ x: 263, y: 40, z: 260, face: 'py', distance: 1 })).toBe(true);
+		expect(loop.ignite({ x: 263, y: 40, z: 260, face: 'py', distance: 1 }, 0)).toBe(true);
 		const cells = [{ x: -1, y: 40, z: 260 }, { x: 260, y: 64, z: 260 }, { x: 259, y: 40, z: 260 }, { x: 260, y: 40, z: 260 }, { x: 261, y: 40, z: 260 }, { x: 262, y: 40, z: 260 }, { x: 263, y: 40, z: 260 }];
 		const { removed } = loop.removeBlocks(cells, { x: 260, y: 40, z: 260 });
 		expect(removed).toEqual([{ x: 260, y: 40, z: 260, blockId: stone }, { x: 263, y: 40, z: 260, blockId: tnt }]);

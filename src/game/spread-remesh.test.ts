@@ -103,7 +103,7 @@ function cornerBlast(h: Harness): { anchor: number; others: number[] } {
 	h.world.setBlock(x, y, z, TNT);
 	const L = lanes(h.loop);
 	L.editLane.clear(); L.bulkLane?.clear(); L.shadowOnly.clear();
-	expect(h.loop.ignite({ x, y, z, face: 'py', distance: 1 })).toBe(true);
+	expect(h.loop.ignite({ x, y, z, face: 'py', distance: 1 }, 0)).toBe(true);
 	h.loop.simulate(TNT_PRIME_FUSE + 0.1);
 	expect(h.world.getBlock(x, y, z)).toBe(AIR);
 	const anchor = chunkIndex(22, 13);

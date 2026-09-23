@@ -169,7 +169,7 @@ describe('area mining (spec §5, §11 loop)', () => {
 		fill(h, [262, 266], [39, 39], [262, 266], bedrock);
 		h.world.setBlock(263, 40, 263, water);
 		h.world.setBlock(265, 40, 265, tnt);
-		expect(h.loop.ignite({ x: 265, y: 40, z: 265, face: 'py', distance: 1 })).toBe(true);
+		expect(h.loop.ignite({ x: 265, y: 40, z: 265, face: 'py', distance: 1 }, 0)).toBe(true);
 		h.loop.onBlocksRemoved = (removed) => { applyRemoved(h.player, removed.map((r) => r.blockId), false); };
 		h.loop.setLeftMouseDown(true);
 		mineUntilAir(h, 264, 41, 264);

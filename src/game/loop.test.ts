@@ -57,7 +57,7 @@ describe('GameLoop.onWorldMutated', () => {
 			mutations++;
 		};
 
-		expect(loop.ignite({ x: 260, y: 40, z: 260 } as never)).toBe(true);
+		expect(loop.ignite({ x: 260, y: 40, z: 260 } as never, 0)).toBe(true);
 		loop.simulate(TNT_PRIME_FUSE + 0.1);
 
 		expect(world.getBlock(261, 40, 260)).toBe(AIR);
@@ -101,7 +101,7 @@ describe('GameLoop.paused', () => {
 		loop.onWorldMutated = () => {
 			mutations++;
 		};
-		expect(loop.ignite({ x: 260, y: 30, z: 260 } as never)).toBe(true);
+		expect(loop.ignite({ x: 260, y: 30, z: 260 } as never, 0)).toBe(true);
 
 		keys.forward = true;
 		loop.paused = true;
@@ -161,7 +161,7 @@ describe('GameLoop.replaceBlock', () => {
 		const { loop, world } = makeLoop();
 		world.setBlock(260, 40, 260, tnt);
 		world.setBlock(261, 40, 260, stone);
-		expect(loop.ignite(hit(260, 40, 260))).toBe(true);
+		expect(loop.ignite(hit(260, 40, 260), 0)).toBe(true);
 		expect(loop.replaceBlock(hit(260, 40, 260), dirt, '#ffffff')).toBe(true);
 		loop.simulate(TNT_PRIME_FUSE + 0.1);
 		// detonate() ignores what sits at the origin, so a leaked fuse still

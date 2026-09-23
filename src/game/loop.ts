@@ -7,14 +7,14 @@ import { meshChunk, type ChunkMeshResult, type UvFn } from '../engine/world/mesh
 import { computeChunkShadows, ensureShadowNeighbourhood, hashSunlit } from '../engine/world/shadows';
 import type { ChunkJobs } from '../engine/world/chunk-jobs';
 import { raycastVoxel, type VoxelHit } from '../engine/input/raycast';
-import { AIR, BLOCKS, BLOCK_BY_NAME, isSolid, type BlockId, type Face } from '../data/blocks.data';
+import { AIR, BLOCKS, BLOCK_BY_NAME, WATER, isSolid, type BlockId, type Face } from '../data/blocks.data';
 import type { ParticleSystem } from '../engine/render/particles';
 import type { PrimedOverlay } from '../engine/render/primed-overlay';
 import type { LightRegistry } from '../engine/render/light-registry';
 import type { FaceHighlight } from '../engine/render/face-highlight';
 import { canReplace, igniteTnt, placeBlock, type PrimedEntry } from './actions';
 import { tntKey, TNT_CHAIN_FUSE } from './tnt';
-import { cellInBox, detonate, playerBox } from './blast-shapes';
+import { cellInBox, detonate, playerBox, yawDir } from './blast-shapes';
 import { updateLightsForBlockChange } from '../engine/world/lighting';
 import { LiquidScheduler } from './liquid-scheduler';
 import { chunkIndex, chunkIndexOrNeg, WORLD_CHUNKS_Z } from '../engine/world/coords';
@@ -329,9 +329,12 @@ export class GameLoop {
 		return this.mining ? Math.min(1, this.mining.elapsed / this.mining.duration) : 0;
 	}
 
-	/** Called from main.ts on 'ignite' keydown. Returns true if a TNT was newly primed. */
-	ignite(hit: VoxelHit): boolean {
-		const ok = igniteTnt(this.world, hit, this.primedTnt);
+	/**
+	 * Called from main.ts on 'ignite' keydown with the camera's yaw. Returns true if a TNT was newly primed.
+	 * A Tunnel TNT takes its direction from the yaw, snapped to ±x or ±z (toys spec §3.4).
+	 */
+	ignite(hit: VoxelHit, yaw: number): boolean {
+		const ok = igniteTnt(this.world, hit, this.primedTnt, yawDir(yaw));
 		if (ok) this.overlay?.add(hit.x, hit.y, hit.z);
 		return ok;
 	}
@@ -682,18 +685,29 @@ export class GameLoop {
 		return expired.length > 0;
 	}
 
-	/** Radius comes from the entry (fixed at priming), never from what sits at the origin now. */
+	/**
+	 * Radius, shape and a Tunnel's dir come from the entry (fixed at priming: the shape through its blockId), never from
+	 * what sits at the origin now. Toys spec §4: removal first (counted, minus the origin), then the free builds.
+	 */
 	private detonateAt(entry: PrimedEntry): void {
 		const { x: ox, y: oy, z: oz } = entry;
-		const result = detonate(this.world, ox, oy, oz, (x, y, z) => this.primedTnt.has(tntKey(x, y, z)), entry.radius);
+		const origin = { x: ox, y: oy, z: oz };
+		const shape = BLOCKS[entry.blockId]?.tnt?.shape ?? 'sphere';
+		const result = detonate(this.world, ox, oy, oz, (x, y, z) => this.primedTnt.has(tntKey(x, y, z)), entry.radius,
+			{ shape, dir: entry.dir, player: playerBox(this.player.position) });
 		// Crafting spec §7: one batch anchored at the origin (edit lane); the rest of the blast goes to the bulk lane.
-		const { removed } = this.removeBlocks(result.destroyed, { x: ox, y: oy, z: oz });
+		const { removed } = this.removeBlocks(result.destroyed, origin);
 		// The detonating TNT's own cell is not a mined block (spec §2: a lone TNT adds 0 TNT).
 		const mined = removed.filter((r) => r.x !== ox || r.y !== oy || r.z !== oz);
 		if (mined.length > 0) this.onBlocksRemoved?.(mined);
-		for (const { x, y, z, radius, blockId } of result.primed) {
-			// Chain fuse is 0.1 s for every tier; the chained TNT keeps ITS OWN radius.
-			this.primedTnt.set(tntKey(x, y, z), { x, y, z, fuse: TNT_CHAIN_FUSE, radius, blockId });
+		// Toys spec §2: built blocks (dome glass, lake water) are free, never counted.
+		if (result.build) this.placeBlocks(result.build.cells, result.build.blockId, origin);
+		if (result.water) this.placeBlocks(result.water, WATER, origin);
+		for (const { x, y, z, radius, blockId, dir } of result.primed) {
+			// Chain fuse is 0.1 s for every tier; the chained TNT keeps ITS OWN radius (and a Tunnel its chained dir).
+			const chained: PrimedEntry = { x, y, z, fuse: TNT_CHAIN_FUSE, radius, blockId };
+			if (dir) chained.dir = dir;
+			this.primedTnt.set(tntKey(x, y, z), chained);
 			this.overlay?.add(x, y, z);
 		}
 		this.particles?.spawnBreak(ox, oy, oz, entry.blockId);

@@ -102,7 +102,7 @@ describe('applyRemoved through a TNT blast (spec §3 auto-hotbar)', () => {
 		loop.onBlocksRemoved = (removed) => { applyRemoved(player, removed.map((r) => r.blockId), true); };
 		world.setBlock(264, 41, 262, tnt);
 		for (const [x, y, z] of [[265, 41, 262], [263, 41, 262], [264, 42, 262], [264, 40, 262], [264, 41, 261]]) world.setBlock(x, y, z, coal);
-		expect(loop.ignite({ x: 264, y: 41, z: 262, face: 'py', distance: 1 })).toBe(true);
+		expect(loop.ignite({ x: 264, y: 41, z: 262, face: 'py', distance: 1 }, 0)).toBe(true);
 		loop.simulate(TNT_PRIME_FUSE + 0.1);
 		expect(world.getBlock(265, 41, 262)).toBe(AIR);
 		expect(player.inventory.coal_ore).toBe(5);

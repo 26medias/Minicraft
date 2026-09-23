@@ -285,7 +285,7 @@ async function crafting(page: Page): Promise<CraftResult> {
 			const mc = (window as unknown as { __mc: {
 				world: { getBlock(x: number, y: number, z: number): number; setBlock(x: number, y: number, z: number, id: number): void };
 				loop: {
-					ignite(hit: { x: number; y: number; z: number; face: string; distance: number }): boolean;
+					ignite(hit: { x: number; y: number; z: number; face: string; distance: number }, yaw: number): boolean;
 					markChunkDirtyAround(x: number, z: number): void;
 					applyLightUpdate(x: number, y: number, z: number): void;
 					removeBlocks?: (cells: Cell[], anchor: Cell) => { removed: unknown[] };
@@ -350,7 +350,7 @@ async function crafting(page: Page): Promise<CraftResult> {
 				const gone = (o: Cell) => world.getBlock(o.x, o.y, o.z) !== def.blockId;
 				done = () => origins.every(gone);
 				if (def.real) {
-					arm = () => { if (!loop.ignite({ ...origins[0], face: 'py', distance: 1 })) throw new Error(`${def.name}: ignite refused`); };
+					arm = () => { if (!loop.ignite({ ...origins[0], face: 'py', distance: 1 }, 0)) throw new Error(`${def.name}: ignite refused`); };
 					due = (frame) => { while (events.length < origins.length && gone(origins[events.length])) events.push(frame); };
 				} else {
 					let t0 = -1;

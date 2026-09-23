@@ -27,7 +27,7 @@ describe('TNT tiers in the loop (spec §6)', () => {
 		const { loop, world } = makeLoop();
 		world.setBlock(O.x, O.y, O.z, big);
 		world.setBlock(O.x + 1, O.y, O.z, stone);
-		expect(loop.ignite(hit(O.x, O.y, O.z))).toBe(true);
+		expect(loop.ignite(hit(O.x, O.y, O.z), 0)).toBe(true);
 		loop.simulate(3.0);
 		expect(world.getBlock(O.x + 1, O.y, O.z)).toBe(stone);
 		loop.simulate(1.1);
@@ -40,7 +40,7 @@ describe('TNT tiers in the loop (spec §6)', () => {
 		world.setBlock(O.x, O.y, O.z, mega);
 		world.setBlock(O.x + 8, O.y, O.z, stone);
 		world.setBlock(O.x, O.y, O.z + 9, stone);
-		loop.ignite(hit(O.x, O.y, O.z));
+		loop.ignite(hit(O.x, O.y, O.z), 0);
 		loop.simulate(6.1);
 		expect(world.getBlock(O.x + 8, O.y, O.z)).toBe(AIR);
 		expect(world.getBlock(O.x, O.y, O.z + 9)).toBe(stone);
@@ -49,7 +49,7 @@ describe('TNT tiers in the loop (spec §6)', () => {
 		p.world.setBlock(O.x, O.y, O.z, tnt);
 		p.world.setBlock(O.x + 3, O.y, O.z, stone);
 		p.world.setBlock(O.x + 4, O.y, O.z, stone);
-		p.loop.ignite(hit(O.x, O.y, O.z));
+		p.loop.ignite(hit(O.x, O.y, O.z), 0);
 		p.loop.simulate(2.6);
 		expect(p.world.getBlock(O.x + 3, O.y, O.z)).toBe(AIR);
 		expect(p.world.getBlock(O.x + 4, O.y, O.z)).toBe(stone);
@@ -61,7 +61,7 @@ describe('TNT tiers in the loop (spec §6)', () => {
 		const { loop, world } = makeLoop();
 		world.setBlock(O.x, O.y, O.z, big);
 		world.setBlock(O.x + 5, O.y, O.z, stone);
-		loop.ignite(hit(O.x, O.y, O.z));
+		loop.ignite(hit(O.x, O.y, O.z), 0);
 		world.setBlock(O.x, O.y, O.z, tnt);
 		loop.simulate(4.1);
 		expect(world.getBlock(O.x + 5, O.y, O.z)).toBe(AIR);
@@ -75,7 +75,7 @@ describe('TNT tiers in the loop (spec §6)', () => {
 		world.setBlock(O.x + 2, O.y, O.z, big);
 		world.setBlock(O.x + 7, O.y, O.z, stone);   // 7 from plain (out of r3), 5 from Big (in r5)
 		world.setBlock(O.x - 4, O.y, O.z, stone);   // 4 from plain, 6 from Big: out of both
-		loop.ignite(hit(O.x, O.y, O.z));
+		loop.ignite(hit(O.x, O.y, O.z), 0);
 		loop.simulate(2.6);
 		expect(world.getBlock(O.x + 2, O.y, O.z)).toBe(big);   // primed, not destroyed
 		loop.simulate(TNT_CHAIN_FUSE + 0.05);                  // chain fuse is 0.1 s for every tier
@@ -90,7 +90,7 @@ describe('TNT tiers in the loop (spec §6)', () => {
 		world.setBlock(O.x + 4, O.y, O.z, tnt);
 		world.setBlock(O.x + 7, O.y, O.z, stone);   // 3 from plain: destroyed by the chained blast
 		world.setBlock(O.x + 8, O.y, O.z, stone);   // 4 from plain, 8 from Big: survives
-		loop.ignite(hit(O.x, O.y, O.z));
+		loop.ignite(hit(O.x, O.y, O.z), 0);
 		loop.simulate(4.1);
 		loop.simulate(TNT_CHAIN_FUSE + 0.05);
 		expect(world.getBlock(O.x + 4, O.y, O.z)).toBe(AIR);
@@ -105,7 +105,7 @@ describe('TNT blasts and counts (spec §2)', () => {
 		for (const id of [tnt, big, mega] as BlockId[]) {
 			const h = counted();
 			h.world.setBlock(O.x, O.y, O.z, id);
-			h.loop.ignite(hit(O.x, O.y, O.z));
+			h.loop.ignite(hit(O.x, O.y, O.z), 0);
 			h.loop.simulate(6.1);
 			expect(h.world.getBlock(O.x, O.y, O.z)).toBe(AIR);  // it really went off
 			expect(countOf(h.inv(), 'tnt')).toBe(0);
@@ -121,7 +121,7 @@ describe('TNT blasts and counts (spec §2)', () => {
 		h.world.setBlock(O.x, O.y, O.z, tnt);
 		h.world.setBlock(O.x + 1, O.y, O.z, tnt);
 		h.world.setBlock(O.x, O.y + 1, O.z, stone);
-		h.loop.ignite(hit(O.x, O.y, O.z));
+		h.loop.ignite(hit(O.x, O.y, O.z), 0);
 		h.loop.simulate(2.6);
 		h.loop.simulate(TNT_CHAIN_FUSE + 0.05);
 		expect(h.world.getBlock(O.x + 1, O.y, O.z)).toBe(AIR);
@@ -135,7 +135,7 @@ describe('TNT blasts and counts (spec §2)', () => {
 		h.world.setBlock(O.x, O.y, O.z, tnt);
 		h.world.setBlock(O.x + 2, O.y, O.z, big);
 		h.world.setBlock(O.x, O.y + 1, O.z, stone);
-		h.loop.ignite(hit(O.x, O.y, O.z));
+		h.loop.ignite(hit(O.x, O.y, O.z), 0);
 		h.loop.simulate(2.6);
 		h.loop.simulate(TNT_CHAIN_FUSE + 0.05);
 		expect(h.world.getBlock(O.x + 2, O.y, O.z)).toBe(AIR);
@@ -149,7 +149,7 @@ it('igniting a Big TNT leaves the block and the counts as they were until it det
 	const big = BLOCK_BY_NAME['big_tnt'].id;
 	h.world.setBlock(264, 40, 264, big);
 	h.player.inventory = { big_tnt: 2 };
-	expect(h.loop.ignite({ x: 264, y: 40, z: 264, face: 'py', distance: 1 })).toBe(true);
+	expect(h.loop.ignite({ x: 264, y: 40, z: 264, face: 'py', distance: 1 }, 0)).toBe(true);
 	h.loop.onBlocksRemoved = (removed) => {
 		h.player.inventory = onRemoved(h.player.inventory, removed.map((e) => e.blockId)).inv;
 	};

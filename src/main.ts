@@ -330,7 +330,7 @@ async function main() {
 						const eye = player.eyePosition();
 						const dir = cam.getLookDir();
 						const hit = raycastVoxel(world, eye, [dir.x, dir.y, dir.z], REACH);
-						if (hit) loop.ignite(hit);
+						if (hit) loop.ignite(hit, cam.yaw);
 					}
 					break;
 				case 'pickLightColor':

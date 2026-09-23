@@ -1,6 +1,6 @@
 import { AIR, BLOCK_BY_NAME, BLOCKS, type BlockDef, type BlockId } from '../data/blocks.data';
 import { PICKAXES, type Inventory, type PlayerTools } from '../data/crafting.data';
-import type { Recipe } from '../data/recipes.data';
+import type { CraftTab, Recipe } from '../data/recipes.data';
 import { pickaxeIconName } from '../data/atlas-derive';
 import { countOf, isCraftedOnly, needsCount, needsCountName } from '../game/inventory';
 import { canCraft, haveOf } from '../game/crafting';
@@ -74,6 +74,56 @@ export function craftCards(recipes: readonly Recipe[], inv: Inventory, tools: Pl
 			state: owned ? 'owned' : canCraft(recipe, inv, tools) ? 'ready' : 'short',
 		};
 	});
+}
+
+/** The Craft tab's three icon tabs (toys spec §5), in display order. */
+export const CRAFT_TABS: readonly { tab: CraftTab; title: string; picture: Picture }[] = Object.freeze([
+	{ tab: 'pickaxes', title: 'Pickaxes', picture: { kind: 'icon', name: pickaxeIconName(4) } },
+	{ tab: 'boom', title: 'Boom', picture: { kind: 'block', id: BLOCK_BY_NAME['tnt'].id } },
+	{ tab: 'toys', title: 'Toys', picture: { kind: 'block', id: BLOCK_BY_NAME['slime_pad'].id } },
+]);
+
+/** A tab's recipes, in recipe order. */
+export function tabRecipes(recipes: readonly Recipe[], tab: CraftTab): Recipe[] {
+	return recipes.filter((r) => r.tab === tab);
+}
+
+/** Ids of the recipes whose button would be enabled (canCraft: enough of everything, pickaxe not owned). */
+export function readyRecipeIds(recipes: readonly Recipe[], inv: Inventory, tools: PlayerTools): Set<string> {
+	return new Set(recipes.filter((r) => canCraft(r, inv, tools)).map((r) => r.id));
+}
+
+/**
+ * The green-dot memory (toys spec §5). `lastReady`: the recipes craftable at the previous step. `dotted`: the recipes
+ * that became craftable since their tab was last viewed and are still craftable.
+ */
+export type CraftDots = { lastReady: ReadonlySet<string>; dotted: ReadonlySet<string> };
+
+/** Session start: nothing counts as seen, so the first step dots everything already craftable. */
+export const NO_DOTS: CraftDots = Object.freeze({ lastReady: new Set<string>(), dotted: new Set<string>() });
+
+/**
+ * One step of the dot rule, called on every count change and on every tab view. A recipe that turns craftable is
+ * dotted; a dotted recipe that stops being craftable loses it; the tab being viewed (`viewing`, null when the Craft
+ * tab is not on screen) clears its recipes last, so nothing that turns craftable under his eyes gets a dot.
+ */
+export function stepDots(prev: CraftDots, recipes: readonly Recipe[], ready: ReadonlySet<string>, viewing: CraftTab | null): CraftDots {
+	const dotted = new Set<string>();
+	for (const id of prev.dotted) if (ready.has(id)) dotted.add(id);
+	for (const id of ready) if (!prev.lastReady.has(id)) dotted.add(id);
+	if (viewing !== null) for (const r of tabRecipes(recipes, viewing)) dotted.delete(r.id);
+	return { lastReady: new Set(ready), dotted };
+}
+
+export type CraftTabView = { tab: CraftTab; title: string; picture: Picture; active: boolean; dot: boolean };
+
+/** The three icon buttons: which one is active, which ones carry a dot. */
+export function craftTabViews(recipes: readonly Recipe[], dots: CraftDots, active: CraftTab): CraftTabView[] {
+	return CRAFT_TABS.map((t) => ({
+		...t,
+		active: t.tab === active,
+		dot: tabRecipes(recipes, t.tab).some((r) => dots.dotted.has(r.id)),
+	}));
 }
 
 export type TileView = { visible: boolean; badge: string | null; dimmed: boolean };

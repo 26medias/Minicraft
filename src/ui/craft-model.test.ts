@@ -4,6 +4,7 @@ import type { Inventory, PlayerTools } from '../data/crafting.data';
 import { RECIPES, type Recipe } from '../data/recipes.data';
 import {
 	badgeText, blockTileView, craftCards, hotbarBadges, keycapLabel, pickaxeRow,
+	CRAFT_TABS, NO_DOTS, craftTabViews, readyRecipeIds, stepDots, tabRecipes, type CraftDots,
 } from './craft-model';
 
 const id = (name: string) => BLOCK_BY_NAME[name].id;
@@ -130,4 +131,81 @@ it('every BLOCKS row used as a picture exists (no retired ids on cards)', () => 
 	for (const c of craftCards(RECIPES, {}, HAND)) {
 		for (const i of c.ingredients) if (i.picture.kind === 'block') expect(BLOCKS[i.picture.id].retired).toBeUndefined();
 	}
+});
+
+describe('Craft icon tabs (toys spec §5)', () => {
+	const recipeId = (name: string) => blockRecipe(name).id;
+	const dotsOf = (d: CraftDots) => Object.fromEntries(craftTabViews(RECIPES, d, 'pickaxes').map((v) => [v.tab, v.dot]));
+	const ids = (...names: string[]) => new Set(names.map(recipeId));
+
+	it('three tabs in order — Pickaxes (iron pickaxe), Boom (TNT), Toys (slime) — each with 10 cards or fewer', () => {
+		// Catches a missing tab, a tab over the 10 cards that fit 1280×720 without scrolling, and a recipe on no tab.
+		expect(CRAFT_TABS.map((t) => t.tab)).toEqual(['pickaxes', 'boom', 'toys']);
+		expect(CRAFT_TABS.map((t) => t.picture)).toEqual([
+			{ kind: 'icon', name: 'pickaxe_4' }, { kind: 'block', id: id('tnt') }, { kind: 'block', id: id('slime_pad') },
+		]);
+		const counts = CRAFT_TABS.map((t) => tabRecipes(RECIPES, t.tab).length);
+		expect(counts).toEqual([7, 8, 2]);
+		for (const n of counts) expect(n).toBeLessThanOrEqual(10);
+		expect(counts.reduce((a, b) => a + b)).toBe(RECIPES.length);
+		expect(tabRecipes(RECIPES, 'toys').map((r) => r.id)).toEqual([recipeId('slime_pad'), recipeId('launch_pad')]);
+	});
+
+	it('exactly the given tab is active', () => {
+		// Catches the active flag taken from the first tab instead of the remembered one.
+		expect(craftTabViews(RECIPES, NO_DOTS, 'toys').map((v) => v.active)).toEqual([false, false, true]);
+	});
+
+	it('ready ids: exactly-enough counts are ready, an owned pickaxe is not', () => {
+		// Catches the dot rule fed by "has any ingredient" (a dot for 1 sand) and an owned pickaxe counted as new.
+		const wood = pickaxeRecipe(1);
+		expect([...readyRecipeIds(RECIPES, enough(wood), HAND)]).toEqual([wood.id]);
+		expect(readyRecipeIds(RECIPES, enough(wood, 1), HAND).size).toBe(0);
+		expect(readyRecipeIds(RECIPES, enough(wood), { owned: [0, 1], equipped: 1 }).size).toBe(0);
+	});
+
+	it('session start: nothing counts as seen, so every tab with a craftable recipe shows its dot', () => {
+		// Catches starting "seen" from what is craftable at load (no dot would ever show for what he already has).
+		const d = stepDots(NO_DOTS, RECIPES, ids('tnt', 'slime_pad'), null);
+		expect(dotsOf(d)).toEqual({ pickaxes: false, boom: true, toys: true });
+	});
+
+	it('viewing a tab clears its dot, and only its dot', () => {
+		// Catches viewing that never clears, and viewing one tab clearing all three.
+		const start = stepDots(NO_DOTS, RECIPES, ids('tnt', 'slime_pad'), null);
+		expect(dotsOf(stepDots(start, RECIPES, ids('tnt', 'slime_pad'), 'boom'))).toEqual({ pickaxes: false, boom: false, toys: true });
+	});
+
+	it('the dot stays clear while the same recipes stay craftable, and comes back when a new one becomes craftable', () => {
+		// Catches "dot = anything craftable in the tab" (Boom green all day), and a dot that never returns once seen.
+		let d = stepDots(NO_DOTS, RECIPES, ids('tnt'), 'boom');
+		d = stepDots(d, RECIPES, ids('tnt'), null);
+		expect(dotsOf(d).boom).toBe(false);
+		d = stepDots(d, RECIPES, ids('tnt', 'big_tnt'), null);
+		expect(dotsOf(d).boom).toBe(true);
+	});
+
+	it('a recipe that stops being craftable and becomes craftable again brings the dot back', () => {
+		// Catches a permanent "seen" set: after crafting his TNT and mining more sand, Boom would never dot again.
+		let d = stepDots(NO_DOTS, RECIPES, ids('tnt'), 'boom');
+		d = stepDots(d, RECIPES, new Set(), null);
+		d = stepDots(d, RECIPES, ids('tnt'), null);
+		expect(dotsOf(d).boom).toBe(true);
+	});
+
+	it('a dot whose recipe is no longer craftable goes away', () => {
+		// Catches a stale dot pointing him at a tab where nothing is craftable.
+		let d = stepDots(NO_DOTS, RECIPES, ids('slime_pad'), null);
+		d = stepDots(d, RECIPES, new Set(), null);
+		expect(dotsOf(d).toys).toBe(false);
+	});
+
+	it('something that becomes craftable on the tab he is looking at gets no dot', () => {
+		// Catches the view clearing applied before the new-ready step (crafting a Slime Pad would dot Toys for the Launch Pad he is looking at).
+		let d = stepDots(NO_DOTS, RECIPES, ids('slime_pad'), 'toys');
+		d = stepDots(d, RECIPES, ids('slime_pad', 'launch_pad'), 'toys');
+		expect(dotsOf(d).toys).toBe(false);
+		d = stepDots(d, RECIPES, ids('slime_pad', 'launch_pad'), null);
+		expect(dotsOf(d).toys).toBe(false);
+	});
 });

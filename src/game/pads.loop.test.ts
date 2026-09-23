@@ -142,3 +142,99 @@ describe('Slime Pad in the loop (toys spec §3.1, §6)', { timeout: 30_000 }, ()
 		});
 	}
 });
+
+const LAUNCH = BLOCK_BY_NAME['launch_pad'].id;
+/** Stone floor along x 256..266 at y = P.y, the launch pad in it at (L.x, P.y, P.z); his feet on the pad. */
+const L = { x: 262, y: P.y, z: P.z };
+
+function onLaunchPad() {
+	const h = makeLoop();
+	for (let x = 256; x <= 266; x++) for (let z = P.z - 1; z <= P.z + 1; z++) h.world.setBlock(x, P.y, z, STONE);
+	h.world.setBlock(L.x, L.y, L.z, LAUNCH);
+	h.player.position = [L.x + 0.5, TOP, L.z + 0.5];
+	h.player.vy = 0;
+	return h;
+}
+
+/** Ticks until his feet are in column x (walking with the key already held), at most 5 s. */
+function walkTo(h: H, x: number) {
+	for (let i = 0; i < 300 && Math.floor(h.player.position[0]) !== x; i++) h.tick(DT);
+	expect(Math.floor(h.player.position[0])).toBe(x);
+}
+
+describe('Launch Pad in the loop (toys spec §3.2, §6)', { timeout: 30_000 }, () => {
+	it('the pad starts armed: standing on it throws him 25 ± 1.5 blocks straight up', () => {
+		// Catches a pad that starts disarmed (the first step onto it does nothing) and a LAUNCH_VY off target.
+		const h = onLaunchPad();
+		const { maxY } = fly(h, 60 * 4);
+		expect(maxY).toBeGreaterThan(23.5);
+		expect(maxY).toBeLessThan(26.5);
+		expect(Math.floor(h.player.position[0])).toBe(L.x); // straight up: he comes down on the same pad
+	});
+
+	it('jump held: still 25 ± 1.5 — the jump line cannot overwrite the launch', () => {
+		// Catches the launch applied before the jump line (vy = 8 wins: a 1.4-block hop).
+		const h = onLaunchPad();
+		h.keys.jump = true;
+		const { apexes } = fly(h, 60 * 4);
+		expect(apexes[0]).toBeGreaterThan(23.5);
+		expect(apexes[0]).toBeLessThan(26.5);
+	});
+
+	it('landing back on the pad does not relaunch him', () => {
+		// Catches no re-arm state (he is thrown up forever) and re-arming when his feet leave the ground
+		// (the landing re-fires, because in the air his feet are "off the pad").
+		const h = onLaunchPad();
+		fly(h, 60 * 5); // up, down, landed
+		expect(h.player.grounded).toBe(true);
+		expect(fly(h, 60 * 3).maxY).toBeLessThan(0.01);
+	});
+
+	it('stepping off and back on launches him again', () => {
+		// Catches a single-use pad (never re-armed) and a re-arm that needs something other than leaving the cell.
+		const h = onLaunchPad();
+		fly(h, 60 * 5);
+		h.keys.right = true;
+		walkTo(h, L.x + 1);
+		h.keys.right = false;
+		fly(h, 10);
+		h.keys.left = true;
+		walkTo(h, L.x);
+		h.keys.left = false;
+		expect(fly(h, 60 * 4).maxY).toBeGreaterThan(23.5);
+	});
+
+	it('sneak blocks it without using it up: letting go of Shift on the pad launches him', () => {
+		// Catches a launch that ignores sneak, and sneak treated as a launch (disarming the pad until he steps off).
+		const h = onLaunchPad();
+		h.keys.sneak = true;
+		expect(fly(h, 120).maxY).toBeLessThan(0.01);
+		h.keys.sneak = false;
+		expect(fly(h, 60 * 4).maxY).toBeGreaterThan(23.5);
+	});
+
+	it('in a cave (Review Focus 4): he stops at the ceiling, lands back on the pad, and it does not fire again until he steps off', () => {
+		// Catches a pad re-armed by the head bump (he would be thrown into the ceiling over and over), a pad re-armed
+		// whenever his feet leave the ground, and no re-arm state at all.
+		const h = onLaunchPad();
+		const ROOM = 6; // stone ceiling 6 above the pad's top: his feet can rise 6 − 1.8 = 4.2
+		for (let x = 256; x <= 266; x++) for (let z = P.z - 1; z <= P.z + 1; z++) h.world.setBlock(x, TOP + ROOM, z, STONE);
+		const first = fly(h, 60 * 2);
+		expect(first.maxY).toBeGreaterThan(3.5);
+		expect(first.maxY).toBeLessThanOrEqual(ROOM - 1.8 + 0.001);
+		expect(first.apexes).toHaveLength(1); // one throw, not a ceiling-to-pad loop
+		expect(h.player.grounded).toBe(true);
+		expect(Math.floor(h.player.position[0])).toBe(L.x); // back on the pad
+		expect(fly(h, 60 * 3).maxY).toBeLessThan(0.01);
+		h.keys.right = true;
+		walkTo(h, L.x + 1);
+		h.keys.right = false;
+		fly(h, 10);
+		h.keys.left = true;
+		walkTo(h, L.x);
+		h.keys.left = false;
+		const again = fly(h, 60 * 2);
+		expect(again.maxY).toBeGreaterThan(3.5);
+		expect(again.maxY).toBeLessThanOrEqual(ROOM - 1.8 + 0.001);
+	});
+});

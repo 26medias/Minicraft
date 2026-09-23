@@ -110,6 +110,11 @@ export class Player {
 	flying = false;
 	flySpeedTier = FLY_TIER_DEFAULT;
 	swimming = false;
+	/**
+	 * Toys spec §3.2: the column (x, z) of the Launch Pad that last threw him, or null when armed. It re-arms once
+	 * his feet leave that column, so landing back on the pad does not throw him again. Not saved: a load starts armed.
+	 */
+	launchedFrom: [number, number] | null = null;
 	readonly height: number;
 
 	constructor(spawn: [number, number, number], height = 64) {
@@ -152,6 +157,9 @@ export class Player {
 			Math.floor(this.position[2]),
 		);
 		const feetInLiquid = isLiquid(feetBlock);
+		// Launch Pad re-arm: his feet have left the column of the pad that threw him.
+		const lf = this.launchedFrom;
+		if (lf && (Math.floor(this.position[0]) !== lf[0] || Math.floor(this.position[2]) !== lf[1])) this.launchedFrom = null;
 
 		let ix = 0,
 			iy = 0,
@@ -218,6 +226,14 @@ export class Player {
 		} else {
 			this.vy -= GRAVITY * dt;
 			if (keys.jump && (this.grounded || feetInLiquid)) this.vy = JUMP_SPEED;
+			// Launch Pad: after the jump line, so a held jump cannot overwrite the launch.
+			if (this.grounded && this.launchedFrom === null && padUnderFeet(world, this.position) === 'launch') {
+				const up = padResponse(0, 'launch', keys.jump, keys.sneak === true);
+				if (up > 0) {
+					this.vy = up;
+					this.launchedFrom = [Math.floor(this.position[0]), Math.floor(this.position[2])];
+				}
+			}
 			vyStep = this.vy * dt;
 		}
 

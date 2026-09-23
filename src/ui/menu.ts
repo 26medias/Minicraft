@@ -11,7 +11,7 @@ import {
 import { formatStartTime, resolveWorld, sessionInForce } from '../game/schedule';
 
 export type MenuAction =
-	| { type: 'new'; id: string; seed: number; name: string }
+	| { type: 'new'; id: string; seed: number; name: string; mustMine: boolean }
 	| { type: 'continue'; id: string; seed: number; name: string }
 	| { type: 'options' };
 
@@ -524,7 +524,9 @@ export class MainMenu {
 			const name =
 				(card.querySelector('#w-name') as HTMLInputElement).value.trim() || 'My World';
 			const seed = Number((card.querySelector('#w-seed') as HTMLInputElement).value) || 0;
-			this.onAction?.({ type: 'new', id: newWorldId(), seed, name });
+			// "Must mine blocks to build" gets its checkbox with the New World screen
+			// change (crafting spec §3); until then every new world is unlimited.
+			this.onAction?.({ type: 'new', id: newWorldId(), seed, name, mustMine: false });
 		};
 		card.appendChild(create);
 		card.appendChild(back);

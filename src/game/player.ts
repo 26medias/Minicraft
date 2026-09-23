@@ -3,6 +3,7 @@ import type { World } from '../engine/world/world';
 import { moveWithCollisions } from '../engine/physics/collision';
 import type { BlockId } from '../data/blocks.data';
 import { isLiquid } from '../data/blocks.data';
+import type { Inventory, PlayerTools } from '../data/crafting.data';
 
 const WALK_SPEED = 5; // blocks/sec
 const JUMP_SPEED = 8; // blocks/sec, initial upward velocity
@@ -101,6 +102,10 @@ export class Player {
 	grounded = false;
 	hotbar: BlockId[] = [];
 	selected = 0;
+	/** Crafting counts by block name; replaced from the save by resolvePlayerExtras. */
+	inventory: Inventory = {};
+	/** Owned and equipped pickaxe tiers; 0 (the hand) is always owned. */
+	tools: PlayerTools = { owned: [0], equipped: 0 };
 	flying = false;
 	flySpeedTier = FLY_TIER_DEFAULT;
 	swimming = false;

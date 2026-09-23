@@ -1,5 +1,6 @@
 import { describe, it, expect } from 'vitest';
-import { resolvePlayerExtras } from './player-extras';
+import { playerSave, resolvePlayerExtras } from './player-extras';
+import { Player } from './player';
 import { DEFAULT_TOOLS, MAX_PICKAXE_TIER } from '../data/crafting.data';
 import type { PlayerSave } from '../persistence/adapter';
 
@@ -84,5 +85,53 @@ describe('resolvePlayerExtras', () => {
 		expect(resolvePlayerExtras(BASE, undefined).mustMine).toBe(false);
 		expect(resolvePlayerExtras(BASE, 'true' as unknown as boolean).mustMine).toBe(false);
 		expect(resolvePlayerExtras(BASE, 1 as unknown as boolean).mustMine).toBe(false);
+	});
+});
+describe('Player crafting fields and playerSave', () => {
+	it('gives every Player its own default inventory and tools', () => {
+		// Catches: a shared default object (a craft in one session would leak into the
+		// next world), and a Player without the fields (the snapshot would throw).
+		const a = new Player([10.5, 60, 10.5]);
+		const b = new Player([10.5, 60, 10.5]);
+		expect(a.inventory).toEqual({});
+		expect(a.tools).toEqual({ owned: [0], equipped: 0 });
+		a.tools.owned.push(2);
+		a.inventory.stone = 1;
+		expect(b.tools).toEqual({ owned: [0], equipped: 0 });
+		expect(b.inventory).toEqual({});
+	});
+
+	it('always writes inventory and tools, defaults included', () => {
+		// Catches: main.ts's old fixed player field list, which silently drops the new
+		// fields from every save (spec §10: the new client always writes all three).
+		const p = new Player([10.5, 60, 10.5]);
+		p.hotbar = [1, 2, 3];
+		p.selected = 2;
+		const s = playerSave(p, 0.5, -0.25);
+		expect(s).toEqual({
+			x: p.position[0],
+			y: p.position[1],
+			z: p.position[2],
+			yaw: 0.5,
+			pitch: -0.25,
+			hotbar: [1, 2, 3],
+			selected: 2,
+			inventory: {},
+			tools: { owned: [0], equipped: 0 },
+		});
+	});
+
+	it('copies the live counts and tools', () => {
+		// Catches: aliasing the live objects, so mining after the snapshot is taken
+		// would change a save that is still being written.
+		const p = new Player([10.5, 60, 10.5]);
+		p.inventory = { stone: 3 };
+		p.tools = { owned: [0, 1], equipped: 1 };
+		const s = playerSave(p, 0, 0);
+		p.inventory.stone = 9;
+		p.tools.owned.push(2);
+		p.tools.equipped = 2;
+		expect(s.inventory).toEqual({ stone: 3 });
+		expect(s.tools).toEqual({ owned: [0, 1], equipped: 1 });
 	});
 });

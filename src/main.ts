@@ -39,6 +39,7 @@ import { PlaytimeOverlay } from './ui/playtime-overlay';
 import { TICK_MS } from './data/playtime.data';
 import { Inventory } from './ui/inventory';
 import { resolveHotbar } from './game/hotbar';
+import { playerSave, resolvePlayerExtras } from './game/player-extras';
 import { shouldHandleKey } from './game/input-gate';
 
 const REACH = 6;
@@ -82,7 +83,7 @@ async function main() {
 				showMenu();
 				return;
 			}
-			if (action.type === 'new') startGame(action.id, action.seed, action.name, null);
+			if (action.type === 'new') startGame(action.id, action.seed, action.name, null, action.mustMine);
 			else startGame(action.id, action.seed, action.name, 'continue');
 		}, notice);
 	}
@@ -94,6 +95,7 @@ async function main() {
 		seed: number,
 		name: string,
 		mode: null | 'continue',
+		newMustMine = false,
 	) {
 		menu.hide();
 		// Clear any lights from a prior session of startGame (returning from main menu to a new world).
@@ -102,10 +104,15 @@ async function main() {
 		// Load BEFORE building anything. A failed load used to console.warn and start
 		// a fresh world, whose first autosave pruned the local copy to zero chunks.
 		let save: WorldSave | null = null;
+		let localWon = false;
 		if (mode === 'continue') {
 			let outcome: LoadOutcome;
 			try {
-				outcome = { save: await adapter.loadWorld(worldId) };
+				const loaded = await adapter.loadWorld(worldId);
+				// The newer local copy beat an older cloud copy with the same chunks; the
+				// cloud has not seen it yet (crafting spec §10).
+				localWon = loaded?.localWon === true;
+				outcome = { save: loaded };
 			} catch (err) {
 				console.error('loadWorld failed', err);
 				outcome = { error: err };
@@ -190,6 +197,14 @@ async function main() {
 		player.hotbar = resolved.hotbar;
 		player.selected = resolved.selected;
 		hud.setHotbar(player.hotbar, player.selected);
+
+		// Counts, pickaxes and the world mode (crafting spec §10). A save from before
+		// crafting has none of them and gets the defaults; a new world takes the New
+		// World screen's choice. The mode is fixed for the life of the world.
+		const extras = resolvePlayerExtras(save?.player, save ? save.mustMine : newMustMine);
+		player.inventory = extras.inventory;
+		player.tools = extras.tools;
+		const mustMine = extras.mustMine;
 
 		const keys: Keys = {
 			forward: false,
@@ -351,21 +366,15 @@ async function main() {
 		const autosave = new AutoSave(
 			adapter,
 			world,
-			() => ({
-				x: player.position[0],
-				y: player.position[1],
-				z: player.position[2],
-				yaw: cam.yaw,
-				pitch: cam.pitch,
-				hotbar: player.hotbar,
-				selected: player.selected,
-			}),
-			{ id: activeId, name: worldName, createdAt },
+			() => playerSave(player, cam.yaw, cam.pitch),
+			{ id: activeId, name: worldName, createdAt, mustMine },
 			() => {
 				saveStatus.textContent = 'Storage on this device is full';
 			},
 			() => [...lights.entries()],
 		);
+		// Upload the kept local copy even if he only looks around and closes the tab.
+		if (localWon) autosave.markDirty();
 		autosave.onStatus = (status) => {
 			saveStatus.className = status;
 			saveStatus.textContent =

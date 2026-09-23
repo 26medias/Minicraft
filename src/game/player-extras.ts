@@ -1,6 +1,7 @@
 import { BLOCK_BY_NAME } from '../data/blocks.data';
 import { DEFAULT_TOOLS, MAX_PICKAXE_TIER, type Inventory, type PlayerTools } from '../data/crafting.data';
 import type { PlayerSave } from '../persistence/adapter';
+import type { Player } from './player';
 
 export type PlayerExtras = { inventory: Inventory; tools: PlayerTools; mustMine: boolean };
 
@@ -54,4 +55,26 @@ export function resolvePlayerExtras(
 	};
 
 	return { inventory, tools, mustMine: mustMine === true };
+}
+/**
+ * The player part of a save. Always carries inventory and tools, defaults
+ * included (crafting spec §10), as copies: the live objects keep changing while
+ * a save is in flight.
+ */
+export function playerSave(
+	player: Pick<Player, 'position' | 'hotbar' | 'selected' | 'inventory' | 'tools'>,
+	yaw: number,
+	pitch: number,
+): PlayerSave {
+	return {
+		x: player.position[0],
+		y: player.position[1],
+		z: player.position[2],
+		yaw,
+		pitch,
+		hotbar: player.hotbar,
+		selected: player.selected,
+		inventory: { ...player.inventory },
+		tools: { owned: [...player.tools.owned], equipped: player.tools.equipped },
+	};
 }

@@ -31,7 +31,7 @@ export type CraftCardView = {
 	/** "×2" when a recipe makes more than one; null otherwise. */
 	countLabel: string | null;
 	ingredients: IngredientView[];
-	/** ready: button enabled; short: button disabled; owned: a check mark instead of the button. */
+	/** ready: button enabled; short: button disabled; owned: a check mark instead of the button, and no ingredient rows. */
 	state: 'ready' | 'short' | 'owned';
 };
 
@@ -69,7 +69,8 @@ export function craftCards(recipes: readonly Recipe[], inv: Inventory, tools: Pl
 			title: out.kind === 'pickaxe' ? PICKAXES[out.tier].label : BLOCK_BY_NAME[out.name].label,
 			picture: outputPicture(recipe),
 			countLabel: out.kind === 'block' && out.count > 1 ? `×${out.count}` : null,
-			ingredients,
+			// An owned pickaxe shows only its check mark: red "0 / 8" bars under it read as "not done" (gate 2 playtest).
+			ingredients: owned ? [] : ingredients,
 			state: owned ? 'owned' : canCraft(recipe, inv, tools) ? 'ready' : 'short',
 		};
 	});

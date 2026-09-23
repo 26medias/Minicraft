@@ -100,6 +100,12 @@ describe('craft cards (spec §9)', () => {
 		const wood = pickaxeRecipe(1);
 		expect(craftCards([wood], enough(wood), { owned: [0, 1], equipped: 1 })[0].state).toBe('owned');
 	});
+
+	it('an owned pickaxe card has no ingredient rows (catches red "0 / 8" bars under the check mark, which read as unfinished)', () => {
+		const wood = pickaxeRecipe(1);
+		expect(craftCards([wood], {}, { owned: [0, 1], equipped: 1 })[0].ingredients).toEqual([]);
+		expect(craftCards([wood], {}, HAND)[0].ingredients).toHaveLength(1);
+	});
 });
 
 describe('pickaxe row and keycap', () => {

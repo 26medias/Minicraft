@@ -150,7 +150,9 @@ export class GameLoop {
 		this.scheduler = new LiquidScheduler(
 			this.world,
 			(cx, cz) => this.markChunkDirty(cx, cz),
-			(x, y, z) => this.applyLightUpdate(x, y, z),
+			// Liquid light changes are never under the crosshair: spread their re-mesh over frames (final review:
+			// a lake refilling a Mega crater re-meshed 4 chunks per liquid tick on the main thread).
+			(x, y, z) => this.applyLightUpdate(x, y, z, 'bulk'),
 			// DEV assertion (spec §3.E): no scheduler read may reach beyond the data ring of the CURRENT player chunk.
 			(x, z) => {
 				const pcx = Math.floor(this.player.position[0] / 16), pcz = Math.floor(this.player.position[2] / 16);
@@ -224,14 +226,26 @@ export class GameLoop {
 		}
 	}
 
-	applyLightUpdate(x: number, y: number, z: number): void {
+	/** `lane` 'bulk': the touched chunks re-mesh through the bulk lane instead of synchronously (liquid updates). */
+	/** Queue a chunk in the bulk lane (spread re-mesh), unless it is already in the edit lane this frame. */
+	private markChunkBulk(cx: number, cz: number): void {
+		const i = chunkIndexOrNeg(cx, cz);
+		if (i < 0 || this.editLane.has(i)) return;
+		// It must re-mesh whatever its sunlit does: a shadowOnly flag would let the sunlitHash skip drop it.
+		this.shadowOnly.delete(i);
+		this.bulkLane.add(i);
+		this.streamSet.delete(i);
+	}
+
+	applyLightUpdate(x: number, y: number, z: number, lane: 'edit' | 'bulk' = 'edit'): void {
 		const getLampColor = (lx: number, ly: number, lz: number): string | null =>
 			this.lights?.getColor(lx, ly, lz) ?? null;
 		const t0 = performance.now();
 		const touched = updateLightsForBlockChange(this.world, x, y, z, getLampColor);
 		this.stats.lightMs += performance.now() - t0;
 		for (const c of touched) {
-			this.markChunkDirty(c.cx, c.cz, { edit: true });
+			if (lane === 'edit') this.markChunkDirty(c.cx, c.cz, { edit: true });
+			else this.markChunkBulk(c.cx, c.cz);
 			c.shadowsDirty = true;
 			c.rev++;
 		}

@@ -268,7 +268,7 @@ async function main() {
 		inventory.onCraft = (recipeId) => {
 			const recipe = RECIPES.find((r) => r.id === recipeId);
 			if (!recipe) return false;
-			const out = applyCraft(player, recipe, () => autosave.markDirty());
+			const out = applyCraft(player, recipe, mustMine, () => autosave.markDirty());
 			if (!out.ok) return false;
 			if (out.kind === 'pickaxe') loop.onPickaxeChanged(); // a crafted pickaxe is equipped: re-arm the floor
 			playCraft();

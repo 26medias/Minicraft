@@ -1,14 +1,22 @@
-import { AIR, BLOCK_BY_NAME, type BlockId } from '../data/blocks.data';
+import { AIR, BLOCKS, BLOCK_BY_NAME, type BlockId } from '../data/blocks.data';
 import type { Inventory, PlayerTools } from '../data/crafting.data';
 import type { Recipe } from '../data/recipes.data';
 import { canCraft, craft } from './crafting';
+import { countOf, needsCount } from './inventory';
 
-/** Where a crafted block goes (spec §9): the slot already holding it, else the first empty slot, else the selected slot. */
-export function craftedBlockSlot(hotbar: BlockId[], selected: number, id: BlockId): number {
+/**
+ * Where a crafted block goes (spec §9): the slot already holding it, else the first empty slot, else the
+ * first other slot whose block needs a count and is at 0 (a greyed slot), else the selected slot. In a
+ * must-mine world the bar starts full of greyed blocks, so without the third step every craft would
+ * replace the block in his hand (gate-2 playtest; parent's decision).
+ */
+export function craftedBlockSlot(hotbar: BlockId[], selected: number, id: BlockId, inv: Inventory, mustMine: boolean): number {
 	const holding = hotbar.indexOf(id);
 	if (holding >= 0) return holding;
 	const empty = hotbar.indexOf(AIR);
-	return empty >= 0 ? empty : selected;
+	if (empty >= 0) return empty;
+	const greyed = hotbar.findIndex((b, i) => i !== selected && needsCount(b, mustMine) && countOf(inv, BLOCKS[b].name) === 0);
+	return greyed >= 0 ? greyed : selected;
 }
 
 export type CraftOutcome =
@@ -25,6 +33,7 @@ export type CraftOutcome =
 export function applyCraft(
 	player: { inventory: Inventory; tools: PlayerTools; hotbar: BlockId[]; selected: number },
 	recipe: Recipe,
+	mustMine: boolean,
 	markDirty: () => void,
 ): CraftOutcome {
 	if (!canCraft(recipe, player.inventory, player.tools)) return { ok: false };
@@ -37,7 +46,7 @@ export function applyCraft(
 	} else {
 		player.tools = out.tools;
 		const id = BLOCK_BY_NAME[recipe.output.name].id;
-		const slot = craftedBlockSlot(player.hotbar, player.selected, id);
+		const slot = craftedBlockSlot(player.hotbar, player.selected, id, player.inventory, mustMine);
 		player.hotbar = player.hotbar.map((b, i) => (i === slot ? id : b));
 		result = { ok: true, kind: 'block', slot };
 	}

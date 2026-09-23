@@ -1,5 +1,10 @@
 import { AIR, GROUP_ORDER, type BlockDef, type BlockId } from '../data/blocks.data';
+import type { Inventory as Counts, PlayerTools } from '../data/crafting.data';
 import type { LoadedAtlas } from '../engine/render/atlas';
+import { blockTileView, type HotbarBadge } from './craft-model';
+
+/** What the I screen shows counts from; pushed by main.ts on every change. */
+export type InventoryState = { inv: Counts; tools: PlayerTools; mustMine: boolean };
 
 const TILE_PX = 48;
 
@@ -15,6 +20,10 @@ export class Inventory {
 	private strip: HTMLDivElement;
 	private slotEls: HTMLDivElement[] = [];
 	private labels = new Map<BlockId, string>();
+	private tiles: Array<{ def: BlockDef; el: HTMLButtonElement; badge: HTMLSpanElement }> = [];
+	private groupHeads: Array<{ el: HTMLDivElement; members: HTMLButtonElement[] }> = [];
+	private slotBadges: HTMLSpanElement[] = [];
+	private state: InventoryState = { inv: {}, tools: { owned: [0], equipped: 0 }, mustMine: false };
 	onPick: ((id: BlockId) => void) | null = null;
 	onSelectSlot: ((slot: number) => void) | null = null;
 	onClose: (() => void) | null = null;
@@ -40,12 +49,17 @@ export class Inventory {
 			h.className = 'inventory-group';
 			h.textContent = group.toUpperCase();
 			this.grid.appendChild(h);
+			const members: HTMLButtonElement[] = [];
 			for (const b of rows) {
 				const tile = document.createElement('button');
 				tile.className = 'inventory-tile';
 				tile.title = b.label;
+				tile.dataset.block = b.name;
 				tile.tabIndex = -1; // a focused tile would re-fire on Space (his jump reflex)
 				this.paintTile(tile, b.id);
+				const badge = document.createElement('span');
+				badge.className = 'count-badge';
+				tile.appendChild(badge);
 				tile.addEventListener('mouseenter', () => { this.nameEl.textContent = b.label; });
 				tile.addEventListener('click', (e) => {
 					e.stopPropagation();
@@ -53,7 +67,10 @@ export class Inventory {
 					this.onPick?.(b.id);
 				});
 				this.grid.appendChild(tile);
+				this.tiles.push({ def: b, el: tile, badge });
+				members.push(tile);
 			}
+			this.groupHeads.push({ el: h, members });
 		}
 		card.appendChild(this.grid);
 
@@ -94,6 +111,25 @@ export class Inventory {
 
 	open(): void {
 		this.root.classList.remove('hidden');
+		this.renderBlocks();
+	}
+
+	/** New counts/tools/mode. Re-renders only while open; open() renders anyway. */
+	setState(state: InventoryState): void {
+		this.state = state;
+		if (this.isOpen) this.renderBlocks();
+	}
+
+	/** Crafted-only blocks hidden at 0, count badges, must-mine dimming (spec §9). */
+	private renderBlocks(): void {
+		const { inv, mustMine } = this.state;
+		for (const t of this.tiles) {
+			const v = blockTileView(t.def, inv, mustMine);
+			t.el.classList.toggle('hidden', !v.visible);
+			t.el.classList.toggle('dimmed', v.dimmed);
+			t.badge.textContent = v.badge ?? '';
+		}
+		for (const g of this.groupHeads) g.el.classList.toggle('hidden', g.members.every((m) => m.classList.contains('hidden')));
 	}
 
 	close(): void {
@@ -101,7 +137,7 @@ export class Inventory {
 	}
 
 	/** Mirrors Hud.setHotbar; `flashSlot` pulses that slot (every pick, even a repeat). */
-	setHotbar(ids: BlockId[], selected: number, flashSlot?: number): void {
+	setHotbar(ids: BlockId[], selected: number, flashSlot?: number, badges?: Array<HotbarBadge | null>): void {
 		while (this.slotEls.length < ids.length) {
 			const i = this.slotEls.length;
 			const el = document.createElement('div');
@@ -110,14 +146,21 @@ export class Inventory {
 				e.stopPropagation();
 				this.onSelectSlot?.(i);
 			});
+			const badge = document.createElement('span');
+			badge.className = 'count-badge';
+			el.appendChild(badge);
 			this.strip.appendChild(el);
 			this.slotEls.push(el);
+			this.slotBadges.push(badge);
 		}
 		for (let i = 0; i < ids.length; i++) {
 			const el = this.slotEls[i];
 			el.classList.toggle('selected', i === selected);
 			el.title = ids[i] === AIR ? '' : (this.labels.get(ids[i]) ?? '');
 			this.paintTile(el, ids[i]);
+			const b = badges?.[i] ?? null;
+			this.slotBadges[i].textContent = b ? b.text : '';
+			el.classList.toggle('grey', b?.grey === true);
 			if (i === flashSlot) {
 				el.classList.remove('flash');
 				void el.offsetWidth; // restart the animation

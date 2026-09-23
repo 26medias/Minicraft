@@ -1,6 +1,7 @@
 import type { BlockId } from '../data/blocks.data';
 import { BLOCKS } from '../data/blocks.data';
 import type { LoadedAtlas } from '../engine/render/atlas';
+import type { HotbarBadge } from './craft-model';
 
 const SVG_NS = 'http://www.w3.org/2000/svg';
 const RING_RADIUS = 16;
@@ -12,6 +13,7 @@ export class Hud {
 	private root: HTMLElement;
 	private hotbarEl: HTMLDivElement;
 	private slotEls: HTMLDivElement[] = [];
+	private slotBadges: HTMLSpanElement[] = [];
 	private miningSvg: SVGSVGElement;
 	private miningArc: SVGCircleElement;
 	private atlas: LoadedAtlas;
@@ -66,15 +68,20 @@ export class Hud {
 		this.root.appendChild(this.flyEl);
 	}
 
-	setHotbar(ids: BlockId[], selected: number) {
+	setHotbar(ids: BlockId[], selected: number, badges?: Array<HotbarBadge | null>) {
 		while (this.slotEls.length < ids.length) {
 			const el = document.createElement('div');
 			el.className = 'hotbar-slot';
+			const badge = document.createElement('span');
+			badge.className = 'count-badge';
+			el.appendChild(badge);
 			this.hotbarEl.appendChild(el);
 			this.slotEls.push(el);
+			this.slotBadges.push(badge);
 		}
 		while (this.slotEls.length > ids.length) {
 			const el = this.slotEls.pop()!;
+			this.slotBadges.pop();
 			el.remove();
 		}
 		const scale = SLOT_PX / this.atlas.tileSize;
@@ -94,6 +101,9 @@ export class Hud {
 			} else {
 				slot.style.backgroundImage = '';
 			}
+			const b = badges?.[i] ?? null;
+			this.slotBadges[i].textContent = b ? b.text : '';
+			slot.classList.toggle('grey', b?.grey === true);
 		}
 	}
 

@@ -473,3 +473,27 @@
 #perf-overlay.hidden {
 	display: none;
 }
+/* --- Counts (crafting spec §3, §9) ------------------------------------- */
+.inventory-tile.hidden,
+.inventory-group.hidden {
+	display: none;
+}
+.inventory-tile,
+.hotbar-slot {
+	position: relative;
+}
+.count-badge {
+	position: absolute;
+	right: 2px;
+	bottom: 0;
+	font: bold 14px system-ui, sans-serif;
+	color: #fff;
+	text-shadow: 1px 1px 0 #000, -1px -1px 0 #000, 1px -1px 0 #000, -1px 1px 0 #000;
+	pointer-events: none;
+}
+.inventory-tile.dimmed {
+	opacity: 0.35;
+}
+.hotbar-slot.grey {
+	filter: grayscale(1) brightness(0.55);
+}

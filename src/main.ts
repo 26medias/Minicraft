@@ -38,6 +38,7 @@ import { activeLimits, canStartNow, formatStartTime } from './game/schedule';
 import { PlaytimeOverlay } from './ui/playtime-overlay';
 import { TICK_MS } from './data/playtime.data';
 import { Inventory } from './ui/inventory';
+import { hotbarBadges } from './ui/craft-model';
 import { resolveHotbar } from './game/hotbar';
 import { playerSave, resolvePlayerExtras } from './game/player-extras';
 import { shouldHandleKey, buildKeyToAction } from './game/input-gate';
@@ -197,8 +198,6 @@ async function main() {
 		const resolved = resolveHotbar(savedHotbar, savedSelected, BLOCKS);
 		player.hotbar = resolved.hotbar;
 		player.selected = resolved.selected;
-		hud.setHotbar(player.hotbar, player.selected);
-
 		// Counts, pickaxes and the world mode (crafting spec §10). A save from before
 		// crafting has none of them and gets the defaults; a new world takes the New
 		// World screen's choice. The mode is fixed for the life of the world.
@@ -206,6 +205,8 @@ async function main() {
 		player.inventory = extras.inventory;
 		player.tools = extras.tools;
 		const mustMine = extras.mustMine;
+		// First paint of the bar, now that counts and the mode are known (the badges need both).
+		hud.setHotbar(player.hotbar, player.selected, hotbarBadges(player.hotbar, player.inventory, mustMine));
 
 		const keys: Keys = {
 			forward: false,
@@ -225,10 +226,14 @@ async function main() {
 			keys.forward = keys.back = keys.left = keys.right = keys.jump = false;
 		};
 		const inventory = new Inventory(app, atlas, BLOCKS);
-		const syncHotbar = () => {
-			hud.setHotbar(player.hotbar, player.selected);
-			inventory.setHotbar(player.hotbar, player.selected);
+		/** Every HUD + I-screen view of hotbar, counts and tools. Call after ANY change to them. */
+		const syncHotbar = (flashSlot?: number) => {
+			const badges = hotbarBadges(player.hotbar, player.inventory, mustMine);
+			hud.setHotbar(player.hotbar, player.selected, badges);
+			inventory.setHotbar(player.hotbar, player.selected, flashSlot, badges);
+			inventory.setState({ inv: player.inventory, tools: player.tools, mustMine });
 		};
+		syncHotbar();
 		const openInventory = () => {
 			if (inventoryOpen || frozen || colorPicker.isOpen) return;
 			inventoryOpen = true;
@@ -249,8 +254,7 @@ async function main() {
 		inventory.onClose = closeInventory;
 		inventory.onPick = (id) => {
 			player.hotbar[player.selected] = id;
-			hud.setHotbar(player.hotbar, player.selected);
-			inventory.setHotbar(player.hotbar, player.selected, player.selected);
+			syncHotbar(player.selected);
 			autosave.markDirty();
 		};
 		inventory.onSelectSlot = (slot) => {
@@ -438,7 +442,8 @@ async function main() {
 		// Spec §2: every block the player's actions remove counts +1; in must-mine worlds a block
 		// that just became available joins the hotbar (§3). Every count change marks the save dirty.
 		const countRemoved = (ids: BlockId[]) => {
-			if (applyRemoved(player, ids, mustMine)) syncHotbar();
+			applyRemoved(player, ids, mustMine);
+			syncHotbar(); // unconditional: the badges change with every count, not only when the bar does
 			autosave.markDirty();
 		};
 		loop.onBlockBroken = (ev) => countRemoved([ev.blockId]);
@@ -494,7 +499,7 @@ async function main() {
 		if (import.meta.env.DEV) {
 			// Debug oracle for manual checks at localhost only; tree-shaken from the build.
 			// `apiUrl` lets the bench log which save API the page is wired to (never production).
-			(window as unknown as { __mc: unknown }).__mc = { world, player, loop, apiUrl };
+			(window as unknown as { __mc: unknown }).__mc = { world, player, loop, apiUrl, cam, highlight, mustMine, syncHotbar };
 		}
 
 		window.addEventListener('mousedown', (e) => {
@@ -512,7 +517,8 @@ async function main() {
 				// Shift replaces the aimed block instead of building next to it. tryPlace owns the
 				// count refusal, the world write and the count update; the loop's placeBlock /
 				// replaceBlock fire onWorldMutated, which marks the save dirty.
-				tryPlace({ loop, world, player, hit, shift: e.shiftKey, mustMine, lampColor: opts.currentLightColor });
+				const placed = tryPlace({ loop, world, player, hit, shift: e.shiftKey, mustMine, lampColor: opts.currentLightColor });
+				if (placed.ok) syncHotbar(); // a place that needed a count spent one; markDirty comes from onWorldMutated
 			}
 		});
 

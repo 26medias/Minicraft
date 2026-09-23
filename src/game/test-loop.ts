@@ -5,6 +5,7 @@ import { World } from '../engine/world/world';
 import { FpCamera } from '../engine/render/camera';
 import type { LightRegistry } from '../engine/render/light-registry';
 import type { FaceHighlight } from '../engine/render/face-highlight';
+import type { ParticleSystem } from '../engine/render/particles';
 import { Player, type Keys } from './player';
 import { AIR } from '../data/blocks.data';
 import type { Renderer } from '../engine/render/renderer';
@@ -14,7 +15,7 @@ import { chunkIndex } from '../engine/world/coords';
 import type { ChunkJobs } from '../engine/world/chunk-jobs';
 
 /** `jobs` null/undefined → every chunk mounts synchronously; a ChunkJobs → streaming mounts go through it. */
-export type MakeLoopOpts = { lights?: LightRegistry | null; highlight?: FaceHighlight | null; seed?: number; jobs?: ChunkJobs | null };
+export type MakeLoopOpts = { lights?: LightRegistry | null; highlight?: FaceHighlight | null; seed?: number; jobs?: ChunkJobs | null; particles?: ParticleSystem | null };
 
 /**
  * GameLoop's constructor only builds the LiquidScheduler; it never dereferences the renderer, so a
@@ -22,7 +23,7 @@ export type MakeLoopOpts = { lights?: LightRegistry | null; highlight?: FaceHigh
  * drive a full tick() headlessly, counts mounts and records the last mesh per chunk index.
  */
 export function makeLoop(opts: MakeLoopOpts = {}) {
-	const { lights = null, highlight = null, seed, jobs = null } = opts;
+	const { lights = null, highlight = null, seed, jobs = null, particles = null } = opts;
 	// seed undefined → today's fixture: v1 world (64-high) with chunk (16,16) cleared. seed given → World.create(seed): 256-high v3 world.
 	const world = seed === undefined ? new World(1) : World.create(seed);
 	if (seed === undefined) {
@@ -50,7 +51,7 @@ export function makeLoop(opts: MakeLoopOpts = {}) {
 	const keys: Keys = { forward: false, back: false, left: false, right: false, jump: false };
 	const player = new Player(seed === undefined ? [260, 40, 260] : [256.5, 200, 256.5]);
 	const cam = new FpCamera();
-	const loop = new GameLoop(world, renderer, cam, player, keys, () => [0, 0, 1, 1], null, null, lights, highlight, jobs);
+	const loop = new GameLoop(world, renderer, cam, player, keys, () => [0, 0, 1, 1], particles, null, lights, highlight, jobs);
 	loop.start();
 	const tick = (dt: number) => tickFn!(dt);
 	return { loop, world, player, keys, cam, tick, mounts: () => mounts, meshes: () => meshes };

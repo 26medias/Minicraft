@@ -8,6 +8,7 @@ import type { Inventory } from '../data/crafting.data';
 import { TNT_CHAIN_FUSE } from './tnt';
 import { detonate } from './blast-shapes';
 import type { World } from '../engine/world/world';
+import type { ParticleSystem } from '../engine/render/particles';
 
 const tnt = BLOCK_BY_NAME['tnt'].id, stone = BLOCK_BY_NAME['stone'].id, water = BLOCK_BY_NAME['water'].id, glass = BLOCK_BY_NAME['glass'].id;
 const tunnel = BLOCK_BY_NAME['tunnel_tnt'].id, flatten = BLOCK_BY_NAME['flatten_tnt'].id, lake = BLOCK_BY_NAME['lake_tnt'].id;
@@ -240,5 +241,69 @@ describe('Fireworks in the loop (toys spec §3.3, §6)', () => {
 		expect(snap()).toEqual(before);
 		expect(h.calls).toEqual([]);
 		expect(h.primedCount()).toBe(0);
+	});
+});
+
+describe('Fireworks effect (toys spec §3.3)', () => {
+	/** A particle stub that records what detonateAt asks for. */
+	function withParticles() {
+		const shots: number[][] = [];
+		const particles = {
+			spawnBreak: () => undefined,
+			spawnFirework: (x: number, y: number, z: number, big: boolean) => { shots.push([x, y, z, big ? 1 : 0]); },
+			tick: () => undefined,
+		} as unknown as ParticleSystem;
+		const h = makeLoop({ particles });
+		for (let cx = 15; cx <= 17; cx++) for (let cz = 15; cz <= 17; cz++) {
+			const c = h.world.ensureChunk(cx, cz);
+			c.blocks.fill(AIR);
+			c.lights.fill(0);
+			c.liquidFrontier.clear();
+		}
+		return { ...h, shots };
+	}
+
+	it('lit: one big firework from the centre of its cell (catches detonateAt ignoring the effect)', () => {
+		const h = withParticles();
+		h.world.setBlock(O.x, O.y, O.z, fireworks);
+		h.loop.ignite(at(O), 0);
+		h.loop.simulate(1.1);
+		expect(h.shots).toEqual([[O.x + 0.5, O.y + 0.5, O.z + 0.5, 1]]);
+	});
+
+	it('chained: a firework primed by a TNT fires the same way; the TNT itself makes no firework (catches the effect on every blast, or only on a lit firework)', () => {
+		const h = withParticles();
+		h.world.setBlock(O.x, O.y, O.z, tnt);
+		h.world.setBlock(O.x + 2, O.y, O.z, fireworks);
+		h.loop.ignite(at(O), 0);
+		h.loop.simulate(2.6);
+		expect(h.shots).toEqual([]);
+		h.loop.simulate(TNT_CHAIN_FUSE + 0.05);
+		expect(h.world.getBlock(O.x + 2, O.y, O.z)).toBe(AIR);
+		expect(h.shots).toEqual([[O.x + 2.5, O.y + 0.5, O.z + 0.5, 1]]);
+	});
+
+	it('a mixed chain (Review Focus 5): a TNT lights a Fireworks and a Tunnel, the Tunnel lights a TNT, that TNT lights a second Fireworks; each goes off exactly once with its own effect and nothing stays primed (catches an origin that re-primes itself, a firework on every blast, and a chained Tunnel that forgets its direction)', () => {
+		const h = withParticles();
+		const primed = () => (h.loop as unknown as { primedTnt: Map<string, unknown> }).primedTnt.size;
+		h.world.setBlock(O.x, O.y, O.z, tnt);
+		h.world.setBlock(O.x - 2, O.y, O.z, fireworks);       // in the TNT's radius
+		h.world.setBlock(O.x, O.y, O.z + 2, tunnel);          // in the TNT's radius: chained, it runs pz
+		h.world.setBlock(O.x, O.y, O.z + 10, tnt);            // in the tunnel's line
+		h.world.setBlock(O.x + 3, O.y, O.z + 10, fireworks);  // in the second TNT's radius, outside the tunnel
+		h.world.setBlock(O.x, O.y + 1, O.z + 20, stone);      // pz marker: the tunnel digs it
+		h.world.setBlock(O.x + 20, O.y + 1, O.z + 2, stone);  // px marker: a Tunnel that lost its dir would dig this
+		h.loop.ignite(at(O), 0);
+		h.loop.simulate(2.6);
+		expect(h.shots).toEqual([]);
+		expect(primed()).toBe(2); // the Fireworks and the Tunnel
+		h.loop.simulate(TNT_CHAIN_FUSE + 0.05);
+		expect(h.shots).toEqual([[O.x - 1.5, O.y + 0.5, O.z + 0.5, 1]]);
+		expect(h.world.getBlock(O.x, O.y + 1, O.z + 20)).toBe(AIR);
+		expect(h.world.getBlock(O.x + 20, O.y + 1, O.z + 2)).toBe(stone);
+		for (let i = 0; i < 20; i++) h.loop.simulate(TNT_CHAIN_FUSE + 0.01);
+		expect(h.shots).toEqual([[O.x - 1.5, O.y + 0.5, O.z + 0.5, 1], [O.x + 3.5, O.y + 0.5, O.z + 10.5, 1]]);
+		for (const [x, z] of [[O.x, O.z], [O.x - 2, O.z], [O.x, O.z + 2], [O.x, O.z + 10], [O.x + 3, O.z + 10]]) expect(h.world.getBlock(x, O.y, z), `${x},${z}`).toBe(AIR);
+		expect(primed()).toBe(0);
 	});
 });

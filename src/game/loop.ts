@@ -710,7 +710,8 @@ export class GameLoop {
 			this.primedTnt.set(tntKey(x, y, z), chained);
 			this.overlay?.add(x, y, z);
 		}
-		this.particles?.spawnBreak(ox, oy, oz, entry.blockId);
+		if (result.effect === 'firework') this.particles?.spawnFirework(ox + 0.5, oy + 0.5, oz + 0.5, true);
+		else this.particles?.spawnBreak(ox, oy, oz, entry.blockId);
 	}
 
 	/** Enqueues the MESH_RADIUS ring into the stream set (spec §3.B) and updates the `moving` flag. */

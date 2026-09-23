@@ -17,7 +17,7 @@ describe('igniteTnt', () => {
 		const w = new World(1);
 		w.setBlock(100, 60, 100, tntId);
 		const reg = new Map<string, PrimedEntry>();
-		const ok = igniteTnt(w, hitAt(100, 60, 100), reg, 2.5);
+		const ok = igniteTnt(w, hitAt(100, 60, 100), reg);
 		expect(ok).toBe(true);
 		expect(reg.size).toBe(1);
 		const entry = reg.values().next().value!;
@@ -29,7 +29,7 @@ describe('igniteTnt', () => {
 		const w = new World(1);
 		w.setBlock(100, 60, 100, stoneId);
 		const reg = new Map<string, PrimedEntry>();
-		const ok = igniteTnt(w, hitAt(100, 60, 100), reg, 2.5);
+		const ok = igniteTnt(w, hitAt(100, 60, 100), reg);
 		expect(ok).toBe(false);
 		expect(reg.size).toBe(0);
 	});
@@ -38,13 +38,25 @@ describe('igniteTnt', () => {
 		const w = new World(1);
 		w.setBlock(100, 60, 100, tntId);
 		const reg = new Map<string, PrimedEntry>();
-		igniteTnt(w, hitAt(100, 60, 100), reg, 2.5);
+		igniteTnt(w, hitAt(100, 60, 100), reg);
 		const first = reg.values().next().value!;
 		first.fuse = 1.0;
-		const ok = igniteTnt(w, hitAt(100, 60, 100), reg, 2.5);
+		const ok = igniteTnt(w, hitAt(100, 60, 100), reg);
 		expect(ok).toBe(false);
 		expect(reg.size).toBe(1);
 		expect(first.fuse).toBe(1.0);
+	});
+	it('primes Big and Mega TNT with their own fuse and radius, fixed in the entry', () => {
+		// Catches ignite on id === tnt only (actions.ts:61 today) and a global fuse for every tier.
+		const w = new World(1);
+		const big = BLOCK_BY_NAME['big_tnt'].id, mega = BLOCK_BY_NAME['mega_tnt'].id;
+		w.setBlock(100, 60, 100, big);
+		w.setBlock(104, 60, 100, mega);
+		const reg = new Map<string, PrimedEntry>();
+		expect(igniteTnt(w, hitAt(100, 60, 100), reg)).toBe(true);
+		expect(igniteTnt(w, hitAt(104, 60, 100), reg)).toBe(true);
+		expect(reg.get('100,60,100')).toEqual({ x: 100, y: 60, z: 100, fuse: 4, radius: 5, blockId: big });
+		expect(reg.get('104,60,100')).toEqual({ x: 104, y: 60, z: 100, fuse: 6, radius: 8, blockId: mega });
 	});
 });
 

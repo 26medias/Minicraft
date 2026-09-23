@@ -13,7 +13,7 @@ import type { PrimedOverlay } from '../engine/render/primed-overlay';
 import type { LightRegistry } from '../engine/render/light-registry';
 import type { FaceHighlight } from '../engine/render/face-highlight';
 import { canReplace, igniteTnt, placeBlock, type PrimedEntry } from './actions';
-import { detonate, tntKey, TNT_CHAIN_FUSE, TNT_PRIME_FUSE } from './tnt';
+import { detonate, tntKey, TNT_CHAIN_FUSE } from './tnt';
 import { updateLightsForBlockChange } from '../engine/world/lighting';
 import { LiquidScheduler } from './liquid-scheduler';
 import { chunkIndex, chunkIndexOrNeg, WORLD_CHUNKS_Z } from '../engine/world/coords';
@@ -304,7 +304,7 @@ export class GameLoop {
 
 	/** Called from main.ts on 'ignite' keydown. Returns true if a TNT was newly primed. */
 	ignite(hit: VoxelHit): boolean {
-		const ok = igniteTnt(this.world, hit, this.primedTnt, TNT_PRIME_FUSE);
+		const ok = igniteTnt(this.world, hit, this.primedTnt);
 		if (ok) this.overlay?.add(hit.x, hit.y, hit.z);
 		return ok;
 	}
@@ -611,13 +611,15 @@ export class GameLoop {
 			const k = tntKey(entry.x, entry.y, entry.z);
 			this.primedTnt.delete(k);
 			this.overlay?.remove(entry.x, entry.y, entry.z);
-			this.detonateAt(entry.x, entry.y, entry.z);
+			this.detonateAt(entry);
 		}
 		return expired.length > 0;
 	}
 
-	private detonateAt(ox: number, oy: number, oz: number): void {
-		const result = detonate(this.world, ox, oy, oz, (x, y, z) =>
+	/** Radius comes from the entry (fixed at priming), never from what sits at the origin now. */
+	private detonateAt(entry: PrimedEntry): void {
+		const { x: ox, y: oy, z: oz } = entry;
+		const result = detonate(this.world, ox, oy, oz, entry.radius, (x, y, z) =>
 			this.primedTnt.has(tntKey(x, y, z)),
 		);
 		// Crafting spec §7: one batch anchored at the origin (edit lane); the rest of the blast goes to the bulk lane.
@@ -625,11 +627,12 @@ export class GameLoop {
 		// The detonating TNT's own cell is not a mined block (spec §2: a lone TNT adds 0 TNT).
 		const mined = removed.filter((r) => r.x !== ox || r.y !== oy || r.z !== oz);
 		if (mined.length > 0) this.onBlocksRemoved?.(mined);
-		for (const { x, y, z } of result.primed) {
-			this.primedTnt.set(tntKey(x, y, z), { x, y, z, fuse: TNT_CHAIN_FUSE });
+		for (const { x, y, z, radius, blockId } of result.primed) {
+			// Chain fuse is 0.1 s for every tier; the chained TNT keeps ITS OWN radius.
+			this.primedTnt.set(tntKey(x, y, z), { x, y, z, fuse: TNT_CHAIN_FUSE, radius, blockId });
 			this.overlay?.add(x, y, z);
 		}
-		this.particles?.spawnBreak(ox, oy, oz, BLOCK_BY_NAME['tnt'].id);
+		this.particles?.spawnBreak(ox, oy, oz, entry.blockId);
 	}
 
 	/** Enqueues the MESH_RADIUS ring into the stream set (spec §3.B) and updates the `moving` flag. */

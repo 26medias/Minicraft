@@ -1,8 +1,8 @@
 import type { World } from '../engine/world/world';
 import type { VoxelHit } from '../engine/input/raycast';
 import type { BlockId } from '../data/blocks.data';
-import { AIR, BLOCKS, isSolid, BLOCK_BY_NAME } from '../data/blocks.data';
-import { tntKey } from './tnt';
+import { AIR, BLOCKS, isSolid } from '../data/blocks.data';
+import { tntKey, tntSpec } from './tnt';
 
 const FACE_NORMAL: Record<string, [number, number, number]> = {
 	px: [1, 0, 0],
@@ -50,19 +50,21 @@ export function canReplace(world: World, hit: VoxelHit, block: BlockId): boolean
 	return existing !== block;
 }
 
-export type PrimedEntry = { x: number; y: number; z: number; fuse: number };
+/** A lit TNT. `radius` and `blockId` are fixed at priming (spec §6); `fuse` counts down. */
+export type PrimedEntry = { x: number; y: number; z: number; fuse: number; radius: number; blockId: BlockId };
 
+/** Primes the aimed TNT of any tier with its own fuse and radius. False on non-TNT or already primed. */
 export function igniteTnt(
 	world: World,
 	hit: VoxelHit,
 	registry: Map<string, PrimedEntry>,
-	fuse: number,
 ): boolean {
-	const tntId = BLOCK_BY_NAME['tnt'].id;
-	if (world.getBlock(hit.x, hit.y, hit.z) !== tntId) return false;
+	const id = world.getBlock(hit.x, hit.y, hit.z);
+	const spec = tntSpec(id);
+	if (!spec) return false;
 	const k = tntKey(hit.x, hit.y, hit.z);
 	if (registry.has(k)) return false;
-	registry.set(k, { x: hit.x, y: hit.y, z: hit.z, fuse });
+	registry.set(k, { x: hit.x, y: hit.y, z: hit.z, fuse: spec.fuse, radius: spec.radius, blockId: id });
 	return true;
 }
 

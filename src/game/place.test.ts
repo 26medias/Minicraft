@@ -110,3 +110,29 @@ describe('applyRemoved through a TNT blast (spec §3 auto-hotbar)', () => {
 		expect(player.hotbar[4]).toBe(coal);
 	});
 });
+describe('crafted-only blocks with their real ids (spec §3, §6)', () => {
+	it('Big TNT at 0 is refused even in an unlimited world; with 1 it places and spends it; plain TNT stays free', () => {
+		// Catches a crafted-only rule that only exists in must-mine worlds (Big TNT would be free), and
+		// an unconditional count check that also refused or spent plain TNT in an unlimited world.
+		const { loop, world, player } = fixture();
+		const big = id('big_tnt');
+		player.hotbar = [big, tnt, AIR, AIR, AIR, AIR, AIR, AIR, AIR];
+		player.selected = 0;
+		player.inventory = {};
+		const place = (hit: VoxelHit) => tryPlace({ loop, world, player, hit, shift: false, mustMine: false, lampColor: '#ffffff' });
+
+		expect(place(base)).toEqual({ ok: false, reason: 'no-count' });
+		expect(world.getBlock(264, 39, 268)).toBe(AIR);
+
+		player.inventory = { big_tnt: 1 };
+		expect(place(base)).toEqual({ ok: true });
+		expect(world.getBlock(264, 39, 268)).toBe(big);
+		expect(player.inventory).toEqual({ big_tnt: 0 });
+
+		player.selected = 1;
+		const onBig: VoxelHit = { x: 264, y: 39, z: 268, face: 'py', distance: 3 };
+		expect(place(onBig)).toEqual({ ok: true });
+		expect(world.getBlock(264, 40, 268)).toBe(tnt);
+		expect(player.inventory).toEqual({ big_tnt: 0 });
+	});
+});

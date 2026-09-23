@@ -211,7 +211,11 @@ blocks from spawn. Numbers get tuned after the first play session.
     button, by switching pickaxes (P or click), and re-armed whenever the aimed block is outside the area of
     the previous break, so the aim sliding onto his house gets the full
     warning again.
-  - **0.25 s for a held break** inside the previous area. Minecraft uses
+  - **0.25 s for a held break** in the held zone. The held zone is the
+    previous area plus the next layer beyond it, away from the player.
+    The previous area itself is empty after the break, so a held tunnel
+    aims one layer deeper each time. Sliding sideways or skipping a layer
+    re-arms the 0.4 s floor. Minecraft uses
     the same 0.25 s delay between held breaks, and it keeps Emerald at 4
     area breaks per second or fewer.
 

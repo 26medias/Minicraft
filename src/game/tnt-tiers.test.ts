@@ -144,3 +144,13 @@ describe('TNT blasts and counts (spec §2)', () => {
 		expect(countOf(h.inv(), 'stone')).toBe(1);
 	});
 });
+it('igniting a Big TNT leaves the block and the counts as they were until it detonates (catches ignite consuming a count or rewriting the block; primed state is not saved, so a reload finds a plain big_tnt)', () => {
+	const h = makeLoop();
+	const big = BLOCK_BY_NAME['big_tnt'].id;
+	h.world.setBlock(264, 40, 264, big);
+	h.player.inventory = { big_tnt: 2 };
+	expect(h.loop.ignite({ x: 264, y: 40, z: 264, face: 'py', distance: 1 })).toBe(true);
+	h.tick(0.5); // well inside the 4 s fuse
+	expect(h.world.getBlock(264, 40, 264)).toBe(big);
+	expect(h.player.inventory).toEqual({ big_tnt: 2 });
+});

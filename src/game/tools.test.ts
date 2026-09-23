@@ -95,3 +95,6 @@ describe('nextOwnedTier', () => {
 		expect(nextOwnedTier({ owned: [0, 1, 5], equipped: 3 })).toBe(5);
 	});
 });
+it('nextOwnedTier with only the Hand owned stays at 0 (catches cycling to an unowned tier 1)', () => {
+	expect(nextOwnedTier({ owned: [0], equipped: 0 })).toBe(0);
+});

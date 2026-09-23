@@ -175,3 +175,13 @@ describe('area mining (spec §5, §11 loop)', () => {
 		expect(h.world.getBlock(1, 30, 300)).toBe(stone); // not in a −x area
 	});
 });
+it('Emerald area at the top of a 64-high world skips out-of-bounds cells without throwing (catches areaCells results passed unfiltered to setBlock)', () => {
+	const h = fixture(7); // makeLoop() default: a 64-high v1 world
+	const stone = BLOCK_BY_NAME['stone'].id;
+	fill(h, [262, 266], [61, 63], [262, 266], stone);
+	const cells = areaCells({ x: 264, y: 62, z: 264 }, 'ny', 7); // depth runs +y, past y 63
+	expect(cells.some((c) => c.y > 63)).toBe(true);
+	const { removed } = h.loop.removeBlocks(cells, { x: 264, y: 62, z: 264 });
+	expect(removed.every((c) => c.y <= 63)).toBe(true);
+	expect(removed.length).toBe(5 * 5 * 2); // y 62 and 63, each 5×5
+});

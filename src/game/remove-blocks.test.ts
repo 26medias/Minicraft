@@ -192,3 +192,15 @@ describe('TNT through removeBlocks (crafting spec §2, §7)', () => {
 		expect(world.getBlock(266, 40, 260)).toBe(stone);
 	});
 });
+it('water next to a removed wall flows into the hole (catches removeBlocks writing through chunk.set, which skips the liquid wake-up)', () => {
+	const h = makeLoop();
+	const stone = BLOCK_BY_NAME['stone'].id, water = BLOCK_BY_NAME['water'].id;
+	// Floor at y 39, a water source at (262,40,264), and a one-block stone wall at x 263.
+	for (let x = 260; x <= 268; x++) for (let z = 262; z <= 266; z++) h.world.setBlock(x, 39, z, stone);
+	h.world.setBlock(262, 40, 264, water);
+	h.world.setBlock(263, 40, 264, stone);
+	for (let i = 0; i < 60; i++) h.loop.simulate(0.05); // let the water settle against the wall first
+	h.loop.removeBlocks([{ x: 263, y: 40, z: 264 }], { x: 263, y: 40, z: 264 });
+	for (let i = 0; i < 60; i++) h.loop.simulate(0.05);
+	expect(h.world.getBlock(263, 40, 264)).toBe(water);
+});

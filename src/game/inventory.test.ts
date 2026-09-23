@@ -144,3 +144,8 @@ describe('autoHotbar (spec §3)', () => {
 		);
 	});
 });
+it('a block already on the hotbar twice is not added a third time (catches the "not on hotbar" check scanning only the selected slot)', () => {
+	const stone = BLOCK_BY_NAME['stone'].id;
+	const hotbar = [stone, stone, AIR, AIR, AIR, AIR, AIR, AIR, AIR];
+	expect(autoHotbar(hotbar, 4, { stone: 3 }, [stone], true)).toBeNull(); // selected slot 4 is empty: the check must scan the whole bar
+});

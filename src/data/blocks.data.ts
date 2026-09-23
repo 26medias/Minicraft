@@ -1,5 +1,6 @@
 import { BASE_BLOCKS, type BlockDef, type BlockId, type Face } from './blocks.base.data';
 import { CATALOG_BLOCKS } from './blocks.catalog.data';
+import { EXTRA_BLOCKS } from './blocks.extra.data';
 
 export * from './blocks.base.data';
 
@@ -23,7 +24,8 @@ function dense(rows: BlockDef[]): BlockDef[] {
 	return out;
 }
 
-export const BLOCKS: BlockDef[] = dense([...BASE_BLOCKS, ...CATALOG_BLOCKS]);
+// Extras sit at EXTRA_ID_START (1000); dense() tombstones the gap, so BLOCKS.length is ~1002.
+export const BLOCKS: BlockDef[] = dense([...BASE_BLOCKS, ...CATALOG_BLOCKS, ...EXTRA_BLOCKS]);
 
 export const BLOCK_BY_NAME: Record<string, BlockDef> = Object.fromEntries(
 	BLOCKS.filter((b) => !b.retired).map((b) => [b.name, b]),

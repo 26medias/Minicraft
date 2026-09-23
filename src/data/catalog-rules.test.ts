@@ -195,6 +195,15 @@ describe('selectCandidates', () => {
 });
 
 describe('assignIds', () => {
+	it('refuses to generate an id at or above EXTRA_ID_START (1000)', () => {
+		// Catches a missing guard: without it, catalog growth past 999 silently hands out
+		// 1000 = big_tnt's id, and every saved Big TNT would turn into the new block.
+		expect(assignIds({ ids: { a: 998 }, retired: [] }, ['a', 'b'], [])).toEqual({ ids: { a: 998, b: 999 }, retired: [] });
+		expect(() => assignIds({ ids: { a: 998 }, retired: [] }, ['a', 'b', 'c'], [])).toThrow(/1000/);
+		// A frozen map that already holds an id ≥ 1000 is refused too, even with nothing new to assign.
+		expect(() => assignIds({ ids: { a: 1000 }, retired: [] }, ['a'], [])).toThrow(/1000/);
+	});
+
 	const empty = { ids: {}, retired: [] };
 	it('keeps existing ids, appends new names in name order from max+1, starts at 20', () => {
 		expect(assignIds(empty, ['b', 'a'], [])).toEqual({ ids: { a: 20, b: 21 }, retired: [] });

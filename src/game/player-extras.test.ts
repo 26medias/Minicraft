@@ -135,3 +135,11 @@ describe('Player crafting fields and playerSave', () => {
 		expect(s.tools).toEqual({ owned: [0, 1], equipped: 1 });
 	});
 });
+describe('TNT tier counts survive load (Phase D blocks)', () => {
+	it('keeps big_tnt and mega_tnt counts: they are real block names now', () => {
+		// Catches EXTRA_BLOCKS missing from dense()/BLOCK_BY_NAME: resolvePlayerExtras drops unknown
+		// names, so every crafted Big/Mega TNT would vanish on the next load.
+		const player = { x: 0, y: 0, z: 0, yaw: 0, pitch: 0, hotbar: [], selected: 0, inventory: { big_tnt: 2, mega_tnt: 1, tnt: 0 }, tools: { owned: [0], equipped: 0 } };
+		expect(resolvePlayerExtras(player, false).inventory).toEqual({ big_tnt: 2, mega_tnt: 1, tnt: 0 });
+	});
+});

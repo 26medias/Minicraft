@@ -1,4 +1,5 @@
 import { type BlockDef, type BlockFaceTextures, type BlockGroup, GENERATED_ID_START } from './blocks.base.data';
+import { EXTRA_ID_START } from './blocks.extra.data';
 
 export type ModelJson = {
 	parent?: string;
@@ -250,6 +251,9 @@ export function assignIds(existing: IdMap, names: string[], retire: string[]): I
 	let next = Math.max(GENERATED_ID_START - 1, ...Object.values(ids)) + 1;
 	for (const name of [...names].sort()) {
 		if (ids[name] === undefined) ids[name] = next++;
+	}
+	for (const [name, id] of Object.entries(ids)) {
+		if (id >= EXTRA_ID_START) throw new Error(`catalog id ${id} for "${name}" reaches EXTRA_ID_START (${EXTRA_ID_START}); ids from ${EXTRA_ID_START} up belong to blocks.extra.data.ts`);
 	}
 	return { ids, retired: [...retired].sort() };
 }

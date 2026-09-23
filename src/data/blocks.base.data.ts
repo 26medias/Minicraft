@@ -25,6 +25,8 @@ export type BlockDef = {
 	group: BlockGroup;
 	// Slot kept so BLOCKS[id] stays aligned; never shown, never placeable.
 	retired?: true;
+	// Present exactly on TNT blocks: blast radius (blocks) and kid-ignited fuse (seconds). Spec §6.
+	tnt?: { radius: number; fuse: number };
 };
 
 export const AIR: BlockId = 0;
@@ -76,7 +78,7 @@ export const BASE_BLOCKS: BlockDef[] = [
 		lightLevel: 0, lightFilter: 15, liquid: 'none',
 		textures: { kind: 'uniform', all: 'black_wool' } },
 	{ id: 15, name: 'tnt', label: 'TNT', solid: true, transparent: false, translucent: false, group: 'basics', hardness: 0.5,
-		lightLevel: 0, lightFilter: 15, liquid: 'none',
+		lightLevel: 0, lightFilter: 15, liquid: 'none', tnt: { radius: 3, fuse: 2.5 },
 		textures: { kind: 'top-bottom-side', top: 'tnt_top', bottom: 'tnt_bottom', side: 'tnt_side' } },
 	{ id: 16, name: 'lamp', label: 'Lamp', solid: true, transparent: false, translucent: false, group: 'basics', hardness: 0.3,
 		lightLevel: 15, lightFilter: 15, liquid: 'none',

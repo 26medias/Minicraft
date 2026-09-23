@@ -1,21 +1,18 @@
-import { describe, it, expect, vi } from 'vitest';
-
-// Big TNT gets its real id (1000) in Phase D (blocks.extra.data.ts). Until then this file adds a
-// stand-in row at 1000 named big_tnt, so the id-level rule is tested now. Phase D deletes the mock.
-vi.mock('../data/blocks.data', async (importOriginal) => {
-	const orig = await importOriginal<typeof import('../data/blocks.data')>();
-	const BLOCKS = [...orig.BLOCKS];
-	BLOCKS[1000] = { ...orig.BLOCK_BY_NAME['tnt'], id: 1000, name: 'big_tnt', label: 'Big TNT' };
-	return { ...orig, BLOCKS };
-});
-
+import { describe, it, expect } from 'vitest';
+import { BLOCK_BY_NAME } from '../data/blocks.data';
 import { canPlace, onPlaced } from './inventory';
+
+const big = BLOCK_BY_NAME['big_tnt'].id;
+const mega = BLOCK_BY_NAME['mega_tnt'].id;
 
 describe('crafted-only blocks (spec §3)', () => {
 	it('are refused at 0 in an unlimited world and spend a count there (catches crafted-only treated like plain TNT)', () => {
-		expect(canPlace({}, 1000, false)).toBe(false);
-		expect(canPlace({ big_tnt: 0 }, 1000, false)).toBe(false);
-		expect(canPlace({ big_tnt: 1 }, 1000, false)).toBe(true);
-		expect(onPlaced({ big_tnt: 2 }, 1000, false)).toEqual({ big_tnt: 1 });
+		expect([big, mega]).toEqual([1000, 1001]); // the real rows, no stand-in
+		for (const [id, name] of [[big, 'big_tnt'], [mega, 'mega_tnt']] as const) {
+			expect(canPlace({}, id, false)).toBe(false);
+			expect(canPlace({ [name]: 0 }, id, false)).toBe(false);
+			expect(canPlace({ [name]: 1 }, id, false)).toBe(true);
+			expect(onPlaced({ [name]: 2 }, id, false)).toEqual({ [name]: 1 });
+		}
 	});
 });

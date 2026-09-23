@@ -199,7 +199,9 @@ it('water next to a removed wall flows into the hole (catches removeBlocks writi
 	for (let x = 260; x <= 268; x++) for (let z = 262; z <= 266; z++) h.world.setBlock(x, 39, z, stone);
 	h.world.setBlock(262, 40, 264, water);
 	h.world.setBlock(263, 40, 264, stone);
-	for (let i = 0; i < 60; i++) h.loop.simulate(0.05); // let the water settle against the wall first
+	// Settle first, so the water placed above is no longer on the liquid frontier: only removeBlocks' own wake-up can move it.
+	for (let i = 0; i < 60; i++) h.loop.simulate(0.05);
+	expect(h.world.getBlock(263, 40, 264)).toBe(stone);
 	h.loop.removeBlocks([{ x: 263, y: 40, z: 264 }], { x: 263, y: 40, z: 264 });
 	for (let i = 0; i < 60; i++) h.loop.simulate(0.05);
 	expect(h.world.getBlock(263, 40, 264)).toBe(water);

@@ -45,6 +45,22 @@ renders in false shadow.
   moving, with a minimum of one chunk. A cold chunk exceeds 6 ms, so moving means one cold
   chunk per frame. Generating missing neighbours counts against the budget.
 - **Dirty until applied.** A chunk leaves the dirty set only when its mesh is mounted.
+- **Bulk lane** (crafting spec §7). A batched removal (a TNT blast, an area break; `GameLoop.removeBlocks`)
+  sends only its anchor chunk (the TNT origin, the aimed block) to the edit lane. Every other chunk it
+  touched — each removed cell's chunk and its edge neighbours, and every chunk the light touched — goes
+  to the bulk lane. `planFrame` drains the bulk lane after the edit lane and before streaming, even in an
+  edit frame, nearest first. With the worker, bulk chunks are posted, and when the worker is full they
+  wait for the next frame; they never fall back to a synchronous mesh. Without the worker, one bulk chunk
+  is meshed per frame. A bulk chunk stays in the lane until its mesh is applied, so a dropped reply
+  leaves it there to be posted again. The south-east shadow neighbours stay shadow-only, as for a single
+  edit. Single-block mining, placing and replacing never use the bulk lane: a block at a chunk edge still
+  re-meshes both chunks in the same frame.
+- Accepted visual cost: until its reply lands, a bulk chunk keeps its old mesh, so for a few frames the
+  far side of a big hole can show blocks that are gone, or miss the faces that now face the hole. The
+  bench asserts every bulk chunk is mounted within 16 frames of its edit.
+- Light stays per block, called directly (not through `applyLightUpdate`, which would put every chunk
+  the light touched in the edit lane). A bounding-box relight is wrong for sunlight: opening the roof of
+  a shaft lights cells far below the box.
 
 Neighbours dirtied only by a shadow change go to the stream lane flagged `shadowOnly`, and are
 re-meshed only if their `sunlitHash` changed.
@@ -166,6 +182,28 @@ Baseline, before batched removal (2026-09-23, medians of 3):
 
 Mega r8 chain ×4 interior: detonation frames 50.0 / 33.3 / 16.8 / 33.3 ms
 Mega r8 chain ×4 corner: detonation frames 33.3 / 16.8 / 33.4 / 33.3 ms
+
+After batched removal (removeBlocks, bulk lane, 9-slot freshness, no drop cascade), 2026-09-23, medians of 3:
+
+| Crafting row | max frame ms (median / worst) | frames > 50 ms | light ms, worst frame | bulk frames, worst chunk | cells removed | gate |
+|---|---|---|---|---|---|---|
+| TNT r3 interior | 40.9 / 54.8 | 0 | 0.6 | 0 | 122 | ok (thin) |
+| TNT r3 corner | 37.6 / 38.6 | 0 | 0.5 | 3 | 122 | ok |
+| area 5×5×5 ×10 held interior | 31.7 / 36.6 | 0 | 0.6 | 3 | 1250 | ok |
+| area 5×5×5 ×10 held corner | 38.4 / 45.4 | 0 | 0.3 | 4 | 521 | ok |
+| Mega r8 interior | 27.3 / 36.8 | 0 | 4.0 | 4 | 1219 | ok |
+| Mega r8 corner | 30.9 / 31.9 | 0 | 2.7 | 4 | 1315 | ok |
+| Mega r8 chain ×4 interior | 32.3 / 43.5 | 0 | 4.5 | 10 | 3675 | ok |
+| Mega r8 chain ×4 corner | 31.7 / 33.9 | 0 | 4.2 | 4 | 3738 | ok |
+
+Mega r8 chain ×4 interior: detonation frames 16.7 / 16.7 / 16.7 / 16.7 ms
+Mega r8 chain ×4 corner: detonation frames 16.7 / 16.8 / 16.7 / 16.8 ms
+
+The chunk-corner TNT went from one ~52 ms frame (four chunks re-meshed synchronously) to 38 ms: only
+the anchor is re-meshed in the edit frame, and the other three are posted to the worker and mounted
+within 3 frames. Light work stays under 6 ms per frame even for a radius-8 blast. The interior r3 row
+is still thin (~41 ms): it is the one chunk's own synchronous re-mesh, the same as a single edit in
+a dense chunk.
 
 The remaining hitches came from the liquid scheduler, not chunk work: generated ocean at the world
 edge read the outside as air and retried ~5 500 phantom flows every tick, and every liquid cell of

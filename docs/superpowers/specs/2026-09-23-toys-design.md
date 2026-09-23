@@ -1,6 +1,6 @@
 # Crafting toys: design
 
-Date: 2026-09-23. Branch: `crafting-2`, worked in the worktree `.claude/worktrees/toys`, based on `main` at 78934b3. Status: rev 2, after the gate-1 repairs. Process: light Anvil.
+Date: 2026-09-23. Branch: `crafting-2`, worked in the worktree `.claude/worktrees/toys`, based on `main` at 78934b3. Status: rev 3, gate 1 closed. Process: light Anvil.
 
 ## 1. Intent
 
@@ -48,6 +48,7 @@ Crafting shipped and is "really fun". The parent asked for more recipes, inspire
   - A TNT-kind cell inside the shape (any block with `tnt`) is **primed with the chain fuse, never removed or counted**.
   - Dome and firework prime nothing.
   - This rule lives in the shape dispatch, not in each shape.
+  - **The detonating TNT's own cell is always removed and never goes through the chain rule.** Tunnel and Flatten include the origin, so without this the TNT would re-prime itself every 0.1 s forever (gate 1). A test pins that a lone Tunnel or Flatten goes off exactly once.
 - **Textures.**
   - Slime Pad uses the Mojang `slime_block` texture.
   - The others are derived in `DERIVED_TEXTURES` (grey, then tinted):
@@ -66,8 +67,9 @@ Crafting shipped and is "really fun". The parent asked for more recipes, inspire
   - `grounded = false`, so the jump line on the next frame does not overwrite the bounce. Gate 1 measured that overwrite: a 19.7 bounce became 8.0.
 - **`padResponse`:**
   - no jump held: `-landingVy × 0.8`;
-  - jump held: `max(-landingVy, JUMP_SPEED) + 2`, capped so the apex is at most 8 blocks. It works like a trampoline: holding jump grows every bounce up to the cap.
-  - sneak held: 0.
+  - jump held: `min(max(-landingVy, JUMP_SPEED) + 2, CAP_VY)`, with `CAP_VY = √(2·GRAVITY·8) ≈ 19.6`. It works like a trampoline: holding jump grows every bounce up to the cap. Gate 1's probe measured rises of 1.27, 2.0, 2.9, 3.97, 5.2, 6.6 and 7.84, then 7.84 on every bounce after.
+  - sneak held: 0. **Sneak wins over jump** when both are held.
+- **The block under his feet** is the block under the centre of his feet at `y − 1`, even when the 0.6-wide player straddles two blocks.
 - **Settling.** A landing with `|vy| < MIN_BOUNCE_VY = 3` ends the bounce.
 - **Recipe.** 4 moss_block + 2 clay → 2.
 
@@ -75,7 +77,7 @@ Crafting shipped and is "really fun". The parent asked for more recipes, inspire
 
 - **When it fires.** He is grounded on it, his feet have been **outside the pad's cell since the last launch**, and sneak is not held. Then `vy = LAUNCH_VY`, and the jump line cannot overwrite it: the launch is applied after the jump line.
 - **Height.** `LAUNCH_VY` is chosen so a simulated `Player.update` at 1/60 s reaches 25 ± 1.5 blocks.
-- **Re-arming.** Landing back on the pad does not fire it again until his feet have left the cell. So he doesn't loop forever; he steps off, steps on, and flies again.
+- **Re-arming.** The pad starts armed, so the first step onto it fires. Landing back on it does not fire again until his feet have left the cell. So he doesn't loop forever; he steps off, steps on, and flies again.
 - **Recipe.** 1 slime_pad + 4 redstone ore → 1.
 
 ### 3.3 Fireworks (`fireworks`, 1004)
@@ -125,7 +127,7 @@ Crafting shipped and is "really fun". The parent asked for more recipes, inspire
   - The **ring** is the columns with `round(hypot(dx, dz)) == 5`.
   - For each ring column, `top` is the highest solid block at or below the TNT's y (scanning down at most 8).
   - `rimY = min(top over ring columns) − 1`.
-  - If no ring column has a solid block, there is **no water** (flat or floating ground).
+  - If no ring column has a solid block within 8 below the TNT's y (floating ground), there is **no water**. On flat ground every column's top is at `oy − 1`, so `rimY = oy − 2` and the lake fills: gate 1's probe gives 59 cells in 3 layers.
 - **Where water goes.**
   - Water candidates are the removed cells with `y ≤ rimY`, at most 4 layers.
   - Then **erode to stability**: drop any candidate that has a horizontal neighbour, or a cell below, which is neither solid nor itself a candidate. Repeat until nothing changes.
@@ -173,10 +175,16 @@ Every test names the wrong version it catches.
 
 **Pure tests**
 - **`padResponse`:** checks 0.8; jump held grows bounces up to the 8-block cap; sneak gives 0; a landing below `MIN_BOUNCE_VY` gives 0.
+- **Origin:** a lone Tunnel and a lone Flatten each go off exactly once. This catches the self-re-priming loop.
 - **Blast shapes:** exact counts and pinned cells for each shape.
   - **Tunnel:** 4 directions, floor at the TNT's y, the chained direction including the tie and the directly-above case.
   - **Flatten:** the cylinder, with nothing below the TNT's y.
-  - **Lake:** fixtures for flat ground (no water), a 2-step slope (water only below the low rim, and none touching the open side), a cave under the crater (no spill), and at most 4 deep.
+  - **Lake:** fixtures and expected results:
+    - flat ground: 59 water cells in 3 layers;
+    - floating ground: no water;
+    - a 2-step slope: water only below the low rim, and none touching the open side;
+    - a cave under the crater: erosion empties the lake, so 0 water and no spill;
+    - never more than 4 deep.
   - **Dome:** only AIR cells on the shell, and none inside the player's box.
   - **Firework:** removes and primes nothing.
 - **Chain rule:** a TNT inside a Tunnel, Flatten or Lake blast is primed, not removed and not counted.
@@ -185,7 +193,8 @@ Every test names the wrong version it catches.
 **Loop tests (`makeLoop`)**
 - **Slime:**
   - a 10-block drop onto a pad bounces;
-  - with jump held, each rise is higher than the last, up to the cap, and higher than a plain jump's 1.33 apex (this catches the jump overwrite);
+  - with jump held, starting from a jump onto the pad, each rise is strictly higher than the last until a rise reaches 7.5 or more, then stays flat at the cap. The first rise is already above a plain jump's 1.33 apex. This catches the jump overwrite, which gives about 1.3 every time;
+  - with jump and sneak both held, no bounce;
   - with sneak held, it doesn't bounce;
   - it settles.
 - **Launch:** simulated `Player.update` at 1/60 reaches an apex of 25 ± 1.5, also with jump held. Landing back on the pad does not relaunch; stepping off and on does. Sneak blocks it.

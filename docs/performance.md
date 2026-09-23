@@ -205,6 +205,24 @@ within 3 frames. Light work stays under 6 ms per frame even for a radius-8 blast
 is still thin (~41 ms): it is the one chunk's own synchronous re-mesh, the same as a single edit in
 a dense chunk.
 
+### Crafting rows, after TNT tiers (2026-09-23)
+
+Real Mega TNT (`MEGA.real = true`), full bench run:
+
+| Crafting row | max frame ms (median / worst) | frames > 50 ms | light ms, worst frame | bulk frames, worst chunk | cells removed | gate |
+|---|---|---|---|---|---|---|
+| TNT r3 interior | 33.0 / 46.0 | 0 | 0.4 | 0 | 122 | ok |
+| TNT r3 corner | 32.6 / 38.7 | 0 | 0.4 | 3 | 122 | ok |
+| area 5×5×5 ×10 held interior | 29.1 / 30.9 | 0 | 0.5 | 3 | 1250 | ok |
+| area 5×5×5 ×10 held corner | 34.9 / 38.4 | 0 | 0.3 | 4 | 521 | ok |
+| Mega r8 interior | 32.6 / 36.2 | 0 | 3.0 | 3 | 1219 | ok |
+| Mega r8 corner | 37.9 / 39.8 | 0 | 4.1 | 3 | 1315 | ok |
+| Mega r8 chain ×4 interior | 38.0 / 41.8 | 0 | 5.5 | 4 | 3675 | ok |
+| Mega r8 chain ×4 corner | 38.6 / 44.3 | 0 | 3.8 | 3 | 3738 | ok |
+
+Mega r8 chain ×4 interior: detonation frames 16.8 / 16.8 / 16.8 / 16.8 ms
+Mega r8 chain ×4 corner: detonation frames 16.8 / 16.8 / 16.8 / 16.7 ms
+
 The remaining hitches came from the liquid scheduler, not chunk work: generated ocean at the world
 edge read the outside as air and retried ~5 500 phantom flows every tick, and every liquid cell of
 each arriving chunk was rescanned. Outside the map now reads as a wall, and `seedArrival` seeds only

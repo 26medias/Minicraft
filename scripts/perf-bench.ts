@@ -257,7 +257,7 @@ type CraftRowDef =
 	| { name: string; kind: 'area'; dcx: number; dcz: number; corner: boolean; swings: number; everyMs: number };
 const PLAIN_TNT = BLOCK_BY_NAME['tnt'].id;
 /** Radius-8 rows. Stand-in until a radius-8 block exists (Phase D: `real: true, blockId: BLOCK_BY_NAME['mega_tnt'].id`). */
-const MEGA = { radius: 8, real: false, blockId: PLAIN_TNT };
+const MEGA = { radius: 8, real: true, blockId: BLOCK_BY_NAME['mega_tnt'].id };
 const CRAFT_ROWS: CraftRowDef[] = [
 	{ name: 'TNT r3 interior', kind: 'tnt', dcx: -3, dcz: -3, corner: false, radius: 3, count: 1, step: [0, 0], real: true, blockId: PLAIN_TNT },
 	{ name: 'TNT r3 corner', kind: 'tnt', dcx: -3, dcz: 0, corner: true, radius: 3, count: 1, step: [0, 0], real: true, blockId: PLAIN_TNT },

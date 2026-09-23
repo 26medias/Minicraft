@@ -14,6 +14,8 @@ export type LoadedAtlas = {
 	uvTable: Float32Array;
 	/** Pixel rect of the block's face in the atlas PNG, for DOM CSS positioning. */
 	tileRect: (id: BlockId, face: Face) => TileRect | null;
+	/** Pixel rect of a named atlas tile (pickaxe icons, spec §5), or null when the atlas lacks it. */
+	tileRectByName: (name: string) => TileRect | null;
 };
 
 export async function loadAtlas(
@@ -53,6 +55,7 @@ export async function loadAtlas(
 		uvFor: uvFromTable(uvTable),
 		uvTable,
 		tileRect: (id, face) => rectCache[id * 6 + faceIndex[face]],
+		tileRectByName: (name) => atlas.tiles[name] ?? null,
 	};
 }
 

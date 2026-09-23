@@ -5,6 +5,7 @@ import { exit } from 'node:process';
 import sharp from 'sharp';
 import { BLOCKS } from '../src/data/blocks.data.js';
 import { textureNames } from '../src/data/catalog-rules.js';
+import { DERIVED_TEXTURES, PICKAXE_TIERS, greyTint, pickaxeIcon, pickaxeIconName } from '../src/data/atlas-derive.js';
 
 const ATLAS_SIZE = 1024;
 const TILE = 16;
@@ -48,6 +49,9 @@ async function main() {
 		if (b.textures === null) continue;
 		for (const name of textureNames(b.textures)) names.add(name);
 	}
+	// HUD / inventory icons that no block uses (spec §5); drawn, not read from disk.
+	const icons = new Map<string, number>(PICKAXE_TIERS.map((t) => [pickaxeIconName(t), t]));
+	for (const name of icons.keys()) names.add(name);
 
 	const sorted = [...names].sort();
 	if (sorted.length > TILES_PER_ROW * TILES_PER_ROW) {
@@ -73,28 +77,17 @@ async function main() {
 		const x = col * CELL;
 		const y = row * CELL;
 
-		const tilePath = join(ASSETS_DIR, `${name}.png`);
-		// ensureAlpha() forces 4-channel RGBA regardless of the source PNG's channel count — Mojang's
-		// Phase 1 assets mix RGB and RGBA, and padEdgeReplicate's stride math assumes 4 channels.
-		// Animated textures are vertical strips of frames; take frame 0 rather than
-		// squashing every frame into one tile (which is what water and lava did).
-		const meta = await sharp(tilePath).metadata();
-		const w = meta.width ?? TILE;
-		let img = sharp(tilePath);
-		if ((meta.height ?? w) > w) img = img.extract({ left: 0, top: 0, width: w, height: w });
-		img = img.resize(TILE, TILE, { kernel: 'nearest' }).ensureAlpha();
-		const raw = await img.raw().toBuffer({ resolveWithObject: true });
-		if (raw.info.width !== TILE || raw.info.height !== TILE) {
-			throw new Error(
-				`Unexpected tile size for ${name}: ${raw.info.width}x${raw.info.height}`,
-			);
+		const derived = DERIVED_TEXTURES[name];
+		const iconTier = icons.get(name);
+		let pixels: Uint8Array;
+		if (iconTier !== undefined) {
+			pixels = pickaxeIcon(iconTier);
+		} else {
+			const raw = await readTile(derived ? derived.source : name);
+			// Derived tiles (Big/Mega TNT): greyscale then tint, from the source's untinted pixels.
+			const tint = TEXTURE_TINTS[name];
+			pixels = derived ? greyTint(raw, derived.tint) : tint ? applyTint(raw, tint) : raw;
 		}
-		if (raw.info.channels !== 4) {
-			throw new Error(`Expected 4-channel RGBA for ${name}, got ${raw.info.channels}`);
-		}
-
-		const tint = TEXTURE_TINTS[name];
-		const pixels = tint ? applyTint(raw.data, tint) : raw.data;
 
 		const padded = padEdgeReplicate(pixels, TILE, PADDING);
 		composites.push({
@@ -114,6 +107,28 @@ async function main() {
 	);
 
 	console.log(`Wrote ${sorted.length} tiles to ${OUT_PNG} (${ATLAS_SIZE}x${ATLAS_SIZE})`);
+}
+
+/** One 16×16 RGBA tile from src/assets/blocks (frame 0 of animated strips). */
+async function readTile(name: string): Promise<Uint8Array> {
+	const tilePath = join(ASSETS_DIR, `${name}.png`);
+	// ensureAlpha() forces 4-channel RGBA regardless of the source PNG's channel count — Mojang's
+	// Phase 1 assets mix RGB and RGBA, and padEdgeReplicate's stride math assumes 4 channels.
+	// Animated textures are vertical strips of frames; take frame 0 rather than
+	// squashing every frame into one tile (which is what water and lava did).
+	const meta = await sharp(tilePath).metadata();
+	const w = meta.width ?? TILE;
+	let img = sharp(tilePath);
+	if ((meta.height ?? w) > w) img = img.extract({ left: 0, top: 0, width: w, height: w });
+	img = img.resize(TILE, TILE, { kernel: 'nearest' }).ensureAlpha();
+	const raw = await img.raw().toBuffer({ resolveWithObject: true });
+	if (raw.info.width !== TILE || raw.info.height !== TILE) {
+		throw new Error(`Unexpected tile size for ${name}: ${raw.info.width}x${raw.info.height}`);
+	}
+	if (raw.info.channels !== 4) {
+		throw new Error(`Expected 4-channel RGBA for ${name}, got ${raw.info.channels}`);
+	}
+	return new Uint8Array(raw.data);
 }
 
 function padEdgeReplicate(src: Uint8Array, size: number, pad: number): Buffer {

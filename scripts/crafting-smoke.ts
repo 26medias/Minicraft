@@ -6,7 +6,8 @@
 // stops and says so; it never reuses or kills a server it did not start) with
 // VITE_MINICRAFT_API_URL pointed at a dead local port, drives a headed Chromium at 1280×720:
 // new must-mine world → mine → the block joins the hotbar → I → Craft → craft Wood with seeded
-// counts → P switches → HUD icon opens I → craft TNT tiers → Iron → orange area highlight.
+// counts → P switches → HUD icon opens I → craft TNT tiers → Iron → orange area highlight → toys: the three
+// icon tabs (≤ 10 cards each, all on screen), the green dot, a Slime Pad crafted, Shift = sneak, a real bounce.
 // Screenshots go to smoke-out/<timestamp>/. Exit 0 = every check passed, 1 = a check failed,
 // 2 = the page tried to reach a non-localhost host (aborted before it left the machine).
 // SAFETY: the save API is blocked twice — every request to the dead API port is aborted, and
@@ -29,6 +30,8 @@ const OUT = `smoke-out/${Date.now()}`;
 const COAL = BLOCK_BY_NAME['coal_ore'].id;
 const BIG = BLOCK_BY_NAME['big_tnt'].id;
 const MEGA = BLOCK_BY_NAME['mega_tnt'].id;
+const SLIME = BLOCK_BY_NAME['slime_pad'].id;
+const LAUNCH = BLOCK_BY_NAME['launch_pad'].id;
 
 let stopDev: (() => void) | null = null;
 let blockedApiCalls = 0;
@@ -76,12 +79,13 @@ async function guard(page: Page) {
 
 type Mc = {
 	world: { getBlock(x: number, y: number, z: number): number; setBlock(x: number, y: number, z: number, id: number): void };
-	player: { position: number[]; hotbar: number[]; selected: number; inventory: Record<string, number>; tools: { owned: number[]; equipped: number } };
+	player: { position: number[]; hotbar: number[]; selected: number; inventory: Record<string, number>; tools: { owned: number[]; equipped: number }; flying: boolean };
 	loop: { setLeftMouseDown(d: boolean): void; markChunkDirtyAround(x: number, z: number): void; applyLightUpdate(x: number, y: number, z: number): void };
 	cam: { pitch: number; yaw: number };
 	highlight: { setCells(cells: Array<{ x: number; y: number; z: number }>, multi: boolean): void };
 	mustMine: boolean;
 	syncHotbar(): void;
+	keys: { sneak?: boolean };
 };
 
 /** Seed exactly the recipe's needs (first anyOf name) on top of what he has, then refresh the UI. */
@@ -102,8 +106,12 @@ const mc = <T>(page: Page, fn: (m: Mc) => T) => page.evaluate(`(${fn.toString()}
 async function craftVia(page: Page, key: string) {
 	await page.keyboard.press('KeyI');
 	await page.click('.inventory-tab[data-tab="craft"]');
+	await page.click(`.craft-tab[data-craft-tab="${recipeFor(key).tab}"]`);
 	await page.click(`.craft-card[data-output="${key}"] .craft-button`);
 }
+/** Every visible card's box (hidden panels have none). */
+const cardBoxes = (page: Page) => page.locator('.craft-card').evaluateAll((els) => els.map((e) => e.getBoundingClientRect()).map((r) => ({ top: r.top, left: r.left, bottom: r.bottom, right: r.right })));
+const dotted = (page: Page, tab: string) => page.locator(`.craft-tab[data-craft-tab="${tab}"].dot`).count().then((n) => n === 1);
 
 // However the run ends (Ctrl-C, a pipe closing, an exception), the server it started goes with it.
 process.on('exit', () => stopDev?.());
@@ -152,15 +160,24 @@ for (const sig of ['SIGINT', 'SIGTERM', 'SIGHUP'] as const) process.on(sig, () =
 		const coalSlot = (await mc(page, (m) => m.player.hotbar)).indexOf(COAL);
 		check((await page.locator('#hud-hotbar .hotbar-slot').nth(coalSlot).innerText()).trim() === '1', 'its hotbar slot shows the badge 1');
 
-		// 3. I → Craft: 10 cards, all on screen at 1280×720, no scrolling.
+		// 3. I → Craft: three icon tabs (toys spec §5), each ≤ 10 cards, all on screen at 1280×720, no scrolling.
 		await page.keyboard.press('KeyI');
 		await page.click('.inventory-tab[data-tab="craft"]');
-		const boxes = await page.locator('.craft-card').evaluateAll((els) => els.map((e) => e.getBoundingClientRect()).map((r) => ({ top: r.top, left: r.left, bottom: r.bottom, right: r.right })));
-		check(boxes.length === 10, `10 craft cards (got ${boxes.length})`);
-		check(boxes.every((b) => b.top >= 0 && b.left >= 0 && b.bottom <= 720 && b.right <= 1280), 'every card fully inside 1280×720');
-		check(await page.evaluate(() => document.documentElement.scrollHeight <= window.innerHeight), 'the page does not scroll');
+		const tabs = await page.locator('.craft-tab').evaluateAll((els) => els.map((e) => (e as HTMLElement).dataset.craftTab));
+		check(JSON.stringify(tabs) === '["pickaxes","boom","toys"]', `three craft tabs in order (got ${JSON.stringify(tabs)})`);
+		check(await page.locator('.craft-tab.active[data-craft-tab="pickaxes"]').count() === 1, 'the Craft tab opens on Pickaxes');
+		check(await page.locator('.craft-tab.dot').count() === 0, 'no dot: nothing is craftable with one coal ore');
+		for (const tab of ['pickaxes', 'boom', 'toys'] as const) {
+			await page.click(`.craft-tab[data-craft-tab="${tab}"]`);
+			const boxes = await cardBoxes(page);
+			const want = RECIPES.filter((r) => r.tab === tab).length;
+			check(boxes.length === want && want <= 10, `${tab}: ${want} cards, ≤ 10 (got ${boxes.length})`);
+			check(boxes.every((b) => b.top >= 0 && b.left >= 0 && b.bottom <= 720 && b.right <= 1280), `${tab}: every card fully inside 1280×720`);
+			check(await page.evaluate(() => document.documentElement.scrollHeight <= window.innerHeight), `${tab}: the page does not scroll`);
+			await page.screenshot({ path: `${OUT}/craft-tab-${tab}-empty.png` });
+		}
+		await page.click('.craft-tab[data-craft-tab="pickaxes"]');
 		check(await page.locator('.craft-card[data-output="pickaxe:1"] .craft-button').isDisabled(), 'Wood is disabled with no logs');
-		await page.screenshot({ path: `${OUT}/craft-tab-empty.png` });
 
 		// 4. Seed logs, craft Wood: owned, equipped, check mark, HUD icon tier 1.
 		await seed(page, recipeFor('pickaxe:1'));
@@ -250,6 +267,63 @@ for (const sig of ['SIGINT', 'SIGTERM', 'SIGHUP'] as const) process.on(sig, () =
 			check(area.cells.length >= 1 && area.cells.length <= 9 && ext[0] === 0 && ext[2] <= 2, `glow covers the blocks of one 3×3 layer (${area.cells.length} cells, extents ${ext.join('×')})`);
 		}
 		await page.screenshot({ path: `${OUT}/iron-highlight.png` });
+
+		// 9. Toys (toys spec §5, §3.1, §4): the dot, a Slime Pad crafted, the remembered tab, Shift = sneak, a real bounce.
+		await page.keyboard.press('Escape'); // no-op if already closed
+		await seed(page, recipeFor('block:slime_pad')); // counts change while I is closed: the dot rule steps with no tab on screen
+		await page.keyboard.press('KeyI');
+		check(await page.locator('.inventory-tab.active[data-tab="craft"]').count() === 1, 'I reopens on the Craft tab');
+		check(await dotted(page, 'toys'), 'Toys shows the green dot once a Slime Pad is craftable');
+		await page.screenshot({ path: `${OUT}/craft-dot-toys.png` });
+		await page.click('.craft-tab[data-craft-tab="toys"]');
+		check(!(await dotted(page, 'toys')), 'the dot clears when he looks at Toys');
+		await page.click('.craft-card[data-output="block:slime_pad"] .craft-button');
+		check(await mc(page, (m) => m.player.inventory['slime_pad'] === 2), 'Slime Pad crafted: 2 pads');
+		check(!(await dotted(page, 'toys')), 'no dot on the tab he is looking at');
+		await page.screenshot({ path: `${OUT}/craft-tab-toys-crafted.png` });
+		await page.keyboard.press('Escape');
+		await page.keyboard.press('KeyI');
+		check(await page.locator('.craft-tab.active[data-craft-tab="toys"]').count() === 1, 'the last craft tab viewed is remembered');
+		await page.keyboard.press('Escape');
+		await page.keyboard.down('ShiftLeft');
+		check(await mc(page, (m) => m.keys.sneak === true), 'Shift held: sneak on');
+		await page.keyboard.press('KeyI');
+		await page.keyboard.press('Escape');
+		check(await mc(page, (m) => m.keys.sneak === false), 'closing I clears sneak (resetKeys) even with Shift still down');
+		await page.keyboard.up('ShiftLeft');
+		// A real bounce: a Slime Pad under his feet, dropped from 6 blocks. Recorded over 150 frames in the page.
+		const apex = await page.evaluate(async (SLIME) => {
+			const m = (window as unknown as { __mc: Mc }).__mc;
+			const [x, y, z] = m.player.position.map(Math.floor);
+			m.world.setBlock(x, y - 1, z, SLIME);
+			m.loop.markChunkDirtyAround(x, z);
+			m.loop.applyLightUpdate(x, y - 1, z);
+			m.player.position = [x + 0.5, y + 6, z + 0.5];
+			const ys: number[] = [];
+			for (let i = 0; i < 150; i++) {
+				await new Promise((r) => requestAnimationFrame(r));
+				ys.push(m.player.position[1] - y);
+			}
+			const low = ys.indexOf(Math.min(...ys));
+			return Math.max(...ys.slice(low));
+		}, SLIME);
+		check(apex > 2, `a 6-block drop onto the Slime Pad bounces back up (${apex.toFixed(2)} blocks)`);
+		// In-world look at both pads, floating in the open sky in front of him (nothing nearby to hide them).
+		await page.evaluate(({ SLIME, LAUNCH }) => {
+			const m = (window as unknown as { __mc: Mc }).__mc;
+			const [x, y, z] = m.player.position.map(Math.floor);
+			m.player.flying = true;
+			m.player.position = [x + 0.5, y + 20, z + 0.5];
+			for (const [dx, id] of [[1, SLIME], [-1, LAUNCH]]) {
+				m.world.setBlock(x + dx, y + 21, z + 3, id);
+				m.loop.markChunkDirtyAround(x + dx, z + 3);
+				m.loop.applyLightUpdate(x + dx, y + 21, z + 3);
+			}
+			m.cam.pitch = 0;
+			m.cam.yaw = Math.PI; // look towards +z
+		}, { SLIME, LAUNCH });
+		await page.waitForTimeout(500);
+		await page.screenshot({ path: `${OUT}/world-pads.png` });
 		console.log(`save API requests blocked: ${blockedApiCalls}`);
 	} finally {
 		await browser.close();

@@ -1,10 +1,10 @@
 import { AIR, GROUP_ORDER, type BlockDef, type BlockId } from '../data/blocks.data';
 import type { Inventory as Counts, PlayerTools } from '../data/crafting.data';
-import type { Recipe } from '../data/recipes.data';
+import type { CraftTab, Recipe } from '../data/recipes.data';
 import type { LoadedAtlas, TileRect } from '../engine/render/atlas';
 import {
-	blockTileView, craftCards, inventoryRows, pickaxeRow,
-	type CraftCardView, type HotbarBadge, type InventoryTab, type Picture,
+	CRAFT_TABS, NO_DOTS, blockTileView, craftCards, craftTabViews, inventoryRows, pickaxeRow, readyRecipeIds, stepDots, tabRecipes,
+	type CraftCardView, type CraftDots, type HotbarBadge, type InventoryTab, type Picture,
 } from './craft-model';
 
 const TILE_PX = 48;
@@ -15,15 +15,20 @@ export type InventoryState = { inv: Counts; tools: PlayerTools; mustMine: boolea
 /**
  * Full-screen I screen with two tabs (spec §9). Blocks: the pickaxe row (click to
  * equip) over today's block grid, with count badges, must-mine dimming and
- * crafted-only blocks hidden at 0. Craft: one card per recipe. The strip at the
- * bottom mirrors the HUD hotbar. Built once per game; the tab and the grid's
- * scroll position survive open/close for the session.
+ * crafted-only blocks hidden at 0. Craft: three icon tabs (toys spec §5), each
+ * showing its recipes' cards, with a green dot for "something new is craftable".
+ * The strip at the bottom mirrors the HUD hotbar. Built once per game; the tabs,
+ * the craft tab and the grid's scroll position survive open/close for the session.
  */
 export class Inventory {
 	private root: HTMLDivElement;
 	private tabButtons = new Map<InventoryTab, HTMLButtonElement>();
 	private blocksPanel: HTMLDivElement;
 	private craftPanel: HTMLDivElement;
+	private craftGrid: HTMLDivElement;
+	private craftTabButtons = new Map<CraftTab, HTMLButtonElement>();
+	private craftTab: CraftTab = 'pickaxes';
+	private dots: CraftDots = NO_DOTS;
 	private pickRow: HTMLDivElement;
 	private grid: HTMLDivElement;
 	private tiles: Array<{ def: BlockDef; el: HTMLButtonElement; badge: HTMLSpanElement }> = [];
@@ -112,7 +117,32 @@ export class Inventory {
 		card.appendChild(this.blocksPanel);
 
 		this.craftPanel = document.createElement('div');
-		this.craftPanel.className = 'inventory-panel craft-grid';
+		this.craftPanel.className = 'inventory-panel craft-panel';
+		const craftTabs = document.createElement('div');
+		craftTabs.className = 'craft-tabs';
+		for (const t of CRAFT_TABS) {
+			const b = document.createElement('button');
+			b.className = 'craft-tab';
+			b.dataset.craftTab = t.tab;
+			b.title = t.title;
+			b.tabIndex = -1;
+			const pic = document.createElement('div');
+			pic.className = 'craft-pic';
+			this.paintPicture(pic, t.picture, 40);
+			const dot = document.createElement('span');
+			dot.className = 'craft-dot';
+			b.append(pic, dot);
+			b.addEventListener('click', (e) => {
+				e.stopPropagation();
+				b.blur();
+				this.setCraftTab(t.tab);
+			});
+			craftTabs.appendChild(b);
+			this.craftTabButtons.set(t.tab, b);
+		}
+		this.craftGrid = document.createElement('div');
+		this.craftGrid.className = 'craft-grid';
+		this.craftPanel.append(craftTabs, this.craftGrid);
 		card.appendChild(this.craftPanel);
 
 		this.nameEl = document.createElement('div');
@@ -163,8 +193,14 @@ export class Inventory {
 		return this.tab;
 	}
 
+	/** The icon tab the Craft panel shows (remembered for the session). */
+	get activeCraftTab(): CraftTab {
+		return this.craftTab;
+	}
+
 	open(): void {
 		this.root.classList.remove('hidden');
+		this.refreshDots();
 		this.render();
 	}
 
@@ -177,13 +213,27 @@ export class Inventory {
 		for (const [t, b] of this.tabButtons) b.classList.toggle('active', t === tab);
 		this.blocksPanel.classList.toggle('hidden', tab !== 'blocks');
 		this.craftPanel.classList.toggle('hidden', tab !== 'craft');
+		this.refreshDots();
 		this.render();
 	}
 
-	/** New counts/tools/mode. Re-renders only while open; open() renders anyway. */
+	setCraftTab(tab: CraftTab): void {
+		this.craftTab = tab;
+		this.refreshDots();
+		this.render();
+	}
+
+	/** New counts/tools/mode. Steps the dot rule always (it must see every change); re-renders only while open. */
 	setState(state: InventoryState): void {
 		this.state = state;
+		this.refreshDots();
 		if (this.isOpen) this.render();
+	}
+
+	/** One step of the dot rule (toys spec §5): the craft tab counts as viewed only while it is on screen. */
+	private refreshDots(): void {
+		const viewing = this.isOpen && this.tab === 'craft' ? this.craftTab : null;
+		this.dots = stepDots(this.dots, this.recipes, readyRecipeIds(this.recipes, this.state.inv, this.state.tools), viewing);
 	}
 
 	/** A short sparkle on a card, after a successful craft (spec §9). */
@@ -229,12 +279,17 @@ export class Inventory {
 
 	private renderCraft(): void {
 		const { inv, tools } = this.state;
-		this.craftPanel.replaceChildren();
+		for (const v of craftTabViews(this.recipes, this.dots, this.craftTab)) {
+			const b = this.craftTabButtons.get(v.tab)!;
+			b.classList.toggle('active', v.active);
+			b.classList.toggle('dot', v.dot);
+		}
+		this.craftGrid.replaceChildren();
 		this.cardEls.clear();
-		for (const c of craftCards(this.recipes, inv, tools)) {
+		for (const c of craftCards(tabRecipes(this.recipes, this.craftTab), inv, tools)) {
 			const el = this.buildCard(c);
 			this.cardEls.set(c.recipeId, el);
-			this.craftPanel.appendChild(el);
+			this.craftGrid.appendChild(el);
 		}
 	}
 

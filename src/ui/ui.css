@@ -548,6 +548,47 @@
 	gap: 8px;
 	width: min(88vw, 1300px);
 }
+/* Craft icon tabs (toys spec §5): Pickaxes / Boom / Toys, a green dot for "something new". */
+.craft-panel {
+	display: flex;
+	flex-direction: column;
+	gap: 8px;
+}
+.craft-panel.hidden {
+	display: none;
+}
+.craft-tabs {
+	display: flex;
+	gap: 8px;
+}
+.craft-tab {
+	position: relative;
+	width: 56px;
+	height: 56px;
+	padding: 6px;
+	background: #1b1b1b;
+	border: 2px solid rgba(255, 255, 255, 0.15);
+	border-radius: 8px;
+	cursor: pointer;
+}
+.craft-tab.active {
+	border-color: #fff;
+	background: #3a3a3a;
+}
+.craft-dot {
+	display: none;
+	position: absolute;
+	right: -5px;
+	top: -5px;
+	width: 16px;
+	height: 16px;
+	border-radius: 50%;
+	background: #5fd35f;
+	border: 2px solid #1b1b1b;
+}
+.craft-tab.dot .craft-dot {
+	display: block;
+}
 .craft-card {
 	position: relative;
 	background: #1b1b1b;

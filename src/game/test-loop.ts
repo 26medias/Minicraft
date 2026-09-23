@@ -49,8 +49,9 @@ export function makeLoop(opts: MakeLoopOpts = {}) {
 	} as unknown as Renderer;
 	const keys: Keys = { forward: false, back: false, left: false, right: false, jump: false };
 	const player = new Player(seed === undefined ? [260, 40, 260] : [256.5, 200, 256.5]);
-	const loop = new GameLoop(world, renderer, new FpCamera(), player, keys, () => [0, 0, 1, 1], null, null, lights, highlight, jobs);
+	const cam = new FpCamera();
+	const loop = new GameLoop(world, renderer, cam, player, keys, () => [0, 0, 1, 1], null, null, lights, highlight, jobs);
 	loop.start();
 	const tick = (dt: number) => tickFn!(dt);
-	return { loop, world, player, keys, tick, mounts: () => mounts, meshes: () => meshes };
+	return { loop, world, player, keys, cam, tick, mounts: () => mounts, meshes: () => meshes };
 }

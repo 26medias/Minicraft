@@ -18,6 +18,8 @@ import { updateLightsForBlockChange } from '../engine/world/lighting';
 import { LiquidScheduler } from './liquid-scheduler';
 import { chunkIndex, chunkIndexOrNeg, WORLD_CHUNKS_Z } from '../engine/world/coords';
 import { planFrame, chebyshev, budgetFor, MESH_RADIUS, UNMOUNT_RADIUS, DATA_RADIUS } from './chunk-scheduler';
+import { areaBounds, areaCells, inHeldZone, isMultiBlock, miningDuration, type AreaBounds } from './tools';
+import type { PickaxeTier } from '../data/crafting.data';
 
 const LAMP_ID = BLOCK_BY_NAME['lamp'].id;
 const FACE_OFFSET: Readonly<Record<Face, [number, number, number]>> = {
@@ -90,6 +92,12 @@ export class GameLoop {
 	private mining: MiningState | null = null;
 	private aim: VoxelHit | null = null;
 	private leftMouseDown = false;
+	/**
+	 * Spec §5 floor state. Armed (0.4 s) by a press, a release and a pickaxe switch; cleared by an
+	 * area break, after which a target in that break's held zone gets the 0.25 s floor.
+	 */
+	private floorArmed = true;
+	private lastArea: (AreaBounds & { face: Face }) | null = null;
 	private primedTnt = new Map<string, PrimedEntry>();
 	private scheduler: LiquidScheduler;
 
@@ -270,7 +278,23 @@ export class GameLoop {
 		// freeze can clear in-progress mining.
 		if (down && this.paused) return;
 		this.leftMouseDown = down;
+		this.floorArmed = true;
 		if (!down) this.mining = null;
+	}
+
+	/**
+	 * Spec §5: called after `player.tools.equipped` changes (P, or a click in the I screen). Re-arms
+	 * the 0.4 s floor and drops the mine in progress, so the next tick restarts it at the new tier's
+	 * time from zero.
+	 */
+	onPickaxeChanged(): void {
+		this.floorArmed = true;
+		this.mining = null;
+	}
+
+	/** The equipped pickaxe tier (Phase B resolves `player.tools` on load). */
+	private equippedTier(): PickaxeTier {
+		return this.player.tools.equipped as PickaxeTier;
 	}
 
 	/** 0..1 if mining in progress, 0 otherwise. Consumed by the HUD to draw the progress ring. */
@@ -440,8 +464,12 @@ export class GameLoop {
 		// the camera sync so it sees this frame's eye position. `fwd` is this
 		// tick's look direction (yaw/pitch do not change inside a tick).
 		this.aim = raycastVoxel(this.world, eye, [fwd.x, fwd.y, fwd.z], REACH);
-		if (this.aim) this.highlight?.show(this.aim.x, this.aim.y, this.aim.z, this.aim.face);
-		else this.highlight?.hide();
+		if (this.aim) {
+			this.highlight?.show(this.aim.x, this.aim.y, this.aim.z, this.aim.face);
+			const tier = this.equippedTier();
+			const b = areaBounds(this.aim, this.aim.face, tier);
+			this.highlight?.setArea(b.min, b.max, isMultiBlock(tier));
+		} else this.highlight?.hide();
 
 		this.updateMining(dt);
 		this.onMiningProgress?.(this.miningProgress());
@@ -525,10 +553,14 @@ export class GameLoop {
 			const blockId = this.world.getBlock(hit.x, hit.y, hit.z);
 			const def = BLOCKS[blockId];
 			if (!def || !isSolid(blockId) || def.hardness <= 0) return;
+			// Spec §5: only the aimed block's hardness counts. The held floor needs the button held since
+			// the last area break AND the aim inside that break's held zone; anything else is armed.
+			const tier = this.equippedTier();
+			const held = !this.floorArmed && this.lastArea !== null && inHeldZone(this.lastArea, hit);
 			this.mining = {
 				target: { x: hit.x, y: hit.y, z: hit.z },
 				elapsed: 0,
-				duration: def.hardness,
+				duration: miningDuration(def.hardness, tier, isMultiBlock(tier) ? (held ? 'held' : 'armed') : 'none'),
 				blockId,
 			};
 			return;
@@ -538,6 +570,16 @@ export class GameLoop {
 		if (this.mining.elapsed >= this.mining.duration) {
 			const { target, blockId } = this.mining;
 			this.mining = null;
+			const tier = this.equippedTier();
+			if (isMultiBlock(tier)) {
+				// Area break (spec §5, §7): the whole shape goes to removeBlocks, which skips air, liquids,
+				// hardness-0 and out-of-bounds cells; the aimed block is the anchor (edit lane).
+				const { removed } = this.removeBlocks(areaCells(target, hit.face, tier), target);
+				this.lastArea = { ...areaBounds(target, hit.face, tier), face: hit.face };
+				this.floorArmed = false;
+				if (removed.length > 0) this.onBlocksRemoved?.(removed);
+				return;
+			}
 			this.clearBlockEffects(target.x, target.y, target.z, blockId);
 			this.world.setBlock(target.x, target.y, target.z, AIR);
 			this.markChunkDirtyAround(target.x, target.z);

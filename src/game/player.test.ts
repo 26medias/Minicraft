@@ -350,3 +350,22 @@ describe('Player at height 256', () => {
 		expect(y).toBeLessThanOrEqual(131);
 	});
 });
+
+describe('below the world floor (Noah #1 ended up under the bedrock)', () => {
+	it('in a tall world (unbreakable bedrock at y 0) a player below y 0 is moved back to the surface of his column', () => {
+		const w = new World(1, { height: 256 });
+		const p = new Player([300.5, 60, 300.5]);
+		p.position = [300.5, -10, 300.5];
+		p.update(0.05, w, noKeys(), FWD, RIGHT);
+		expect(p.position[1]).toBeGreaterThan(100); // the tall placeholder generator's surface is 114..130
+		expect(w.getBlock(300, Math.floor(p.position[1]) - 1, 300)).not.toBe(AIR); // standing on ground
+	});
+
+	it('in an old 64-high world the void below y 0 is unchanged (he flies back up through the hole he dug)', () => {
+		const w = new World(1, { height: 64 });
+		const p = new Player([300.5, 40, 300.5]);
+		p.position = [300.5, -10, 300.5];
+		p.update(0.05, w, noKeys(), FWD, RIGHT);
+		expect(p.position[1]).toBeLessThan(0);
+	});
+});

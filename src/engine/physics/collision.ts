@@ -22,6 +22,19 @@ export function moveWithCollisions(
 	let [vx, vy, vz] = velocity;
 	let grounded = false;
 
+	// Embedded (a block appeared inside the player, e.g. lava turning to obsidian around him): push him up
+	// to the first free space before moving. Without this the snaps below ratcheted an embedded player down
+	// one block per up/down cycle, straight through a one-block bedrock floor (Noah #1).
+	if (collidesAABB(world, px, py, pz, sx, sy, sz)) {
+		for (let k = 1; k <= world.height + 2; k++) {
+			const up = Math.floor(py) + k + EPS;
+			if (!collidesAABB(world, px, up, pz, sx, sy, sz)) {
+				py = up;
+				break;
+			}
+		}
+	}
+
 	// X axis
 	px = resolveAxis(world, px, py, pz, sx, sy, sz, vx, 'x');
 	if (collidesAABB(world, px, py, pz, sx, sy, sz)) {
@@ -43,7 +56,8 @@ export function moveWithCollisions(
 			grounded = true;
 			py = Math.floor(py) + EPS;
 		} else {
-			py = Math.floor(newY + sy) - sy - EPS;
+			// Stop under the ceiling, but an upward move never lowers the player.
+			py = Math.max(py, Math.floor(newY + sy) - sy - EPS);
 		}
 		vy = 0;
 	} else {

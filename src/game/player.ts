@@ -129,6 +129,12 @@ export class Player {
 	}
 
 	update(dt: number, world: World, keys: Keys, forward: THREE.Vector3, right: THREE.Vector3) {
+		// Tall worlds have unbreakable bedrock at y 0, so below it there is no way back up: put the player
+		// on the surface of his column. Old 64-high worlds keep their void (he flies back up through his hole).
+		if (world.height === 256 && this.position[1] < 0) {
+			this.position = findSafeSpawn(world, [this.position[0], world.height - 1, this.position[2]]);
+			this.vy = 0;
+		}
 		// Swim state (from Task 18) — keep this at the top so downstream logic sees it.
 		const eye = this.eyePosition();
 		const eyeBlock = world.getBlock(Math.floor(eye[0]), Math.floor(eye[1]), Math.floor(eye[2]));

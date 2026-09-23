@@ -9,8 +9,27 @@ export const WORLD_CHUNKS_X = 32;
 export const WORLD_CHUNKS_Z = 32;
 export const MAX_CHUNKS = WORLD_CHUNKS_X * WORLD_CHUNKS_Z;
 
-// Everything both wire versions share. v2 (`worldSaveWireSchema`) is frozen:
-// its behaviour must not change, so anything v3-only goes in the v3 object.
+// Crafting fields (crafting spec §10). Loose bounds on purpose: a later pickaxe
+// tier or a few hundred more blocks must not need an API redeploy.
+export const MAX_INVENTORY_KEYS = 2000;
+export const MAX_TOOL_TIER = 15;
+export const MAX_OWNED_TOOLS = 16;
+
+export const inventorySchema = z
+	.record(z.string(), int.nonnegative())
+	.refine((r) => Object.keys(r).length <= MAX_INVENTORY_KEYS, {
+		message: `inventory has more than ${MAX_INVENTORY_KEYS} keys`,
+	});
+
+export const toolsSchema = z.object({
+	owned: z.array(int.min(0).max(MAX_TOOL_TIER)).max(MAX_OWNED_TOOLS),
+	equipped: int.min(0).max(MAX_TOOL_TIER),
+});
+
+// Everything both wire versions share. v2 (`worldSaveWireSchema`) is frozen in
+// the sense that nothing it accepted may start being refused: it may only grow
+// by OPTIONAL fields (the crafting fields below). Anything v3-only goes in the
+// v3 object.
 const baseShape = {
 	id: z.string().regex(WORLD_ID_RE),
 	// int32 and MAY BE NEGATIVE: the menu mints seeds with `Number(input) | 0`.
@@ -27,6 +46,9 @@ const baseShape = {
 		pitch: z.number(),
 		hotbar: z.array(int).max(64),
 		selected: int.nonnegative(),
+		// Optional: a save from a bundle older than crafting has neither.
+		inventory: inventorySchema.optional(),
+		tools: toolsSchema.optional(),
 	}),
 	chunks: z
 		.array(
@@ -50,6 +72,8 @@ const baseShape = {
 		.max(4096)
 		.optional(),
 	lastSyncedGeneration: z.string().nullable().optional(),
+	// "Must mine to build". Optional for the same reason; missing means false.
+	mustMine: z.boolean().optional(),
 };
 
 function noDuplicateChunks(

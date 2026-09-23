@@ -255,3 +255,43 @@ describe('worlds API v3', () => {
 			.then((r) => expect(r.body.code).toBe('SUSPICIOUS_SHRINK'));
 	});
 });
+describe('crafting fields through the API (crafting spec §10)', () => {
+	let bucket: FakeBucket;
+	let app: ReturnType<typeof createApp>;
+	beforeEach(() => {
+		bucket = new FakeBucket();
+		app = createApp(bucket as unknown as BucketLike);
+	});
+
+	const EXTRAS = {
+		inventory: { stone: 12, dirt: 0, deepslate_emerald_ore: 1 },
+		tools: { owned: [0, 1, 3], equipped: 3 },
+	};
+
+	for (const route of [
+		{ name: 'v2', prefix: '/worlds', make: () => validWire() as Record<string, unknown> },
+		{ name: 'v3', prefix: '/v3/worlds', make: () => validWireV3() as unknown as Record<string, unknown> },
+	]) {
+		it(`round-trips inventory, tools and mustMine on ${route.name} with exact equality`, async () => {
+			// Catches: a schema that strips the fields (v2 today: 200 and the counts are
+			// gone) or refuses them (v3 today: 400 on the unknown mustMine key).
+			const base = route.make();
+			const w = { ...base, mustMine: true, player: { ...(base.player as object), ...EXTRAS } };
+			await request(app).put(`${route.prefix}/${FIXTURE_ID}`).set(NEW).send(w).expect(200);
+			const got = await request(app).get(`${route.prefix}/${FIXTURE_ID}`).expect(200);
+			expect(got.body.player.inventory).toEqual(EXTRAS.inventory);
+			expect(got.body.player.tools).toEqual(EXTRAS.tools);
+			expect(got.body.mustMine).toBe(true);
+		});
+
+		it(`stores a pre-crafting ${route.name} body as it came, without inventing the fields`, async () => {
+			// Catches: the API filling defaults into an old client's save. A stored `{}`
+			// is indistinguishable from "used up everything" and the guard could not help.
+			await request(app).put(`${route.prefix}/${FIXTURE_ID}`).set(NEW).send(route.make()).expect(200);
+			const got = await request(app).get(`${route.prefix}/${FIXTURE_ID}`).expect(200);
+			expect('inventory' in got.body.player).toBe(false);
+			expect('tools' in got.body.player).toBe(false);
+			expect('mustMine' in got.body).toBe(false);
+		});
+	}
+});

@@ -1,6 +1,6 @@
 # Crafting — design
 
-Date: 2026-09-22 · Branch: `crafting` (from `main` at aa57368) · Status: rev 4 (second re-gate repairs)
+Date: 2026-09-22 · Branch: `crafting` (from `main` at aa57368) · Status: rev 5 (gate 1 closed)
 
 ## 1. Intent
 
@@ -293,7 +293,7 @@ including synchronous re-meshing of both chunks at a chunk edge.
   Without `jobs` (tests, fallback), at most one bulk chunk is meshed
   synchronously per frame.
 - Accepted visual cost: the far edge of a big hole may appear a few frames
-  late. Bound: every bulk chunk is mounted within 10 frames (asserted in
+  late. Bound: every bulk chunk is mounted within 16 frames (asserted in
   §8).
 
 **Neighbourhood freshness (fixes an existing bug too).**
@@ -320,7 +320,8 @@ including synchronous re-meshing of both chunks at a chunk edge.
 - **Accepted visual cost:** until its reply lands, a bulk chunk keeps its
   old mesh. It can briefly show blocks that are gone, and gaps where its
   faces toward the new hole are missing. This lasts a few frames and is
-  bounded by the 10-frame rule.
+  bounded by the 16-frame rule. Gate 1 modelled a full 3×3 blast at 9 frames
+  with no drops and 11 with one drop.
 
 ## 8. Perf gate
 
@@ -333,7 +334,7 @@ expected cells were actually removed:
 - a chain of 4 Mega TNT (report each detonation frame).
 
 Pass = no frame over 50 ms, light work per row under 15 ms, and every bulk
-chunk mounted within 10 frames of its edit. The plain-TNT chunk-corner row
+chunk mounted within 16 frames of its edit. The plain-TNT chunk-corner row
 fails on today's build (72 ms), which shows the gate can go red. Fallbacks in order: reduce Mega's radius to 7, then 6.
 Results recorded in `docs/performance.md`. The dev box is faster than
 Noah's laptop — keep a 20 % margin.
@@ -379,9 +380,13 @@ Client, every place that must carry them:
       succeeds unless another device wrote since, in which case it gets
       the correct 409. `DualAdapter.saveWorld` stamps the local copy only
       after that PUT succeeds.
-    - `loadWorld` returns a `localWon` flag, and `main.ts` then calls
-      `autosave.markDirty()` at once, so the upload happens even if he
-      only looks around and closes the tab.
+    - `loadWorld` returns a `localWon` flag. `main.ts` calls
+      `autosave.markDirty()` right after constructing `AutoSave`
+      (main.ts:351), so the upload happens even if he only looks around
+      and closes the tab.
+    - `localWon` is set only in this branch. It is never set when chunks
+      differ (fork), when loading offline, or when the cloud copy is
+      corrupt; those paths already `markUnsynced`.
     - Today every offline save clears the local stamp, so without this rule
       each P press made offline would fork a "(copy from this device)"
       world on the next reload.
@@ -392,6 +397,11 @@ Client, every place that must carry them:
     - With identical chunks, a lamp colour changed on the older side is
       lost, because `lights` are not compared. That is no worse than
       today, where the cloud copy always wins.
+    - Two tabs on one world: the second tab's PUT gets a 409 and shows
+      "Saved on this device only", as it does today.
+  - Known and not in scope: when a chunk's `sunlit` changes, its mounted
+    neighbours' border-corner shading can stay slightly stale. It will
+    be logged in `docs/performance.md`.
 
 API (`api/src/schema.ts`, handlers):
 - v2 and v3 `player`: `inventory` (record of string → int ≥ 0, ≤ 2000 keys)
@@ -496,7 +506,7 @@ build" — the named wrong implementation is what they must catch.
   - With a fake worker holding 2 jobs and replying in order, a full 3×3
     blast makes at most (bulk count + 1) posts. This catches the drop
     cascade.
-  - The 10-frame bound can't be seen with a microtask worker; it is
+  - The 16-frame bound can't be seen with a microtask worker; it is
     asserted by the browser bench (§8).
 - Freshness identity: a neighbour evicted and regenerated at rev 0 while a
   job is in flight → the reply is dropped.
@@ -525,7 +535,7 @@ build" — the named wrong implementation is what they must catch.
   - Equal `updatedAt` → the cloud copy wins.
   - P pressed offline, then reload → no fork.
   - A cloud copy without `inventory` vs local `{}` → treated as equal.
-  - Different chunks → fork, as today.
+  - Different chunks → fork, as today, with `localWon` false.
 - `input-gate`: `cyclePickaxe` blocked with the picker, the I screen and
   freeze open.
 - Options: unbound is the empty string `''`.

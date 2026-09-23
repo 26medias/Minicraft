@@ -1,8 +1,9 @@
 # Crafting
 
-Blocks he mines are counted; counts buy pickaxes and bigger TNT from the
+Blocks he mines are counted; counts buy pickaxes, bigger TNT and toys from the
 **Craft** tab of the I screen. There is no crafting table: recipes resolve from
-the counts. Design: `docs/superpowers/specs/2026-09-22-crafting-design.md`.
+the counts. Design: `docs/superpowers/specs/2026-09-22-crafting-design.md`; the
+toys: `docs/superpowers/specs/2026-09-23-toys-design.md`.
 
 ## Counts
 
@@ -41,9 +42,9 @@ hotbar (Minecraft-like). It takes the first slot that is empty, else holds a
 never-touched counted block, else holds a counted block at 0. It never takes
 the selected slot and never replaces a free block.
 
-**Big TNT and Mega TNT are crafted-only**: they need a count in *every* world
-and show in the Blocks tab only when he has one. Plain TNT needs a count only
-in must-mine worlds.
+**Big TNT, Mega TNT and every toy are crafted-only** (`CRAFTED_ONLY`): they
+need a count in *every* world and show in the Blocks tab only when he has one.
+Plain TNT needs a count only in must-mine worlds.
 
 Unlimited worlds may farm counts (place an ore, mine it back). That is
 accepted; it is also how old worlds without ores reach the high tiers.
@@ -95,22 +96,77 @@ leaving the last area) and 0.25 s when held inside the last area.
   The pickaxe icons are original 16×16 pixel art drawn from templates in the
   same file. `npm run build-atlas` writes all of them into `public/atlas.*`.
 
+## Toys
+
+Seven crafted-only blocks, hand-written in `blocks.extra.data.ts` at ids
+1002–1008 (never renumber). None changes saves or the API: counts are keyed by
+name. Blocks a toy **removes** are counted like any blast; blocks it **builds**
+(dome glass, lake water) are free; a used-up toy and its own cell are never
+counted.
+
+| Toy | Id | What it does | Recipe |
+|---|---|---|---|
+| Slime Pad | 1002 | Bounces him back up | 2 from 4 moss block, 2 clay |
+| Launch Pad | 1003 | Throws him ~25 blocks straight up | 1 Slime Pad, 4 redstone ore |
+| Fireworks | 1004 | A rocket and a burst of sparkles; changes no block | 3 from 1 sand, 2 coal ore |
+| Tunnel TNT | 1005 | A 3 × 3 tunnel, 24 long, the way he faces | 2 TNT, 8 iron ore |
+| Block Bomb | 1006 | A glass dome (radius 5) in the air around it | 2 TNT, 8 sand |
+| Flattening TNT | 1007 | Clears a radius-6 disc, 13 high, down to a flat floor | 2 Big TNT, 16 stone |
+| Lake TNT | 1008 | A radius-4 crater that fills with water | 2 TNT, 4 ice |
+
+**Pads** (`src/game/pads.ts`, hooked into `Player.update`). The pad is the
+block under the **centre** of his feet, even when he straddles two blocks.
+- *Slime Pad*: a landing faster than 3 blocks/s bounces him with 0.8 of the
+  speed, so a 10-block drop comes back about 6 blocks and settles after a few
+  bounces. Holding jump works like a trampoline: every bounce grows, up to an
+  8-block rise.
+- *Launch Pad*: standing on it throws him straight up (`LAUNCH_VY`, a 25-block
+  rise), jump held or not. Landing back on the same pad does nothing until his
+  feet have left its column: step off, step on, fly again.
+- **Shift** is sneak: held, neither pad fires. It is not rebindable (like Tab)
+  and has its own listener in `main.ts`; closing I, the freeze and resuming
+  clear it.
+
+**Blast toys** share one chain rule: a TNT-kind block inside the shape is
+primed, never removed or counted; the detonating toy's own cell is always
+removed. The Flattening TNT clears from its own height up 12 blocks, so if he
+stands on a hill above one it drops him up to 12 blocks. That is harmless: there
+is no fall damage.
+
+Textures: the Slime Pad uses Mojang's `slime_block`; the others are derived in
+`DERIVED_TEXTURES` (the Launch Pad is slime tinted red; the blast toys are TNT
+tinted green, cyan, blue, white and magenta).
+
 ## The Craft tab
 
-Ten cards, all on screen at 1280×720. Each shows the output, its ingredients
-with `have / need` and a fill bar (red when short), and one big green button
-(greyed when short). An owned pickaxe shows ✔ instead. Crafting plays a short
-chime and sparkles the card. Crafted TNT goes to the hotbar slot already
-holding it, else the first empty slot, else the selected slot; crafting never
-triggers the must-mine auto-hotbar. The button's logic is `applyCraft`
-(`src/game/craft-apply.ts`) and the card view-models are
+Three icon tabs, each with 10 cards or fewer, all on screen at 1280×720:
+**Pickaxes** (iron pickaxe icon, 7 cards), **Boom** (TNT face: TNT, Big, Mega
+and the five blast toys, 8 cards) and **Toys** (slime face: the two pads). A
+recipe's tab is its `tab` field. The tab he last looked at is remembered for
+the session.
+
+A tab shows a **green dot** when one of its recipes has *become* craftable since
+he last looked at that tab. Looking clears it until something new becomes
+craftable, so Boom is not green all day. At the start of a session nothing
+counts as seen: every tab with a craftable recipe shows its dot once. The rule
+is `stepDots` in `src/ui/craft-model.ts`.
+
+Each card shows the output, its ingredients with `have / need` and a fill bar
+(red when short), and one big green button (greyed when short). An owned
+pickaxe shows ✔ instead. Crafting plays a short chime and sparkles the card. A
+crafted block (TNT or a toy) goes to the hotbar slot already holding it, else
+the first empty slot, else the first greyed slot, else the selected slot;
+crafting never triggers the must-mine auto-hotbar. The button's logic is
+`applyCraft` (`src/game/craft-apply.ts`) and the card and tab view-models are
 `src/ui/craft-model.ts`, both pure and unit-tested; `npm run smoke:crafting`
-checks the real screen.
+checks the real screen (always pass `--port` with a free port, never 5173).
 
 ## Adding a recipe
 
 1. Add a row to `RECIPES` in `src/data/recipes.data.ts`:
-   `{ id, output: { kind: 'block', name, count } | { kind: 'pickaxe', tier }, needs: [{ anyOf: [...names], count }] }`.
+   `{ id, output: { kind: 'block', name, count } | { kind: 'pickaxe', tier }, needs: [{ anyOf: [...names], count }], tab: 'pickaxes' | 'boom' | 'toys' }`.
+   `tab` is required. Give the output block a line in this file:
+   `crafting-docs.test.ts` fails on a crafted block whose label is not here.
 2. Every `anyOf` name becomes counted automatically; a test fails if a name is
    not a block. A block output that should be crafted-only must not be a
    worldgen block.
@@ -120,5 +176,6 @@ checks the real screen.
 4. A new pickaxe tier also needs a `PICKAXES` row, a head colour in
    `PICKAXE_HEAD`, and `MAX_PICKAXE_TIER` raised (the API already accepts tiers
    0–15).
-5. The Craft tab is laid out for 10 cards in a 5-column grid; an 11th starts a
-   third row. Re-check the 1280×720 no-scroll check in the smoke.
+5. Each icon tab is laid out for 10 cards in a 5-column grid; an 11th starts a
+   third row. Boom has 8, so 2 more fit. Re-run the smoke's per-tab 1280×720
+   no-scroll check.

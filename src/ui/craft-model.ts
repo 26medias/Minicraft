@@ -121,3 +121,30 @@ export function keycapLabel(code: string): string {
 	const m = /^(?:Key|Digit|Numpad)(.+)$/.exec(code);
 	return m ? m[1] : code;
 }
+
+const ORE_VARIANT = /^(deepslate|nether)_/;
+
+/**
+ * The blocks one Blocks-tab row shows, in display order. Every `*_ore` block is listed in the ORE row,
+ * whatever its catalog group (deepslate and nether ores live in other groups because the group sets
+ * their hardness), with each deepslate/nether variant right after its plain ore — a kid looking for
+ * his diamonds finds all of them in one place. The raw metal blocks follow. BASICS keeps hand order;
+ * other rows sort by label.
+ */
+export function inventoryRows(blocks: readonly BlockDef[], group: string): BlockDef[] {
+	const live = blocks.filter((b) => b && b.id !== AIR && !b.retired);
+	const isOre = (b: BlockDef) => b.name.endsWith('_ore');
+	if (group === 'ore') {
+		const key = (b: BlockDef) => b.name.replace(ORE_VARIANT, '');
+		const rank = (b: BlockDef) => (b.name.startsWith('deepslate_') ? 1 : b.name.startsWith('nether_') ? 2 : 0);
+		const ores = live.filter(isOre).sort((a, b) => key(a).localeCompare(key(b)) || rank(a) - rank(b));
+		// The rest of the catalog's ore group (raw copper/gold/iron blocks) follows the ores, by label.
+		const rest = live.filter((b) => b.group === 'ore' && !isOre(b)).sort((a, b) => a.label.localeCompare(b.label));
+		return [...ores, ...rest];
+	}
+	const rows = live.filter((b) => b.group === group && !isOre(b));
+	// BASICS keeps hand order (grass, dirt, stone…); generated groups sort by label so a
+	// regeneration that appends ids does not land new blocks at the end.
+	if (group !== 'basics') rows.sort((a, b) => a.label.localeCompare(b.label));
+	return rows;
+}

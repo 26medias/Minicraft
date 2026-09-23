@@ -3,7 +3,7 @@ import type { Inventory as Counts, PlayerTools } from '../data/crafting.data';
 import type { Recipe } from '../data/recipes.data';
 import type { LoadedAtlas, TileRect } from '../engine/render/atlas';
 import {
-	blockTileView, craftCards, pickaxeRow,
+	blockTileView, craftCards, inventoryRows, pickaxeRow,
 	type CraftCardView, type HotbarBadge, type InventoryTab, type Picture,
 } from './craft-model';
 
@@ -79,10 +79,7 @@ export class Inventory {
 		this.grid = document.createElement('div');
 		this.grid.className = 'inventory-grid';
 		for (const group of GROUP_ORDER) {
-			const rows = blocks.filter((b) => b.group === group && b.id !== AIR && !b.retired);
-			// BASICS keeps hand order (grass, dirt, stone…); generated groups sort by
-			// label so a regeneration that appends ids does not land new blocks at the end.
-			if (group !== 'basics') rows.sort((a, b) => a.label.localeCompare(b.label));
+			const rows = inventoryRows(blocks, group); // every ore in the ORE row, variants beside their plain ore
 			if (rows.length === 0) continue;
 			const h = document.createElement('div');
 			h.className = 'inventory-group';

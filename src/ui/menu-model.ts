@@ -77,3 +77,12 @@ export function planSave(staged: Staged, worlds: WorldSummary[], now: number): S
 	const session = gateOpen(startMin, now) ? doneForToday(staged.limitMin, now) : null;
 	return { kind: 'schedule', schedule, session };
 }
+
+/** The New World form, read. `mustMine` is the "Must mine blocks to build" checkbox (spec §3), unchecked by default. */
+export function newWorldFields(form: { nameRaw: string; seedRaw: string; mustMine: boolean }): { name: string; seed: number; mustMine: boolean } {
+	return {
+		name: form.nameRaw.trim() || 'My World',
+		seed: Number(form.seedRaw) || 0,
+		mustMine: form.mustMine === true,
+	};
+}

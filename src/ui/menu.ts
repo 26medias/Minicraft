@@ -4,7 +4,7 @@ import { loadOptions } from '../persistence/options';
 import { PLAY_BREAK_CHOICES_MIN, PLAY_LIMIT_CHOICES_MIN } from '../data/playtime.data';
 import { applyPlaytimeSetting, clearSession, loadSession, saveSession } from '../persistence/playtime';
 import { phaseOf } from '../game/playtime';
-import { menuModel, planSave, type CardModel, type Staged } from './menu-model';
+import { menuModel, newWorldFields, planSave, type CardModel, type Staged } from './menu-model';
 import {
 	clearPin, clearSchedule, loadPin, loadSchedule, savePin, saveSchedule,
 } from '../persistence/schedule';
@@ -513,6 +513,7 @@ export class MainMenu {
 			<div style="margin: 12px 0;">
 				<label>Seed<br/><input type="number" id="w-seed" value="${Math.floor(Math.random() * 1_000_000)}" /></label>
 			</div>
+			<label class="menu-check"><input type="checkbox" id="w-must-mine" /> Must mine blocks to build</label>
 		`;
 		const back = document.createElement('button');
 		back.textContent = 'Back';
@@ -521,12 +522,12 @@ export class MainMenu {
 		const create = document.createElement('button');
 		create.textContent = 'Create';
 		create.onclick = () => {
-			const name =
-				(card.querySelector('#w-name') as HTMLInputElement).value.trim() || 'My World';
-			const seed = Number((card.querySelector('#w-seed') as HTMLInputElement).value) || 0;
-			// "Must mine blocks to build" gets its checkbox with the New World screen
-			// change (crafting spec §3); until then every new world is unlimited.
-			this.onAction?.({ type: 'new', id: newWorldId(), seed, name, mustMine: false });
+			const f = newWorldFields({
+				nameRaw: (card.querySelector('#w-name') as HTMLInputElement).value,
+				seedRaw: (card.querySelector('#w-seed') as HTMLInputElement).value,
+				mustMine: (card.querySelector('#w-must-mine') as HTMLInputElement).checked,
+			});
+			this.onAction?.({ type: 'new', id: newWorldId(), seed: f.seed, name: f.name, mustMine: f.mustMine });
 		};
 		card.appendChild(create);
 		card.appendChild(back);

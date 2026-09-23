@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { menuModel, planSave, type MenuInput } from './menu-model';
+import { menuModel, newWorldFields, planSave, type MenuInput } from './menu-model';
 import type { Schedule } from '../game/schedule';
 import type { PlaytimeSession } from '../game/playtime';
 import type { WorldSummary } from '../persistence/adapter';
@@ -120,5 +120,16 @@ describe('menuModel notice', () => {
 	});
 	it('is null when there is nothing to say', () => {
 		expect(menuModel(base({ schedule: { kind: 'none' } }))).toEqual({ mode: 'full', notice: null });
+	});
+});
+describe('newWorldFields (spec §3 New World checkbox)', () => {
+	it('carries the checkbox into mustMine; unchecked is false', () => {
+		// Catches the checkbox being drawn but never read (every new world unlimited).
+		expect(newWorldFields({ nameRaw: 'Cave', seedRaw: '42', mustMine: true })).toEqual({ name: 'Cave', seed: 42, mustMine: true });
+		expect(newWorldFields({ nameRaw: 'Cave', seedRaw: '42', mustMine: false }).mustMine).toBe(false);
+	});
+	it("keeps today's defaults for a blank name and a junk seed", () => {
+		// Catches the refactor changing what Create did before (blank name → "My World", NaN seed → 0).
+		expect(newWorldFields({ nameRaw: '   ', seedRaw: 'abc', mustMine: false })).toEqual({ name: 'My World', seed: 0, mustMine: false });
 	});
 });

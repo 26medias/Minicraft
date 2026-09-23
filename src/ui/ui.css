@@ -693,3 +693,14 @@
 #hud-pickaxe .keycap.hidden {
 	display: none;
 }
+.menu-check {
+	display: flex;
+	align-items: center;
+	gap: 8px;
+	margin: 12px 0;
+	cursor: pointer;
+}
+.menu-check input {
+	width: 22px;
+	height: 22px;
+}

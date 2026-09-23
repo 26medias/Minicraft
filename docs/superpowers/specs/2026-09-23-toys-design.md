@@ -128,8 +128,8 @@ Crafting shipped and is "really fun". The parent asked for more recipes, inspire
   - If no ring column has a solid block, there is **no water** (flat or floating ground).
 - **Where water goes.**
   - Water candidates are the removed cells with `y ≤ rimY`, at most 4 layers.
-  - Then **erode to stability**: drop any candidate that has a horizontal neighbour which is neither solid nor itself a candidate. Repeat until nothing changes.
-  - So water can never touch an open side: no spill on a slope, over a cliff edge or into a cave.
+  - Then **erode to stability**: drop any candidate that has a horizontal neighbour, or a cell below, which is neither solid nor itself a candidate. Repeat until nothing changes.
+  - So water can never touch an open side or an open floor: no spill on a slope, over a cliff edge or into a cave under the crater.
 - **Writes.** Through `placeBlocks(cells, WATER, anchor)`, which updates light and wakes the liquids.
 - **Recipe.** 2 TNT + 4 ice → 1.
 
@@ -164,7 +164,7 @@ Crafting shipped and is "really fun". The parent asked for more recipes, inspire
   - TNT face, Boom: TNT, Big, Mega, Tunnel, Flatten, Lake, Block Bomb and Fireworks (8 cards).
   - Slime face, Toys: Slime and Launch (2 cards).
 - **Tab field.** Each `Recipe` gains `tab: 'pickaxes' | 'boom' | 'toys'`. The last tab viewed is remembered for the session.
-- **Green dot.** A tab gets a green dot when a recipe in it has **become** craftable since that tab was last viewed. Once he looks at the tab, the dot clears until something new becomes craftable, so Boom doesn't stay green all day.
+- **Green dot.** A tab gets a green dot when a recipe in it has **become** craftable since that tab was last viewed. Once he looks at the tab, the dot clears until something new becomes craftable, so Boom doesn't stay green all day. At the start of a session nothing counts as seen, so every tab with a craftable recipe shows its dot once.
 - **Hotbar slot.** A crafted toy uses the crafted-block slot rule (holding → empty → greyed → selected).
 
 ## 6. Testing
@@ -211,4 +211,4 @@ Every test names the wrong version it catches.
 2. The blast toys: Fireworks, Tunnel (with `ignite(hit, yaw)` and the preview), Block Bomb, Flatten, Lake.
 3. Pads: Slime, Launch, and the sneak key.
 4. Craft tab icon tabs, the recipes, and the derived textures.
-5. Docs (`docs/crafting.md`), the smoke test, and the bench row.
+5. Docs (`docs/crafting.md`), the smoke test, and the bench row. The docs should mention that standing on a hill above a Flattening TNT drops him up to 12 blocks. That is harmless, since there is no fall damage.

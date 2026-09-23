@@ -1,223 +1,214 @@
 # Crafting toys: design
 
-Date: 2026-09-23. Branch: `crafting-2`, from `main` at 78934b3. Status: draft, before gate 1. Process: a light Anvil.
+Date: 2026-09-23. Branch: `crafting-2`, worked in the worktree `.claude/worktrees/toys`, based on `main` at 78934b3. Status: rev 2, after the gate-1 repairs. Process: light Anvil.
 
 ## 1. Intent
 
-Crafting shipped and is "really fun". The parent asked for more recipes, inspired by Minecraft, and new "toys". This batch adds 8 crafted-only toy blocks and splits the Craft tab into icon tabs. All the non-goals in CLAUDE.md still hold: no mobs, combat, health, progression or automation.
+Crafting shipped and is "really fun". The parent asked for more recipes, inspired by Minecraft, and new "toys". This batch adds **7 crafted-only toy blocks** and **icon tabs** in the Craft tab. The non-goals in CLAUDE.md still hold: no mobs, combat, health, progression or automation.
 
 **Decisions taken with the parent:**
-- **Toys:**
+- **Toys in this batch:**
   - Slime Pad
   - Launch Pad
-  - Climbing Scaffold
   - Fireworks
   - Tunnel TNT
   - Block Bomb
   - Flattening TNT
   - Lake TNT
-- **The Craft tab gets icon tabs:** ⛏ Pickaxes, 💥 Boom, 🎈 Toys. Each tab holds at most 10 cards, nothing scrolls, and a green dot shows on a tab when something inside it can be crafted.
+- **Deferred to its own follow-up:** the Climbing Scaffold. It would be the first walk-in block, which means new code for drawing, aiming, collision and mining.
+- **Craft tab:** icon tabs ⛏ / 💥 / 🎈, each holding 10 cards or fewer, with no scrolling and a green dot on a tab.
+- **Lake TNT** keeps ice as its ingredient. Finding snow is a small quest.
+- **Fireworks** is a first-day toy: sand and coal, no lapis.
 
-**Findings that shaped this** (from the brainstorm agents):
-- Recipes for planks, glass or bricks would do nothing, because those blocks are already free. So every toy is a new **crafted-only block**, like Big TNT.
-- The player has no horizontal momentum; only `vy` carries over between frames. So every movement toy works **straight up** only.
+**What the brainstorm found:**
+- Every toy is a new **crafted-only block**. Plain-block recipes would do nothing, because those blocks are already free.
+- Movement is **straight up only**, because the player keeps no horizontal momentum.
 
 **Success criteria:**
-1. Existing worlds and saves are unchanged. The old toys are untouched: pickaxes, TNT, Big TNT and Mega TNT keep their radius, fuse and rules.
-2. Each toy works as described in §3, and each has a test that fails on its named wrong version.
-3. No toy blast produces a frame over the 50 ms perf gate. This is checked headless, by the count of cells removed per frame against the Mega figure, plus a real-GPU run by the parent.
-4. The Craft tab shows three icon tabs at 1280×720 with no scrolling. The headless smoke test covers this.
+1. Existing worlds, saves, pickaxes, TNT, Big TNT and Mega TNT are unchanged.
+2. Each toy behaves as §3 says, and each has a test that fails on its named wrong version.
+3. No toy blast is heavier than Mega TNT. This is measured by main-thread light time and frame time at the same site (§6). The parent also runs the bench on a real GPU.
+4. The Craft tab shows 3 icon tabs at 1280×720 with no scrolling (headless smoke test).
 
-**Non-goals for this batch:**
-- Builder wand and bridge builder, because held tools need a save change.
-- Buckets.
-- Sideways launchers and ice sliding.
-- Speed path.
-- Recipes for plain building blocks.
+**Out of scope:**
+- Scaffold, builder wand, bridge builder
+- Buckets, sideways launchers, speed path
+- Recipes for plain building blocks
 
 ## 2. Common rules
 
-- **Each toy is a new hand-written block** in `blocks.extra.data.ts`, with ids 1002 to 1009 in the order of §3. Never renumber them.
-- **Crafted-only everywhere.** Each toy is added to `CRAFTED_ONLY`: placing it needs a count in every world, and the Blocks tab lists it only when the count is above 0. So it is counted, and a recipe output.
-- **No save or API change.** Counts are already keyed by block name, and blocks with ids ≥ 1000 already round-trip. Deploy notes are the same as for Big TNT: the atlas goes up before the bundle, then a Cloudflare purge and a hard refresh.
-- **What counts:**
-  - Blocks a toy **removes** count as mined, through `removeBlocks` and `onBlocksRemoved`, exactly like TNT.
-  - Blocks a toy **builds** are free and never touch counts: the dome's glass and the lake's water.
-  - A toy that is used up is not counted: a firework, or a TNT variant's own cell.
-- **Textures:**
-  - Slime Pad uses the Mojang `slime_block`.
-  - Scaffold uses `scaffolding_top`, `scaffolding_side` and `scaffolding_bottom`.
-  - The others are derived when the atlas is built (grey then tinted), using the existing `DERIVED_TEXTURES` mechanism:
-    - Launch Pad from slime, tinted red.
-    - Tunnel, Flatten and Lake TNT from TNT, tinted green, cyan and blue.
-    - Block Bomb from TNT, tinted white.
-    - Fireworks from TNT, tinted magenta.
-  - Each tint must be distinct by hue (≥ 20°) from its neighbours and from Big and Mega. The atlas test asserts this.
+- **Blocks and ids.** Each toy is a new hand-written block in `blocks.extra.data.ts`, ids 1002–1008 in the order of §3. Never renumber them.
+- **Crafted-only.** Each toy is in `CRAFTED_ONLY`, so it needs a count to place in every world. It appears in the Blocks tab only when its count is above 0.
+- **No save or API change.** Counts are keyed by name. The deploy rules are the same as for Big TNT: atlas first, then purge, then hard refresh.
+- **What counts as mined:**
+  - Blocks a toy **removes** count as mined, through `removeBlocks` and `onBlocksRemoved`.
+  - Blocks a toy **builds** (dome glass, lake water) are free.
+  - A toy that is used up is not counted, and neither is its own cell.
+- **One chain rule for every toy that removes blocks** (sphere, tunnel, flatten, lake):
+  - A TNT-kind cell inside the shape (any block with `tnt`) is **primed with the chain fuse, never removed or counted**.
+  - Dome and firework prime nothing.
+  - This rule lives in the shape dispatch, not in each shape.
+- **Textures.**
+  - Slime Pad uses the Mojang `slime_block` texture.
+  - The others are derived in `DERIVED_TEXTURES` (grey, then tinted):
+    - Launch Pad: slime tinted red.
+    - Tunnel, Flatten, Lake: TNT tinted green, cyan and blue.
+    - Block Bomb: TNT tinted white.
+    - Fireworks: TNT tinted magenta.
+  - The atlas test asserts each tint is ≥ 20° of hue away from every other TNT tint, including Big and Mega.
 
 ## 3. The toys
 
-### 3.1 Slime Pad (`slime_pad`, 1002)
+### 3.1 Slime Pad (`slime_pad`, 1002), `pad: 'slime'`
 
-- **Behaviour.** When the player lands on its top face with `vy < -MIN_BOUNCE_VY`, `vy` becomes `-vy × 0.8` instead of 0.
-  - Holding jump at the landing uses a factor of 0.9.
-  - Holding Shift (sneak) lands with no bounce.
-  - A landing slower than `MIN_BOUNCE_VY = 3` ends the bounce, so there is no jitter.
-- **Data.** `pad: 'slime'` on the BlockDef.
-- **Where it lives.** A pure function `padResponse(landingVy, pad, jump, sneak): number` in `src/game/pads.ts`. `Player.step` calls it where the grounded collision zeroes `vy`.
+- **When it fires.** In `Player.update`, the vertical velocity at the start of the substep loop is recorded (`landingVy`). After the loop, if `grounded`, `landingVy < -MIN_BOUNCE_VY` and the block under the feet is a slime pad:
+  - `vy = padResponse(landingVy, 'slime', keys.jump, keys.sneak)`;
+  - `grounded = false`, so the jump line on the next frame does not overwrite the bounce. Gate 1 measured that overwrite: a 19.7 bounce became 8.0.
+- **`padResponse`:**
+  - no jump held: `-landingVy × 0.8`;
+  - jump held: `max(-landingVy, JUMP_SPEED) + 2`, capped so the apex is at most 8 blocks. It works like a trampoline: holding jump grows every bounce up to the cap.
+  - sneak held: 0.
+- **Settling.** A landing with `|vy| < MIN_BOUNCE_VY = 3` ends the bounce.
 - **Recipe.** 4 moss_block + 2 clay → 2.
-- **Sneak.** The game has no sneak key today. "Holding Shift" means the Shift key is down (`ShiftLeft` or `ShiftRight`), read by `main.ts` into `keys.sneak`. That is a new optional field on `Keys`, and Shift is already used as a modifier for replace.
 
-### 3.2 Launch Pad (`launch_pad`, 1003)
+### 3.2 Launch Pad (`launch_pad`, 1003), `pad: 'launch'`
 
-- **Behaviour.** When the player stands on it (grounded, and the block under the feet is the pad), `vy = LAUNCH_VY`. That value is picked so the apex is about 25 blocks above the pad, given `GRAVITY`. The formula is pinned in a test.
-- **Cooldown.** 0.5 s, so standing still does not re-launch every frame; he only re-launches after landing again.
+- **When it fires.** He is grounded on it, his feet have been **outside the pad's cell since the last launch**, and sneak is not held. Then `vy = LAUNCH_VY`, and the jump line cannot overwrite it: the launch is applied after the jump line.
+- **Height.** `LAUNCH_VY` is chosen so a simulated `Player.update` at 1/60 s reaches 25 ± 1.5 blocks.
+- **Re-arming.** Landing back on the pad does not fire it again until his feet have left the cell. So he doesn't loop forever; he steps off, steps on, and flies again.
 - **Recipe.** 1 slime_pad + 4 redstone ore → 1.
 
-### 3.3 Climbing Scaffold (`scaffold`, 1004)
+### 3.3 Fireworks (`fireworks`, 1004)
 
-- **New block kind:** `solid: false`, `liquid: 'none'`, `climbable: true`, drawn as a cutout the way leaves are.
-- **Collision.** The player walks into it. Its cells do not block movement.
-- **Climbing.** Swimming is unchanged. When the feet or eyes are in a climbable cell:
-  - holding jump sets `vy = CLIMB_SPEED` (3 blocks/s);
-  - otherwise `vy` is clamped to at least `-CLIMB_SPEED`, so he slides down slowly.
-- **Aiming (raycast).** The raycast must hit a scaffold so he can mine it, place against it and replace it. So the raycast tests `isTargetable(id) = isSolid(id) || def.climbable`.
-- **Placing.** Placing *into* a scaffold cell is refused, just like any occupied cell. `placeBlock` must treat climbable as occupied.
-- **Meshing.** Faces are drawn like the cutout leaves path. A face between two scaffolds is culled.
-- **Light.** `lightFilter: 0`, so sunlight passes through, like leaves.
-- **Mining.** `hardness: 0.3`, counted when mined.
-- **TNT and area mining.** `removeBlocks` currently skips non-solid cells. Scaffold must be removed too, so the rule becomes "solid, or climbable, and hardness > 0". The area glow follows the same rule, `removableCells`.
-- **Liquids.** Water must not flow into a scaffold cell. The liquid scheduler treats it as solid for spreading.
-- **Recipe.** 4 of any log → 6.
-
-### 3.4 Fireworks (`fireworks`, 1005)
-
-- **Behaviour.** Lit with E, fuse 1 s. When it goes off:
-  - the block becomes AIR (not counted);
-  - no block is ever removed;
-  - a rocket particle rises 12 blocks in 1 s, then bursts into about 60 coloured sparkles.
-- **Cap.** At most 8 bursts at once. Extra ones burst smaller (about 20 sparkles).
-- **Chain.** A firework caught in a TNT blast is primed like TNT: the chain rule applies, and it fires with its own effect.
 - **Data.** `tnt: { radius: 0, fuse: 1, shape: 'firework' }`.
-- **Recipe.** 1 sand + 2 coal ore + 1 lapis ore → 3.
+- **When it goes off:**
+  - its cell becomes AIR, and it is not counted;
+  - no other block changes;
+  - `ParticleSystem.spawnFirework(x, y, z, big)` sends a rocket 12 blocks up in 1 s, then about 60 sparkles in 3 random bright colours.
+- **Burst cap.** At most 8 bursts at once. Any extra burst is small (about 20 sparkles).
+- **Chains.** When primed by a chain it fires the same way.
+- **Recipe.** 1 sand + 2 coal ore → 3.
 
-### 3.5 Tunnel TNT (`tunnel_tnt`, 1006)
+### 3.4 Tunnel TNT (`tunnel_tnt`, 1005)
 
-- **Behaviour.** A 3×3 cross-section, 24 cells long, starting at the TNT's cell and running along the horizontal direction the player faced when he lit it (the yaw snapped to ±x or ±z).
-- **Direction when chained.** When another blast primes it, the direction points away from that blast's origin, along its dominant horizontal axis.
-- **Storage.** The direction is stored in the primed entry, like radius. Nothing is saved: primed state isn't saved today either.
-- **Preview.** During the fuse, the area glow (`removableCells`) previews the tunnel.
 - **Data.** `tnt: { radius: 0, fuse: 3, shape: 'tunnel' }`.
-- **Recipe.** 2 TNT + 8 iron ore → 1.
+- **Shape.** 3 wide (centred on the TNT's column), 3 tall with **its floor at the TNT's y**, and 24 long starting at the TNT's cell, along `dir`.
+- **Direction when lit.** `ignite(hit, yaw)` changes signature: `dir` comes from the player's yaw, snapped to ±x or ±z.
+- **Direction when chained.** `dir` is the dominant horizontal axis of (TNT − blast origin).
+  - On a tie (|dx| = |dz|), x wins.
+  - When dx = dz = 0 (directly above or below), `dir = 'px'`.
+- **Storage.** `dir` is stored in the primed entry. Nothing is saved.
+- **Preview.** During the fuse, the area glow (`removableCells`) previews the tunnel.
 
-### 3.6 Block Bomb (`block_bomb`, 1007)
+### 3.5 Block Bomb (`block_bomb`, 1006)
 
-- **Behaviour.** On detonation it writes glass into every **air** cell on a sphere shell of radius 5 around its cell (shell = cells with `4.5 < d ≤ 5.5`).
-  - It never replaces a non-air cell, and never replaces liquid.
-  - Its own cell becomes AIR (not counted).
-- **Writes.** Through a batched `placeBlocks(cells, blockId, anchor)` in `GameLoop`. This mirrors `removeBlocks`: per-block light, with the anchor chunk in the edit lane and the others in the bulk lane.
-- **Chain.** A block bomb in a TNT blast is primed and builds its dome.
 - **Data.** `tnt: { radius: 5, fuse: 3, shape: 'dome' }`.
+- **Where glass goes.** When it goes off it writes glass into every **AIR** cell with `4.5 < d ≤ 5.5` (about 350 cells), **except cells the player's box overlaps**. So no glass is ever sealed into his body.
+- **What it never touches.** It never replaces a non-air cell or a liquid, and it primes nothing.
+- **Its own cell** becomes AIR and is not counted.
+- **Batched writes.** The new `GameLoop.placeBlocks(cells, blockId, anchor)` mirrors `removeBlocks`: per-block light, the anchor chunk in the edit lane, the other chunks in the bulk lane. It skips cells that are not AIR, and cells inside the player's box.
 - **Recipe.** 2 TNT + 8 sand → 1.
 
-### 3.7 Flattening TNT (`flatten_tnt`, 1008)
+### 3.6 Flattening TNT (`flatten_tnt`, 1007)
 
-- **Behaviour.** It removes every removable cell in the cylinder `dx² + dz² ≤ 6²` for `y` from the TNT's own `y` up to `y + 12`, own cell included. That leaves a flat floor at the TNT's `y − 1`.
-- **Perf.** Up to about 1,400 cells. That is under Mega's ~2,145, so one `removeBlocks` batch is fine; §6 checks it.
+- **Data.** `tnt: { radius: 6, fuse: 3, shape: 'flatten' }`.
+- **Shape.** The cylinder `dx² + dz² ≤ 36`, for y from the TNT's y to y + 12 inclusive. That leaves a flat floor at y − 1.
+- **Size.** About 1,469 cells, against Mega's 2,109.
+- **Perf gate.** Measured by light time, not by cell count (§6).
 - **Recipe.** 2 Big TNT + 16 stone → 1.
 
-### 3.8 Lake TNT (`lake_tnt`, 1009)
+### 3.7 Lake TNT (`lake_tnt`, 1008)
 
-- **Behaviour.** It removes a radius-4 sphere, exactly like TNT's sphere at radius 4. It then writes water sources into the removed cells whose `y ≤ rimY`:
-  - `rimY` is the lowest `y` among the solid blocks on the crater's outer ring (the cells at horizontal distance 5 from the centre, at the TNT's `y` and above), minus 1;
-  - the result is clamped so the water is at most 4 deep.
-- **Water.** It is free, and goes through `world.setBlock`, which wakes the liquids.
+- **Data.** `tnt: { radius: 4, fuse: 3, shape: 'lake' }`.
+- **Crater.** It removes the radius-4 sphere, the same cells as today's `detonate` at radius 4.
+- **Water level.**
+  - The **ring** is the columns with `round(hypot(dx, dz)) == 5`.
+  - For each ring column, `top` is the highest solid block at or below the TNT's y (scanning down at most 8).
+  - `rimY = min(top over ring columns) − 1`.
+  - If no ring column has a solid block, there is **no water** (flat or floating ground).
+- **Where water goes.**
+  - Water candidates are the removed cells with `y ≤ rimY`, at most 4 layers.
+  - Then **erode to stability**: drop any candidate that has a horizontal neighbour which is neither solid nor itself a candidate. Repeat until nothing changes.
+  - So water can never touch an open side: no spill on a slope, over a cliff edge or into a cave.
+- **Writes.** Through `placeBlocks(cells, WATER, anchor)`, which updates light and wakes the liquids.
 - **Recipe.** 2 TNT + 4 ice → 1.
 
 ## 4. Engine changes
 
-**`BlockDef`** gains three optional fields:
-- `pad?: 'slime' | 'launch'`
-- `climbable?: true`
-- `tnt.shape?: 'sphere' | 'tunnel' | 'flatten' | 'lake' | 'dome' | 'firework'` (default `'sphere'`)
+- **`BlockDef`** gains:
+  - `pad?: 'slime' | 'launch'`
+  - `tnt.shape?: 'sphere' | 'tunnel' | 'flatten' | 'lake' | 'dome' | 'firework'`, default `'sphere'`
+- **`src/game/blast-shapes.ts`** holds pure shape functions. `detonate` becomes a dispatch that:
+  - calls the shape;
+  - applies the shared chain rule (§2) to the shape's candidate cells;
+  - returns `{ destroyed, primed, build?: { cells, blockId }, water?, effect? }`.
 
-**`detonate`** becomes a small dispatch on `shape`. Each shape is one pure function in `src/game/blast-shapes.ts`, returning `{ remove: Cell[]; build?: { cells: Cell[]; blockId } ; water?: Cell[]; effect?: 'firework' }`. The sphere's behaviour stays byte-identical, including chain-priming.
-
-**`PrimedEntry`** gains `dir?: 'px' | 'nx' | 'pz' | 'nz'`.
-
-**`GameLoop.placeBlocks(cells, blockId, anchor)`** is the build counterpart of `removeBlocks`. It writes only into cells that are currently AIR.
-
-**Particles:** `ParticleSystem.spawnFirework(x, y, z, big: boolean)`.
-
-**Player** (`player.ts`):
-- the pad response goes in the grounded branch;
-- the climb rule goes next to `feetInLiquid`;
-- the collision test is `isSolid`, so the scaffold is non-solid and needs no change there.
-
-**Mining, raycast and placement:** use `isTargetable` where they use `isSolid` today, and `isRemovable` covers the scaffold.
+  For plain, Big and Mega TNT, the destroyed and primed lists stay **identical, including cell order** (a frozen copy in the test), on worlds without toys.
+- **`PrimedEntry`** gains `dir?: 'px' | 'nx' | 'pz' | 'nz'`.
+- **`GameLoop`:**
+  - `ignite(hit, yaw)`
+  - `placeBlocks(cells, blockId, anchor)`
+  - `detonateAt` applies `build`, `water` and `effect`.
+- **`src/game/pads.ts`:** `padResponse`, `LAUNCH_VY`, `MIN_BOUNCE_VY`.
+- **`Player.update`:** the landing and launch hooks from §3.1 and §3.2, plus launch re-arm state.
+- **`Keys`** gains an optional `sneak`:
+  - `main.ts` gets its own `keydown`/`keyup` listener for `ShiftLeft` and `ShiftRight`, because `onKey` returns early for keys that have no action.
+  - `resetKeys` clears it.
+  - No clash with Shift-replace (which reads `e.shiftKey`) or with Shift+Tab.
+- **`ParticleSystem.spawnFirework`**, with the burst cap.
 
 ## 5. Craft tab: icon tabs
 
-- **Tabs.** The Craft panel gets three icon buttons inside it: the Iron pickaxe icon for Pickaxes, the TNT face for Boom, and the slime face for Toys.
-  - Pickaxes has 7 cards.
-  - Boom has TNT, Big, Mega, Tunnel, Flatten, Lake, Block Bomb and Fireworks: 8 cards.
-  - Toys has Slime, Launch and Scaffold: 3 cards.
-- **Grouping is data.** The tab is a `tab: 'pickaxes' | 'boom' | 'toys'` field on each `Recipe`. The tab you last looked at is remembered for the session.
-- **Green dot.** A tab shows a green dot when any recipe in it can be crafted now.
-- **The Blocks tab** lists the owned toys in the BASICS row, as Big TNT does today.
-- **Placing a crafted toy in the hotbar.** It uses the same slot rule as crafted TNT: the slot holding it, else an empty slot, else a greyed slot, else the selected slot.
+- **Three icon buttons** inside the Craft panel, each holding its cards with no scrolling at 1280×720:
+  - Iron pickaxe icon, Pickaxes: 7 cards.
+  - TNT face, Boom: TNT, Big, Mega, Tunnel, Flatten, Lake, Block Bomb and Fireworks (8 cards).
+  - Slime face, Toys: Slime and Launch (2 cards).
+- **Tab field.** Each `Recipe` gains `tab: 'pickaxes' | 'boom' | 'toys'`. The last tab viewed is remembered for the session.
+- **Green dot.** A tab gets a green dot when a recipe in it has **become** craftable since that tab was last viewed. Once he looks at the tab, the dot clears until something new becomes craftable, so Boom doesn't stay green all day.
+- **Hotbar slot.** A crafted toy uses the crafted-block slot rule (holding → empty → greyed → selected).
 
 ## 6. Testing
 
 Every test names the wrong version it catches.
 
-**Pure tests:**
-- **`padResponse`:**
-  - bounces at 0.8;
-  - 0.9 with jump held;
-  - no bounce with sneak;
-  - no bounce below `MIN_BOUNCE_VY`.
-- **Launch Pad:**
-  - the apex height from `LAUNCH_VY` is 25 ± 1;
-  - the cooldown stops a re-launch while standing.
-- **Each blast shape:** exact cell counts and a set of pinned cells.
-  - Tunnel: for each of the 4 directions, 3×3×24, and the chained direction.
-  - Flatten: the cylinder, with nothing below `y`.
-  - Lake: water only below the rim, and never deeper than 4.
-  - Dome: shell cells only, and air cells only.
-  - Fireworks: removes nothing.
-- **Sphere regression:** plain, Big and Mega TNT cells are identical to today's `detonate()` output (a frozen copy in the test).
+**Pure tests**
+- **`padResponse`:** checks 0.8; jump held grows bounces up to the 8-block cap; sneak gives 0; a landing below `MIN_BOUNCE_VY` gives 0.
+- **Blast shapes:** exact counts and pinned cells for each shape.
+  - **Tunnel:** 4 directions, floor at the TNT's y, the chained direction including the tie and the directly-above case.
+  - **Flatten:** the cylinder, with nothing below the TNT's y.
+  - **Lake:** fixtures for flat ground (no water), a 2-step slope (water only below the low rim, and none touching the open side), a cave under the crater (no spill), and at most 4 deep.
+  - **Dome:** only AIR cells on the shell, and none inside the player's box.
+  - **Firework:** removes and primes nothing.
+- **Chain rule:** a TNT inside a Tunnel, Flatten or Lake blast is primed, not removed and not counted.
+- **Sphere regression:** plain, Big and Mega give the same lists in the same order as a frozen copy of today's `detonate`.
 
-**Loop tests** (`makeLoop`):
-- **Scaffold:**
-  - he walks into a scaffold column and climbs to the top holding jump;
-  - he slides down slowly without holding jump;
-  - the raycast targets it;
-  - mining it counts;
-  - placing into it is refused;
-  - TNT removes it;
-  - water does not enter it.
-- **Slime Pad:** a drop from 10 blocks onto a pad goes up again, and settles after N bounces.
-- **Launch Pad:** standing on it rises to about 25.
-- **Block Bomb:** in a partly built area, only air cells become glass, and counts are unchanged.
-- **Lake TNT:** after the liquids settle, no water is above `rimY`.
-- **Fireworks:** block → AIR, count unchanged, no other block changed.
+**Loop tests (`makeLoop`)**
+- **Slime:**
+  - a 10-block drop onto a pad bounces;
+  - with jump held, each rise is higher than the last, up to the cap, and higher than a plain jump's 1.33 apex (this catches the jump overwrite);
+  - with sneak held, it doesn't bounce;
+  - it settles.
+- **Launch:** simulated `Player.update` at 1/60 reaches an apex of 25 ± 1.5, also with jump held. Landing back on the pad does not relaunch; stepping off and on does. Sneak blocks it.
+- **Block Bomb:** in a part-built area only AIR becomes glass. Counts are unchanged. The player's cells stay AIR.
+- **Lake:** after the liquids settle, no water is outside the crater.
+- **Fireworks:** its block becomes AIR, its count is unchanged, and no other block changes.
 - **Counts:** Tunnel, Flatten and Lake add their removed cells to the counts and never count their own cell.
+- **Ignite:** the direction comes from yaw.
 
-**Craft tab:**
-- a view-model test: tabs, cards per tab, the dot rule;
-- the headless smoke test extended: three tabs, each with 10 or fewer cards, all inside 1280×720, and a Toys card that can be crafted.
+**Craft tab**
+- View-model tests: tabs, cards per tab, and the dot rule (it clears on view and comes back only on a new craftable).
+- The headless smoke test is extended: 3 tabs, each with ≤ 10 cards inside 1280×720, and crafting a Slime Pad.
 
-**Perf:**
-- a headless probe counts the cells written per frame and the edit-lane chunks for Flatten and Lake. Flatten must write at most Mega's cells, and the edit lane must hold only the anchor.
-- The parent runs the real-GPU `perf:bench`, with a new Flatten row added.
+**Perf**
+- A headless probe measures `stats.lightMs` and the worst frame's main-thread time for Flatten and Lake, against Mega at the same v3 surface site. Neither may exceed Mega's.
+- The parent runs the real-GPU `perf:bench` with a Flatten row added.
 
-**Run everything headless: no browser windows on the parent's display.**
+**Run everything headless, with no windows on the parent's display, never port 5173, and never the main checkout.**
 
 ## 7. Sequencing
 
-1. BlockDef fields, blast-shape dispatch with sphere regression, and `placeBlocks`.
-2. The blast toys: Fireworks, Tunnel, Block Bomb, Flatten, Lake, with their particles and the tunnel preview.
-3. The pads: Slime, Launch, and the sneak key.
-4. Scaffold: the new block kind across raycast, player, mesher, liquids and removal.
-5. The Craft tab icon tabs, the recipes, and the derived textures.
-6. Docs (`docs/crafting.md`), the smoke test, and the bench row.
+1. BlockDef fields, the blast-shape dispatch with the chain rule and sphere regression, and `placeBlocks`.
+2. The blast toys: Fireworks, Tunnel (with `ignite(hit, yaw)` and the preview), Block Bomb, Flatten, Lake.
+3. Pads: Slime, Launch, and the sneak key.
+4. Craft tab icon tabs, the recipes, and the derived textures.
+5. Docs (`docs/crafting.md`), the smoke test, and the bench row.

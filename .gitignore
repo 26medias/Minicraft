@@ -149,5 +149,8 @@ api/build/
 # Browser benchmark output (scripts/perf-bench.ts)
 bench-out/
 
+# Crafting browser smoke output (scripts/crafting-smoke.ts)
+smoke-out/
+
 # Kid's world backups — never commit these
 backup/

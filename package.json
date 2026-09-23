@@ -16,6 +16,7 @@
 		"test:watch": "vitest",
 		"lint": "eslint .",
 		"perf:bench": "tsx scripts/perf-bench.ts",
+		"smoke:crafting": "tsx scripts/crafting-smoke.ts",
 		"format": "prettier --write ."
 	},
 	"dependencies": {

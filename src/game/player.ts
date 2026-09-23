@@ -4,10 +4,9 @@ import { moveWithCollisions } from '../engine/physics/collision';
 import type { BlockId } from '../data/blocks.data';
 import { isLiquid } from '../data/blocks.data';
 import type { Inventory, PlayerTools } from '../data/crafting.data';
+import { GRAVITY, JUMP_SPEED } from './pads';
 
 const WALK_SPEED = 5; // blocks/sec
-const JUMP_SPEED = 8; // blocks/sec, initial upward velocity
-const GRAVITY = 24; // blocks/sec^2
 const SIZE: [number, number, number] = [0.6, 1.8, 0.6];
 const EYE_HEIGHT = 1.6;
 const MAX_STEP = 0.4; // max displacement per physics sub-step (blocks)

@@ -1,6 +1,6 @@
 # Crafting — design
 
-Date: 2026-09-22 · Branch: `crafting` (from `main` at aa57368) · Status: rev 3 (gate-1 re-gate repairs)
+Date: 2026-09-22 · Branch: `crafting` (from `main` at aa57368) · Status: rev 4 (second re-gate repairs)
 
 ## 1. Intent
 
@@ -27,7 +27,8 @@ reads a little, and **take nothing away** from worlds he already plays.
   owned pickaxes** (P, or click in the I screen).
 - No build protection; TNT destroys what it destroys. Mining warns by
   **highlighting the whole area** (orange for multi-block tiers), and the
-  first multi-block break of each click takes at least 0.4 s.
+  first multi-block break of a click, or after the aim leaves the shown
+  area, takes at least 0.4 s; held breaks at least 0.25 s.
 - Placing lowers a count only when placing that block needed a count.
 - In must-mine worlds a newly mined block **joins the hotbar** (Minecraft-like).
 - Unlimited worlds may farm counts (place an ore at 0, mine it back) — this is
@@ -80,7 +81,9 @@ differ from the block mined (grass gives grass), recipes for decorative blocks.
 
 All count rules live in one pure module, `src/game/inventory.ts`:
 `onRemoved(inv, blockIds)`, `canPlace(inv, blockId, mustMine)`,
-`onPlaced(inv, blockId)`, `onReplaced(inv, placedId, oldId)`. The place and
+`onPlaced(inv, blockId, mustMine)`,
+`onReplaced(inv, placedId, oldId, mustMine)`. Each of these that
+places a block checks `needsCount`. The place and
 replace handlers in `main.ts` call a single `tryPlace(...)` function in
 `src/game/place.ts` (extracted from `main.ts:476–516`) that owns the
 raycast-result → refusal → world write → count update sequence, so it is
@@ -96,15 +99,22 @@ testable headless.
 - **Counted blocks** = the blocks worldgen v3 **actually writes** (not the
   whole `NAMES` list: `cobblestone`, `mossy_cobblestone` and `red_sandstone`
   are listed there but never generated; gate 1 measured this), minus
-  `water`, `lava`, `bedrock`; **plus every recipe output that is a block**
-  (`tnt`, `big_tnt`, `mega_tnt`). Written as an explicit list,
-  `WORLDGEN_BLOCKS`, in `src/data/crafting.data.ts`. A test generates fixed
-  seeds (enough chunks to include mountains and deep layers), then asserts
-  two things: every block written, apart from the three exclusions, is in
-  the list, and every listed block appears in the sample. The only
-  exceptions are ores that appear only in their deepslate variant
-  (`diamond_ore`, `redstone_ore`), which are allowed as recipe
-  alternatives.
+  `water`, `lava`, `bedrock`; **plus every name that appears in any recipe
+  ingredient `anyOf`**; plus every recipe output that is a block (`tnt`,
+  `big_tnt`, `mega_tnt`).
+  - Ingredient names are in the set even when worldgen rarely or never
+    writes them (`diamond_ore`, `redstone_ore`, `deepslate_emerald_ore`,
+    …). Otherwise he could place a free ore and mine it back as a recipe
+    ingredient.
+  - `WORLDGEN_BLOCKS` is an explicit list in `src/data/crafting.data.ts`.
+    The counted set is computed from it and the recipes.
+  - A slow-tagged test generates one fixed seed, taking every second
+    chunk (about 6 s). It asserts only that every block written, apart
+    from the three exclusions, is in `WORLDGEN_BLOCKS`. It does not
+    assert the reverse: rare ores such as `deepslate_copper_ore`, at 1–4
+    per 256 chunks, would make that half flaky. Every entry in
+    `WORLDGEN_BLOCKS` must be in v3 `NAMES`, which gets exported for this
+    test.
 - `needsCount(block, world)` = the block is crafted-only (anywhere), or the
   world is must-mine and the block is counted.
 - In a must-mine world, placing a block that needs a count at count 0 does
@@ -195,12 +205,18 @@ blocks from spawn. Numbers get tuned after the first play session.
 - "**Multi-block tier**" means the equipped tier's area is larger than one
   cell (Copper and up), whatever the aimed spot holds. That single
   definition drives both the floor and the orange highlight.
-- **Mining time** = `hardness(target) / (1 + bonus)`, raised to at least
-  **0.4 s for the first break after the button is pressed** with a
-  multi-block tier. Later breaks while the button stays held run at the real
-  speed, because the warning has already been seen. Releasing the button
-  re-arms the floor. Only the aimed block's hardness counts: aiming at dirt
-  breaks a 5×5×5 of stone at dirt speed, and that is accepted.
+- **Mining time** = `hardness(target) / (1 + bonus)`. With a multi-block
+  tier it is raised to at least:
+  - **0.4 s for an armed break.** The floor is armed by pressing the
+    button, by switching pickaxes (P or click), and re-armed whenever the aimed block is outside the area of
+    the previous break, so the aim sliding onto his house gets the full
+    warning again.
+  - **0.25 s for a held break** inside the previous area. Minecraft uses
+    the same 0.25 s delay between held breaks, and it keeps Emerald at 4
+    area breaks per second or fewer.
+
+  Only the aimed block's hardness counts: aiming at dirt breaks a 5×5×5 of
+  stone at dirt speed, and that is accepted.
 - **Area cells:** with hit-face normal `n` (one of ±x, ±y, ±z), the face-plane
   extent is centred on the target, and depth runs **away from the player**,
   i.e. from the target along `−n`, `depth` cells including the target.
@@ -262,7 +278,8 @@ including synchronous re-meshing of both chunks at a chunk edge.
    neighbours, every chunk the light touched, and their south-east shadow
    neighbours, with the same `rev`/`shadowsDirty` bumps
    `applyLightUpdate` does today. Only the **anchor's** chunk (the aimed
-   block, or the TNT origin) goes to the edit lane; every other chunk goes
+   block, or the TNT origin) goes to the edit lane. The south-east shadow
+   neighbours stay shadow-only, as today. Every other touched chunk goes
    to the **bulk lane**.
 3. Return `removed: Array<{x,y,z,blockId}>`; the caller applies counts.
 
@@ -285,8 +302,25 @@ including synchronous re-meshing of both chunks at a chunk edge.
 - Gate 1 reproduced the failure: chunk B in flight, a border edit in
   neighbour A in the dark (B's rev unchanged), then the stale reply mounts
   with a face missing, and the hole persists.
-- Fix: a job records the revs of all 9 chunks it copied, and a reply is
-  dropped unless all of them are unchanged.
+- Fix: a job records the **chunk object and `rev`** of all 9 chunks it
+  copied. A reply is dropped unless every slot holds the same object at the
+  same rev. Checking identity catches a neighbour that was evicted and
+  regenerated at rev 0.
+- **No drop cascade.** Today `onJobReply` bumps the rev of every mounted
+  axis neighbour (loop.ts:157–163). With 9-slot freshness, each landing
+  reply would then invalidate the other in-flight bulk jobs. Gate 1
+  modelled a 3×3 blast at 17 frames.
+  - Fix: `onJobReply` bumps a neighbour's rev only when this chunk's
+    `sunlitHash` changed. With the hash unchanged, the in-flight job
+    copied valid data.
+  - Dropped bulk chunks are re-queued into the **bulk lane**, not the
+    stream set.
+- South-east shadow neighbours stay **shadow-only** (stream lane with the
+  `sunlitHash` skip), as today. They do not go to the bulk lane.
+- **Accepted visual cost:** until its reply lands, a bulk chunk keeps its
+  old mesh. It can briefly show blocks that are gone, and gaps where its
+  faces toward the new hole are missing. This lasts a few frames and is
+  bounded by the 10-frame rule.
 
 ## 8. Perf gate
 
@@ -294,7 +328,7 @@ Bench runs **first** (§14 step 1), against today's path, to record the
 baseline. Rows, each run interior and at a chunk corner, each asserting the
 expected cells were actually removed:
 - plain TNT r3;
-- area mine 5×5×5, 10 swings along a tunnel;
+- area mine 5×5×5, 10 held swings along a tunnel at the 0.25 s held rate;
 - one Mega TNT;
 - a chain of 4 Mega TNT (report each detonation frame).
 
@@ -336,16 +370,28 @@ Client, every place that must carry them:
 - `dual.ts` load merge. Both copies are first run through the load-time
   defaulting, so a missing field equals its default.
   - **Identical chunks, different player/mode:** no fork. The copy with the
-    newer `updatedAt` wins whole.
-    - If the local copy wins, it is stamped with the cloud generation just
-      loaded and marked `needsUpload`. It is not `markUnsynced`, which
-      would 409 on every retry.
+    newer `updatedAt` wins whole; on a tie, the cloud copy wins.
+    - If the local copy wins, it is **not** re-stamped on disk. A local
+      copy carrying the cloud's stamp reads as "in sync" and would lose to
+      the cloud on the next reload (gate 1 reproduced this).
+    - `CloudAdapter.loadWorld` has already recorded the loaded generation
+      in memory, so the next PUT goes out with `If-Match` on it. It
+      succeeds unless another device wrote since, in which case it gets
+      the correct 409. `DualAdapter.saveWorld` stamps the local copy only
+      after that PUT succeeds.
+    - `loadWorld` returns a `localWon` flag, and `main.ts` then calls
+      `autosave.markDirty()` at once, so the upload happens even if he
+      only looks around and closes the tab.
     - Today every offline save clears the local stamp, so without this rule
       each P press made offline would fork a "(copy from this device)"
       world on the next reload.
   - **Different chunks:** fork, as today.
-  - Accepted: crafting on two machines at once, without mining, is
-    newest-wins.
+  - Accepted:
+    - Crafting on two machines at once, without mining, is newest-wins.
+      Clock skew between the machines decides which copy is newer.
+    - With identical chunks, a lamp colour changed on the older side is
+      lost, because `lights` are not compared. That is no worse than
+      today, where the cloud copy always wins.
 
 API (`api/src/schema.ts`, handlers):
 - v2 and v3 `player`: `inventory` (record of string → int ≥ 0, ≤ 2000 keys)
@@ -384,8 +430,10 @@ build" — the named wrong implementation is what they must catch.
   - Must-mine refusal for place *and* replace.
   - Non-counted blocks are always placeable.
   - Crafted-only blocks are refused at 0 in unlimited worlds.
-  - A free place (TNT in an unlimited world) leaves the count unchanged.
-    Catches an unconditional −1.
+  - A free place leaves the count unchanged: seed `tnt: 3`, place TNT in
+    an unlimited world, and the count is still 3. Catches an
+    unconditional −1, which a fixture starting at 0 would hide behind the
+    floor.
   - `startingCount` injected as 5. Catches a hard-coded 0.
   - A key touched down to 0 stays 0 after save/load.
 - Counted set: the fixed-seed worldgen sample test (§3); `tnt` counted;
@@ -400,11 +448,23 @@ build" — the named wrong implementation is what they must catch.
   - Crafting does not trigger it.
 - `crafting.ts`: either ore variant; short by one refused; plain consumed
   before deepslate; owned pickaxe refused; outputs added; never negative.
-- Mining time per tier, including the 0.4 s floor. The floor applies on
-  the first break after press, not on a held second break, and it re-arms
-  on release. It does not apply to single-cell tiers even when the tier's
-  area covers only air. Catches a floor on every break, and a floor keyed
-  to the count of solid cells.
+- Mining time per tier, with the floors:
+  - 0.4 s on the first break after a press;
+  - 0.25 s on a held break inside the previous area;
+  - back to 0.4 s when the aim leaves the previous area while held;
+  - re-armed on release;
+  - re-armed when P switches to a multi-block tier while the button is
+    held;
+  - no floor for single-cell tiers;
+  - Iron aimed at a lone block surrounded by air still gets the 0.4 s
+    floor.
+
+  Catches a single floor applied to every break, a floor that never
+  re-arms while held or on switch, and a floor keyed to the number of
+  solid cells.
+- Counted set: every recipe `anyOf` name needs a count in a must-mine
+  world. Catches a set built from worldgen alone, which leaves
+  `deepslate_emerald_ore` free to farm.
 - Area cells: exact lists per tier for `+x` and `−y` hits (catches depth
   running toward the player); bedrock/air/liquid/out-of-bounds skipped.
 - TNT: radius and fuse per tier; radius fixed at priming; a chain explodes
@@ -416,7 +476,7 @@ build" — the named wrong implementation is what they must catch.
   - Compared over **every loaded chunk**, not a bounding box: blocks,
     light, `modified`, and the liquid frontier. It also compares the union
     of chunks queued (edit + bulk + shadow-only lanes) against the old
-    path's edit set.
+    path's edit set **plus its shadow-only set**.
   - Fixtures:
     - interior;
     - chunk corner;
@@ -432,8 +492,14 @@ build" — the named wrong implementation is what they must catch.
     touched chunk is **not** mounted that frame. The test counts mesh calls
     and mounts in that tick. Catches "everything in the edit lane", which
     today's build does.
-  - All bulk chunks are mounted within 10 frames.
   - Without `jobs`, at most one bulk chunk is meshed per frame.
+  - With a fake worker holding 2 jobs and replying in order, a full 3×3
+    blast makes at most (bulk count + 1) posts. This catches the drop
+    cascade.
+  - The 10-frame bound can't be seen with a microtask worker; it is
+    asserted by the browser bench (§8).
+- Freshness identity: a neighbour evicted and regenerated at rev 0 while a
+  job is in flight → the reply is dropped.
 - Edge mining unchanged: a single-block mine at `lx=15` mounts both chunks
   in the same frame. Catches the bulk lane leaking into single edits.
 - Neighbourhood freshness, using gate 1's reproduction:
@@ -446,10 +512,17 @@ build" — the named wrong implementation is what they must catch.
 - Save defaulting: old save without fields; junk counts/tiers; equipped not
   owned.
 - `dual.ts`:
-  - Same chunks, newer local with crafted tools, older cloud → local is
-    kept, no fork, stamped with the cloud generation, `needsUpload` set.
+  - Same chunks, a newer local copy with crafted tools, an older cloud
+    copy:
+    - local is kept, with no fork and `localWon` set;
+    - the local stamp is unchanged on disk;
+    - a **reload before any upload loads the local copy again**, which
+      catches re-stamping;
+    - the next save's PUT carries `If-Match` with the cloud generation.
+
     Catches both a chunks-only compare that takes the cloud copy and a
     fork on every player difference.
+  - Equal `updatedAt` → the cloud copy wins.
   - P pressed offline, then reload → no fork.
   - A cloud copy without `inventory` vs local `{}` → treated as equal.
   - Different chunks → fork, as today.
@@ -493,7 +566,8 @@ Screenshots of Big/Mega TNT tiles.
 
 ## 12. Docs
 
-New `docs/crafting.md` (rules, how to add a recipe); `docs/inventory.md`
+New `docs/crafting.md` (rules, including why stone is counted but
+cobblestone is free in must-mine worlds; how to add a recipe); `docs/inventory.md`
 (tabs, counts, badges); `docs/persistence.md` (new fields, old-client guard,
 deploy order incl. atlas and cache purge); `docs/performance.md` (bench rows,
 bulk lane); CLAUDE.md "no crafting table UI; recipes resolve from inventory"

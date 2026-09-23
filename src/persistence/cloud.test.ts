@@ -244,3 +244,38 @@ describe('CloudAdapter v3 routing', () => {
 		expect(list.find((w) => w.name === 'Old')).toMatchObject({ version: 2, height: 64, origin: 'cloud' });
 	});
 });
+describe('CloudAdapter — crafting fields (crafting spec §10)', () => {
+	const EXTRAS = { inventory: { stone: 4, dirt: 0 }, tools: { owned: [0, 1], equipped: 1 } };
+
+	it('sends inventory, tools and mustMine in the PUT body', async () => {
+		// Catches: the fixed body field list dropping mustMine (today's code). With the
+		// old-client guard on the server, an omitted field keeps the stored value, so a
+		// client that "forgets" it could never switch a world back.
+		const calls = stubFetch(res(200, { generation: '1' }));
+		const a = new CloudAdapter('https://api.test');
+		await a.saveWorld(save({ mustMine: true, player: { ...save().player, ...EXTRAS } }));
+		const sent = JSON.parse(calls[0].init!.body as string);
+		expect(sent.mustMine).toBe(true);
+		expect(sent.player.inventory).toEqual(EXTRAS.inventory);
+		expect(sent.player.tools).toEqual(EXTRAS.tools);
+	});
+
+	it('sends mustMine false rather than leaving it out', async () => {
+		// Catches: `mustMine: save.mustMine` when the save has none: JSON drops the key
+		// and the server guard would keep a stored `true`.
+		const calls = stubFetch(res(200, { generation: '1' }));
+		const a = new CloudAdapter('https://api.test');
+		await a.saveWorld(save());
+		expect(JSON.parse(calls[0].init!.body as string).mustMine).toBe(false);
+	});
+
+	it('decodes inventory, tools and mustMine from a loaded body', async () => {
+		// Catches: decode() rebuilding the save from a fixed list without mustMine (today's code).
+		const a = new CloudAdapter('https://api.test');
+		stubFetch(res(404), res(200, { ...wire(), mustMine: true, player: { ...wire().player, ...EXTRAS } }, '3'));
+		const loaded = await a.loadWorld(ID);
+		expect(loaded!.mustMine).toBe(true);
+		expect(loaded!.player.inventory).toEqual(EXTRAS.inventory);
+		expect(loaded!.player.tools).toEqual(EXTRAS.tools);
+	});
+});

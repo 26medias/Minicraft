@@ -160,8 +160,9 @@ export class LocalStorageAdapter implements PersistenceAdapter {
 			throw new Error('LEGACY_ID_NOT_WRITABLE');
 		}
 		const ns = save.version === 3 ? V3_NS : V2_NS;
-		// The v2 payload is byte-identical to what shipped before v3 existed: a
-		// 64-high world never learns the new fields.
+		// A 64-high (v2) world never learns height/genVersion. Both namespaces carry
+		// mustMine (crafting spec §10: the new client always writes it; an older bundle
+		// ignores the key). player is stored whole, inventory and tools included.
 		const metaPayload: Record<string, unknown> = {
 			version: save.version,
 			id: save.id,
@@ -171,6 +172,7 @@ export class LocalStorageAdapter implements PersistenceAdapter {
 			updatedAt: save.updatedAt,
 			player: save.player,
 			lights: save.lights,
+			mustMine: save.mustMine === true,
 			lastSyncedGeneration: save.lastSyncedGeneration ?? null,
 		};
 		if (save.version === 3) {

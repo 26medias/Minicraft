@@ -324,3 +324,31 @@ describe('AutoSave snapshot carries the world profile', () => {
 		expect(seen).toMatchObject({ version: 2, height: 64, genVersion: 1 });
 	});
 });
+describe('AutoSave snapshot carries mustMine (crafting spec §10)', () => {
+	beforeEach(() => stubDom());
+	afterEach(() => vi.unstubAllGlobals());
+
+	async function snapshotWith(meta: { id: string; name: string; createdAt: number; mustMine?: boolean }) {
+		let seen: WorldSave | null = null;
+		const adapter = makeAdapter(async (s) => {
+			seen = s;
+		});
+		const a = new AutoSave(adapter, fakeWorld(), () => PLAYER, meta);
+		a.markDirty();
+		await a.flush();
+		a.dispose();
+		return seen as unknown as WorldSave;
+	}
+
+	it('writes the world mode it was constructed with', async () => {
+		// Catches: a snapshot without mustMine (today's code): the first autosave of a
+		// must-mine world would store it as unlimited.
+		expect((await snapshotWith({ id: WORLD_ID, name: 'w', createdAt: 0, mustMine: true })).mustMine).toBe(true);
+	});
+
+	it('writes false, not nothing, when the meta has no mode', async () => {
+		// Catches: `mustMine: meta.mustMine` leaving the key undefined.
+		const s = await snapshotWith({ id: WORLD_ID, name: 'w', createdAt: 0 });
+		expect(s.mustMine).toBe(false);
+	});
+});

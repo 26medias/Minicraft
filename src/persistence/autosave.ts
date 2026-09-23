@@ -38,6 +38,7 @@ export class AutoSave {
 	private name: string;
 	private createdAt: number;
 	private id: string;
+	private mustMine: boolean;
 	private adapter: SyncCapableAdapter;
 
 	onStatus: (s: SaveStatus) => void = () => {};
@@ -46,7 +47,7 @@ export class AutoSave {
 		adapter: PersistenceAdapter,
 		private world: World,
 		private getPlayer: () => PlayerSave,
-		meta: { id: string; name: string; createdAt: number },
+		meta: { id: string; name: string; createdAt: number; mustMine?: boolean },
 		public onQuotaExceeded: () => void = () => {},
 		private getLights: () => LightSave[] = () => [],
 	) {
@@ -54,6 +55,7 @@ export class AutoSave {
 		this.id = meta.id;
 		this.name = meta.name;
 		this.createdAt = meta.createdAt;
+		this.mustMine = meta.mustMine === true;
 
 		window.addEventListener('blur', () => void this.flush());
 		document.addEventListener('visibilitychange', () => {
@@ -128,6 +130,8 @@ export class AutoSave {
 				fluidMeta: c.fluidMeta.size > 0 ? new Map(c.fluidMeta) : undefined,
 			})),
 			lights: this.getLights(),
+			// Always written, false included (crafting spec §10).
+			mustMine: this.mustMine,
 		};
 	}
 

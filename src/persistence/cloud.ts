@@ -36,6 +36,8 @@ type Wire = {
 	player: WorldSave['player'];
 	chunks: EncodedChunk[];
 	lights?: WorldSave['lights'];
+	/** Absent on a save from before crafting. */
+	mustMine?: boolean;
 	generation?: string;
 };
 
@@ -125,6 +127,8 @@ export class CloudAdapter implements PersistenceAdapter {
 			player: wire.player,
 			chunks,
 			lights: wire.lights,
+			// Passed through as stored; resolvePlayerExtras applies the default.
+			...(typeof wire.mustMine === 'boolean' ? { mustMine: wire.mustMine } : {}),
 			lastSyncedGeneration: wire.generation ?? null,
 		};
 	}
@@ -161,6 +165,9 @@ export class CloudAdapter implements PersistenceAdapter {
 			player: save.player,
 			chunks: pre ?? this.encode(save),
 			lights: save.lights,
+			// Always sent: omitting it would let the API's old-client guard keep a
+			// stored value this save meant to replace.
+			mustMine: save.mustMine === true,
 		};
 
 		const headers: Record<string, string> = { 'Content-Type': 'application/json' };

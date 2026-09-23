@@ -87,6 +87,20 @@ the v2 one does not exist yet.
 
 The v1 keys stay where they are, permanently, as a cold backup.
 
+### Crafting fields (both namespaces)
+
+The meta record carries `mustMine`, which is always written, `false` included.
+The `player` object is stored whole and carries `inventory` (counts by block
+name) and `tools` (`owned` tiers, `equipped`). A record from before crafting has
+none of them. On load, `resolvePlayerExtras` (`src/game/player-extras.ts`, next
+to `resolveHotbar`) turns whatever is there into usable values:
+- unknown block names, negative or fractional counts, and unknown tiers are dropped;
+- zero counts are kept, so a block used up to 0 does not come back at a later start value;
+- tier 0 is always owned;
+- an equipped tier that is not owned becomes the highest owned tier.
+
+The cloud wire carries the same fields unchanged.
+
 ## Adapters
 
 All three implement one interface (`src/persistence/adapter.ts`).

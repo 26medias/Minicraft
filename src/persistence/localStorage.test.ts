@@ -497,3 +497,40 @@ describe('LocalStorageAdapter — v3 namespace', () => {
 		expect(meta.updatedAt).toBe(2000); // meta untouched by the refused save
 	});
 });
+describe('LocalStorageAdapter — crafting fields (crafting spec §10)', () => {
+	let storage: MemStorage;
+	let adapter: LocalStorageAdapter;
+	beforeEach(() => {
+		storage = new MemStorage();
+		adapter = new LocalStorageAdapter(storage as unknown as Storage);
+	});
+
+	const EXTRAS = { inventory: { stone: 4, dirt: 0 }, tools: { owned: [0, 1], equipped: 1 } };
+
+	it('keeps mustMine through save and load, on both namespaces', async () => {
+		// Catches: saveLocalSync's fixed meta field list dropping mustMine (today's code),
+		// which would turn a must-mine world unlimited after the first reload.
+		for (const s of [{ ...sampleSave(51), mustMine: true }, { ...tallSave(52), mustMine: true }]) {
+			await adapter.saveWorld(s);
+			expect((await adapter.loadWorld(s.id))!.mustMine).toBe(true);
+		}
+	});
+
+	it('always writes mustMine, false included', async () => {
+		// Catches: writing the key only when true. Absent and false mean the same on load,
+		// but the spec requires every save from this client to carry all three fields.
+		await adapter.saveWorld(sampleSave(53));
+		const meta = JSON.parse(storage.getItem(`minicraft:v2:world:${idFor(53)}:meta`)!);
+		expect(meta.mustMine).toBe(false);
+	});
+
+	it('keeps inventory (a zero included) and tools through save and load', async () => {
+		// Catches: a fixed player field list in the meta writer (the shape main.ts's
+		// snapshot had), and dropping zero counts on the way to disk.
+		const s = { ...sampleSave(54), player: { ...sampleSave(54).player, ...EXTRAS } };
+		await adapter.saveWorld(s);
+		const loaded = await adapter.loadWorld(s.id);
+		expect(loaded!.player.inventory).toEqual(EXTRAS.inventory);
+		expect(loaded!.player.tools).toEqual(EXTRAS.tools);
+	});
+});

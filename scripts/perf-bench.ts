@@ -396,7 +396,9 @@ async function crafting(page: Page): Promise<CraftResult> {
 			const enter = new Map<number, number>();
 			const deltas: number[] = [];
 			for (;;) {
-				const now = await raf();
+				await raf();
+				// performance.now(), not the rAF timestamp: rAF timestamps are vsync-aligned and hide a long frame (gate 2 measured 16.8 ms gaps against 30–40 ms real frames).
+				const now = performance.now();
 				frame++;
 				deltas[frame] = prevNow < 0 ? 0 : now - prevNow;
 				prevNow = now;
@@ -517,7 +519,8 @@ async function memory(page: Page, cdp: CDPSession, dir: { dirX: number; dirZ: nu
 		for (const def of CRAFT_ROWS) {
 			const rs = C.map((c) => c.rows.find((x) => x.name === def.name)!);
 			const mf = median(rs.map((x) => x.maxFrame)), worst = Math.max(...rs.map((x) => x.maxFrame));
-			const over = median(rs.map((x) => x.over50)), light = median(rs.map((x) => x.lightMax)), bulk = Math.max(...rs.map((x) => x.bulkMax));
+			// Spec §8: no frame over 50 ms in ANY repetition, so gate on the worst, never the median.
+			const over = Math.max(...rs.map((x) => x.over50)), light = Math.max(...rs.map((x) => x.lightMax)), bulk = Math.max(...rs.map((x) => x.bulkMax));
 			const ok = over === 0 && light < GATES.craftLightMs && bulk <= GATES.craftBulkFrames;
 			const thin = mf > GATES.craftFrameMs * GATES.craftMargin || light > GATES.craftLightMs * GATES.craftMargin || bulk > GATES.craftBulkFrames * GATES.craftMargin;
 			const bulkCell = rs[0].bulkLane ? String(bulk) : '— (no bulk lane)';

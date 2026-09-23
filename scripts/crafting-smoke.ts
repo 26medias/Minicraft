@@ -112,7 +112,8 @@ for (const sig of ['SIGINT', 'SIGTERM', 'SIGHUP'] as const) process.on(sig, () =
 (async () => {
 	mkdirSync(OUT, { recursive: true });
 	stopDev = await startDev();
-	const browser = await chromium.launch({ headless: false, args: ['--use-gl=angle'] });
+	// Headless: a headed window steals the user's focus (standing rule).
+	const browser = await chromium.launch({ headless: true });
 	try {
 		const page = await browser.newPage({ viewport: { width: 1280, height: 720 } });
 		await guard(page);

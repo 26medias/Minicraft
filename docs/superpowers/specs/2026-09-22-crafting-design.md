@@ -384,6 +384,11 @@ Client, every place that must carry them:
       `autosave.markDirty()` right after constructing `AutoSave`
       (main.ts:351), so the upload happens even if he only looks around
       and closes the tab.
+    - Before defaulting, a local winner that **lacks** `player.inventory`,
+      `player.tools` or `mustMine` gets that field from the cloud copy.
+      This covers the case where an old cached bundle saved offline, so a
+      newer local copy has no fields and would otherwise wipe counts that
+      the cloud still holds.
     - `localWon` is set only in this branch. It is never set when chunks
       differ (fork), when loading offline, or when the cloud copy is
       corrupt; those paths already `markUnsynced`.

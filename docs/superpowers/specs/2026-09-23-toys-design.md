@@ -101,6 +101,7 @@ Crafting shipped and is "really fun". The parent asked for more recipes, inspire
   - When dx = dz = 0 (directly above or below), `dir = 'px'`.
 - **Storage.** `dir` is stored in the primed entry. Nothing is saved.
 - **Preview.** During the fuse, the area glow (`removableCells`) previews the tunnel.
+- **Recipe.** 2 TNT + 8 iron ore → 1.
 
 ### 3.5 Block Bomb (`block_bomb`, 1006)
 

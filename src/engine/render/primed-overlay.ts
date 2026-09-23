@@ -11,6 +11,8 @@ export class PrimedOverlay {
 	private material: THREE.MeshBasicMaterial;
 	private geometry: THREE.BoxGeometry;
 	private elapsed = 0;
+	private probe: THREE.Mesh | null = null;
+	private probeTicks = 0;
 
 	constructor(private scene: THREE.Scene) {
 		this.material = new THREE.MeshBasicMaterial({
@@ -20,6 +22,19 @@ export class PrimedOverlay {
 			opacity: OPACITY_MIN + OPACITY_SWING,
 		});
 		this.geometry = new THREE.BoxGeometry(OVERLAY_SCALE, OVERLAY_SCALE, OVERLAY_SCALE);
+	}
+
+	/**
+	 * Draw the overlay material once now, instead of on the frame the first TNT is lit (measured:
+	 * a 48–56 ms first-draw frame at ignition; gl.compile alone did not remove it).
+	 */
+	warm(ticks = 30): void {
+		const probe = new THREE.Mesh(this.geometry, this.material);
+		probe.position.set(0, -1000, 0);
+		probe.frustumCulled = false;
+		this.scene.add(probe);
+		this.probe = probe;
+		this.probeTicks = ticks;
 	}
 
 	add(x: number, y: number, z: number): void {
@@ -40,6 +55,10 @@ export class PrimedOverlay {
 	}
 
 	tick(dt: number): void {
+		if (this.probe && --this.probeTicks <= 0) {
+			this.scene.remove(this.probe);
+			this.probe = null;
+		}
 		this.elapsed += dt;
 		const pulse = 0.5 + 0.5 * Math.sin(this.elapsed * PULSE_HZ);
 		this.material.opacity = OPACITY_MIN + OPACITY_SWING * pulse;

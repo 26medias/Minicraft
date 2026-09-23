@@ -429,6 +429,7 @@ async function main() {
 
 		const particles = new ParticleSystem(renderer.scene, renderer.material, atlas);
 		const overlay = new PrimedOverlay(renderer.scene);
+		overlay.warm();
 		const highlight = new FaceHighlight(renderer.scene);
 		const loop = new GameLoop(
 			world,

@@ -1,0 +1,34 @@
+import { describe, it, expect } from 'vitest';
+import { RECIPES } from './recipes.data';
+
+const flat = (id: string) => {
+	const r = RECIPES.find((x) => x.id === id)!;
+	return { output: r.output, needs: r.needs.map((n) => [n.anyOf.join('|'), n.count]) };
+};
+const LOGS = 'oak_log|birch_log|spruce_log|acacia_log|cherry_log';
+
+describe('RECIPES (spec §4 tables)', () => {
+	it('has the 7 pickaxes and 3 TNT rows, ids unique, one recipe per pickaxe tier 1–7 (catches a dropped or duplicated row)', () => {
+		expect(RECIPES.map((r) => r.id)).toEqual([
+			'wood_pickaxe', 'stone_pickaxe', 'copper_pickaxe', 'iron_pickaxe', 'gold_pickaxe', 'diamond_pickaxe', 'emerald_pickaxe', 'tnt', 'big_tnt', 'mega_tnt',
+		]);
+		const tiers = RECIPES.flatMap((r) => (r.output.kind === 'pickaxe' ? [r.output.tier] : []));
+		expect(tiers).toEqual([1, 2, 3, 4, 5, 6, 7]);
+	});
+
+	it('pickaxe ingredients match the table, plain ore before deepslate (catches a wrong count, or deepslate taken first)', () => {
+		expect(flat('wood_pickaxe').needs).toEqual([[LOGS, 8]]);
+		expect(flat('stone_pickaxe').needs).toEqual([['stone', 24], [LOGS, 4]]);
+		expect(flat('copper_pickaxe').needs).toEqual([['copper_ore|deepslate_copper_ore', 16], ['stone', 32]]);
+		expect(flat('iron_pickaxe').needs).toEqual([['iron_ore|deepslate_iron_ore', 16], ['stone', 48]]);
+		expect(flat('gold_pickaxe').needs).toEqual([['gold_ore|deepslate_gold_ore', 16], ['redstone_ore|deepslate_redstone_ore', 8]]);
+		expect(flat('diamond_pickaxe').needs).toEqual([['diamond_ore|deepslate_diamond_ore', 8], ['lapis_ore|deepslate_lapis_ore', 6]]);
+		expect(flat('emerald_pickaxe').needs).toEqual([['emerald_ore|deepslate_emerald_ore', 3], ['diamond_ore|deepslate_diamond_ore', 4], ['deepslate', 32]]);
+	});
+
+	it('TNT rows match the table (catches 1 TNT per craft instead of 2)', () => {
+		expect(flat('tnt')).toEqual({ output: { kind: 'block', name: 'tnt', count: 2 }, needs: [['sand', 5], ['coal_ore|deepslate_coal_ore', 4]] });
+		expect(flat('big_tnt')).toEqual({ output: { kind: 'block', name: 'big_tnt', count: 1 }, needs: [['tnt', 2], ['redstone_ore|deepslate_redstone_ore', 4]] });
+		expect(flat('mega_tnt')).toEqual({ output: { kind: 'block', name: 'mega_tnt', count: 1 }, needs: [['big_tnt', 2], ['lapis_ore|deepslate_lapis_ore', 4]] });
+	});
+});

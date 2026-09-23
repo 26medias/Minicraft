@@ -1,6 +1,6 @@
 import { describe, it, expect } from 'vitest';
 import * as THREE from 'three';
-import { faceTransform, HIGHLIGHT_EPS, FaceHighlight } from './face-highlight';
+import { faceTransform, HIGHLIGHT_EPS, FaceHighlight, HIGHLIGHT_AREA, HIGHLIGHT_WHITE, AREA_BOX_PAD } from './face-highlight';
 import type { Face } from '../../data/blocks.data';
 
 const NORMALS: Record<Face, [number, number, number]> = {
@@ -38,5 +38,42 @@ describe('FaceHighlight', () => {
 		h.hide();
 		expect(group.visible).toBe(false);
 		expect(scene.children.filter((c) => c instanceof THREE.Group)).toHaveLength(1);
+	});
+});
+describe('FaceHighlight.setArea (spec §5)', () => {
+	function parts() {
+		const scene = new THREE.Scene();
+		const h = new FaceHighlight(scene);
+		const group = scene.children.find((c) => c instanceof THREE.Group) as THREE.Group;
+		const box = scene.children.find((c) => c instanceof THREE.LineSegments) as THREE.LineSegments;
+		const border = (group.children[1] as THREE.Mesh).material as THREE.MeshBasicMaterial;
+		return { h, group, box, border };
+	}
+
+	it('multi-block: orange border and one box over the whole area, air included (catches a white or face-only warning)', () => {
+		const { h, box, border } = parts();
+		h.show(10, 20, 30, 'px');
+		h.setArea([8, 19, 29], [10, 21, 31], true);
+		expect(box.visible).toBe(true);
+		expect(border.color.getHex()).toBe(HIGHLIGHT_AREA);
+		expect(box.position.toArray()).toEqual([9.5, 20.5, 30.5]);
+		expect(box.scale.toArray()).toEqual([3 + 2 * AREA_BOX_PAD, 3 + 2 * AREA_BOX_PAD, 3 + 2 * AREA_BOX_PAD]);
+	});
+
+	it('single-cell tier: today\'s white face outline and no box (catches a box drawn for the hand, which changes every existing world\'s look)', () => {
+		const { h, box, border } = parts();
+		h.show(10, 20, 30, 'px');
+		h.setArea([8, 19, 29], [10, 21, 31], true);
+		h.setArea([10, 20, 30], [10, 20, 30], false);
+		expect(box.visible).toBe(false);
+		expect(border.color.getHex()).toBe(HIGHLIGHT_WHITE);
+	});
+
+	it('hide() hides the box too (catches an orange box left floating when the aim leaves reach)', () => {
+		const { h, box } = parts();
+		h.show(10, 20, 30, 'px');
+		h.setArea([8, 19, 29], [10, 21, 31], true);
+		h.hide();
+		expect(box.visible).toBe(false);
 	});
 });

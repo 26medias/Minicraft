@@ -7,6 +7,12 @@ const INSET = 0.005; // keep edges out of neighbouring blocks' planes
 const BORDER = 1 / 16; // one texel wide
 const FILL_OPACITY = 0.2;
 const BORDER_OPACITY = 0.85;
+/** Face border for a single-cell pickaxe tier (today's look). */
+export const HIGHLIGHT_WHITE = 0xffffff;
+/** Face border and area box for a multi-block tier (spec §5). */
+export const HIGHLIGHT_AREA = 0xff8c1a;
+/** The area box sits this far outside the cells so its edges do not z-fight with block edges. */
+export const AREA_BOX_PAD = 0.01;
 
 type Transform = { offset: readonly [number, number, number]; euler: readonly [number, number, number] };
 
@@ -49,6 +55,9 @@ function material(color: number, opacity: number, renderOrder: number) {
  */
 export class FaceHighlight {
 	private group = new THREE.Group();
+	private borderMaterial: THREE.MeshBasicMaterial;
+	/** Outline of the whole area (air cells included) for a multi-block tier; hidden for single-cell tiers. */
+	private box: THREE.LineSegments;
 
 	constructor(scene: THREE.Scene) {
 		const side = 1 - 2 * INSET;
@@ -57,7 +66,8 @@ export class FaceHighlight {
 		fillMesh.renderOrder = fill.renderOrder;
 		this.group.add(fillMesh);
 
-		const border = material(0xffffff, BORDER_OPACITY, 3);
+		const border = material(HIGHLIGHT_WHITE, BORDER_OPACITY, 3);
+		this.borderMaterial = border.m;
 		const horizontal = new THREE.PlaneGeometry(side, BORDER);
 		// Verticals stop short of the horizontals so corners are not painted twice.
 		const vertical = new THREE.PlaneGeometry(BORDER, side - 2 * BORDER);
@@ -76,6 +86,29 @@ export class FaceHighlight {
 
 		this.group.visible = false;
 		scene.add(this.group);
+
+		// Drawn over terrain (no depth test): the part of the area inside the wall is exactly what
+		// the warning is about. Unit cube edges, scaled and moved by setArea.
+		this.box = new THREE.LineSegments(
+			new THREE.EdgesGeometry(new THREE.BoxGeometry(1, 1, 1)),
+			new THREE.LineBasicMaterial({ color: HIGHLIGHT_AREA, transparent: true, opacity: 0.9, depthTest: false, depthWrite: false, fog: false }),
+		);
+		this.box.renderOrder = 4;
+		this.box.visible = false;
+		scene.add(this.box);
+	}
+
+	/**
+	 * The equipped tier's area around the aimed block, as inclusive integer corners (tools.areaBounds).
+	 * `multi` false: today's white face outline only. `multi` true: orange face outline plus the box.
+	 */
+	setArea(min: readonly [number, number, number], max: readonly [number, number, number], multi: boolean): void {
+		this.borderMaterial.color.setHex(multi ? HIGHLIGHT_AREA : HIGHLIGHT_WHITE);
+		this.box.visible = multi && this.group.visible;
+		if (!multi) return;
+		const sx = max[0] - min[0] + 1, sy = max[1] - min[1] + 1, sz = max[2] - min[2] + 1;
+		this.box.position.set(min[0] + sx / 2, min[1] + sy / 2, min[2] + sz / 2);
+		this.box.scale.set(sx + 2 * AREA_BOX_PAD, sy + 2 * AREA_BOX_PAD, sz + 2 * AREA_BOX_PAD);
 	}
 
 	show(x: number, y: number, z: number, face: Face): void {
@@ -87,5 +120,6 @@ export class FaceHighlight {
 
 	hide(): void {
 		this.group.visible = false;
+		this.box.visible = false;
 	}
 }

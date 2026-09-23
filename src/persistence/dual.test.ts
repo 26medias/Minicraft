@@ -465,6 +465,18 @@ describe('DualAdapter â€” same chunks, different player or mode (crafting spec Â
 		expect(await forks()).toHaveLength(0);
 	});
 
+	it('keeps a newer local copy whose only difference is a count', async () => {
+		// Catches: a player compare that ignores inventory. TNT crafted offline changes only the
+		// counts; with that bug the older cloud copy wins on reload and the crafted TNT is gone.
+		const withInv = (inventory: Record<string, number>, updatedAt: number) =>
+			save({ updatedAt, player: { ...save().player, inventory } });
+		await local.saveWorld(withInv({ sand: 0, tnt: 2 }, 3000));
+		const cloud = fakeCloud({ loadWorld: async () => ({ ...withInv({ sand: 5, tnt: 0 }, 2000), lastSyncedGeneration: '9' }) });
+		const got = await new DualAdapter(local, cloud).loadWorld(ID);
+		expect(got!.player.inventory).toEqual({ sand: 0, tnt: 2 });
+		expect(got!.localWon).toBe(true);
+	});
+
 	it('leaves the local stamp unchanged on disk when the local copy wins', async () => {
 		// Catches: adopt() in the local-wins branch, stamping the local copy with a
 		// generation whose content it does not match.

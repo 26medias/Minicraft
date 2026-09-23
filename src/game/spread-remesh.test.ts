@@ -2,7 +2,7 @@
 import { describe, it, expect, vi } from 'vitest';
 import { readFileSync, existsSync } from 'node:fs';
 import { makeLoop } from './test-loop';
-import { AIR, BLOCKS, BLOCK_BY_NAME, isSolid } from '../data/blocks.data';
+import { AIR, BLOCKS, BLOCK_BY_NAME, isLiquid, isSolid } from '../data/blocks.data';
 import { chunkIndex, indexOf } from '../engine/world/coords';
 import { ChunkJobs } from '../engine/world/chunk-jobs';
 import { manualWorkerFactory } from '../engine/world/chunk-jobs.test-utils';
@@ -173,5 +173,42 @@ describe('spread re-meshing (crafting spec §7)', () => {
 		expect(h.world.getBlock(271, 41, 267)).toBe(AIR);
 		expect(mounted).toContain(chunkIndex(16, 16));
 		expect(mounted).toContain(chunkIndex(17, 16));
+	}, 60_000);
+});
+describe('no drop cascade (crafting spec §7)', () => {
+	it('a full 3×3 blast through a 2-slot worker replying in order makes at most bulk-count + 1 posts of bulk chunks (catches onJobReply bumping every mounted neighbour\'s rev: each landing reply drops the other in-flight bulk job)', () => {
+		const { h, mw } = seededManual();
+		const L = lanes(h.loop);
+		// A 24 × 5 × 24 slab underground around chunk (21, 12), at the first depth where every chunk of its 3×3 loses
+		// blocks and no liquid touches it (seed 3 has a cavern under (22, 13) at y 38–46; lava flowing into the hole
+		// would put chunks in the edit lane through the liquid scheduler and hide the cascade).
+		const slab = (y0: number, pad: number) => {
+			const out: Array<{ x: number; y: number; z: number }> = [];
+			for (let x = 21 * 16 - 4 - pad; x < 22 * 16 + 4 + pad; x++) for (let z = 12 * 16 - 4 - pad; z < 13 * 16 + 4 + pad; z++) for (let y = y0 - pad; y < y0 + 5 + pad; y++) out.push({ x, y, z });
+			return out;
+		};
+		let y0 = 8;
+		for (; y0 < 100; y0++) {
+			if (slab(y0, 1).some((c) => isLiquid(h.world.getBlock(c.x, c.y, c.z)))) continue;
+			const hit = new Set(slab(y0, 0).filter((c) => removable(h.world.getBlock(c.x, c.y, c.z))).map((c) => chunkIndex(Math.floor(c.x / 16), Math.floor(c.z / 16))));
+			if (hit.size === 9) break;
+		}
+		expect(y0).toBeLessThan(100);
+		const cells = slab(y0, 0);
+		L.editLane.clear(); L.bulkLane!.clear(); L.shadowOnly.clear();
+		const { removed } = h.loop.removeBlocks(cells, { x: 21 * 16 + 8, y: y0 + 1, z: 12 * 16 + 8 });
+		expect(removed.length).toBeGreaterThan(500);
+		const bulk = [...L.bulkLane!];
+		for (let dx = -1; dx <= 1; dx++) for (let dz = -1; dz <= 1; dz++) if (dx || dz) expect(bulk).toContain(chunkIndex(21 + dx, 12 + dz));
+		const from = mw.posted.length;
+		let frames = 0;
+		for (; frames < 60 && L.bulkLane!.size > 0; frames++) {
+			h.tick(1 / 60);
+			mw.deliver(); // the worker answers both slots, oldest first
+		}
+		expect(L.bulkLane!.size).toBe(0);
+		expect(L.editLane.size).toBe(0);
+		const posts = mw.posted.slice(from).filter((p) => bulk.includes(chunkIndex(p.cx, p.cz))).length;
+		expect(posts).toBeLessThanOrEqual(bulk.length + 1);
 	}, 60_000);
 });

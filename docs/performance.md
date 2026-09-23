@@ -67,6 +67,15 @@ thread because its flood fill writes into neighbouring chunks.
   over the edit with a face missing, and nothing would re-mesh it. Checking identity catches a
   neighbour that was evicted and regenerated at a low `rev`.
 - **Dropped replies re-dirty** the chunk so the next frame posts it again.
+- **No drop cascade.** When a reply lands, the loop re-dirties its mounted axis neighbours (they sample
+  its `sunlit` at their border corners) and bumps their `rev` only if the chunk's `sunlitHash`
+  changed. Bumping them unconditionally, with 9-slot freshness, would drop every other in-flight job
+  whose 3×3 holds one of them: the replies of a blast's bulk chunks would invalidate each other in turn.
+- **Known stale seam (accepted).** A chunk's `sunlit` can change without its `rev` moving: the loop
+  shadows axis neighbours on the main thread before posting a chunk, and that recompute does not
+  re-dirty their own mounted neighbours. Those neighbours keep slightly stale border-corner shading
+  until something else re-meshes them. It is a shading difference at one corner row, never missing
+  geometry, and it predates crafting (spec §10 of the crafting design logs it here).
 - At most 2 jobs in flight. In-flight chunks are skipped by the stream lane.
 - The `Worker` is built through an injectable factory. Tests use an inline factory in
   `chunk-jobs.test-utils.ts` that routes payloads through `structuredClone` with transfer, so

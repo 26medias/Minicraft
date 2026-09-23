@@ -157,13 +157,14 @@ export class GameLoop {
 		return chebyshev(i, Math.floor(this.player.position[0] / 16), Math.floor(this.player.position[2] / 16)) <= MESH_RADIUS;
 	}
 
-	/** Fresh reply (identity + rev checked by ChunkJobs): store sunlit, mount, re-dirty mounted axis neighbours shadowOnly. */
+	/** Fresh reply (all 9 slots checked by ChunkJobs): store sunlit, mount, and re-dirty mounted axis neighbours shadowOnly if the sunlit changed. */
 	private onJobReply(c: Chunk, sunlit: Uint8Array, mesh: ChunkMeshResult): void {
 		const idx = chunkIndex(c.cx, c.cz);
 		this.inFlightIndex.delete(idx);
 		// A fresh reply means nothing in its 3×3 changed since the post, so a bulk chunk is done (or unwanted).
 		this.bulkLane.delete(idx);
 		if (!this.wanted(idx)) return; // player left: do not mount what the evictor would drop next frame
+		const before = c.sunlitHash;
 		c.sunlit.set(sunlit);
 		c.sunlitHash = hashSunlit(sunlit);
 		c.shadowsDirty = false;
@@ -171,6 +172,10 @@ export class GameLoop {
 		this.mountedChunks.add(idx);
 		// Seams (spec §3.D): mounted axis neighbours sample this chunk's final sunlit at their border
 		// corners → re-dirty them shadowOnly; the sunlitHash compare keeps most from re-meshing.
+		// Crafting spec §7, no drop cascade: only when this chunk's sunlit CHANGED. With 9-slot freshness a rev bump
+		// drops every in-flight job whose 3×3 holds the neighbour, so an unconditional bump made a blast's bulk replies
+		// invalidate each other in turn; with the hash unchanged the in-flight jobs copied valid data.
+		if (c.sunlitHash === before) return;
 		for (const n of axisNeighbours(this.world, c)) {
 			if (n && this.mountedChunks.has(chunkIndex(n.cx, n.cz))) {
 				n.shadowsDirty = true;

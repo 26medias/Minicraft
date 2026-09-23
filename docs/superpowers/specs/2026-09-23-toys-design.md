@@ -87,7 +87,7 @@ Crafting shipped and is "really fun". The parent asked for more recipes, inspire
   - its cell becomes AIR, and it is not counted;
   - no other block changes;
   - `ParticleSystem.spawnFirework(x, y, z, big)` sends a rocket 12 blocks up in 1 s, then about 60 sparkles in 3 random bright colours.
-- **Burst cap.** At most 8 bursts at once. Any extra burst is small (about 20 sparkles).
+- **Burst cap.** At most 8 big bursts at once; any extra burst is small (about 20 sparkles). At most 16 fireworks active at once: any extra one is dropped, so there is no rocket and no sparkles, though its block is still used up. That keeps the worst case at 640 sparkles (final review).
 - **Chains.** When primed by a chain it fires the same way.
 - **Recipe.** 1 sand + 2 coal ore → 3.
 
@@ -134,6 +134,7 @@ Crafting shipped and is "really fun". The parent asked for more recipes, inspire
   - Then **erode to stability**: drop any candidate that has a horizontal neighbour, or a cell below, which is neither solid nor itself a candidate. Repeat until nothing changes.
   - So water can never touch an open side or an open floor: no spill on a slope, over a cliff edge or into a cave under the crater.
 - **Writes.** Through `placeBlocks(cells, WATER, anchor)`, which updates light and wakes the liquids.
+- **Another TNT nearby.** If any other TNT-kind block (primed, already primed or waiting) within 13 blocks would reach a water cell (its radius + 1), the crater stays dry. A Tunnel or Flattening TNT in that range always keeps it dry. Its later blast would open the walls and drain the lake (final review: 166 water cells ran down a cliff).
 - **Recipe.** 2 TNT + 4 ice → 1.
 
 ## 4. Engine changes

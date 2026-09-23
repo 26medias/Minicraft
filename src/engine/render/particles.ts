@@ -20,6 +20,12 @@ export const FIREWORK_SPARKS_BIG = 60;
 export const FIREWORK_SPARKS_SMALL = 20;
 /** At most this many bursts (rocket in flight or sparkles alive) are big at once; any extra one is small. */
 export const FIREWORK_MAX_BURSTS = 8;
+/**
+ * At most this many fireworks (rocket or sparkles) are active at once; any extra one is dropped, with no rocket and
+ * no sparkles (its block is still used up). Worst case 8 × 60 + 8 × 20 = 640 sparkle meshes (final review: 200 at
+ * once gave 4,320 live meshes, one draw call each).
+ */
+export const FIREWORK_MAX_ACTIVE = 16;
 const SPARK_SIZE = 0.15;
 const SPARK_SPEED_MIN = 3;
 const SPARK_SPEED_MAX = 7;
@@ -97,6 +103,7 @@ export class ParticleSystem {
 	 * small (FIREWORK_SPARKS_SMALL) whatever `big` says.
 	 */
 	spawnFirework(x: number, y: number, z: number, big: boolean): void {
+		if (this.bursts.length >= FIREWORK_MAX_ACTIVE) return;
 		const sparks = big && this.bursts.length < FIREWORK_MAX_BURSTS ? FIREWORK_SPARKS_BIG : FIREWORK_SPARKS_SMALL;
 		const rocket = new THREE.Mesh(this.sparks(), this.sparkMaterial(0xffffff));
 		rocket.position.set(x, y, z);

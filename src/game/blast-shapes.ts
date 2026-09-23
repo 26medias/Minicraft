@@ -21,6 +21,8 @@ export const FLATTEN_HEIGHT = 12;
 export const LAKE_RING = 5;
 export const LAKE_SCAN = 8;
 export const LAKE_MAX_LAYERS = 4;
+/** How far around a Lake TNT to look for other TNT that could breach it later: the lake radius (4) + Mega's radius (8) + 1. */
+export const LAKE_TNT_SCAN = 13;
 /** Player collision box (player.ts SIZE): 0.6 wide, 1.8 tall, feet at position[1]. */
 const PLAYER_HALF_WIDTH = 0.3;
 const PLAYER_HEIGHT = 1.8;
@@ -133,6 +135,19 @@ export function lakeWater(world: World, ox: number, oy: number, oz: number, dest
 	const gone = new Set(destroyed.map((c) => key(c.x, c.y, c.z)));
 	const cand = new Map<string, Cell>();
 	for (const c of destroyed) if (c.y <= rimY && c.y > rimY - LAKE_MAX_LAYERS) cand.set(key(c.x, c.y, c.z), c);
+	// A TNT-kind block near the lake (primed by this blast, already primed, or waiting) can blow the walls open later
+	// and let the water run out (final review: 166 cells down a cliff). If any water cell is within its reach + 1 the
+	// crater stays dry: once that blast opens a hole, the connected lake drains through it. A Tunnel or Flattening TNT
+	// reaches the whole lake.
+	for (let dx = -LAKE_TNT_SCAN; dx <= LAKE_TNT_SCAN; dx++) for (let dy = -LAKE_TNT_SCAN; dy <= LAKE_TNT_SCAN; dy++) for (let dz = -LAKE_TNT_SCAN; dz <= LAKE_TNT_SCAN; dz++) {
+		const x = ox + dx, y = oy + dy, z = oz + dz;
+		if ((dx === 0 && dy === 0 && dz === 0) || !world.inBounds(x, y, z)) continue;
+		const spec = BLOCKS[world.getBlock(x, y, z)]?.tnt;
+		if (!spec) continue;
+		if (spec.shape === 'tunnel' || spec.shape === 'flatten') return [];
+		const reach = (spec.shape === 'dome' || spec.shape === 'firework' ? 0 : spec.radius) + 1;
+		for (const c of cand.values()) if (Math.hypot(c.x - x, c.y - y, c.z - z) <= reach) return [];
+	}
 	const holds = (x: number, y: number, z: number): boolean => {
 		const k = key(x, y, z);
 		if (cand.has(k)) return true;

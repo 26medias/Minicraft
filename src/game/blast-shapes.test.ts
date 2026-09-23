@@ -349,6 +349,32 @@ describe('lake (toys spec §3.7)', () => {
 		sealed(w, r);
 	});
 
+	it('a TNT in the crater wall (primed by the lake, it goes off 0.1 s later): the crater stays dry (final review: its blast opened the wall and 166 water cells ran down a cliff; catches erosion that counts a primed TNT as a wall)', () => {
+		const w = emptyWorld();
+		fill(w, O.x - 10, O.x + 10, O.y - 10, O.y + 5, O.z - 10, O.z + 10, stone);
+		const T = { x: O.x + 3, y: O.y - 2, z: O.z };
+		w.setBlock(T.x, T.y, T.z, BLOCK_BY_NAME['tnt'].id);
+		const r = run(w);
+		expect(r.primed.map((p) => `${p.x},${p.y},${p.z}`)).toContain(`${T.x},${T.y},${T.z}`);
+		expect(r.water).toEqual([]); // its blast will open the lake, so the crater stays dry
+	});
+
+	it('a TNT outside the lake\'s reach does not dry it (catches drying the lake for any TNT in the scan box)', () => {
+		const w = emptyWorld();
+		fill(w, O.x - 20, O.x + 20, O.y - 10, O.y + 5, O.z - 20, O.z + 20, stone);
+		w.setBlock(O.x + 12, O.y - 2, O.z, BLOCK_BY_NAME['tnt'].id); // radius 3: reach 4 falls short of the lake
+		expect(run(w).water).toHaveLength(104);
+	});
+
+	it('a Tunnel or Flattening TNT near the crater: no water at all (their reach is the whole lake; catches only sphere reaches being considered)', () => {
+		for (const name of ['tunnel_tnt', 'flatten_tnt']) {
+			const w = emptyWorld();
+			fill(w, O.x - 10, O.x + 10, O.y - 10, O.y + 5, O.z - 10, O.z + 10, stone);
+			w.setBlock(O.x - 3, O.y - 1, O.z, BLOCK_BY_NAME[name].id);
+			expect(run(w).water, name).toEqual([]);
+		}
+	});
+
 	it('next to his build (Review Focus 2): a wall on the ring and a cellar dug beside the crater — no water in the layer that touches the cellar, every water cell sealed (catches erosion that counts an air cell outside the crater as a wall)', () => {
 		const w = emptyWorld();
 		flatGround(w);
@@ -363,14 +389,13 @@ describe('lake (toys spec §3.7)', () => {
 		expect(layers(r.water!)).toEqual({ '-3': 21, '-4': 1 });
 	});
 
-	it('chain rule: a TNT in the crater is primed, not removed, and gets no water (catches a lake that removes or floods TNT)', () => {
+	it('chain rule: a TNT in the crater is primed, not removed, and the crater stays dry (catches a lake that removes or floods TNT; final review: its later blast would drain the lake)', () => {
 		const w = emptyWorld();
 		flatGround(w);
 		w.setBlock(O.x + 1, O.y - 2, O.z, tnt);
 		const r = run(w);
 		expect(r.primed).toEqual([{ x: O.x + 1, y: O.y - 2, z: O.z, radius: 3, blockId: tnt }]);
 		expect(keys(r.destroyed).has(`${O.x + 1},${O.y - 2},${O.z}`)).toBe(false);
-		expect(r.water).toHaveLength(58);
-		expect(keys(r.water!).has(`${O.x + 1},${O.y - 2},${O.z}`)).toBe(false);
+		expect(r.water).toEqual([]);
 	});
 });

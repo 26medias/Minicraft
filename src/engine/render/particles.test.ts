@@ -1,7 +1,7 @@
 // Toys spec §3.3: ParticleSystem.spawnFirework — a rocket 12 blocks up in 1 s, then a burst; at most 8 big bursts at once.
 import { describe, it, expect } from 'vitest';
 import * as THREE from 'three';
-import { FIREWORK_MAX_BURSTS, FIREWORK_RISE, FIREWORK_SPARKS_BIG, FIREWORK_SPARKS_SMALL, ParticleSystem } from './particles';
+import { FIREWORK_MAX_ACTIVE, FIREWORK_MAX_BURSTS, FIREWORK_RISE, FIREWORK_SPARKS_BIG, FIREWORK_SPARKS_SMALL, ParticleSystem } from './particles';
 import type { LoadedAtlas } from './atlas';
 
 function system() {
@@ -40,6 +40,16 @@ describe('spawnFirework (toys spec §3.3)', () => {
 		ps.spawnFirework(0, 40, 0, true);
 		ps.tick(1);
 		expect(scene.children).toHaveLength(FIREWORK_SPARKS_BIG);
+	});
+
+	it('200 fireworks at once never exceed FIREWORK_MAX_ACTIVE bursts: extra ones are dropped (final review: 200 gave 4,320 live meshes in one frame; catches a cap on burst size only)', () => {
+		const { scene, ps } = system();
+		for (let i = 0; i < 200; i++) ps.spawnFirework(i, 40, 0, true);
+		expect(scene.children).toHaveLength(FIREWORK_MAX_ACTIVE); // rockets
+		ps.tick(1);
+		const cap = FIREWORK_MAX_BURSTS * FIREWORK_SPARKS_BIG + (FIREWORK_MAX_ACTIVE - FIREWORK_MAX_BURSTS) * FIREWORK_SPARKS_SMALL;
+		expect(scene.children.length).toBeLessThanOrEqual(cap);
+		expect(cap).toBeLessThanOrEqual(640);
 	});
 
 	it('big = false is always the small burst (catches the flag ignored)', () => {

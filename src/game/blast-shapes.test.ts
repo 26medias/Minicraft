@@ -210,3 +210,167 @@ describe('sphere regression (toys spec §4)', () => {
 		}
 	}, 60_000);
 });
+
+const glass = BLOCK_BY_NAME['glass'].id;
+const bomb = BLOCK_BY_NAME['block_bomb'].id, fireworks = BLOCK_BY_NAME['fireworks'].id, lake = BLOCK_BY_NAME['lake_tnt'].id;
+/** The player's box standing at feet (O.x + 5.5, O.y, O.z + 0.5): it overlaps exactly (O.x + 5, O.y, O.z) and (O.x + 5, O.y + 1, O.z). */
+const PLAYER = { min: [O.x + 5.2, O.y, O.z + 0.2] as [number, number, number], max: [O.x + 5.8, O.y + 1.8, O.z + 0.8] as [number, number, number] };
+
+describe('dome (toys spec §3.5)', () => {
+	it('glass goes only into AIR cells of the 4.5 < d ≤ 5.5 shell: 350 in open air; its own cell is removed; nothing is primed (catches a dome over solid blocks or water, a solid ball, or one that chains TNT)', () => {
+		const w = emptyWorld();
+		w.setBlock(O.x, O.y, O.z, bomb);
+		const open = detonate(w, O.x, O.y, O.z, never, 5, { shape: 'dome' });
+		expect(open.build!.blockId).toBe(glass);
+		expect(open.build!.cells).toHaveLength(350);
+		for (const c of open.build!.cells) {
+			const d2 = (c.x - O.x) ** 2 + (c.y - O.y) ** 2 + (c.z - O.z) ** 2;
+			expect(d2).toBeGreaterThan(20.25);
+			expect(d2).toBeLessThanOrEqual(30.25);
+		}
+		// A part-built area: stone, water and a TNT on the shell, a TNT inside.
+		w.setBlock(O.x + 5, O.y, O.z, stone);
+		w.setBlock(O.x - 5, O.y, O.z, water);
+		w.setBlock(O.x, O.y + 5, O.z, tnt);
+		w.setBlock(O.x + 2, O.y, O.z, tnt);
+		const r = detonate(w, O.x, O.y, O.z, never, 5, { shape: 'dome' });
+		const k = keys(r.build!.cells);
+		expect(r.build!.cells).toHaveLength(347);
+		for (const c of [[O.x + 5, O.y, O.z], [O.x - 5, O.y, O.z], [O.x, O.y + 5, O.z]]) expect(k.has(c.join(',')), c.join(',')).toBe(false);
+		for (const c of r.build!.cells) expect(w.getBlock(c.x, c.y, c.z)).toBe(AIR);
+		expect(r.destroyed).toEqual([O]);
+		expect(r.primed).toEqual([]);
+		expect(r.water ?? r.effect).toBeUndefined();
+	});
+
+	it('no glass in a cell the player\'s box overlaps (catches glass sealed into his body)', () => {
+		const w = emptyWorld();
+		w.setBlock(O.x, O.y, O.z, bomb);
+		const r = detonate(w, O.x, O.y, O.z, never, 5, { shape: 'dome', player: PLAYER });
+		const k = keys(r.build!.cells);
+		expect(r.build!.cells).toHaveLength(348);
+		expect(k.has(`${O.x + 5},${O.y},${O.z}`)).toBe(false);
+		expect(k.has(`${O.x + 5},${O.y + 1},${O.z}`)).toBe(false);
+		expect(k.has(`${O.x + 5},${O.y + 2},${O.z}`)).toBe(true); // just above his head: glass
+	});
+});
+
+describe('firework (toys spec §3.3)', () => {
+	it('removes only its own cell, primes nothing, and asks for the firework effect (catches a firework that blasts like TNT or chains its neighbours)', () => {
+		const w = emptyWorld();
+		w.setBlock(O.x, O.y, O.z, fireworks);
+		w.setBlock(O.x + 1, O.y, O.z, stone);
+		w.setBlock(O.x, O.y + 1, O.z, tnt);
+		w.setBlock(O.x - 1, O.y, O.z, fireworks);
+		const r = detonate(w, O.x, O.y, O.z, never, 0, { shape: 'firework' });
+		expect(r).toStrictEqual({ destroyed: [O], primed: [], effect: 'firework' });
+	});
+});
+
+describe('lake (toys spec §3.7)', () => {
+	const flatGround = (w: World) => fill(w, O.x - 10, O.x + 10, O.y - 10, O.y - 1, O.z - 10, O.z + 10, stone);
+	const run = (w: World) => { w.setBlock(O.x, O.y, O.z, lake); return detonate(w, O.x, O.y, O.z, never, 4, { shape: 'lake' }); };
+	const layers = (cells: Cell[]) => {
+		const m = new Map<number, number>();
+		for (const c of cells) m.set(c.y - O.y, (m.get(c.y - O.y) ?? 0) + 1);
+		return Object.fromEntries([...m].sort((a, b) => b[0] - a[0]));
+	};
+	/** Every water cell sits on water or post-blast solid, with water or post-blast solid on all four sides. */
+	const sealed = (w: World, r: { destroyed: Cell[]; water?: Cell[] }) => {
+		const wet = keys(r.water ?? []), gone = keys(r.destroyed);
+		const holds = (x: number, y: number, z: number) => wet.has(`${x},${y},${z}`) || (!gone.has(`${x},${y},${z}`) && isSolid(w.getBlock(x, y, z)));
+		for (const { x, y, z } of r.water ?? [])
+			for (const [nx, ny, nz] of [[x, y - 1, z], [x + 1, y, z], [x - 1, y, z], [x, y, z + 1], [x, y, z - 1]])
+				expect(holds(nx, ny, nz), `water ${x},${y},${z} open at ${nx},${ny},${nz}`).toBe(true);
+	};
+
+	it('the crater is the radius-4 sphere, exactly as today\'s detonate at radius 4 (catches a lake with its own crater shape)', () => {
+		const w = emptyWorld();
+		flatGround(w);
+		const r = run(w);
+		const sphere = detonate(w, O.x, O.y, O.z, never, 4);
+		expect(r.destroyed).toEqual(sphere.destroyed);
+	});
+
+	it('flat ground: 59 water cells in 3 layers, 37 + 21 + 1, all inside the crater, top at y − 2 (catches rimY = rim top, which floods the layer the TNT sat on)', () => {
+		const w = emptyWorld();
+		flatGround(w);
+		const r = run(w);
+		expect(r.water).toHaveLength(59);
+		expect(layers(r.water!)).toEqual({ '-2': 37, '-3': 21, '-4': 1 });
+		const crater = keys(r.destroyed);
+		for (const c of r.water!) expect(crater.has(key(c))).toBe(true);
+		sealed(w, r);
+	});
+
+	it('floating ground (an island whose edge is inside the ring): no water (catches a rim ring at radius 4, which stands on the island itself)', () => {
+		const w = emptyWorld();
+		for (let dx = -5; dx <= 5; dx++) for (let dz = -5; dz <= 5; dz++)
+			if (dx * dx + dz * dz <= 20) fill(w, O.x + dx, O.x + dx, O.y - 6, O.y - 1, O.z + dz, O.z + dz, stone);
+		const r = run(w);
+		expect(r.destroyed.length).toBeGreaterThan(50);
+		expect(r.water).toEqual([]);
+	});
+
+	it('a 1-step slope (ground at y − 1 for dx ≤ 0, y − 2 for dx ≥ 1): water only up to the low rim, y − 3, and sealed (catches the high rim setting the level)', () => {
+		const w = emptyWorld();
+		fill(w, O.x - 10, O.x, O.y - 10, O.y - 1, O.z - 10, O.z + 10, stone);
+		fill(w, O.x + 1, O.x + 10, O.y - 10, O.y - 2, O.z - 10, O.z + 10, stone);
+		const r = run(w);
+		expect(layers(r.water!)).toEqual({ '-3': 21, '-4': 1 });
+		sealed(w, r);
+	});
+
+	it('a 2-step slope (ground at y − 1 for dx ≤ 0, y − 3 for dx ≥ 1): only the bottom cell, nothing touching the open side (catches max instead of min over the rim: 22 cells, level with the low ground)', () => {
+		const w = emptyWorld();
+		fill(w, O.x - 10, O.x, O.y - 10, O.y - 1, O.z - 10, O.z + 10, stone);
+		fill(w, O.x + 1, O.x + 10, O.y - 10, O.y - 3, O.z - 10, O.z + 10, stone);
+		const r = run(w);
+		expect(r.water).toEqual([{ x: O.x, y: O.y - 4, z: O.z }]);
+		sealed(w, r);
+	});
+
+	it('a cave under the crater: erosion empties the lake, 0 water and no spill (catches a lake without erosion, or erosion that ignores the cell below)', () => {
+		const w = emptyWorld();
+		flatGround(w);
+		for (let dx = -3; dx <= 3; dx++) for (let dz = -3; dz <= 3; dz++)
+			if (dx * dx + dz * dz <= 9) fill(w, O.x + dx, O.x + dx, O.y - 7, O.y - 5, O.z + dz, O.z + dz, AIR);
+		const r = run(w);
+		expect(r.water).toEqual([]);
+	});
+
+	it('buried in solid ground: 4 layers and never more, 104 cells, none at or above the TNT\'s y (catches the level set at the rim top)', () => {
+		const w = emptyWorld();
+		fill(w, O.x - 10, O.x + 10, O.y - 10, O.y + 5, O.z - 10, O.z + 10, stone);
+		const r = run(w);
+		expect(layers(r.water!)).toEqual({ '-1': 45, '-2': 37, '-3': 21, '-4': 1 });
+		const ys = r.water!.map((c) => c.y);
+		expect(Math.max(...ys) - Math.min(...ys) + 1).toBeLessThanOrEqual(4);
+		sealed(w, r);
+	});
+
+	it('next to his build (Review Focus 2): a wall on the ring and a cellar dug beside the crater — no water in the layer that touches the cellar, every water cell sealed (catches erosion that counts an air cell outside the crater as a wall)', () => {
+		const w = emptyWorld();
+		flatGround(w);
+		const cobble = BLOCK_BY_NAME['cobblestone'].id;
+		// His house: a cobblestone wall standing on the ring at dx = 5, and its cellar under it, dx 4..8, y − 4..y − 2.
+		// The crater cell (O.x + 3, O.y − 2, O.z) touches the cellar at (O.x + 4, O.y − 2, O.z).
+		fill(w, O.x + 5, O.x + 5, O.y, O.y + 3, O.z - 3, O.z + 3, cobble);
+		fill(w, O.x + 4, O.x + 8, O.y - 4, O.y - 2, O.z - 2, O.z + 2, AIR);
+		const r = run(w);
+		sealed(w, r);
+		for (const c of r.water!) expect(c.x - O.x, key(c)).toBeLessThan(4);
+		expect(layers(r.water!)).toEqual({ '-3': 21, '-4': 1 });
+	});
+
+	it('chain rule: a TNT in the crater is primed, not removed, and gets no water (catches a lake that removes or floods TNT)', () => {
+		const w = emptyWorld();
+		flatGround(w);
+		w.setBlock(O.x + 1, O.y - 2, O.z, tnt);
+		const r = run(w);
+		expect(r.primed).toEqual([{ x: O.x + 1, y: O.y - 2, z: O.z, radius: 3, blockId: tnt }]);
+		expect(keys(r.destroyed).has(`${O.x + 1},${O.y - 2},${O.z}`)).toBe(false);
+		expect(r.water).toHaveLength(58);
+		expect(keys(r.water!).has(`${O.x + 1},${O.y - 2},${O.z}`)).toBe(false);
+	});
+});

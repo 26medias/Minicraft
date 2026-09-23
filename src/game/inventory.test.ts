@@ -127,9 +127,10 @@ describe('autoHotbar (spec §3)', () => {
 		expect(autoHotbar(full, 0, { stone: 1, dirt: 1, sand: 1, iron_ore: 1, coal_ore: 1 }, [coal], true)).toBeNull();
 	});
 
-	it('a block already on the hotbar does not move (catches a second copy in another slot)', () => {
-		expect(autoHotbar(bar(), 0, { stone: 1 }, [stone], true)).toBeNull();
-		expect(autoHotbar(bar(), 3, { sand: 1 }, [sand], true)).toBeNull();
+	it('a block already on the hotbar does not move (catches a second copy in another slot, and a check of only the selected slot)', () => {
+		// Selected slot 5 (planks) never holds the risen block, so a "selected slot only" check would add a copy.
+		expect(autoHotbar(bar(), 5, { stone: 1 }, [stone], true)).toBeNull();
+		expect(autoHotbar(bar(), 5, { sand: 1 }, [sand], true)).toBeNull();
 	});
 
 	it('is a no-op in unlimited worlds and for free blocks (catches the rule leaking into existing worlds)', () => {
@@ -147,5 +148,5 @@ describe('autoHotbar (spec §3)', () => {
 it('a block already on the hotbar twice is not added a third time (catches the "not on hotbar" check scanning only the selected slot)', () => {
 	const stone = BLOCK_BY_NAME['stone'].id;
 	const hotbar = [stone, stone, AIR, AIR, AIR, AIR, AIR, AIR, AIR];
-	expect(autoHotbar(hotbar, 4, { stone: 3 }, [stone], true)).toBeNull(); // selected slot 4 is empty: the check must scan the whole bar
+	expect(autoHotbar(hotbar, 4, { stone: 3 }, [stone], true)).toBeNull(); // selected slot 4 is empty: a check of only the selected slot would add a third stone
 });

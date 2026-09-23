@@ -7,12 +7,12 @@ import { meshChunk, type ChunkMeshResult, type UvFn } from '../engine/world/mesh
 import { computeChunkShadows, ensureShadowNeighbourhood, hashSunlit } from '../engine/world/shadows';
 import type { ChunkJobs } from '../engine/world/chunk-jobs';
 import { raycastVoxel, type VoxelHit } from '../engine/input/raycast';
-import { AIR, BLOCKS, BLOCK_BY_NAME, isSolid, type BlockId } from '../data/blocks.data';
+import { AIR, BLOCKS, BLOCK_BY_NAME, isSolid, type BlockId, type Face } from '../data/blocks.data';
 import type { ParticleSystem } from '../engine/render/particles';
 import type { PrimedOverlay } from '../engine/render/primed-overlay';
 import type { LightRegistry } from '../engine/render/light-registry';
 import type { FaceHighlight } from '../engine/render/face-highlight';
-import { canReplace, igniteTnt, type PrimedEntry } from './actions';
+import { canReplace, igniteTnt, placeBlock, type PrimedEntry } from './actions';
 import { detonate, tntKey, TNT_CHAIN_FUSE, TNT_PRIME_FUSE } from './tnt';
 import { updateLightsForBlockChange } from '../engine/world/lighting';
 import { LiquidScheduler } from './liquid-scheduler';
@@ -20,6 +20,9 @@ import { chunkIndex, chunkIndexOrNeg, WORLD_CHUNKS_Z } from '../engine/world/coo
 import { planFrame, chebyshev, budgetFor, MESH_RADIUS, UNMOUNT_RADIUS, DATA_RADIUS } from './chunk-scheduler';
 
 const LAMP_ID = BLOCK_BY_NAME['lamp'].id;
+const FACE_OFFSET: Readonly<Record<Face, [number, number, number]>> = {
+	px: [1, 0, 0], nx: [-1, 0, 0], py: [0, 1, 0], ny: [0, -1, 0], pz: [0, 0, 1], nz: [0, 0, -1],
+};
 /** Crafting spec §7: break particles for at most this many cells of one removeBlocks batch. */
 const REMOVE_PARTICLE_CAP = 16;
 
@@ -379,6 +382,23 @@ export class GameLoop {
 		// lights.add must precede applyLightUpdate, which reads the colour back.
 		if (newId === LAMP_ID) this.lights?.add(x, y, z, lampColor);
 		this.markChunkDirtyAround(x, z);
+		this.applyLightUpdate(x, y, z);
+		this.onWorldMutated?.();
+		return true;
+	}
+
+	/**
+	 * Right click: build against the aimed face. Moved from main.ts unchanged (place.ts calls it):
+	 * refused when the target cell is solid or inside the player; the lamp registers its colour
+	 * before the relight reads it; the re-mesh is around the HIT column, as main.ts always did.
+	 * Fires onWorldMutated (main.ts: autosave.markDirty, as the old handler did).
+	 */
+	placeBlock(hit: VoxelHit, id: BlockId, lampColor: string): boolean {
+		if (!placeBlock(this.world, hit, id, { position: this.player.position, size: [0.6, 1.8, 0.6] })) return false;
+		const [dx, dy, dz] = FACE_OFFSET[hit.face];
+		const x = hit.x + dx, y = hit.y + dy, z = hit.z + dz;
+		if (id === LAMP_ID) this.lights?.add(x, y, z, lampColor);
+		this.markChunkDirtyAround(hit.x, hit.z);
 		this.applyLightUpdate(x, y, z);
 		this.onWorldMutated?.();
 		return true;

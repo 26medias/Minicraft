@@ -8,7 +8,7 @@ import { Player, findSafeSpawn, type Keys } from './game/player';
 import { GameLoop } from './game/loop';
 import { ChunkJobs, type WorkerLike } from './engine/world/chunk-jobs';
 import { raycastVoxel } from './engine/input/raycast';
-import { placeBlock } from './game/actions';
+import { tryPlace, applyRemoved } from './game/place';
 import { Hud } from './ui/hud';
 import { PerfOverlay } from './ui/perf-overlay';
 import { MainMenu } from './ui/menu';
@@ -21,7 +21,7 @@ import { AutoSave } from './persistence/autosave';
 import { ParticleSystem } from './engine/render/particles';
 import { PrimedOverlay } from './engine/render/primed-overlay';
 import { FaceHighlight } from './engine/render/face-highlight';
-import { AIR, BLOCKS, BLOCK_BY_NAME, type BlockId } from './data/blocks.data';
+import { BLOCKS, BLOCK_BY_NAME, type BlockId } from './data/blocks.data';
 import { loadOptions, saveOptions } from './persistence/options';
 import { LightRegistry } from './engine/render/light-registry';
 import { ColorPicker } from './ui/color-picker';
@@ -420,7 +420,14 @@ async function main() {
 				};
 			});
 		};
-		loop.onBlockBroken = () => autosave.markDirty();
+		// Spec §2: every block the player's actions remove counts +1; in must-mine worlds a block
+		// that just became available joins the hotbar (§3). Every count change marks the save dirty.
+		const countRemoved = (ids: BlockId[]) => {
+			if (applyRemoved(player, ids, mustMine)) syncHotbar();
+			autosave.markDirty();
+		};
+		loop.onBlockBroken = (ev) => countRemoved([ev.blockId]);
+		loop.onBlocksRemoved = (removed) => countRemoved(removed.map((r) => r.blockId));
 		loop.onWorldMutated = () => autosave.markDirty();
 		loop.onMiningProgress = (p) => hud.setMiningProgress(p);
 		loop.onFlyStateChange = (tier) => hud.setFlySpeed(tier);
@@ -487,38 +494,10 @@ async function main() {
 				const dir = cam.getLookDir();
 				const hit = raycastVoxel(world, eye, [dir.x, dir.y, dir.z], REACH);
 				if (!hit) return;
-				const id = player.hotbar[player.selected];
-				if (id === undefined || id === AIR) return;
-				if (e.shiftKey) {
-					// Replace the aimed block instead of building next to it. All the
-					// shared guards above (paused, pointer lock, hit, non-empty slot)
-					// have already run; replaceBlock marks autosave dirty itself.
-					loop.replaceBlock(hit, id, opts.currentLightColor);
-					return;
-				}
-				const placed = placeBlock(world, hit, id, {
-					position: player.position,
-					size: [0.6, 1.8, 0.6],
-				});
-				if (!placed) return;
-				const FACE_OFFSET: Record<string, [number, number, number]> = {
-					px: [1, 0, 0],
-					nx: [-1, 0, 0],
-					py: [0, 1, 0],
-					ny: [0, -1, 0],
-					pz: [0, 0, 1],
-					nz: [0, 0, -1],
-				};
-				const [dx, dy, dz] = FACE_OFFSET[hit.face];
-				const placedX = hit.x + dx,
-					placedY = hit.y + dy,
-					placedZ = hit.z + dz;
-				if (id === BLOCK_BY_NAME['lamp'].id) {
-					lights.add(placedX, placedY, placedZ, opts.currentLightColor);
-				}
-				loop.markChunkDirtyAround(hit.x, hit.z);
-				loop.applyLightUpdate(placedX, placedY, placedZ);
-				autosave.markDirty();
+				// Shift replaces the aimed block instead of building next to it. tryPlace owns the
+				// count refusal, the world write and the count update; the loop's placeBlock /
+				// replaceBlock fire onWorldMutated, which marks the save dirty.
+				tryPlace({ loop, world, player, hit, shift: e.shiftKey, mustMine, lampColor: opts.currentLightColor });
 			}
 		});
 

@@ -14,7 +14,7 @@ import type { LightRegistry } from '../engine/render/light-registry';
 import type { FaceHighlight } from '../engine/render/face-highlight';
 import { canReplace, igniteTnt, placeBlock, type PrimedEntry } from './actions';
 import { tntKey, TNT_CHAIN_FUSE } from './tnt';
-import { detonate } from './blast-shapes';
+import { cellInBox, detonate, playerBox } from './blast-shapes';
 import { updateLightsForBlockChange } from '../engine/world/lighting';
 import { LiquidScheduler } from './liquid-scheduler';
 import { chunkIndex, chunkIndexOrNeg, WORLD_CHUNKS_Z } from '../engine/world/coords';
@@ -367,9 +367,7 @@ export class GameLoop {
 		const removed: BlockBrokenEvent[] = [];
 		const stride = Math.max(1, Math.ceil(cells.length / REMOVE_PARTICLE_CAP));
 		let k = 0;
-		const dirty = new Set<number>(); // blocks or light changed, or a removed cell sits on its border
-		const shadow = new Map<number, Chunk>(); // south-east shadow neighbours of each removed cell's chunk
-		const getLampColor = (lx: number, ly: number, lz: number): string | null => this.lights?.getColor(lx, ly, lz) ?? null;
+		const batch = this.newBatch();
 		for (const { x, y, z } of cells) {
 			if (!isRemovable(this.world, x, y, z)) continue;
 			const id = this.world.getBlock(x, y, z);
@@ -377,32 +375,71 @@ export class GameLoop {
 			this.clearBlockEffects(x, y, z, id, k++ % stride === 0);
 			this.world.setBlock(x, y, z, AIR);
 			removed.push({ x, y, z, blockId: id });
-			const t0 = performance.now();
-			const touched = updateLightsForBlockChange(this.world, x, y, z, getLampColor);
-			this.stats.lightMs += performance.now() - t0;
-			for (const c of touched) {
-				c.shadowsDirty = true;
-				c.rev++;
-				dirty.add(chunkIndex(c.cx, c.cz));
-			}
-			const cx = Math.floor(x / 16), cz = Math.floor(z / 16);
-			const lx = x - cx * 16, lz = z - cz * 16;
-			dirty.add(chunkIndex(cx, cz));
-			for (const [ex, ez, on] of [[cx - 1, cz, lx === 0], [cx + 1, cz, lx === 15], [cx, cz - 1, lz === 0], [cx, cz + 1, lz === 15]] as const) {
-				const i = on ? chunkIndexOrNeg(ex, ez) : -1;
-				if (i >= 0) dirty.add(i);
-			}
-			const edited = this.world.getChunk(cx, cz)!;
-			edited.shadowsDirty = true;
-			edited.rev++;
-			for (const n of [this.world.getChunk(cx + 1, cz), this.world.getChunk(cx, cz + 1), this.world.getChunk(cx + 1, cz + 1)]) {
-				if (!n) continue;
-				n.shadowsDirty = true;
-				n.rev++;
-				shadow.set(chunkIndex(n.cx, n.cz), n);
-			}
+			this.batchCell(batch, x, y, z);
 		}
-		if (removed.length === 0) return { removed };
+		if (removed.length > 0) this.routeBatch(batch, anchor);
+		return { removed };
+	}
+
+	/**
+	 * Toys spec §3.5 / §3.7: write `blockId` into a batch of cells (dome glass, lake water), the mirror of removeBlocks.
+	 * Skips out-of-bounds cells, every cell that is not AIR (solid blocks, liquids) and every cell the player's box
+	 * overlaps. Per cell: world.setBlock (wakes liquids, sets `modified`) and the per-block light update; then the anchor
+	 * chunk goes to the edit lane and every other touched chunk to the bulk lane, exactly as removeBlocks routes.
+	 * Placed blocks are free: nothing is counted and no event fires. Not for lamps (no light registry colour is set).
+	 */
+	placeBlocks(cells: ReadonlyArray<{ x: number; y: number; z: number }>, blockId: BlockId, anchor: { x: number; y: number; z: number }): { placed: Array<{ x: number; y: number; z: number }> } {
+		const placed: Array<{ x: number; y: number; z: number }> = [];
+		const box = playerBox(this.player.position);
+		const batch = this.newBatch();
+		for (const { x, y, z } of cells) {
+			if (!this.world.inBounds(x, y, z) || this.world.getBlock(x, y, z) !== AIR || cellInBox(x, y, z, box)) continue;
+			this.world.setBlock(x, y, z, blockId);
+			placed.push({ x, y, z });
+			this.batchCell(batch, x, y, z);
+		}
+		if (placed.length > 0) this.routeBatch(batch, anchor);
+		return { placed };
+	}
+
+	/** One batch's bookkeeping: chunks whose blocks or light changed (or that border a changed cell), and SE shadow neighbours. */
+	private newBatch(): { dirty: Set<number>; shadow: Map<number, Chunk> } {
+		return { dirty: new Set<number>(), shadow: new Map<number, Chunk>() };
+	}
+
+	/** After the world write of one batch cell: the per-block light update and the chunk bookkeeping (removeBlocks' loop body). */
+	private batchCell(batch: { dirty: Set<number>; shadow: Map<number, Chunk> }, x: number, y: number, z: number): void {
+		const { dirty, shadow } = batch;
+		const getLampColor = (lx: number, ly: number, lz: number): string | null => this.lights?.getColor(lx, ly, lz) ?? null;
+		const t0 = performance.now();
+		const touched = updateLightsForBlockChange(this.world, x, y, z, getLampColor);
+		this.stats.lightMs += performance.now() - t0;
+		for (const c of touched) {
+			c.shadowsDirty = true;
+			c.rev++;
+			dirty.add(chunkIndex(c.cx, c.cz));
+		}
+		const cx = Math.floor(x / 16), cz = Math.floor(z / 16);
+		const lx = x - cx * 16, lz = z - cz * 16;
+		dirty.add(chunkIndex(cx, cz));
+		for (const [ex, ez, on] of [[cx - 1, cz, lx === 0], [cx + 1, cz, lx === 15], [cx, cz - 1, lz === 0], [cx, cz + 1, lz === 15]] as const) {
+			const i = on ? chunkIndexOrNeg(ex, ez) : -1;
+			if (i >= 0) dirty.add(i);
+		}
+		const edited = this.world.getChunk(cx, cz)!;
+		edited.shadowsDirty = true;
+		edited.rev++;
+		for (const n of [this.world.getChunk(cx + 1, cz), this.world.getChunk(cx, cz + 1), this.world.getChunk(cx + 1, cz + 1)]) {
+			if (!n) continue;
+			n.shadowsDirty = true;
+			n.rev++;
+			shadow.set(chunkIndex(n.cx, n.cz), n);
+		}
+	}
+
+	/** A batch's lanes: the anchor's chunk to the edit lane, every other dirty chunk to the bulk lane, SE shadow neighbours shadow-only. */
+	private routeBatch(batch: { dirty: Set<number>; shadow: Map<number, Chunk> }, anchor: { x: number; y: number; z: number }): void {
+		const { dirty, shadow } = batch;
 		const a = chunkIndexOrNeg(Math.floor(anchor.x / 16), Math.floor(anchor.z / 16));
 		for (const i of dirty) {
 			// It must re-mesh whatever its sunlit does: a shadowOnly flag would let the sunlitHash skip drop it.
@@ -416,7 +453,6 @@ export class GameLoop {
 			}
 		}
 		for (const [i, n] of shadow) if (!dirty.has(i)) this.markChunkDirty(n.cx, n.cz, { shadowOnly: true });
-		return { removed };
 	}
 
 	/**

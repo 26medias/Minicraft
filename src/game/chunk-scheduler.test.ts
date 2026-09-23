@@ -4,7 +4,7 @@ import { chunkIndex } from '../engine/world/coords';
 
 const I = (cx: number, cz: number) => chunkIndex(cx, cz);
 function clock(costs: number[]) { let t = 0, k = 0; return { now: () => t, mount: (_i: number) => { t += costs[k++ % costs.length]; } }; }
-function input(p: Partial<FrameInput>): FrameInput { return { editLane: new Set(), stream: new Set(), playerCx: 10, playerCz: 10, moving: true, initialLoad: false, ...p }; }
+function input(p: Partial<FrameInput>): FrameInput { return { editLane: new Set(), bulk: new Set(), stream: new Set(), playerCx: 10, playerCz: 10, moving: true, initialLoad: false, ...p }; }
 
 describe('chunk scheduler (spec §6.2)', () => {
 	it('radii are the named constants', () => { expect([MESH_RADIUS, UNMOUNT_RADIUS, DATA_RADIUS]).toEqual([6, 7, 8]); });
@@ -60,5 +60,42 @@ describe('chunk scheduler (spec §6.2)', () => {
 		let frames = 0;
 		while (stream.size > 0 && frames < 200) { const c = clock([9]); const r = planFrame(input({ stream, moving: true, initialLoad: true, playerCx: 5, playerCz: 5 }), c.now, c.mount); for (const i of r.mounts) stream.delete(i); frames++; }
 		expect(frames).toBeLessThanOrEqual(41); // 121 chunks / 3 per frame at 9 ms under a 20 ms budget
+	});
+	it('bulk lane (crafting §7): drained after the edit lane in the SAME frame, before streaming, nearest first (catches today\'s early return after edits, which leaves the bulk lane for a later frame)', () => {
+		const log: string[] = [];
+		const lane = (i: number, l: string) => { log.push(`${l}:${i}`); };
+		const r = planFrame(
+			input({ editLane: new Set([I(10, 10)]), bulk: new Set([I(13, 10), I(11, 10)]), stream: new Set([I(10, 11)]), moving: false }),
+			() => 0,
+			lane,
+		);
+		expect(log).toEqual([`edit:${I(10, 10)}`, `bulk:${I(11, 10)}`, `bulk:${I(13, 10)}`]); // the far one was inserted first
+		expect(r.edits).toEqual([I(10, 10)]);
+		expect(r.bulk).toEqual([I(11, 10), I(13, 10)]);
+		expect(r.mounts).toEqual([]); // the edit still suppresses streaming
+	});
+
+	it('bulkMax caps the bulk lane (1 per frame without a worker) and streaming still runs in a frame with no edit (catches draining the whole bulk lane synchronously in one frame)', () => {
+		const log: string[] = [];
+		const r = planFrame(
+			input({ bulk: new Set([I(11, 10), I(12, 10), I(13, 10)]), bulkMax: 1, stream: new Set([I(10, 11)]), moving: false }),
+			() => 0,
+			(i, l) => { log.push(`${l}:${i}`); },
+		);
+		expect(r.bulk).toEqual([I(11, 10)]);
+		expect(r.mounts).toEqual([I(10, 11)]);
+		expect(log).toEqual([`bulk:${I(11, 10)}`, `stream:${I(10, 11)}`]);
+	});
+
+	it('a refused bulk post (worker full) is not reported as done and stops both the bulk lane and streaming this frame (catches treating the refusal as a mount: the chunk would leave the lane unmeshed)', () => {
+		const calls: number[] = [];
+		const r = planFrame(
+			input({ bulk: new Set([I(11, 10), I(12, 10), I(13, 10)]), stream: new Set([I(10, 11)]), moving: false }),
+			() => 0,
+			(i) => { calls.push(i); return i !== I(12, 10); },
+		);
+		expect(r.bulk).toEqual([I(11, 10)]);
+		expect(calls).toEqual([I(11, 10), I(12, 10)]);
+		expect(r.mounts).toEqual([]);
 	});
 });

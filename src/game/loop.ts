@@ -59,6 +59,12 @@ export class GameLoop {
 	/** All keyed by the flat chunk index (coords.chunkIndex); only ever filled through chunkIndexOrNeg. */
 	private streamSet = new Set<number>();
 	private editLane = new Set<number>();
+	/**
+	 * Crafting spec §7: chunks a batched removal touched besides its anchor. Drained after the edit lane (posted to the
+	 * worker, or one synchronous mesh per frame without one); in-flight entries are skipped. A chunk leaves it only when
+	 * its mesh is applied, so a dropped reply leaves it here to be posted again.
+	 */
+	private bulkLane = new Set<number>();
 	/** Chunks dirtied only by shadow invalidation: re-meshed only when their sunlitHash changed (spec §3.E). */
 	private shadowOnly = new Set<number>();
 	/** Deadline of the current frame's stream budget (performance.now() ms), set before planFrame. */
@@ -99,7 +105,7 @@ export class GameLoop {
 	 * `lastEditMs`: click-to-mounted latency, including the wait for the next tick (informational).
 	 * `lastEditWorkMs`: main-thread time spent re-meshing the edit lane in that tick (the bench's edit gate).
 	 */
-	stats = { streamQueue: 0, editQueue: 0, lastEditMs: -1, lastEditWorkMs: -1, mounted: 0, data: 0, workerInFlight: 0 };
+	stats = { streamQueue: 0, editQueue: 0, bulkQueue: 0, lastEditMs: -1, lastEditWorkMs: -1, mounted: 0, data: 0, workerInFlight: 0 };
 
 	/**
 	 * F3 overlay hook (spec §3.F). Called at the end of every tick, paused or not, with the clamped
@@ -147,6 +153,8 @@ export class GameLoop {
 	private onJobReply(c: Chunk, sunlit: Uint8Array, mesh: ChunkMeshResult): void {
 		const idx = chunkIndex(c.cx, c.cz);
 		this.inFlightIndex.delete(idx);
+		// A fresh reply means nothing in its 3×3 changed since the post, so a bulk chunk is done (or unwanted).
+		this.bulkLane.delete(idx);
 		if (!this.wanted(idx)) return; // player left: do not mount what the evictor would drop next frame
 		c.sunlit.set(sunlit);
 		c.sunlitHash = hashSunlit(sunlit);
@@ -164,10 +172,14 @@ export class GameLoop {
 		}
 	}
 
-	/** Invariant (spec §3.D): a chunk stays dirty until a reply is applied — a dropped reply re-dirties it. */
+	/**
+	 * Invariant (spec §3.D): a chunk stays dirty until a reply is applied — a dropped reply re-dirties it. A bulk chunk is
+	 * still in the bulk lane (crafting spec §7: dropped bulk chunks go back to the bulk lane, not the stream set).
+	 */
 	private onJobDropped(cx: number, cz: number): void {
 		const idx = chunkIndex(cx, cz);
 		this.inFlightIndex.delete(idx);
+		if (this.bulkLane.has(idx)) return;
 		if (this.wanted(idx)) this.streamSet.add(idx);
 	}
 
@@ -361,6 +373,7 @@ export class GameLoop {
 		// reply's wanted()). Mounting it would regenerate its whole 3×3, up to 17 chunks away, for nothing.
 		for (const i of this.streamSet) if (chebyshev(i, pcx, pcz) > MESH_RADIUS) this.streamSet.delete(i);
 		for (const i of this.shadowOnly) if (chebyshev(i, pcx, pcz) > MESH_RADIUS) this.shadowOnly.delete(i);
+		for (const i of this.bulkLane) if (chebyshev(i, pcx, pcz) > MESH_RADIUS) this.bulkLane.delete(i);
 		for (const c of this.world.allChunks()) {
 			if (!c.modified && Math.max(Math.abs(c.cx - pcx), Math.abs(c.cz - pcz)) > DATA_RADIUS) {
 				const i = chunkIndex(c.cx, c.cz);
@@ -606,9 +619,27 @@ export class GameLoop {
 		this.mountedChunks.add(i);
 	}
 
-	/** Spec §3.B: edit lane first (budget-exempt, suppresses streaming), then nearest-first streaming under the adaptive budget. */
+	/**
+	 * Crafting spec §7: a bulk chunk is posted to the worker — false when the worker is full: it waits for the next frame and
+	 * never falls back to a synchronous mesh — or, without a worker, meshed here (planFrame caps that at one per frame).
+	 * It re-meshes whatever its sunlit does, so it drops any shadowOnly flag first (the sunlitHash skip is for shadow-only
+	 * work; a dark blast leaves the hash unchanged).
+	 */
+	private mountBulk(i: number): boolean {
+		this.shadowOnly.delete(i);
+		if (!this.jobs) {
+			this.mountSync(i);
+			this.bulkLane.delete(i);
+			return true;
+		}
+		if (this.mountStream(i)) return true;
+		this.refusedIndex = -1; // mountStream's marker is for the stream lane's bookkeeping
+		return false;
+	}
+
+	/** Spec §3.B: edit lane first (budget-exempt, suppresses streaming), then the bulk lane (crafting spec §7), then nearest-first streaming under the adaptive budget. */
 	private flushDirtyChunks() {
-		if (this.editLane.size > 0 || this.streamSet.size > 0) {
+		if (this.editLane.size > 0 || this.bulkLane.size > 0 || this.streamSet.size > 0) {
 			const pcx = Math.floor(this.player.position[0] / 16);
 			const pcz = Math.floor(this.player.position[2] / 16);
 			// A posted-but-unreplied chunk would be nearest again next frame and get posted twice.
@@ -617,12 +648,17 @@ export class GameLoop {
 				stream = new Set<number>();
 				for (const i of this.streamSet) if (!this.inFlightIndex.has(i)) stream.add(i);
 			}
+			// Bulk chunks stay in the lane while their job is in flight; skip them, as the stream set does.
+			const bulk = new Set<number>();
+			for (const i of this.bulkLane) if (!this.inFlightIndex.has(i)) bulk.add(i);
 			this.refusedIndex = -1;
 			this.frameDeadline = performance.now() + budgetFor(this.moving, this.initialLoad);
 			let editWorkMs = 0;
 			const r = planFrame(
 				{
 					editLane: this.editLane,
+					bulk,
+					bulkMax: this.jobs ? Infinity : 1,
 					stream,
 					playerCx: pcx,
 					playerCz: pcz,
@@ -630,14 +666,15 @@ export class GameLoop {
 					initialLoad: this.initialLoad,
 				},
 				() => performance.now(),
-				(i) => {
+				(i, lane) => {
+					if (lane === 'bulk') return this.mountBulk(i);
 					// Streaming only: generate the missing 3×3 a few chunks per frame (edits stay immediate).
-					if (!this.editLane.has(i) && !this.generatePaced(i)) {
+					if (lane === 'stream' && !this.generatePaced(i)) {
 						this.refusedIndex = i;
 						return false;
 					}
-					if (this.jobs && !this.editLane.has(i)) return this.mountStream(i);
-					if (!this.editLane.has(i)) return this.mountSync(i);
+					if (this.jobs && lane === 'stream') return this.mountStream(i);
+					if (lane === 'stream') return this.mountSync(i);
 					const w0 = performance.now();
 					const ok = this.mountSync(i);
 					editWorkMs += performance.now() - w0;
@@ -647,6 +684,8 @@ export class GameLoop {
 			for (const i of r.edits) {
 				this.editLane.delete(i);
 				this.streamSet.delete(i);
+				// Meshed just now; an in-flight bulk job for it stays owed (its reply is stale and re-queues it).
+				if (!this.inFlightIndex.has(i)) this.bulkLane.delete(i);
 			}
 			for (const i of r.mounts) if (i !== this.refusedIndex) this.streamSet.delete(i);
 			if (r.edits.length > 0) {
@@ -659,6 +698,7 @@ export class GameLoop {
 		this.stats.streamQueue = this.streamSet.size;
 		this.stats.workerInFlight = this.jobs ? this.jobs.inFlight() : 0;
 		this.stats.editQueue = this.editLane.size;
+		this.stats.bulkQueue = this.bulkLane.size;
 		this.stats.mounted = this.mountedChunks.size;
 	}
 }

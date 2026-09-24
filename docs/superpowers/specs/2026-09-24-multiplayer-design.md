@@ -1,7 +1,8 @@
 # Multiplayer — design
 
-Date: 2026-09-24 · Branch: `multiplayer` · Status: **rev 2, incorporates gate-1** (engine,
-server/sequencing, rigour, kid-lens). Evidence behind gate-1 changes is quoted inline as *(G1: …)*.
+Date: 2026-09-24 · Branch: `multiplayer` · Status: **rev 3** (gate 1 plus its re-gate) — engine,
+server/sequencing, rigour, kid-lens. Evidence behind gate changes is quoted inline as *(G1: …)* /
+*(RG: …)*.
 
 ## 1. Intent
 
@@ -27,8 +28,10 @@ What Julien decided (binding):
   - "No limit" stays possible, and is the default for a browser with no limit set.
 - **Refresh:** without a PIN, a refresh discards the play session (honour system). With a PIN, it
   survives, and only a parent resets it.
-  - **Exception:** a session under an active schedule always survives, so "all done for today"
-    can't be refreshed away.
+  - **Exceptions:** the session also survives a refresh
+    - under an active schedule, so "all done for today" can't be refreshed away;
+    - on a multiplayer reconnect reload (§7.5), so a wifi blip doesn't reset the timer.
+  - The existing 12 h stale-session auto-clear is kept in every case.
 - **Schedules:** an active schedule locks the menu to its solo world. Multiplayer is hidden until a
   parent cancels it.
 - **Security:** none beyond a static token in the frontend (readable, accepted).
@@ -107,7 +110,8 @@ browser (static site, hosting unchanged)
   - *(G1: 0 of 300 trials failed. A variant that took the snapshot in the HTTP handler failed
     134 of 300.)*
 - **Each connection** has a reader goroutine and a writer goroutine. The writer drains a bounded
-  queue of 256 messages.
+  queue capped at **1 MiB of queued bytes**. *(RG: a cap counted in messages allowed 9 MB per
+  client on a 1 GB VM.)*
   - When the queue is full, the connection is closed with code `4002 slow`. The world never
     blocks on a client.
   - *(G1: with blocking sends, one slow reader stretched 5 s of traffic to 93 s for everyone. With
@@ -119,12 +123,19 @@ browser (static site, hosting unchanged)
     and `{"t":"ping"}` every 2 s otherwise.
   - A client that hears nothing for 6 s treats the connection as dead *(G1: a black-holed link was
     still undetected after 10 s, and JS never sees protocol-level pings)*.
-- **Takeover:** a `hello` whose `name_key` matches a player already online closes the old
-  connection (code `4001 replaced`) and takes over. There is no `name_taken` for the same name in
-  the same browser.
-  - *(G1: otherwise, after a wifi drop, every retry within 30 s hit `name_taken`.)*
-  - Two different kids who pick the same name will kick each other. The Multiplayer screen shows
-    who is already in a world, so this is visible.
+- **Takeover:** each browser stores a random `bid` (in localStorage `minicraft:v1:mp`) and sends
+  it in `hello`.
+  - If `name_key` is already online **with the same `bid`**, the new connection takes over the
+    old one: the old connection gets `4001 replaced`. This covers the wifi-drop reconnect.
+    *(G1: otherwise every retry within 30 s hit `name_taken`.)*
+  - If the `bid` differs, the server replies `4009 name_taken`. *(RG kid-lens: plain takeover lets
+    two kids called "Noah" kick each other back and forth.)*
+  - A takeover broadcasts **no** `left`/`join`. Friends don't get "Noah went home" on every blip.
+- **Closing never blocks the world goroutine.** *(RG: `Close` to a black-holed peer blocked
+  5 s.)*
+  - The world goroutine only *signals* a connection: it cancels the connection's context and sets
+    the close code.
+  - The connection's own writer goroutine performs `Close`, bounded at 2 s, then `CloseNow`.
 - **Persistence writer:** every 1 s the world goroutine hands a *copy* of the dirty cells and
   players to a single writer goroutine, which upserts them in one transaction.
   - The world goroutine never waits on SQLite *(G1: 50k upserts took 170–190 ms on a 28-core box;
@@ -134,14 +145,15 @@ browser (static site, hosting unchanged)
   DB *(G1 race)*.
 - **Shutdown (SIGTERM, which a GCE stop sends), in this order:**
   1. Stop accepting.
-  2. Close every socket with code `1001` (`http.Server.Shutdown` does not close hijacked
-     sockets).
-  3. Stop the world goroutines.
-  4. Final flush.
+  2. Stop the world goroutines.
+  3. Final flush.
+  4. Close every socket with code `1001`, in parallel, capped at 2 s total
+     (`http.Server.Shutdown` does not close hijacked sockets).
   5. Backup snapshot (§9).
   6. Exit.
 
-  The budget is under 10 s.
+  Flushing before any close means half-open peers can't push the flush past `TimeoutStopSec`
+  *(RG)*. The budget is under 10 s.
 
 ## 4. Data model (SQLite)
 
@@ -184,10 +196,10 @@ A proto version range is exchanged in `hello`. The server accepts `proto` in `[M
 
 | t | fields | notes |
 |---|---|---|
-| `hello` | `world, name, skin, proto, gen` | first message; `gen` = the client's generator version |
+| `hello` | `world, name, skin, bid, proto, gen, resume` | first message; `gen` = the client's generator version; `resume: true` on an autojoin reconnect |
 | `pos` | `x,y,z,yaw,pitch` | ≤ 10 Hz while moving or turning |
-| `ping` | — | every 2 s when nothing else was sent |
-| `edit` | `ops: [[x,y,z,id,fluid,color], …]` | ≤ 2,000 ops per message; client-assigned `cid` for echo matching |
+| `ping` | — | every 2 s when nothing else was sent; driven by `setInterval`, not rAF, so a hidden tab stays alive |
+| `edit` | `cid, ops: [[x,y,z,id,fluid,color], …]` | ≤ 2,000 ops per message; `cid` increases monotonically per connection; a batch may touch one cell more than once and is applied in order |
 | `fx` | `kind: prime\|boom\|firework, x,y,z, tier?` | cosmetic |
 | `extras` | `{inventory,tools,hotbar,selected}` | debounced 5 s, and on leave |
 | `leaving` | `secondsLeft` | §7.4 |
@@ -196,7 +208,7 @@ A proto version range is exchanged in `hello`. The server accepts `proto` in `[M
 
 | t | fields | notes |
 |---|---|---|
-| `welcome` | `you, world{uuid,name,seed,gen,height,mustMine}, spawn, extras, players[], seq` | then one binary snapshot frame |
+| `welcome` | `you, world{uuid,name,seed,gen,height,mustMine}, spawn, extras, players[], seq, catalogMax` | then one binary snapshot frame; the client hides blocks with ids above `catalogMax` from its inventory and hotbar |
 | *(binary)* | snapshot as of `seq` | format below |
 | `edit` | `seq, by, cid?, ops` | server order; sent to **everyone, author included** |
 | `tick` | `poses: [[id,x,y,z,yaw,pitch], …]` | every 100 ms, one message per recipient, excludes the recipient's own pose *(G1: cuts ~6k msgs/s to 250 at 25 players, and egress)* |
@@ -209,14 +221,15 @@ A proto version range is exchanged in `hello`. The server accepts `proto` in `[M
 
 | code | meaning | client reaction |
 |---|---|---|
-| `4001 replaced` | a newer connection took over | stop, no reconnect |
+| `4001 replaced` | a newer connection from this browser took over | "You opened the game somewhere else." with one big **Menu** button; no reconnect |
 | `4002 slow` | the send queue filled up | reconnect (§7.5) |
-| `4003 resync` | the server rejected a batch | reconnect (§7.5) |
-| `4004 proto` | proto version out of range | full-screen "Minicraft was updated — tap to reload" |
+| `4003 resync` | the server rejected a batch | reconnect (§7.5); after **2 consecutive** 4003s, show the 4004 screen instead *(RG: this breaks the loop when the site is newer than the server's catalog)* |
+| `4004 proto` | proto version out of range | full-screen "Minicraft was updated — click to reload" |
 | `4005 gen_unsupported` | generator version not supported | same full-screen message |
 | `4006 unknown_world` | the world doesn't exist | back to the list |
 | `4007 bad_token` | wrong token | back to the list |
 | `4008 bad_name` | name failed the rule below | back to the name screen |
+| `4009 name_taken` | the name is online from another browser | name screen: "Someone called Noah is already playing. Pick another name." |
 
 - **Validation:**
   - Ops must satisfy `0 ≤ x,z < 512` and `0 ≤ y < height`.
@@ -231,14 +244,18 @@ A proto version range is exchanged in `hello`. The server accepts `proto` in `[M
   - A header `u32 seq, u32 count`, then rows sorted by `(x, z, y)`, then deflated.
   - Each row is varints: `dx` (delta from the previous row), `z` and `y` (delta-coded when `x`
     repeats), `id`, `fluid`, `color`.
-  - *(G1 measured 200k clustered edits: 643 KB with absolute varints; delta coding shrinks this
-    sharply.)* The target is under 300 KB at 200k edits, and it is a test.
+  - *(RG measured this exact format at 200k edits: clustered 8 KB, air tunnels 92 KB, scattered
+    456–688 KB. Absolute coding gave about 480 KB even for the clustered case.)*
+  - Scattered edits sit near their information-theoretic floor, so no size is promised for
+    arbitrary worlds. G15 asserts under 300 KB on the **named clustered and tunnel fixtures**
+    only.
 - **HTTP:**
   - `GET /worlds` returns
     `[{uuid,name,mustMine,createdAt,online:[{name,skin}]}]`, sorted by online count descending,
     then `createdAt` descending.
   - `POST /worlds {name, seed, mustMine, gen}` returns the world.
-  - `DELETE /worlds/:uuid` returns 204. The client only offers it from Parents.
+  - `DELETE /worlds/:uuid` returns 204, or **409 while anyone is online in that world**. The
+    client only offers it from Parents, behind a confirm that names the world.
 
 ## 6. Consistency model
 
@@ -250,12 +267,24 @@ A proto version range is exchanged in `hello`. The server accepts `proto` in `[M
   (`cell → latest own cid`).
 - **Echo rule:** a client skips its own echo for a cell when it has a *newer* pending own write to
   that cell (that write's echo will follow). Otherwise it applies the echo.
-  - `applyRemote` is a no-op when the incoming (id, fluid, colour) equals the cell's current value,
-    so plain echoes cost nothing.
+  - The chunk write is a no-op when the incoming (id, fluid, colour) equals the cell's current
+    value, so plain echoes cost nothing. Colour equality is a `LightRegistry` lookup.
+  - The **overlay is always updated, at receive time**, before any no-op check. Overlay writes are
+    idempotent.
+  - The chunk write happens at **apply time**. The target chunk is resolved then, not when the op
+    arrives, because a chunk can be evicted while ops wait in the queue.
+  - The echo-skip rule was run through the liquid probe: 12/12 seeds matched the reference in
+    every scenario *(RG)*.
   - This removes the place-then-mine flicker *(G1)* and keeps the highest-seq invariant, because
     the newer own write is sequenced after it.
-- **`World.applyRemote(x,y,z,id,fluid,color)`** has `setBlock`/`setBlockFlow` semantics, **liquid
-  frontier wake included** *(G1: without the wake, all clients agreed but were often **wrong** —
+- **Where remote writes live** *(RG: the primed TNT, the fuse overlay and the lamp registry are
+  private to `GameLoop`)*:
+  - `World` gains one primitive, `writeRemote(x,y,z,id,fluid)`: a write with the liquid wake that
+    never calls the hook.
+  - `GameLoop.applyRemoteBatch(ops)` does, per op: `clearBlockEffects`, then `writeRemote`, then
+    the lamp colour, then `batchCell`. It calls `routeBatch` once at the end.
+  - The rest of this section calls that whole path **applyRemote**.
+- **applyRemote** has `setBlock`/`setBlockFlow` semantics, **liquid frontier wake included** *(G1: without the wake, all clients agreed but were often **wrong** —
   water froze half-spread when its simulating client left in 12 of 12 runs, and orphan flows never
   drained in 2 of 12. With the wake, all 9 scenarios × 12 seeds matched a single-client
   settle)*. It also:
@@ -295,6 +324,8 @@ A proto version range is exchanged in `hello`. The server accepts `proto` in `[M
   - **In multiplayer, `modified` does not pin a chunk.** It is evictable like a pristine chunk,
     because generation plus the overlay rebuild it. Overlay memory is about 16 bytes per edited
     cell (200k edits ≈ 3 MB).
+  - **Accepted:** a chunk evicted before its own local writes are echoed regenerates without them
+    until the echoes land. It is a brief visual gap and ends correct.
 - **A remote block landing inside the local player:** after applying a remote batch, if the
   player's box overlaps a solid block, lift the player to the nearest free space above (the
   `findSafeSpawn` column search).
@@ -305,17 +336,27 @@ A proto version range is exchanged in `hello`. The server accepts `proto` in `[M
 
 ### 7.1 Mode seam
 
-- `startGame(save, …)` gains an optional `mp: MpSession`. Multiplayer does **not** duplicate the
-  ~400 lines of wiring.
+- The real `startGame(worldId, seed, name, mode, newMustMine)` gains an optional final
+  `mp?: MpSession`. Multiplayer does **not** duplicate the ~400 lines of wiring.
 - **The multiplayer path:**
-  - It builds a synthetic `WorldSave`: `{seed, genVersion, height}` with no chunks, and a player
-    placed at the resolved spawn with the server's `extras`.
+  - It builds a synthetic `WorldSave` in memory: `{seed, genVersion, height, mustMine}` with no
+    chunks, and a player placed at the resolved spawn with the server's `extras`.
+  - It **bypasses** `adapter.loadWorld` and legacy adoption.
   - It installs the overlay (§6) and `World.onLocalWrite = mpSync.record`.
-  - It skips `DualAdapter` and autosave.
+  - It skips `DualAdapter`.
   - It creates `RemotePlayers`, `Minimap` and `MpSync`.
+- **`MpSync` stands in for autosave:** it is `AutoSave`-shaped, so the existing
+  `countRemoved`/`onWorldMutated`/freeze callbacks that call `autosave.markDirty`/`flush`
+  (`main.ts:463–483, 509`) work unchanged. *(RG)*
+  - `markDirty` debounces an `extras` send by 5 s.
+  - `flush` sends `extras` now.
+  - Pending extras are also mirrored to `sessionStorage` and re-sent after the next `welcome`, so a
+    reconnect reload doesn't lose recently mined items *(RG)*.
 - **`World.onLocalWrite`** is null in solo and called from `setBlock`/`setBlockFlow`.
-- **Lamp colours:** `LightRegistry` changes made by `placeBlock`/`replaceBlock` are captured into
-  the same op (the colour field) at the moment of the write.
+- **Lamp colours:** `onLocalWrite` records only the cell. `MpSync` builds the ops at its
+  **per-frame flush**, reading id, fluid and colour then.
+  - *(RG: `placeBlock`/`replaceBlock` call `setBlock` before `lights.add`, so a colour read inside
+    the hook is always 0.)*
 - **Leaving:**
   - Every exit from multiplayer is a page reload, with a `sessionStorage` flag `mp:autojoin`
     when the goal is to rejoin (§7.5).
@@ -332,8 +373,11 @@ A proto version range is exchanged in `hello`. The server accepts `proto` in `[M
 
 - **`{mode:'first'}`** (never joined): use `spawnV3(seed)`, the settled worldgen hill-with-a-view
   spawn, then `findSafeSpawn`.
-- **`{mode:'return', x,y,z,yaw,pitch}`** (joined before, nobody online): the last position, then
-  `findSafeSpawn`.
+- **`{mode:'return', x,y,z,yaw,pitch}`** (joined before and nobody online, **or `hello.resume`**):
+  the last position, then `findSafeSpawn`.
+  - A reconnect always returns the kid to where they were, never next to a friend *(RG kid-lens)*.
+  - With `resume`, the server takes the position from the player's live record, which is
+    updated from `pos` messages.
 - **`{mode:'near', target: id, x,y,z,yaw}`** (someone online; the server picks one at random):
   - Try the columns 3–6 blocks in front of the target's facing, then fan out ±60°.
   - Accept a dry, standable column within ±4 of the target's y.
@@ -346,8 +390,8 @@ A proto version range is exchanged in `hello`. The server accepts `proto` in `[M
 - **The avatar:** one `THREE.Group` per remote player:
   - a 0.6 × 1.8 × 0.6 box in the skin colour, with a darker front face showing yaw;
   - a name label: a `CanvasTexture` sprite with a white background and a coloured border,
-    `depthTest: false` so it shows through hills, and a minimum on-screen height of 14 px.
-- **Interpolation:** rendered 100 ms in the past, linear between `tick` samples. The label and
+    `depthTest: false` so it shows through hills, and a minimum on-screen height of 20 px.
+- **Interpolation:** rendered 200 ms in the past (two tick periods, to absorb jitter), linear between `tick` samples. The label and
   box snap when the gap is over 8 blocks.
 - **Skins:** 8 presets in `src/data/skins.data.ts` (red, blue, green, yellow, purple, orange,
   pink, black).
@@ -359,7 +403,10 @@ A proto version range is exchanged in `hello`. The server accepts `proto` in `[M
 - **Countdown messages:** the client sends `leaving {secondsLeft}` once for each threshold
   **crossed** (120, 60, 30), and when `secondsLeft` reaches 0.
   - Crossing is checked each tick, which may credit 2 s, the same way as `WARNING_THRESHOLDS`.
-  - Joining with less than 120 s left fires the current threshold once.
+  - Joining with less than 120 s left sends **one** immediate `leaving {secondsLeft}` with the
+    real value. Every threshold already passed is marked fired, as `WARNING_THRESHOLDS` does
+    today. The thresholds still ahead fire as they are crossed.
+  - Example: joining at 90 s left sends 90 now, then 60, 30 and 0.
   - The timer pauses while the tab is hidden, so the countdown does too. That is correct.
 - **What each screen shows:**
   - **The leaver:** the existing warnings, plus a big 10 … 1 in the last 10 s.
@@ -367,7 +414,7 @@ A proto version range is exchanged in `hello`. The server accepts `proto` in `[M
     go in 2 minutes" / "…in 1 minute" / "…in 30 seconds". Then "Noah went home".
 - **At 0:** freeze as today, send `extras`, then close.
 - **Disconnected:** the timer is paused while disconnected (§7.5).
-- **Under a PIN, or an active schedule,** a frozen timer blocks rejoining, as it blocks solo.
+- **A frozen timer that survives** (under a PIN) blocks rejoining, as it blocks solo.
 
 ### 7.5 Connection loss
 
@@ -377,6 +424,8 @@ A proto version range is exchanged in `hello`. The server accepts `proto` in `[M
 - **Retries** at 1, 2, 4, 8 and 15 s. Each attempt first probes `GET /worlds`.
 - **On success:** reload the page with `mp:autojoin`. The world is rebuilt from seed plus the fresh
   snapshot, exactly like a first join.
+  - `hello.resume` is set, so the kid comes back where they were.
+  - The play session is **kept** (§8.1 `sessionPolicy`).
   - Local writes that were never acknowledged are discarded.
   - *(G1: an overlay alone can't repair a mined generated cell the server never received.)*
 - **After 30 s without success:** show one big "Try again" button, which rejoins the same world,
@@ -410,7 +459,10 @@ The home screen has three big buttons: **Single Player**, **Multiplayer** and **
 - **The duration control is shared:** a big "30 min" with − and + buttons, in 5-minute steps from
   10 min up to the parent maximum.
   - When the maximum is "No limit", + goes past the top value to "No limit".
-  - The default is 30 min, clamped to the maximum.
+  - **The default duration:**
+    - When the maximum is No limit, the default is **No limit**. A browser that has no limit
+      today keeps playing unlimited solo, as today.
+    - Otherwise the default is 30 min, clamped to the maximum.
   - The value is remembered in `minicraft:v1:menu`.
 
 ### 8.1 Single Player
@@ -422,9 +474,12 @@ The home screen has three big buttons: **Single Player**, **Multiplayer** and **
 - **Play and the timer:**
   - Play starts a new timer session with the chosen duration, unless a session is already in
     force. A "No limit" duration starts no session.
-  - **Refresh:** with no PIN and no active schedule, a reload discards the session. The
-    discard runs at boot. With a PIN, or under a schedule, the session survives.
-    - A new `sessionPolicy(pinSet, scheduleActive)` function decides this and is unit-tested.
+  - **Refresh:** at boot, a new function `sessionPolicy(pinSet, scheduleActive, autojoin)`
+    decides whether to keep the stored session.
+    - It returns `discard` only when there is no PIN, no active schedule and no `mp:autojoin`
+      flag.
+    - `main.ts` calls it **before** `resolveSession`.
+    - The 12 h stale rule still applies afterwards.
 
 ### 8.2 Multiplayer
 
@@ -447,7 +502,10 @@ The home screen has three big buttons: **Single Player**, **Multiplayer** and **
 ### 8.3 Parents (PIN-gated when a PIN is set)
 
 - **Schedule:** a solo world, a start time and a duration, then **Schedule**.
-  - The duration is the parent's choice; the maximum doesn't cap it.
+  - The duration is the parent's choice, from 10 min to 2 h in 5-minute steps. The maximum
+    doesn't cap it.
+  - `isSchedule` validates against the **new 5-minute list**, a superset of the old choices, so
+    both old and new schedules load and save *(RG)*.
   - The app goes to the scheduled card, which survives a refresh. The card's **Parents** button
     asks for the PIN (or cancels directly if none is set) and cancels the schedule.
 - **Maximum duration:** 10 min to 2 h in 5-minute steps, or **No limit**.
@@ -457,6 +515,8 @@ The home screen has three big buttons: **Single Player**, **Multiplayer** and **
 - **PIN:** Set/Change with a New PIN field and **Save PIN**. **Reset PIN** removes it.
 - **Multiplayer worlds:** a list of the multiplayer worlds with Delete. It is shown only when the
   server is reachable.
+  - Delete asks "Delete *World name* for everyone?".
+  - A world with anyone online can't be deleted; the server returns 409.
 - **Break time is removed:**
   - A new session has `breakMs = null`: at its limit it freezes until the next session per the
     §8.1 refresh rule, or a Parents reset.
@@ -486,7 +546,7 @@ The home screen has three big buttons: **Single Player**, **Multiplayer** and **
   site's `VITE_MINICRAFT_MP_URL=http://localhost:8080`.
 - **Toolchain:** Go is installed without sudo into `~/.local/go` from the official tarball.
 - **Cost:** traffic is dominated by `tick`. At 10 players and 10 Hz that is about
-  10 × 9 × 30 B × 10/s ≈ 100 MB/h. Julien should expect a few cents per play session in egress.
+  10 × 9 × ~45 B × 10/s ≈ 150 MB/h. Julien should expect a few cents per play session in egress.
   The rest is free tier or pennies.
 
 ## 10. Testing
@@ -502,18 +562,19 @@ feature lands.
 | G2 | Snapshot/stream boundary uses a **test hook that parks the world goroutine between snapshot build and subscribe** while edits arrive, and checks against an independent op-log oracle | snapshot and subscribe are split, or run outside the world goroutine |
 | G3 | Persistence: edits, then flush, then restart gives an identical snapshot | the DB is wrong |
 | G4 | Flush writes **only** the dirty rows (count the upserts) | the flush rewrites whole worlds |
-| G5 | **Exec the binary**, write edits, send `kill -TERM` within 300 ms, restart: the edits are present | the signal handler is missing or out of order |
-| G6 | Spawn modes: first / return / near, with the target chosen from online players | the modes are wrong |
-| G7 | Takeover: a black-holed first connection, then the same name rejoins within 5 s and succeeds; the old one is closed with 4001 | there is no takeover (spec rev 1 fails this) |
+| G5 | **Exec the binary** with one **black-holed client** connected, write edits, send `kill -TERM` within 300 ms, restart: the edits are present, and the process exited in under 10 s | the signal handler is missing, or closes happen before the flush / serially |
+| G6 | Spawn modes: first / return / near / `resume` → return even with others online, with the near target chosen from online players | a mode is wrong, or `resume` is ignored |
+| G7 | Takeover: a black-holed first connection, then the same name **and bid** rejoins within 5 s and succeeds; the old one gets 4001; no `left`/`join` is broadcast; a third player's tick latency stays under 300 ms throughout | there is no takeover, or the world goroutine closes the socket itself (5 s stall) |
+| G7b | The same name with a **different bid** gets 4009, and the online player is untouched | takeover ignores the bid |
 | G8 | Read deadline: a silent client is dropped within 7 s | the deadline is missing |
-| G9 | Slow consumer: 25 simulated players with one reader stalled; the others' tick latency stays under 300 ms and the stalled client gets 4002 | sends block |
+| G9 | Slow consumer: 25 simulated players with one reader stalled; the others' tick latency stays under 300 ms; the stalled client gets 4002 once its queue passes 1 MiB | sends block, or the queue is counted in messages |
 | G10 | Handshake with `Origin: https://noah.leap-forward.ca` succeeds; `https://evil.example` fails; CORS preflight on `/worlds` | the default origin check is used |
 | G11 | A 2,000-op batch (and a 4 MiB message) is accepted and echoed | the 32 KiB default read limit is used |
-| G12 | An invalid op closes with 4003 and the batch isn't applied | ops are dropped silently |
-| G13 | `/worlds` order and `online[]`; delete removes all rows | |
+| G12 | An invalid op (including id > `catalogMax`) closes with 4003 and the batch isn't applied; `welcome` carries `catalogMax` | ops are dropped silently |
+| G13 | `/worlds` is ordered by online count then recency and lists `online[]` names; delete removes rows in all three tables; delete of an occupied world returns 409 | the sort key is wrong, rows are orphaned, or an occupied world is deletable |
 | G14 | Unload race: a join lands during the unload window and gets a working world | there is no registry lock |
-| G15 | Snapshot of a synthetic 200k-cell world is under 300 KB and round-trips | absolute (non-delta) coding is used |
-| G16 | Names: the rule is enforced; `Noé` and `NOÉ` share a `name_key` | |
+| G15 | Snapshots of the named **clustered** and **tunnel** 200k-cell fixtures are each under 300 KB and round-trip | absolute (non-delta) coding is used (~480 KB clustered) |
+| G16 | Names: the rule is enforced; `Noé` and `NOÉ` (and the decomposed `Noé`) share a `name_key` | there is no NFC normalisation, or no lowercasing |
 
 **TS (vitest)**
 
@@ -521,18 +582,21 @@ feature lands.
 |---|---|---|
 | T1 | The snapshot codec round-trips **fixtures produced by the Go encoder** (committed files), and TS-encoded ops are decoded in G-tests | the formats drift |
 | T2 | `applyRemote` wakes the frontier; **control:** `setBlock` on the same cell produces the same frontier | the no-wake variant (spec rev 1) is used |
-| T3 | Liquid convergence: two `World`+`LiquidScheduler` clients, a sequencer and a **single-client reference**, over scenarios: pour; the simulating client leaves at t=1 s; the source is removed under 0.3–1.5 s latency; a stalled tab. **Each client must equal the reference**, not just each other. Several seeds and dt sequences | the no-wake variant is used (G1 caught 12/12) |
+| T3 | Liquid convergence: two `World`+`LiquidScheduler` clients, a sequencer and a **single-client reference**, with the §6 echo-skip rule on, over scenarios: pour; the simulating client leaves at t=1 s; the source is removed under 0.3–1.5 s latency; a stalled tab. **Each client must equal the reference**, not just each other. Several seeds and dt sequences | the no-wake variant is used (G1 caught 12/12) |
 | T4 | Fluid packing round-trip, including a flow at distance 0 (`0x80`) | fluid is sent as a distance, or dropped |
 | T5 | Overlay: an op to an unloaded chunk is applied at generation, **before lighting**; a dug shaft reads sky light 15 | the overlay is applied after `fillChunkLights` |
 | T6 | A remote op to an unloaded chunk does not create the chunk | `applyRemote` calls `ensureChunk` |
 | T7 | Echo rule: place then mine quickly gives no flicker (no intermediate write observed); a concurrent foreign op still converges | echoes are always applied, or always skipped |
 | T8 | A remote mine of primed TNT cancels the local detonation | `clearBlockEffects` is skipped |
-| T9 | Countdown with **2 s ticks**: every threshold fires exactly once; joining at 90 s left fires 60 and 30 only | fire-at-exact-second logic is used |
-| T10 | Pose interpolation: renders at t−100 ms; snaps when the gap is over 8 | |
-| T11 | Minimap: rim clamp, rotation, ▲/▼ threshold, colour table | |
-| T12 | `sessionPolicy`, break-field migration, and `playLimitMin` → maximum migration (including null → No limit) | |
-| T13 | Menu models: restoring name/skin/world/duration, the busiest-world preselect, duration clamped to the maximum | |
-| T14 | Remote block inside the player: the player is lifted | |
+| T9 | Countdown with **2 s ticks**: every threshold fires exactly once, even when a tick jumps over it; joining at 90 s left sends 90 immediately, then 60, 30 and 0, and never 120 | thresholds are matched on exact seconds, or already-passed thresholds aren't marked |
+| T10 | Pose interpolation: renders at t−200 ms between samples; snaps when the gap is over 8 | there is no delay buffer (it renders the latest sample), or there is no snap |
+| T11 | Minimap: an off-radius player clamps to the rim at the right bearing after rotation; ▲/▼ at dy > 8; the colour table maps a known block to its atlas mean | the bearing ignores player yaw, the clamp is missing, or the threshold is off by one |
+| T12 | `sessionPolicy` truth table (pin × schedule × autojoin); break-field migration; `playLimitMin` → maximum (null → No limit) | the autojoin exemption is missing, or old limits are dropped |
+| T12b | **Boot-level**: store a session, then run the boot path, for each of: no PIN, PIN, schedule, autojoin; assert whether the session is kept | `main.ts` never calls `sessionPolicy` (T12 alone stays green) |
+| T13 | Menu models: restoring name/skin/world/duration; busiest-world preselect when the remembered world is empty; duration clamped to the maximum; default is No limit when the maximum is No limit | the remembered world wins over an occupied one, or the default is 30 under No limit |
+| T14 | Remote block inside the player: the player is lifted to free space | the post-batch overlap check is missing |
+| T15 | Placing a **coloured lamp** sends an op with `color != 0` | colour is read inside the `onLocalWrite` hook |
+| T16 | `MpSync` as the autosave stand-in: `markDirty` sends `extras` after 5 s; pending extras survive a reload via sessionStorage and are re-sent after `welcome` | extras are lost on a reconnect reload |
 
 The existing tests rewritten for break removal (listed by gate 1) are rewritten, not deleted: they
 become T12 cases.
@@ -548,15 +612,15 @@ become T12 cases.
 
 The harness runs a local `mcserver` against a temp DB and blocks the production API host.
 
-| # | Scenario |
-|---|---|
-| E1 | A places a block; B sees it within 500 ms; B mines it; A sees air |
-| E2 | A pours water while B is in range: **both equal a single-client replay** of A's actions (the hash compare against the reference) |
-| E3 | A ignites TNT: B's crater equals A's; B saw `fx:boom` |
-| E4 | B's minimap shows A's dot; B's scene has A's label |
-| E5 | A's timer runs out: B sees the toasts and then "went home" |
-| E6 | The server is killed mid-game: A shows "Reconnecting…"; the server restarts; A auto-rejoins with the world intact |
-| E7 | Solo on the multiplayer build: no WebSocket is constructed; solo works with the multiplayer URL on a dead port |
+| # | Scenario | Goes red when |
+|---|---|---|
+| E1 | A places a block; B sees it within 500 ms; B mines it; A sees air | edits don't relay or apply |
+| E2 | A pours water while B is in range: **both equal a single-client replay** of A's actions (the hash compare against the reference) | remote writes don't wake the liquid scheduler |
+| E3 | A ignites TNT **next to water**: B's crater equals A's, and both equal the reference after the water settles; B saw `fx:boom` | batches are sliced or applied wrongly, or there is no boom fx |
+| E4 | B's minimap shows A's dot; B's scene has A's label | remote players aren't rendered |
+| E5 | A's timer runs out: B sees the toasts and then "went home" | `leaving` isn't sent or shown |
+| E6 | The server is killed mid-game: A shows "Reconnecting…"; the server restarts; A auto-rejoins **at its last position**, with the world intact and **remaining play time unchanged (±2 s)** with no PIN | the reload discards the session, or `resume` isn't sent |
+| E7 | Solo on the multiplayer build: no WebSocket is constructed; solo works with the multiplayer URL on a dead port | solo wires `MpSync`, or waits on the multiplayer server |
 
 ## 11. Docs
 

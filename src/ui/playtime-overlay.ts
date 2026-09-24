@@ -47,7 +47,7 @@ export class PlaytimeOverlay {
 
 		const line = document.createElement('div');
 		line.className = 'playtime-line';
-		line.textContent = lockedText ?? 'ASK A GROWN-UP';
+		line.textContent = lockedText ?? 'ASK A PARENT';
 		const menuBtn = document.createElement('button');
 		menuBtn.className = 'playtime-button';
 		menuBtn.textContent = 'MENU';

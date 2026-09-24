@@ -764,3 +764,90 @@
 .inventory-search:focus {
 	border-color: #5fd35f;
 }
+
+/* Menu screens (multiplayer spec §8): home, Single Player, Parents. */
+.home-buttons {
+	margin: 8px 0 16px;
+}
+.menu-card .home-button {
+	padding: 20px;
+	font-size: 22px;
+	font-weight: 600;
+	margin: 12px 0;
+	background: #3d6b3d;
+}
+.menu-card .home-button:hover {
+	background: #4a804a;
+}
+.menu-card .menu-small,
+.menu-card .menu-back {
+	padding: 8px;
+	font-size: 14px;
+	background: #383838;
+}
+.world-list {
+	max-height: 40vh;
+	overflow-y: auto;
+	margin: 8px 0;
+}
+.world-row {
+	align-items: center;
+	gap: 8px;
+	border: 2px solid transparent;
+}
+.world-row.selected {
+	border-color: #6fbf6f;
+	background: #243424;
+}
+.world-row .world-name {
+	flex: 1;
+	overflow: hidden;
+	text-overflow: ellipsis;
+	white-space: nowrap;
+}
+.world-badge {
+	font-size: 11px;
+	padding: 2px 6px;
+	border-radius: 8px;
+	background: #3a3a3a;
+	color: #ccc;
+	white-space: nowrap;
+}
+.world-badge.badge-cloud {
+	background: #2d4560;
+	color: #bcd8f5;
+}
+.world-badge.badge-new {
+	background: #4d4020;
+	color: #f0d890;
+}
+.duration-control {
+	display: flex;
+	align-items: center;
+	justify-content: center;
+	gap: 16px;
+	margin: 8px 0 12px;
+}
+.menu-card .duration-step {
+	width: 56px;
+	height: 56px;
+	margin: 0;
+	padding: 0;
+	font-size: 28px;
+	border-radius: 50%;
+}
+.duration-value {
+	min-width: 150px;
+	text-align: center;
+	font-size: 30px;
+	font-weight: 700;
+}
+.menu-card .play-big {
+	padding: 18px;
+	font-size: 22px;
+	font-weight: 600;
+	background: #3d6b3d;
+}
+.menu-card .play-big:hover {
+	background: #4a804a;
+}

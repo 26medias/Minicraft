@@ -128,11 +128,13 @@ for (const sig of ['SIGINT', 'SIGTERM', 'SIGHUP'] as const) process.on(sig, () =
 		await page.addInitScript('window.__name = (f) => f;');
 		await page.goto(`http://localhost:${PORT}/`);
 
-		// 1. New World with the checkbox ticked.
-		await page.click('text=New World');
+		// 1. New World with the checkbox ticked (home → Single Player → New World → Create → Play).
+		await page.click('#home-single');
+		await page.click('#single-new');
 		await page.fill('#w-seed', String(SEED));
 		await page.check('#w-must-mine');
-		await page.click('text=Create');
+		await page.click('#w-create');
+		await page.click('#single-play');
 		await page.waitForFunction(() => (window as unknown as { __mc?: unknown }).__mc !== undefined);
 		await page.waitForFunction(() => {
 			const m = (window as unknown as { __mc: { loop: { stats: { streamQueue: number; mounted: number } } } }).__mc;

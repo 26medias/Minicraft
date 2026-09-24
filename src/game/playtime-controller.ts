@@ -42,7 +42,7 @@ export type PlaytimeDeps = {
 	save(s: PlaytimeSession): void;
 	now(): number;
 	visible(): boolean;
-	/** Shown instead of ASK A GROWN-UP on a freeze (schedule mode). */
+	/** Shown instead of ASK A PARENT on a freeze (schedule mode). */
 	lockedText?: string;
 };
 

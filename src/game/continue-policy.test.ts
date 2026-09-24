@@ -22,7 +22,7 @@ describe('resolveContinue', () => {
 	it('gives a mismatch its own wording', () => {
 		const d = resolveContinue({ error: new SaveMismatch('64 vs 256') }, 'Castle');
 		expect(d.ok).toBe(false);
-		if (!d.ok) expect(d.notice).toBe('Castle has two different copies (this device and the cloud). Ask a grown-up. Nothing was changed.');
+		if (!d.ok) expect(d.notice).toBe('Castle has two different copies (this device and the cloud). Ask a parent. Nothing was changed.');
 	});
 	it('handles a non-Error throw', () => {
 		const d = resolveContinue({ error: 'boom' }, 'Castle');

@@ -89,7 +89,7 @@ async function main() {
 				return;
 			}
 			if (action.type === 'new') startGame(action.id, action.seed, action.name, null, action.mustMine);
-			else startGame(action.id, action.seed, action.name, 'continue');
+			else if (action.type === 'continue') startGame(action.id, action.seed, action.name, 'continue');
 		}, notice);
 	}
 

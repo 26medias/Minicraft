@@ -764,3 +764,17 @@
 .inventory-search:focus {
 	border-color: #5fd35f;
 }
+/* Multiplayer minimap (spec §7.6): bottom-left, round, above the hotbar, under the menus. */
+#minimap {
+	position: fixed;
+	left: 16px;
+	bottom: 16px;
+	width: 160px;
+	height: 160px;
+	border-radius: 50%;
+	border: 3px solid #fff;
+	background: rgb(40, 40, 40);
+	box-shadow: 0 2px 8px rgba(0, 0, 0, 0.4);
+	z-index: 5;
+	pointer-events: none;
+}

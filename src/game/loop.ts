@@ -17,10 +17,12 @@ import { tntKey, TNT_CHAIN_FUSE } from './tnt';
 import { cellInBox, detonate, playerBox, yawDir } from './blast-shapes';
 import { updateLightsForBlockChange } from '../engine/world/lighting';
 import { LiquidScheduler } from './liquid-scheduler';
-import { chunkIndex, chunkIndexOrNeg, WORLD_CHUNKS_Z } from '../engine/world/coords';
+import { chunkIndex, chunkIndexOrNeg, indexOf, WORLD_CHUNKS_Z } from '../engine/world/coords';
 import { planFrame, chebyshev, budgetFor, MESH_RADIUS, UNMOUNT_RADIUS, DATA_RADIUS } from './chunk-scheduler';
 import { areaBounds, areaCells, inHeldZone, isMultiBlock, miningDuration, type AreaBounds } from './tools';
 import type { PickaxeTier } from '../data/crafting.data';
+import type { ChunkOverlay } from '../engine/world/overlay';
+import { intToColor, type Op } from '../net/protocol';
 
 const LAMP_ID = BLOCK_BY_NAME['lamp'].id;
 const FACE_OFFSET: Readonly<Record<Face, [number, number, number]>> = {
@@ -113,6 +115,20 @@ export class GameLoop {
 	private lastArea: (AreaBounds & { face: Face }) | null = null;
 	private primedTnt = new Map<string, PrimedEntry>();
 	private scheduler: LiquidScheduler;
+	/**
+	 * Multiplayer (spec §6): server-sequenced ops waiting to be applied, at most REMOTE_OPS_PER_FRAME per frame. The target
+	 * chunk is resolved at apply time (a chunk can be evicted while ops wait). `recolor`: the enqueue changed the lamp
+	 * registry's colour for this cell, so the drain must relight even when id and fluid already match.
+	 */
+	private remoteQueue: Array<{ op: Op; recolor: boolean }> = [];
+	/** Spec §6, G1: 2.1k ops cost 15 ms to apply plus 44 ms in the first tick; a radius-8 TNT is about 2.1k cells. */
+	static readonly REMOTE_OPS_PER_FRAME = 2000;
+	/** Multiplayer: set by main.ts (null in solo). Its overlay is updated at receive time, before queueing. */
+	mp: { overlay: ChunkOverlay } | null = null;
+	/** Multiplayer, set by main.ts: the connection is lost. The paused branch then neither drains nor simulates. */
+	mpDisconnected = false;
+	/** Set by main.ts while the play timer has frozen the game. The paused branch then neither drains nor simulates. */
+	frozenByTimer = false;
 
 	onBlockBroken: ((ev: BlockBrokenEvent) => void) | null = null;
 	/**
@@ -496,6 +512,100 @@ export class GameLoop {
 		return true;
 	}
 
+	/** Remote ops queued and not yet applied. */
+	get remotePending(): number {
+		return this.remoteQueue.length;
+	}
+
+	/**
+	 * Spec §6: queue a server-sequenced batch. The overlay is updated now, for every op, loaded chunk or not (idempotent).
+	 * The lamp registry too (gate-2 C3): an op with a colour registers or recolours its lamp, and an op on a registered
+	 * lamp cell whose id is no longer a lamp unregisters it, at receive time, loaded or not. Chunk writes wait for
+	 * drainRemote.
+	 */
+	enqueueRemote(ops: readonly Op[]): void {
+		for (const op of ops) {
+			const [x, y, z, id, fluid, color] = op;
+			this.mp?.overlay.set(x, y, z, id, fluid, color);
+			let recolor = false;
+			if (this.lights) {
+				const was = this.lights.getColor(x, y, z);
+				const hex = intToColor(color);
+				if (hex && id === LAMP_ID) {
+					if (was === null) this.lights.add(x, y, z, hex);
+					else if (was !== hex) this.lights.setColor(x, y, z, hex);
+					recolor = was !== hex;
+				} else if (was !== null && id !== LAMP_ID) {
+					this.lights.remove(x, y, z);
+				}
+			}
+			this.remoteQueue.push({ op, recolor });
+		}
+	}
+
+	/**
+	 * Spec §6 applyRemote: apply up to REMOTE_OPS_PER_FRAME queued ops through the batched path (batchCell per cell,
+	 * routeBatch once). Per op: an op whose chunk is not loaded is skipped (the overlay already has it; never
+	 * ensureChunk); an op whose id and fluid already match is a no-op unless its enqueue recoloured the lamp (re-gate: the
+	 * check never compares colour, the registry was updated at enqueue); otherwise the cell's effects are cleared (a
+	 * primed TNT and its fuse overlay; the lamp registry is enqueue's job), World.writeRemote (liquid wake, no local-write
+	 * hook), then the relight. An op on the block being mined cancels the mine. Afterwards the player is lifted out of
+	 * any solid a remote block put him in.
+	 */
+	drainRemote(): void {
+		if (this.remoteQueue.length === 0) return;
+		const n = Math.min(this.remoteQueue.length, GameLoop.REMOTE_OPS_PER_FRAME);
+		const batch = this.newBatch();
+		let anchor: { x: number; y: number; z: number } | null = null;
+		for (let k = 0; k < n; k++) {
+			const { op, recolor } = this.remoteQueue[k];
+			const [x, y, z, id, fluid] = op;
+			if (!this.world.inBounds(x, y, z)) continue;
+			const cx = Math.floor(x / 16), cz = Math.floor(z / 16);
+			const c = this.world.getChunk(cx, cz);
+			if (!c) continue;
+			const i = indexOf(x - cx * 16, y, z - cz * 16);
+			const oldId = c.blocks[i] as BlockId;
+			if (oldId === id && (c.fluidMeta.get(i) ?? 0) === fluid && !recolor) continue;
+			const m = this.mining;
+			if (m && m.target.x === x && m.target.y === y && m.target.z === z) this.mining = null;
+			if (oldId !== id && this.primedTnt.delete(tntKey(x, y, z))) this.overlay?.remove(x, y, z);
+			this.world.writeRemote(x, y, z, id, fluid);
+			this.batchCell(batch, x, y, z);
+			anchor ??= { x, y, z };
+		}
+		this.remoteQueue.splice(0, n);
+		if (anchor) this.routeBatch(batch, anchor);
+		this.liftPlayerIfInside();
+	}
+
+	/**
+	 * Spec §6 / T14 (re-gate C3): when the player's box overlaps a solid cell, search upward from floor(feetY) to
+	 * height − 2 for the first feet height at which the whole box (every column the 0.6-wide box overlaps) overlaps no
+	 * solid, with the same overlap test as this trigger. x and z are kept; vertical velocity is zeroed. In a 2-high
+	 * tunnel filled at the feet this goes up through the ceiling: he ends up standing on top.
+	 */
+	private liftPlayerIfInside(): void {
+		const p = this.player.position;
+		if (!this.boxHitsSolid(p[0], p[1], p[2])) return;
+		for (let y = Math.floor(p[1]); y <= this.world.height - 2; y++) {
+			if (this.boxHitsSolid(p[0], y, p[2])) continue;
+			this.player.position = [p[0], y, p[2]];
+			this.player.vy = 0;
+			return;
+		}
+	}
+
+	/** Does the player's box with its feet at (x, y, z) overlap a solid cell? (cellInBox: touching faces do not.) */
+	private boxHitsSolid(x: number, y: number, z: number): boolean {
+		const box = playerBox([x, y, z]);
+		for (let bx = Math.floor(box.min[0]); bx <= Math.floor(box.max[0]); bx++)
+			for (let by = Math.floor(box.min[1]); by <= Math.floor(box.max[1]); by++)
+				for (let bz = Math.floor(box.min[2]); bz <= Math.floor(box.max[2]); bz++)
+					if (cellInBox(bx, by, bz, box) && this.world.inBounds(bx, by, bz) && isSolid(this.world.getBlock(bx, by, bz))) return true;
+		return false;
+	}
+
 	start() {
 		this.renderer.onTick((dt) => this.tick(dt));
 	}
@@ -512,12 +622,25 @@ export class GameLoop {
 		if (this.paused) {
 			this.cam.sync(this.renderer.camera);
 			this.updateSpeed(dt);
-			this.loadNearbyChunks();
-			this.flushDirtyChunks();
-			this.evict();
+			// Multiplayer (gate-2 + re-gate C3): an open inventory does not pause the shared world. Remote ops keep
+			// landing and the simulation keeps running, unless the connection is lost or the play timer froze the game.
+			if (this.mp && !this.mpDisconnected && !this.frozenByTimer) {
+				this.drainRemote();
+				this.simulate(dt);
+				this.evict();
+				this.overlay?.tick(dt);
+				this.loadNearbyChunks();
+				this.flushDirtyChunks();
+			} else {
+				this.loadNearbyChunks();
+				this.flushDirtyChunks();
+				this.evict();
+			}
 			this.highlight?.hide();
 			return;
 		}
+		// Remote ops first (a no-op in solo, where nothing is ever queued): physics, the aim and mining then see them.
+		this.drainRemote();
 		// Use getLookDir() (full 3D, includes pitch) so that cursor-directed fly/swim
 		// movement contributes a Y component. On-ground walking still only reads x/z
 		// from this vector, so there's no horizontal-speed regression.
@@ -571,6 +694,7 @@ export class GameLoop {
 	 * meshes beyond UNMOUNT_RADIUS and clear every numeric set of the index (an entry left in
 	 * mountedChunks would block the re-mesh on re-entry); drop UNMODIFIED data beyond DATA_RADIUS —
 	 * modified chunks stay for the session (autosave.snapshot() is exactly world.modifiedChunks()).
+	 * In multiplayer (world.modifiedPins false) modified chunks are dropped too.
 	 */
 	private evict() {
 		const pcx = Math.floor(this.player.position[0] / 16), pcz = Math.floor(this.player.position[2] / 16);
@@ -588,8 +712,9 @@ export class GameLoop {
 		for (const i of this.streamSet) if (chebyshev(i, pcx, pcz) > MESH_RADIUS) this.streamSet.delete(i);
 		for (const i of this.shadowOnly) if (chebyshev(i, pcx, pcz) > MESH_RADIUS) this.shadowOnly.delete(i);
 		for (const i of this.bulkLane) if (chebyshev(i, pcx, pcz) > MESH_RADIUS) this.bulkLane.delete(i);
+		// Multiplayer (spec §6): `modified` does not pin; generation plus the overlay rebuild the chunk.
 		for (const c of this.world.allChunks()) {
-			if (!c.modified && Math.max(Math.abs(c.cx - pcx), Math.abs(c.cz - pcz)) > DATA_RADIUS) {
+			if ((!c.modified || !this.world.modifiedPins) && Math.max(Math.abs(c.cx - pcx), Math.abs(c.cz - pcz)) > DATA_RADIUS) {
 				const i = chunkIndex(c.cx, c.cz);
 				if (this.inFlightIndex.has(i)) continue; // its reply is still owed; onJobReply's wanted() discards it
 				this.world.dropChunk(c.cx, c.cz);

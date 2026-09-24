@@ -1040,7 +1040,10 @@ Read spec §3.1 (Liveness), §5, §6 (Echo rule), §7.1 (MpSync) and §7.5.
   | anything else | `lost` |
 
 - **Consecutive 4003 counter:** `sessionStorage['mp:resync']`. A second consecutive 4003 turns
-  into `fatal` with code 4004. The counter resets after a `welcome`.
+  into `fatal` with code 4004. *(C4 review fix: the counter resets when the server accepts one of
+  this client's edits — an `edit` whose `by` is `welcome.you` — NOT on `welcome`. The server sends
+  4003 only for a rejected edit, which always follows a welcome, so a welcome reset never breaks
+  the loop.)*
 
 **Tests:**
 - **T7** (`echo.test.ts` and `mp-sync.test.ts`):
@@ -1382,12 +1385,16 @@ Read spec §7 (all of it) and §8.1 (boot).
      sets `world.overlay = overlay` and `world.modifiedPins = false`.
    - It skips `adapter.loadWorld` and legacy adoption.
    - The spawn comes from `resolveMpSpawn`.
-   - Extras come from `welcome.extras`, through `resolvePlayerExtras(extras, mustMine)`.
+   - Extras come from `MpSync.readStash(sessionStorage, stashTag) ?? welcome.extras`, through
+     `resolvePlayerExtras(extras, mustMine)` *(C4 handoff: the stash may be newer than `welcome.extras`;
+     building from `welcome.extras` lets the next `markDirty` overwrite the re-sent stash)*.
    - **`catalogMax`** (spec §5): block ids above `welcome.catalogMax` are removed from the hotbar
      and hidden from the inventory's Blocks tab for this session. Use a filter on `BLOCKS` passed
      to `Inventory`/`resolveHotbar`. Unit-test the filter in `src/net/catalog-filter.test.ts`:
      with an id above the maximum in the hotbar, it is replaced by the default for that slot.
    - `autosave` becomes the `MpSync` instance (same shape). `world.onLocalWrite = mpSync.record`.
+     *(C4 handoff: the constructor also takes `apply` = `loop.enqueueRemote` and
+     `stashTag` = `${uuid}:${name}`; call `resendStashed()` after `welcome`.)*
    - `loop.mp = {overlay}`.
    - `RemotePlayers`, `Minimap` and `LeavingCountdown` are created. Each tick:
      - `mpSync.flushFrame()`

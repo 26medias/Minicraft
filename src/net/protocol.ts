@@ -144,6 +144,20 @@ export type ErrorMsg = { t: 'error'; code: number; message: string };
 export type ClientMsg = Hello | Pos | Ping | EditMsg | FxMsg | ExtrasMsg | LeavingMsg;
 export type ServerMsg = Welcome | EditOut | Tick | Join | Left | FxMsg | LeavingMsg | Ping | ErrorMsg;
 
+/** `true` only when A and B are the same union. */
+type SameUnion<A, B> = [A] extends [B] ? ([B] extends [A] ? true : false) : false;
+
+/** Every client → server `t`, at run time. `src/net/multiplayer-docs.test.ts` checks the docs table against it. */
+export const CLIENT_MSG_TYPES = ['hello', 'pos', 'ping', 'edit', 'fx', 'extras', 'leaving'] as const;
+/** Every server → client `t` (the binary snapshot frame has none). */
+export const SERVER_MSG_TYPES = ['welcome', 'edit', 'tick', 'join', 'left', 'fx', 'leaving', 'ping', 'error'] as const;
+
+/** Compile-time proof that the two lists above name exactly the `t` of each union. */
+export const MSG_TYPES_MATCH: [
+	SameUnion<(typeof CLIENT_MSG_TYPES)[number], ClientMsg['t']>,
+	SameUnion<(typeof SERVER_MSG_TYPES)[number], ServerMsg['t']>,
+] = [true, true];
+
 // ── HTTP ──
 
 export type OnlinePlayer = { name: string; skin: string };

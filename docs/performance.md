@@ -133,7 +133,7 @@ after the `minicraft:world-ready` mark; the one-time spawn search before it is p
 separately), 40 edge and 20 interior edits (every edit applied; main-thread work per edit, the
 `lastEditWorkMs` stat, edge ≤ 50 ms and interior ≤ 20 ms; no frame over 50 ms), and memory after 30 s of flight (heap including typed-array
 backing stores ≤ 250 MB, mounted ≤ (2·`UNMOUNT_RADIUS`+1)², data ≤ (2·`DATA_RADIUS`+1)² plus
-modified chunks). fps and p95 are
+modified chunks), and the multiplayer minimap (median redraw while walking < 1 ms; see below). fps and p95 are
 printed but never gate: they swung by 2× between identical runs.
 
 Final run (same machine as the baseline, medians of 5):
@@ -233,6 +233,32 @@ render-side or garbage collection, not script work). It has shown up in the walk
 in the edit row in another, 0 or 1 per repetition, and is not yet attributed. After the fog change
 (radii 6/7/8) the run gave: walk, fly, load and memory ok; edits work max 28 ms edge / 13 ms
 interior, one such frame in 3 of 5 reps; memory 85 MB with 72 chunks mounted.
+
+### Multiplayer minimap (2026-09-24)
+
+The multiplayer minimap (`src/ui/minimap.ts`, spec §7.6 of the multiplayer design) redraws at
+10 Hz: one 97×97 `putImageData`, then a rotated `drawImage`. Its budget is under 1 ms per redraw.
+The `minimap` phase of the bench times `Minimap.update` directly: the real class, imported through
+the dev server into the loaded seed-3 world, at the player's spot with 3 other players, and the
+10 Hz throttle bypassed so every call redraws. Colour values do not change the cost, so the
+colour table is flat grey. The gate is the median redraw while walking.
+
+`env -u DISPLAY xvfb-run -a -s "-screen 0 1920x1080x24" npm run perf:bench -- --phases minimap --gl auto`,
+medians of 5 (49 chunks in range):
+
+| Minimap redraw | median ms | worst ms | gate |
+|---|---|---|---|
+| cold map, first 20 redraws | — | 2.40 | info |
+| still, turning | 0.10 | 0.30 | info |
+| walking 5 b/s | 0.10 | 0.60 | ok |
+
+A steady redraw costs about 0.1 ms. The first redraws of a fresh map cost 2.3 to 3.6 ms: each
+rebuilds up to 4 chunks' column caches while the code is still cold. That happens once per
+multiplayer join, at 10 Hz, well inside a frame. Walking into new chunks peaks at 0.6 ms.
+
+`--gl auto` exists because `--use-gl=angle` cannot create a WebGL context under `xvfb-run` on the
+dev box. Without ANGLE, xvfb renders in software, so use its frame times for comparison only. The
+minimap timing is script-side and not affected. The dev box is faster than Noah's laptop.
 
 ## Out of scope
 

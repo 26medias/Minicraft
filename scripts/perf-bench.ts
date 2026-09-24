@@ -1,6 +1,6 @@
 // scripts/perf-bench.ts — the browser benchmark of the performance spec (§6.5).
 //
-//   npm run perf:bench [-- --reps 6] [--phases still,walk,fly,load,edit,memory,craft] [--port 5174]
+//   npm run perf:bench [-- --reps 6] [--phases still,walk,fly,load,edit,memory,craft,minimap] [--port 5174] [--gl angle|auto]
 //
 // Starts a Vite dev server on --port with VITE_MINICRAFT_API_URL pointed at a dead local port
 // (never the production save API), drives a headed Chromium through Playwright, creates a new
@@ -21,8 +21,11 @@ function arg(name: string, def: string) {
 
 const PORT = Number(arg('--port', '5174'));
 const REPS = Number(arg('--reps', '6'));
-const PHASES = arg('--phases', 'still,walk,fly,load,edit,memory,craft').split(',');
+const PHASES = arg('--phases', 'still,walk,fly,load,edit,memory,craft,minimap').split(',');
 const SEED = 3;
+// `--gl angle` (default) forces ANGLE, as on real hardware. Under `xvfb-run` ANGLE cannot create a WebGL context on this
+// box; `--gl auto` leaves Chromium's own choice (software GL there), which is fine for the script-side minimap timing.
+const GL = arg('--gl', 'angle');
 const GATES = {
 	walkLongTaskMs: 100, walkOver50: 0,
 	flyLongTaskMs: 400, flyOver50: 5,
@@ -34,6 +37,9 @@ const GATES = {
 	// mounted within 16 frames of its edit. The dev box is faster than Noah's laptop: a value past the margin
 	// (80 % of the gate) prints "thin" beside "ok".
 	craftFrameMs: 50, craftLightMs: 15, craftBulkFrames: 16, craftMargin: 0.8,
+	// Multiplayer minimap (spec §7.6): one 10 Hz redraw under 1 ms. Gated on the median redraw while walking (≤ 4 chunk
+	// rebuilds each); the worst redraw is printed beside it.
+	minimapMs: 1,
 };
 const STONE = BLOCK_BY_NAME['stone'].id; // 3 in the frozen base catalog; never guess it
 if (!(REPS >= 2)) throw new Error('--reps must be ≥ 2 (first repetition is warm-up)');
@@ -100,10 +106,13 @@ async function newWorld(page: Page, timed = false) {
 	await page.goto(`http://localhost:${PORT}/`);
 	await page.evaluate(INSTRUMENT);
 	if (timed) await page.evaluate(() => { (window as unknown as { __benchT0: number }).__benchT0 = performance.now(); });
-	// menu (src/ui/menu.ts): "New World" button → renderNew() card with #w-seed and a "Create" button
-	await page.click('text=New World');
+	// menu (src/ui/menu.ts, spec §8): home → Single Player → New World (#w-seed, Create selects the new world) → Play.
+	// The duration stays at its default: No limit on a fresh browser, so no timer runs.
+	await page.click('#home-single');
+	await page.click('#single-new');
 	await page.fill('#w-seed', String(SEED));
-	await page.click('text=Create');
+	await page.click('#w-create');
+	await page.click('#single-play');
 	await page.waitForFunction(() => (window as unknown as { __mc?: unknown }).__mc !== undefined);
 	console.log('api:', await page.evaluate(() => (window as unknown as { __mc: { apiUrl?: string } }).__mc.apiUrl ?? '(no apiUrl on __mc: Task 7 adds it)')); // informational; the route guard is the safety property
 	// Initial load done: the whole view ring mounted (≥ 81 = the 9×9 walk ring; Task 4 raises it to 121) and nothing queued.
@@ -449,6 +458,63 @@ async function crafting(page: Page): Promise<CraftResult> {
 	}
 	return { rows };
 }
+type MinimapResult = { coldMax: number; stillMedian: number; stillMax: number; walkMedian: number; walkMax: number; chunks: number };
+/**
+ * Spec §7.6: the cost of one `Minimap.update` redraw, timed around the call in the loaded seed-3 world. The map is the
+ * real class from `src/ui/minimap.ts`, imported through the dev server, at a virtual player on the real player's spot with
+ * 3 other players. Colour values do not change the cost, so the colour table is a flat grey. `now` advances 100 ms per
+ * call so every call redraws (the 10 Hz throttle is bypassed, not measured).
+ * - cold: the first 20 redraws of a fresh map (each rebuilds up to 4 chunk column caches);
+ * - still: 100 redraws, the player still and turning;
+ * - walk: 100 redraws, the player moving 0.5 block per redraw (5 blocks/s at 10 Hz), so new chunks keep entering.
+ */
+async function minimapBench(page: Page): Promise<MinimapResult> {
+	return page.evaluate(async ({ tableLen }) => {
+		const mc = (window as unknown as { __mc: { world: { getChunk(cx: number, cz: number): unknown }; player: { position: [number, number, number] } } }).__mc;
+		const url = '/src/ui/minimap.ts';
+		const mod = (await import(/* @vite-ignore */ url)) as {
+			Minimap: new (app: HTMLElement, table: Uint8Array) => { update(now: number, world: unknown, player: { position: readonly [number, number, number] }, yaw: number, others: unknown[]): void; remove(): void };
+		};
+		const host = document.createElement('div');
+		document.body.appendChild(host);
+		const map = new mod.Minimap(host, new Uint8Array(tableLen).fill(128));
+		const [x0, y0, z0] = mc.player.position;
+		const pos: [number, number, number] = [x0, y0, z0];
+		const others = [
+			{ x: x0 + 10, y: y0, z: z0 + 5, skin: 'red' },
+			{ x: x0 - 30, y: y0 + 12, z: z0 - 20, skin: 'blue' },
+			{ x: x0 + 200, y: y0, z: z0, skin: 'green' },
+		];
+		let now = 0;
+		let yaw = 0;
+		const time = () => {
+			now += 100;
+			const t = performance.now();
+			map.update(now, mc.world, { position: pos }, yaw, others);
+			return performance.now() - t;
+		};
+		const cold: number[] = [];
+		for (let i = 0; i < 20; i++) cold.push(time());
+		const still: number[] = [];
+		for (let i = 0; i < 100; i++) { yaw += 0.05; still.push(time()); }
+		const walk: number[] = [];
+		for (let i = 0; i < 100; i++) { pos[0] += 0.5; walk.push(time()); }
+		map.remove();
+		host.remove();
+		const med = (xs: number[]) => [...xs].sort((a, b) => a - b)[Math.floor(xs.length / 2)];
+		let chunks = 0;
+		for (let cx = Math.floor((x0 - 48) / 16); cx <= Math.floor((x0 + 48) / 16); cx++) {
+			for (let cz = Math.floor((z0 - 48) / 16); cz <= Math.floor((z0 + 48) / 16); cz++) if (mc.world.getChunk(cx, cz)) chunks++;
+		}
+		return {
+			coldMax: Math.max(...cold),
+			stillMedian: med(still), stillMax: Math.max(...still),
+			walkMedian: med(walk), walkMax: Math.max(...walk),
+			chunks,
+		};
+	}, { tableLen: BLOCKS.length * 3 });
+}
+
 type MemoryResult = { heapMB: number; mounted: number; data: number; modified: number };
 async function memory(page: Page, cdp: CDPSession, dir: { dirX: number; dirZ: number }): Promise<MemoryResult> {
 	await move(page, 'fly', dir.dirX, dir.dirZ, 25, 30);
@@ -465,7 +531,7 @@ async function memory(page: Page, cdp: CDPSession, dir: { dirX: number; dirZ: nu
 
 (async () => {
 	stopDev = await startDev();
-	const browser = await chromium.launch({ headless: false, args: ['--use-gl=angle'] });
+	const browser = await chromium.launch({ headless: false, args: GL === 'angle' ? ['--use-gl=angle'] : [] });
 	const out: Record<string, Record<string, unknown>[]> = {};
 	let failed = false;
 	try {
@@ -498,6 +564,7 @@ async function memory(page: Page, cdp: CDPSession, dir: { dirX: number; dirZ: nu
 					if (phase === 'edit') runs.push(await edits(page));
 					if (phase === 'memory') runs.push(await memory(page, cdp, dir));
 					if (phase === 'craft') runs.push(await crafting(page));
+					if (phase === 'minimap') runs.push(await minimapBench(page));
 				}
 				console.log(`# ${phase} rep ${rep}${rep === 0 ? ' (warm-up)' : ''}: ${JSON.stringify(runs[runs.length - 1], (k, v) => (k === 'edge' || k === 'interior' || k === 'slow' || k === 'events' || k === 'eventMs' ? undefined : typeof v === 'number' ? Math.round(v * 10) / 10 : v))}`);
 				await page.close();
@@ -552,6 +619,13 @@ async function memory(page: Page, cdp: CDPSession, dir: { dirX: number; dirZ: nu
 			const per = rs[0].eventMs.map((_, k) => Math.max(...rs.map((x) => x.eventMs[k] ?? 0)).toFixed(1));
 			rows.push(`${def.name}: detonation frames ${per.join(' / ')} ms`);
 		}
+	}
+	if (out.minimap) {
+		const walkMed = med('minimap', 'walkMedian');
+		rows.push('', '| Minimap redraw (spec §7.6) | median ms | worst ms | gate |', '|---|---|---|---|');
+		rows.push(`| cold map, first 20 redraws | — | ${med('minimap', 'coldMax').toFixed(2)} | info |`);
+		rows.push(`| still, turning | ${med('minimap', 'stillMedian').toFixed(2)} | ${med('minimap', 'stillMax').toFixed(2)} | info |`);
+		rows.push(`| walking 5 b/s | ${walkMed.toFixed(2)} | ${med('minimap', 'walkMax').toFixed(2)} | ${gate(walkMed < GATES.minimapMs)} |`);
 	}
 	console.log(rows.join('\n'));
 	process.exit(failed ? 1 : 0);

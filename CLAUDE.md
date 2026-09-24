@@ -10,11 +10,13 @@ Minicraft is a **deliberately minimal** Minecraft-style voxel sandbox for a 7-ye
 
 **Hard non-goals** (do not add, do not suggest adding unless asked):
 - Mobs, combat, health, hunger, damage
-- Multiplayer, networking gameplay, accounts
+- Accounts, public servers, matchmaking, chat
 - Survival mechanics (day/night gameplay, weather effects, hunger)
 - Redstone, command blocks, automation, farming
 - Mod loading, custom resource packs
 - Achievements, quests, progression systems
+
+**Multiplayer exists as a private two-family feature** (Noah and a friend in the same world, on a server Julien starts by hand). It is not a platform: keep it that small. See `docs/multiplayer.md`.
 
 When in doubt about scope, lean toward removing features, not adding them. See `README.md` for the full feature list and target UX.
 
@@ -26,15 +28,23 @@ is hosted at `https://noah.leap-forward.ca/minicraft/`.
 
 Layout: `src/engine/` (world, render, input), `src/game/` (loop, player,
 liquids, TNT), `src/ui/`, `src/persistence/`, `src/data/` (`*.data.ts` are pure
-data). `api/` holds the Cloud Function for cloud saves and deploys separately.
+data), `src/net/` (multiplayer client: protocol, snapshot codec, socket, sync).
+`api/` holds the Cloud Function for cloud saves and deploys separately. `server/`
+holds `mcserver`, the Go + SQLite multiplayer relay (runbook: `server/README.md`;
+Go is at `~/.local/go/bin`).
 
 Per-subsystem docs live in `docs/`: `lighting.md`, `liquids.md`, `movement.md`, `worldgen.md`, `performance.md`,
-`persistence.md`, `inventory.md`, `crafting.md`. `docs/specs.md` is the source of truth for the tech stack.
+`persistence.md`, `inventory.md`, `crafting.md`, `playtime.md`, `multiplayer.md`. `docs/specs.md` is the source of truth for the tech stack.
 
 ⚠ **The kid's real worlds live in the localStorage of
 `https://noah.leap-forward.ca` and in `gs://minicraft-worlds`. Never point tests
 at the production site.** Test at `localhost:5173`. `./deploy.sh` deploys the API
 only — the website is deployed by hand.
+
+⚠ **Never point tests at `mc.leap-forward.ca`.** The multiplayer server's data
+lives in the VM's `/var/lib/mcserver` and in `gs://minicraft-worlds/mp-backups`.
+Multiplayer tests start their own local `mcserver` on a temp database.
+`server/deploy.sh` is run by Julien only.
 
 ## Assets
 

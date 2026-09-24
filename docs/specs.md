@@ -4,7 +4,7 @@ Status: **committed** as of 2026-04-20. Source of truth for stack and architectu
 
 ## 1. Purpose
 
-A minimal Minecraft-style voxel sandbox for the author's 7-year-old son. Deployed as a static web bundle behind Cloudflare on a private subdomain. Single-player, no mobs, no survival mechanics — mine and place blocks, and that's it.
+A minimal Minecraft-style voxel sandbox for the author's 7-year-old son. Deployed as a static web bundle behind Cloudflare on a private subdomain. Single-player, no mobs, no survival mechanics — mine and place blocks, and that's it. A private multiplayer mode (added 2026-09) lets two families build in the same world; see `docs/multiplayer.md`.
 
 Primary target environment: **Ubuntu + Chrome + desktop GPU**. Other browsers/OSes are not supported in Phase 1.
 
@@ -20,7 +20,7 @@ Acceptance test for "done enough to ship to Noah": hand him the laptop, he place
 - New block = one row in `blocks.data.ts` — no cross-file edits
 
 ### Non-goals (do not design for these, ever)
-Mobs, combat, health, hunger, damage, multiplayer, networking gameplay, day/night affecting gameplay, weather, redstone, command blocks, automation, farming, mods, custom resource packs, progression, achievements, iPad/touch controls, Safari, Firefox parity.
+Mobs, combat, health, hunger, damage, public or matchmade multiplayer (the private two-family mode in `docs/multiplayer.md` is the only exception), accounts, day/night affecting gameplay, weather, redstone, command blocks, automation, farming, mods, custom resource packs, progression, achievements, iPad/touch controls, Safari, Firefox parity.
 
 ## 3. Tech Stack
 
@@ -36,6 +36,11 @@ Mobs, combat, health, hunger, damage, multiplayer, networking gameplay, day/nigh
 | Testing | **Vitest** | Vite-native |
 | Lint / format | ESLint + Prettier | Standard |
 | Physics | none — hand-rolled AABB | A physics lib is overkill for voxel collision |
+| Multiplayer server | **Go 1.25**, one binary `mcserver` (`server/`) | One goroutine per world orders, persists and relays edits; installed without sudo in `~/.local/go` |
+| Multiplayer socket | `github.com/coder/websocket` | JSON text frames plus one binary snapshot frame; read limit 4 MiB |
+| Multiplayer storage | **SQLite** (WAL) via `modernc.org/sqlite` | Pure Go, no cgo; the differential cell state per world, flushed every 1 s; hourly `VACUUM INTO` backups to `gs://minicraft-worlds/mp-backups` |
+| Multiplayer hosting | GCE `e2-micro` VM behind a **Cloudflare Tunnel** (`mc.leap-forward.ca`) | No inbound ports, no certificates, no DNS updater; Julien starts the VM by hand |
+| Multiplayer E2E | headless Playwright (`npm run e2e:mp`) | Two browsers against a local `mcserver`; every non-local host is blocked |
 
 ### Why WebGL2, not WebGPU or raw WebGL
 - The expected bottleneck at this scope is **JS-side** (mesh rebuild, chunk scheduling), not GPU submission. WebGPU's compute advantages don't apply until we do GPU-side meshing or heavy particles — not on the roadmap.
@@ -144,7 +149,9 @@ src/
         hud.ts                # hotbar overlay
         menu.ts               # main menu (New / Continue / Options)
         options.ts            # keybinding UI
+    net/                      # multiplayer client: protocol, snapshot codec, MpClient, MpSync
     main.ts                   # entry point
+server/                       # Go multiplayer relay (mcserver) + SQLite; runbook in server/README.md
 scripts/
     build-atlas.ts            # offline atlas builder (node-canvas or sharp)
 public/
@@ -197,7 +204,9 @@ docs/
 
 ## 9. Deployment
 
-Static bundle from `vite build` → upload to a **GCP Cloud Storage** bucket configured for static hosting → fronted by **Cloudflare** on a private subdomain. No server for the game itself.
+Static bundle from `vite build` → upload to a **GCP Cloud Storage** bucket configured for static hosting → fronted by **Cloudflare** on a private subdomain. No server for solo play.
+
+Multiplayer adds one server: `mcserver` on a GCE `e2-micro` VM, reached only through a Cloudflare Tunnel at `mc.leap-forward.ca`. The site reads `VITE_MINICRAFT_MP_URL` and `VITE_MINICRAFT_MP_TOKEN` at build time; without the URL the Multiplayer button is hidden. Setup, deploy and backups: `server/README.md`.
 
 The save API is a separate concern and does not affect the static bundle: a Gen2
 Cloud Function (`minicraft-api`) over a GCS bucket, deployed with `./deploy.sh`.

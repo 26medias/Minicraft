@@ -30,7 +30,12 @@ const PING_EVERY_MS = 2000;
 const SILENCE_MS = 6000;
 /** How often the liveness check runs. */
 const CHECK_MS = 500;
-/** sessionStorage key: consecutive 4003 closes (spec §5: the second one shows the 4004 screen). */
+/**
+ * sessionStorage key: consecutive 4003 closes (spec §5: the second one shows the 4004 screen).
+ * The server sends 4003 only for a rejected `edit`, and edits only follow a `welcome`, so a
+ * `welcome` must NOT reset it (the loop would never break). It resets when the server accepts one
+ * of this client's edits: an `edit` whose `by` is our `welcome.you`.
+ */
 export const RESYNC_KEY = 'mp:resync';
 
 /** No reconnect: each needs a different screen (spec §5). */
@@ -56,6 +61,8 @@ export class MpClient {
 	private lastRecv: number;
 	private lastSent: number;
 	private done = false;
+	/** `welcome.you`, once known. */
+	private you: number | null = null;
 
 	constructor(
 		url: string,
@@ -113,10 +120,11 @@ export class MpClient {
 		}
 		if (m.t === 'ping') return;
 		if (m.t === 'welcome') {
-			this.setResync(0);
+			this.you = m.you;
 			this.handlers.onWelcome(m);
 			return;
 		}
+		if (m.t === 'edit' && m.by === this.you) this.setResync(0);
 		this.handlers.onMessage(m);
 	}
 

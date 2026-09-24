@@ -185,7 +185,9 @@ describe('MpClient close codes (spec §5)', () => {
 		});
 	}
 
-	it('4003 once → lost; a second consecutive 4003 (after a reload) → fatal with 4004', () => {
+	// The server sends 4003 only for a rejected `edit`, and a client edits only after its `welcome`:
+	// every real 4003 follows a welcome. The counter must therefore survive the welcome of the reload.
+	it('4003 once → lost; a second 4003 after the reload\'s welcome, with no accepted edit between → fatal with 4004', () => {
 		const storage = new MemStorage();
 		const a = make(storage);
 		a.ws.open();
@@ -195,20 +197,37 @@ describe('MpClient close codes (spec §5)', () => {
 		// The reconnect is a page reload: a new client, the same sessionStorage.
 		const b = make(storage);
 		b.ws.open();
+		b.ws.recv(welcome);
 		b.ws.serverClose(4003);
 		expect(b.states.at(-1)).toEqual(['fatal', 4004]);
 	});
 
-	it('a welcome resets the 4003 counter', () => {
+	it('an accepted own edit (its echo) resets the 4003 counter', () => {
 		const storage = new MemStorage();
 		const a = make(storage);
 		a.ws.open();
+		a.ws.recv(welcome);
 		a.ws.serverClose(4003);
 		const b = make(storage);
 		b.ws.open();
 		b.ws.recv(welcome);
+		b.ws.recv({ t: 'edit', seq: 1, by: welcome.you, cid: 1, ops: [[0, 70, 0, 1, 0, 0]] });
 		b.ws.serverClose(4003);
 		expect(b.states.at(-1)).toEqual(['lost', 4003]);
+	});
+
+	it('a foreign edit does not reset the 4003 counter', () => {
+		const storage = new MemStorage();
+		const a = make(storage);
+		a.ws.open();
+		a.ws.recv(welcome);
+		a.ws.serverClose(4003);
+		const b = make(storage);
+		b.ws.open();
+		b.ws.recv(welcome);
+		b.ws.recv({ t: 'edit', seq: 1, by: welcome.you + 1, ops: [[0, 70, 0, 1, 0, 0]] });
+		b.ws.serverClose(4003);
+		expect(b.states.at(-1)).toEqual(['fatal', 4004]);
 	});
 
 	it('close() by the client reports no lost state and stops the timers', () => {

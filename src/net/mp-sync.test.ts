@@ -70,6 +70,14 @@ describe('MpSync.flushFrame', () => {
 		expect(sent.map((m) => (m as unknown as EditMsg).ops.length)).toEqual([2000, 2000, 500]);
 		expect(sent.map((m) => (m as unknown as EditMsg).cid)).toEqual([1, 2, 3]);
 	});
+	it('a cell whose chunk is evicted before the flush is still sent, with the id and fluid it was written with', () => {
+		const { world, sent, sync } = setup();
+		world.setBlockFlow(1, Y, 2, BLOCK_BY_NAME['water'].id, 3);
+		world.setBlock(2, Y, 2, STONE);
+		expect(world.dropChunk(0, 0)).toBe(true);
+		sync.flushFrame();
+		expect((sent[0] as unknown as EditMsg).ops).toEqual([[1, Y, 2, BLOCK_BY_NAME['water'].id, 0x83, 0], [2, Y, 2, STONE, 0, 0]]);
+	});
 });
 
 describe('T7: echo rule end to end (spec §6)', () => {

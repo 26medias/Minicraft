@@ -19,8 +19,11 @@ export type StorageLike = Pick<Storage, 'getItem' | 'setItem' | 'removeItem'>;
 type Stash = { tag: string; data: unknown };
 
 export class MpSync {
-	/** Cells written locally since the last flushFrame. */
-	private touched = new Set<string>();
+	/**
+	 * Cells written locally since the last flushFrame → [id, fluid] as written. The live chunk is
+	 * read at flush when it is still loaded; the snapshot only covers a chunk evicted in between.
+	 */
+	private touched = new Map<string, [number, number]>();
 	/** Cell → cid of this client's latest own write to it (spec §6). */
 	private pending = new Map<string, number>();
 	private cid = 0;
@@ -46,9 +49,15 @@ export class MpSync {
 		private stashTag = '',
 	) {}
 
-	/** Installed as `world.onLocalWrite`. Records the cell only: it is read at flush (spec §7.1, lamp colour). */
+	/**
+	 * Installed as `world.onLocalWrite`. Records the cell, plus its id and fluid as a fallback for a
+	 * chunk evicted before the flush. The lamp colour is read at flush only (spec §7.1).
+	 */
 	record = (x: number, y: number, z: number): void => {
-		this.touched.add(`${x},${y},${z}`);
+		const { cx, cz, lx, lz } = worldToChunk(x, z);
+		const c = this.world.getChunk(cx, cz);
+		const snap: [number, number] = c ? [c.get(lx, y, lz), c.fluidMeta.get(indexOf(lx, y, lz)) ?? 0] : [0, 0];
+		this.touched.set(`${x},${y},${z}`, snap);
 	};
 
 	/**
@@ -59,15 +68,15 @@ export class MpSync {
 		if (this.touched.size === 0) return;
 		let ops: Op[] = [];
 		let keys: string[] = [];
-		for (const k of this.touched) {
+		for (const [k, snap] of this.touched) {
 			const [x, y, z] = k.split(',').map(Number);
 			const { cx, cz, lx, lz } = worldToChunk(x, z);
 			// Never world.getBlock here: it generates unloaded chunks. A chunk evicted since the
-			// write can't be read; its cell is dropped (the write never reaches the server).
+			// write sends the id and fluid recorded with it (spec §6: a dropped write is lost for good).
 			const c = this.world.getChunk(cx, cz);
-			if (!c) continue;
+			const [id, fluid] = c ? [c.get(lx, y, lz), c.fluidMeta.get(indexOf(lx, y, lz)) ?? 0] : snap;
 			const hex = this.lights?.getColor(x, y, z) ?? null;
-			ops.push([x, y, z, c.get(lx, y, lz), c.fluidMeta.get(indexOf(lx, y, lz)) ?? 0, hex ? colorToInt(hex) : 0]);
+			ops.push([x, y, z, id, fluid, hex ? colorToInt(hex) : 0]);
 			keys.push(k);
 			if (ops.length === MAX_OPS_PER_EDIT) {
 				this.sendEdit(ops, keys);

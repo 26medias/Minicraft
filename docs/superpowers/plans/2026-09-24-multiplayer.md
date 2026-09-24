@@ -276,6 +276,81 @@ Where they conflict, this section wins. Tags: *(K)* kid lens, *(R)* rigour, *(E)
 
 ---
 
+## Gate-2 re-gate amendments (NORMATIVE — override both the tasks and the section above)
+
+### C3
+- **(E) The lift tests the whole player box.** At each candidate y, from `floor(feetY)` up to
+  `world.height − 2`, test `playerBox` at that feet height with the **same overlap test** as the
+  trigger, over every column the 0.6-wide box overlaps. Take the first y with no overlap.
+  - T14 adds a case where the box straddles into the next column (feet x = 10.8, stone at x = 11
+    at feet level). The player must end up not overlapping.
+- **(E)** Drop `pauseSimulationWhenPaused`. The **only** mechanism is the paused-branch condition
+  `this.mp && !this.mpDisconnected && !this.frozenByTimer`.
+  - Order in that branch: `drainRemote()` → `simulate(dt)` → `evict()` → `loadNearbyChunks()` →
+    `flushDirtyChunks()`.
+- **(E)** `drainRemote`'s no-op check compares **id and fluid only**, never colour. The registry
+  was already updated at enqueue, so a colour-only op must still relight.
+
+### I1
+- **(R)(K) The autojoin flag never leaks:**
+  - On a failed rejoin, the args move to `sessionStorage['mp:preselect']` (read once by the
+    Multiplayer screen's preselect, then deleted), and `mp:autojoin` is **cleared**.
+  - `boot(deps)` takes `deps.mpUrl`. With no URL and the flag set, it clears the flag and returns
+    `{kind:'menu'}`.
+  - Starting any solo game clears `mp:autojoin`.
+  - T12b adds these cases: flag plus no URL → menu, flag cleared; flag plus URL → autojoin;
+    solo start → flag cleared.
+- **(K)** "went home" is shown **only** on `leaving 0`. A plain `left` shows no toast; the avatar
+  just disappears.
+- **(E) Lamp recolour** (the colour picker handler that calls `lights.setColor`) also calls
+  `mpSync.record(x, y, z)` in multiplayer, so the colour-only change is sent.
+
+### P1
+- **(R)** `resolveSession(stored, limitMin: number | null, now, schedule): PlaytimeSession | null`:
+  - it returns the stored session when that session is in force, whatever `limitMin` is;
+  - otherwise it returns a new session when `limitMin !== null`;
+  - otherwise `null`, meaning no controller.
+
+  P1 unit-tests all three branches, including "a stored frozen session plus null → the frozen
+  session".
+
+### P2
+- **(R) P2 owns the Parents rename.** Change "ask a grown-up" and "ASK A GROWN-UP" to "ask a
+  parent" and "ASK A PARENT" in:
+  - `src/ui/playtime-overlay.ts`
+  - `src/ui/menu-model.ts`
+  - `src/game/continue-policy.ts`
+  - their tests: `continue-policy.test.ts` and `menu-model.test.ts`.
+
+### C5
+- **(R)** C5 **imports** `src/data/skins.data.ts`, which P1 created in the foundation stage. It
+  does not create it.
+
+### S3 / S4
+- **(S) Forced snapshot bytes do not count** toward `queuedBytes`. The G-test's client stops
+  reading for 1 s after `welcome` (snapshot over 1 MiB), then resumes. It must receive no 4002.
+- **(S)** Normative:
+  - `run()` never takes `registry.mu` and never calls `tryUnload` synchronously. The unload
+    timer is a `time.AfterFunc` goroutine.
+  - `registry.Join`'s wait for the join reply selects on the world's `done` channel and a 5 s
+    timeout.
+  - `Online()` does the same.
+- **(S)** `registry.closed`, set by `StopAll`, makes any later `Join` or `Get` fail with close
+  1001, so it never loads a new world.
+- **(S) S5 red build:** "close before flush" means calling `Close` **synchronously** per
+  connection before the flush. With 2 black-holed clients that takes about 10 s and fails the 4 s
+  bound.
+
+### I2
+- **(K) E6 ordering:**
+  - `page.route` holds A's reconnect probe (and its `/ws` upgrade) until B's `welcome` has
+    arrived, then releases it. B is online first, so a wrong `near` spawn would put A next to B.
+  - The test asserts A is within 1 block of its old spot.
+- **(S) E6:** `fuser -k -TERM 18080/tcp` (the listener only). Before the SIGKILL pass, A stands
+  still for at least 3 s.
+
+---
+
 ## Dependency graph (for the Workflow)
 
 ```

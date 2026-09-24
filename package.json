@@ -19,6 +19,7 @@
 		"perf:bench": "tsx scripts/perf-bench.ts",
 		"smoke:crafting": "tsx scripts/crafting-smoke.ts",
 		"smoke:menu": "tsx scripts/menu-smoke.ts",
+		"e2e:mp": "tsx scripts/mp-e2e.ts",
 		"format": "prettier --write ."
 	},
 	"dependencies": {

@@ -66,6 +66,11 @@ export class PlaytimeController {
 		return this.timer.remainingMs();
 	}
 
+	/** The time left at `now`, between ticks (see PlayTimer.remainingAt): for a per-frame display. */
+	remainingAt(now: number): number {
+		return this.timer.remainingAt(now);
+	}
+
 	/**
 	 * DEV oracle (plan I1, E5): set the time left to `ms` on the live session, then tick. No fast
 	 * clock: the rest runs in real time.

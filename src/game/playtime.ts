@@ -115,4 +115,15 @@ export class PlayTimer {
 	remainingMs(): number {
 		return Math.max(0, this.session.limitMs - this.session.playedMs);
 	}
+
+	/**
+	 * The time left as if a visible tick ran at `now` (the same MAX_TICK_CREDIT_MS cap), without
+	 * changing anything. For a display drawn every frame: the 1 s tick's own value skips a second
+	 * whenever the interval runs late (plan I2, E5). 0 once frozen.
+	 */
+	remainingAt(now: number): number {
+		if (this.session.frozenAt !== null) return 0;
+		const pending = Math.max(0, Math.min(now - this.lastNow, MAX_TICK_CREDIT_MS));
+		return Math.max(0, this.remainingMs() - pending);
+	}
 }

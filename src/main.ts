@@ -71,6 +71,8 @@ import { MpOverlays } from './ui/mp-overlays';
 import { loadMpPrefs } from './persistence/mp-prefs';
 import { skinColor } from './data/skins.data';
 import type { PlayerSave } from './persistence/adapter';
+import { overlayCells, refReplay, worldHash, type RefAction, type RefReplayOpts } from './dev/mp-oracle';
+import type { ServerMsg } from './net/protocol';
 
 const REACH = 6;
 /** Gate-2 K1: no `welcome` (plus its snapshot) within this long → the Multiplayer screen, sleeping. */
@@ -765,21 +767,18 @@ async function main() {
 			});
 			const pt = playtime;
 			// Multiplayer: the timer is paused while disconnected (spec §7.5); the countdown messages
-			// and the big 10…1 follow every tick (spec §7.4).
+			// follow every tick (spec §7.4). The big 10…1 is drawn per frame (mpFrame).
 			const tickPlaytime = () => {
 				if (loop.mpDisconnected) return;
 				pt.tick();
-				if (mp && !loop.frozenByTimer) {
-					const left = pt.remainingMs();
-					leaving?.update(left);
-					mp.ui.countdown(Math.ceil(left / 1000));
-				}
+				if (mp && !loop.frozenByTimer) leaving?.update(pt.remainingMs());
 			};
 			tickPlaytime();
 			setInterval(tickPlaytime, TICK_MS);
 			document.addEventListener('visibilitychange', tickPlaytime);
 		}
-		let mpDebug: { sync: MpSync; client: MpClient; remote: RemotePlayers; overlay: ChunkOverlay } | null = null;
+		/** DEV oracle (plan I2): the session's parts, and every server message but `tick`, in arrival order. */
+		let mpDebug: { sync: MpSync; client: MpClient; remote: RemotePlayers; overlay: ChunkOverlay; log: ServerMsg[]; overlayCells: () => number[] } | null = null;
 		if (mp && mpSync) wireMultiplayer(mp, mpSync);
 
 		/**
@@ -831,7 +830,9 @@ async function main() {
 			mpFx = (kind, x, y, z, tier) => void client.send({ t: 'fx', kind, x, y, z, tier });
 			loop.onDetonate = (x, y, z, effect, blockId) => mpFx?.(effect === 'firework' ? 'firework' : 'boom', x, y, z, blockId);
 
+			const debugLog: ServerMsg[] = [];
 			link.setRoute((m) => {
+				if (import.meta.env.DEV && m.t !== 'tick') debugLog.push(m);
 				switch (m.t) {
 					case 'edit':
 						sync.onEdit(m, you);
@@ -864,6 +865,11 @@ async function main() {
 			let lastPos = '';
 			mpFrame = (now) => {
 				sync.flushFrame();
+				// Spec §7.4, the leaver's big 10…1: drawn every frame from the time left between ticks, so a
+				// late 1 s interval never skips a number (plan I2, E5). The freeze hides it (countdown(0)).
+				if (playtime && !loop.mpDisconnected && !loop.frozenByTimer && document.visibilityState === 'visible') {
+					ui.countdown(Math.ceil(playtime.remainingAt(Date.now()) / 1000));
+				}
 				remote.update(now, renderer.camera);
 				minimap.update(now, world, player, cam.yaw, remote.positions());
 				if (now - lastPosAt < POS_EVERY_MS) return;
@@ -907,7 +913,7 @@ async function main() {
 				}).start();
 			}, freezeForNetwork);
 
-			if (import.meta.env.DEV) mpDebug = { sync, client, remote, overlay: mp.overlay };
+			if (import.meta.env.DEV) mpDebug = { sync, client, remote, overlay: mp.overlay, log: debugLog, overlayCells: () => overlayCells(mp.overlay) };
 		}
 		// ----------------------------------------------------------------------
 		loop.start();
@@ -915,9 +921,13 @@ async function main() {
 			// Debug oracle for manual checks at localhost only; tree-shaken from the build.
 			// `apiUrl` lets the bench log which save API the page is wired to (never production).
 			// `playtime.setRemaining(ms)` (plan I1, E5) sets the live session's time left; no fast clock.
+			// `worldHash` and `refReplay` are the two-client suite's oracles (plan I2, scripts/mp-e2e.ts).
 			(window as unknown as { __mc: unknown }).__mc = {
 				world, player, loop, apiUrl, cam, highlight, mustMine, syncHotbar, keys,
 				playtime, mp: mpDebug,
+				worldHash: (chunks: Array<[number, number]>) => worldHash(world, chunks),
+				refReplay: (actions: RefAction[], o: Omit<RefReplayOpts, 'seed' | 'height' | 'gen'>) =>
+					refReplay(actions, { ...o, seed: world.seed, height: world.height, gen: world.genVersion }),
 			};
 		}
 

@@ -177,3 +177,51 @@ describe('PlayTimer full sequence', () => {
 		expect(timer.phase()).toBe('break');
 	});
 });
+
+describe('remainingAt (plan I2, E5: the leaver\'s big 10…1 is drawn per frame)', () => {
+	it('is the time left as if a visible tick ran at `now`, capped like a tick, never below 0', () => {
+		const t = new PlayTimer(session({ limitMs: 20_000, playedMs: 5_000 }), T0);
+		expect(t.remainingAt(T0)).toBe(15_000);
+		expect(t.remainingAt(T0 + 400)).toBe(14_600);
+		expect(t.remainingAt(T0 + 60_000)).toBe(15_000 - MAX_TICK_CREDIT_MS);
+		expect(t.remainingAt(T0 - 500)).toBe(15_000);
+		t.tick(T0 + 1000, true);
+		expect(t.remainingAt(T0 + 1000)).toBe(14_000);
+		expect(t.remainingAt(T0 + 1250)).toBe(13_750);
+		const done = new PlayTimer(session({ limitMs: 20_000, playedMs: 19_900 }), T0);
+		expect(done.remainingAt(T0 + 1500)).toBe(0);
+	});
+
+	it('is 0 once frozen', () => {
+		const t = new PlayTimer(session({ limitMs: 20_000, playedMs: 20_000, frozenAt: T0 }), T0);
+		expect(t.remainingAt(T0 + 300)).toBe(0);
+	});
+
+	/** Ticks every 1000 ms ± `jitter` (a busy main thread), frames every `frameMs`; the seconds shown in the last 10 s. */
+	function shown(jitter: number, frameMs: number, perFrame: boolean): number[] {
+		let seed = 12345;
+		const rnd = () => ((seed = (seed * 1103515245 + 12345) >>> 0) / 2 ** 32);
+		const t = new PlayTimer(session({ limitMs: 60_000, playedMs: 60_000 - 12_300 }), T0);
+		const out: number[] = [];
+		let nextTick = T0 + 1000;
+		for (let now = T0; now < T0 + 20_000; now += frameMs) {
+			if (now >= nextTick) {
+				t.tick(now, true);
+				nextTick += 1000 + (rnd() * 2 - 1) * jitter;
+			}
+			const s = Math.ceil((perFrame ? t.remainingAt(now) : t.remainingMs()) / 1000);
+			if (s >= 1 && s <= 10 && out[out.length - 1] !== s) out.push(s);
+		}
+		return out;
+	}
+
+	it('drawn per frame from remainingAt, every second 10…1 shows once, in order, even with jittery ticks', () => {
+		for (const [jitter, frame] of [[0, 16], [400, 16], [400, 250], [900, 100]]) {
+			expect(shown(jitter, frame, true), `jitter ${jitter} ms, frames every ${frame} ms`).toEqual([10, 9, 8, 7, 6, 5, 4, 3, 2, 1]);
+		}
+	});
+
+	it('instrument check: drawn from the tick value alone, jittery ticks skip seconds (what E5 caught)', () => {
+		expect(shown(400, 16, false)).not.toEqual([10, 9, 8, 7, 6, 5, 4, 3, 2, 1]);
+	});
+});

@@ -6,7 +6,7 @@ const MIN = 60_000;
 const T0 = 1_700_000_000_000;
 
 function session(over: Partial<PlaytimeSession> = {}): PlaytimeSession {
-	return { limitMs: 30 * MIN, breakMs: 20 * MIN, playedMs: 0, frozenAt: null, startedAt: T0, updatedAt: T0, ...over };
+	return { limitMs: 30 * MIN, breakMs: null, playedMs: 0, frozenAt: null, startedAt: T0, updatedAt: T0, ...over };
 }
 
 /** Drive one visible tick per second from `from` to `to` (exclusive), collecting events. */
@@ -20,14 +20,11 @@ describe('phaseOf', () => {
 	it('is playing while not frozen', () => {
 		expect(phaseOf(session(), T0)).toBe('playing');
 	});
-	it('is break forever when frozen with no break', () => {
-		const s = session({ breakMs: null, frozenAt: T0 });
-		expect(phaseOf(s, T0 + 100 * 3_600_000)).toBe('break');
-	});
-	it('is break until frozenAt + breakMs, then over', () => {
+	it('is break forever once frozen (no break ever ends)', () => {
 		const s = session({ frozenAt: T0 });
-		expect(phaseOf(s, T0 + 20 * MIN - 1)).toBe('break');
-		expect(phaseOf(s, T0 + 20 * MIN)).toBe('over');
+		expect(phaseOf(s, T0)).toBe('break');
+		expect(phaseOf(s, T0 + 20 * MIN)).toBe('break');
+		expect(phaseOf(s, T0 + 100 * 3_600_000)).toBe('break');
 	});
 });
 
@@ -120,12 +117,12 @@ describe('PlayTimer warnings', () => {
 	});
 });
 
-describe('PlayTimer freeze and break', () => {
+describe('PlayTimer freeze (no break time)', () => {
 	it('fires freeze exactly once when play time reaches the limit, with no warn on that tick', () => {
 		const timer = new PlayTimer(session({ playedMs: 30 * MIN - 1000 }), T0);
 		timer.tick(T0, true); // warn(1)
 		const events = timer.tick(T0 + 1000, true);
-		expect(events).toEqual([{ type: 'freeze', breakEndsAt: T0 + 1000 + 20 * MIN }]);
+		expect(events).toEqual([{ type: 'freeze' }]);
 		expect(timer.session.frozenAt).toBe(T0 + 1000);
 		expect(timer.dirty).toBe(true);
 		expect(timer.tick(T0 + 2000, true)).toEqual([]);
@@ -134,33 +131,21 @@ describe('PlayTimer freeze and break', () => {
 
 	it('fires freeze on the first tick when constructed already frozen', () => {
 		const timer = new PlayTimer(session({ playedMs: 30 * MIN, frozenAt: T0 - 5 * MIN }), T0);
-		expect(timer.tick(T0, true)).toEqual([{ type: 'freeze', breakEndsAt: T0 + 15 * MIN }]);
-		expect(timer.breakRemainingMs()).toBe(15 * MIN);
+		expect(timer.tick(T0, true)).toEqual([{ type: 'freeze' }]);
 	});
 
-	it('freezes with breakEndsAt null and never fires break-over when there is no break', () => {
-		const timer = new PlayTimer(session({ breakMs: null, playedMs: 30 * MIN }), T0);
-		expect(timer.tick(T0, true)).toEqual([{ type: 'freeze', breakEndsAt: null }]);
+	it('a freeze stays frozen: no further event for hours, phase stays break', () => {
+		const timer = new PlayTimer(session({ playedMs: 30 * MIN }), T0);
+		expect(timer.tick(T0, true)).toEqual([{ type: 'freeze' }]);
 		expect(play(timer, T0 + 1000, T0 + 2 * 3_600_000)).toEqual([]);
 		expect(timer.phase()).toBe('break');
-		expect(timer.breakRemainingMs()).toBe(Infinity);
+		expect(timer.session.frozenAt).toBe(T0);
 	});
 
-	it('fires break-over exactly once when the break ends', () => {
-		const timer = new PlayTimer(session({ playedMs: 30 * MIN, frozenAt: T0 }), T0);
-		timer.tick(T0, true);
-		expect(play(timer, T0 + 1000, T0 + 20 * MIN)).toEqual([]);
-		expect(timer.tick(T0 + 20 * MIN, true)).toEqual([{ type: 'break-over' }]);
-		expect(timer.tick(T0 + 20 * MIN + 1000, true)).toEqual([]);
-		expect(timer.phase()).toBe('over');
-	});
-
-	it('fires [freeze, break-over] in one tick when constructed past the break end', () => {
+	it('constructed frozen long ago fires only freeze (there is no break-over)', () => {
 		const timer = new PlayTimer(session({ playedMs: 30 * MIN, frozenAt: T0 - 25 * MIN }), T0);
-		expect(timer.tick(T0, true)).toEqual([
-			{ type: 'freeze', breakEndsAt: T0 - 5 * MIN },
-			{ type: 'break-over' },
-		]);
+		expect(timer.tick(T0, true)).toEqual([{ type: 'freeze' }]);
+		expect(timer.phase()).toBe('break');
 	});
 
 	it('does not accrue play time while frozen', () => {
@@ -169,31 +154,26 @@ describe('PlayTimer freeze and break', () => {
 		expect(timer.session.playedMs).toBe(30 * MIN);
 	});
 
-	it('re-anchors the break when the clock is set back so the countdown stays honest', () => {
+	it('a clock set back while frozen stays frozen and fires nothing', () => {
 		const timer = new PlayTimer(session({ playedMs: 30 * MIN, frozenAt: T0 }), T0);
 		timer.tick(T0, true);
 		timer.tick(T0 + 19 * MIN, true);
-		expect(timer.breakRemainingMs()).toBe(1 * MIN);
-		timer.tick(T0 + 5 * MIN, true); // clock set back 14 minutes
-		expect(timer.breakRemainingMs()).toBe(1 * MIN);
-		expect(timer.session.frozenAt).toBe(T0 - 14 * MIN);
-		expect(timer.dirty).toBe(true);
+		expect(timer.tick(T0 + 5 * MIN, true)).toEqual([]); // clock set back 14 minutes
+		expect(play(timer, T0 + 5 * MIN + 1000, T0 + 60 * MIN)).toEqual([]);
 		expect(timer.phase()).toBe('break');
-		// One more minute on the new clock and the break is over, not 15 minutes later.
-		expect(play(timer, T0 + 5 * MIN + 1000, T0 + 6 * MIN)).toEqual([]);
-		expect(timer.tick(T0 + 6 * MIN, true)).toEqual([{ type: 'break-over' }]);
+		expect(timer.session.playedMs).toBe(30 * MIN);
 	});
 });
 
 describe('PlayTimer full sequence', () => {
-	it('warns at 25 and 28 minutes, freezes at 30, break-over at 50', () => {
+	it('warns at 25 and 28 minutes, freezes at 30, and stays frozen', () => {
 		const timer = new PlayTimer(session(), T0);
 		const events = play(timer, T0, T0 + 51 * MIN);
 		expect(events).toEqual([
 			{ type: 'warn', minutesLeft: 5 },
 			{ type: 'warn', minutesLeft: 2 },
-			{ type: 'freeze', breakEndsAt: T0 + 30 * MIN + 20 * MIN },
-			{ type: 'break-over' },
+			{ type: 'freeze' },
 		]);
+		expect(timer.phase()).toBe('break');
 	});
 });

@@ -83,25 +83,23 @@ describe('loadOptions', () => {
 		expect(opts.keybindings).toEqual(DEFAULT_KEYBINDINGS);
 	});
 
-	it('defaults play-time fields to null when absent', async () => {
+	it('defaults the maximum duration to No limit (null) when absent', async () => {
 		const { loadOptions } = await import('./options');
 		const opts = loadOptions();
-		expect(opts.playLimitMin).toBeNull();
-		expect(opts.playBreakMin).toBeNull();
+		expect(opts.maxDurationMin).toBeNull();
+		expect('playLimitMin' in opts).toBe(false);
+		expect('playBreakMin' in opts).toBe(false);
 	});
 
-	it('round-trips play-time fields', async () => {
+	it('round-trips the maximum duration', async () => {
 		const { loadOptions, saveOptions } = await import('./options');
 		const opts = loadOptions();
-		opts.playLimitMin = 30;
-		opts.playBreakMin = 20;
+		opts.maxDurationMin = 30;
 		saveOptions(opts);
-		const back = loadOptions();
-		expect(back.playLimitMin).toBe(30);
-		expect(back.playBreakMin).toBe(20);
+		expect(loadOptions().maxDurationMin).toBe(30);
 	});
 
-	it('rejects play-time values that are not in the choice lists', async () => {
+	it('rejects play-time values that are not in the choice list; a break is dropped', async () => {
 		store['minicraft:v1:options'] = JSON.stringify({
 			keybindings: DEFAULT_KEYBINDINGS,
 			playLimitMin: '30',
@@ -109,8 +107,20 @@ describe('loadOptions', () => {
 		});
 		const { loadOptions } = await import('./options');
 		const opts = loadOptions();
-		expect(opts.playLimitMin).toBeNull();
-		expect(opts.playBreakMin).toBeNull();
+		expect(opts.maxDurationMin).toBeNull();
+		expect('playBreakMin' in opts).toBe(false);
+	});
+
+	it('migrates an old playLimitMin to the maximum; playBreakMin is ignored', async () => {
+		store['minicraft:v1:options'] = JSON.stringify({
+			keybindings: DEFAULT_KEYBINDINGS,
+			playLimitMin: 90,
+			playBreakMin: 20,
+		});
+		const { loadOptions } = await import('./options');
+		const opts = loadOptions();
+		expect(opts.maxDurationMin).toBe(90);
+		expect('playBreakMin' in opts).toBe(false);
 	});
 
 	it('ignores a stored kidMode', async () => {

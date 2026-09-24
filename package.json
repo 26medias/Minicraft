@@ -18,6 +18,7 @@
 		"lint": "eslint .",
 		"perf:bench": "tsx scripts/perf-bench.ts",
 		"smoke:crafting": "tsx scripts/crafting-smoke.ts",
+		"smoke:menu": "tsx scripts/menu-smoke.ts",
 		"format": "prettier --write ."
 	},
 	"dependencies": {

@@ -79,10 +79,11 @@ describe('sessionInForce', () => {
 });
 
 describe('activeLimits', () => {
-	it('9. schedule wins and never has a break; options otherwise', () => {
-		expect(activeLimits(sched({ limitMin: 30 }), { playLimitMin: 90, playBreakMin: 20 })).toEqual({ limitMin: 30, breakMin: null });
-		expect(activeLimits(null, { playLimitMin: null, playBreakMin: 20 })).toEqual({ limitMin: null, breakMin: 20 });
-		expect(activeLimits(null, { playLimitMin: 15, playBreakMin: null })).toEqual({ limitMin: 15, breakMin: null });
+	it('9. schedule wins; the chosen duration otherwise; never a break', () => {
+		expect(activeLimits(sched({ limitMin: 30 }), 90)).toEqual({ limitMin: 30 });
+		expect(activeLimits(sched({ limitMin: 30 }), null)).toEqual({ limitMin: 30 });
+		expect(activeLimits(null, null)).toEqual({ limitMin: null });
+		expect(activeLimits(null, 15)).toEqual({ limitMin: 15 });
 	});
 });
 
@@ -104,9 +105,8 @@ describe('canStartNow', () => {
 		expect(canStartNow(armed, null, at(7, 7, 0))).toBe(true);
 		const frozen = sess({ playedMs: 45 * MIN, frozenAt: at(7, 7, 55), updatedAt: at(7, 7, 55) });
 		expect(canStartNow(armed, frozen, at(7, 9, 0))).toBe(false);
-		// A leftover break-mode session whose break is over is still "done" under a schedule.
-		const over = sess({ breakMs: 20 * MIN, playedMs: 45 * MIN, frozenAt: at(7, 7, 55), updatedAt: at(7, 7, 55) });
-		expect(canStartNow(armed, over, at(7, 9, 0))).toBe(false);
+		// A freeze never ends by itself: hours later it is still "done" under a schedule.
+		expect(canStartNow(armed, frozen, at(7, 20, 0))).toBe(false);
 		expect(canStartNow(armed, frozen, at(8, 7, 0))).toBe(true);
 		expect(canStartNow({ kind: 'none' }, frozen, at(7, 9, 0))).toBe(true);
 	});

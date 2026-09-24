@@ -13,7 +13,7 @@ export function resolveContinue(outcome: LoadOutcome, worldName: string): Contin
 	if ('error' in outcome) {
 		const err = outcome.error;
 		if (err instanceof SaveMismatch) {
-			return { ok: false, notice: `${worldName} has two different copies (this device and the cloud). Ask a grown-up. Nothing was changed.` };
+			return { ok: false, notice: `${worldName} has two different copies (this device and the cloud). Ask a parent. Nothing was changed.` };
 		}
 		const name = err instanceof Error ? err.name : 'Error';
 		return { ok: false, notice: `Couldn't open ${worldName} (${name}). Nothing was changed.` };

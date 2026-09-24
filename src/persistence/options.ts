@@ -1,5 +1,5 @@
 import { ACTIONS, DEFAULT_KEYBINDINGS, type Action, type Options } from '../data/keybindings.data';
-import { PLAY_BREAK_CHOICES_MIN, PLAY_LIMIT_CHOICES_MIN } from '../data/playtime.data';
+import { DURATION_CHOICES_MIN } from '../data/playtime.data';
 
 const KEY = 'minicraft:v1:options';
 const DEFAULT_LIGHT_COLOR = '#FFF5E0'; // warm white
@@ -9,12 +9,22 @@ function choiceOrNull(value: unknown, choices: number[]): number | null {
 	return typeof value === 'number' && choices.includes(value) ? value : null;
 }
 
+/**
+ * Spec §8.3: the parent's maximum. A stored `maxDurationMin` (even null) wins;
+ * otherwise the old `playLimitMin` becomes the maximum (null = No limit).
+ * `playBreakMin` is dropped: break time no longer exists.
+ */
+function migrateMaxDuration(parsed: Record<string, unknown>): number | null {
+	if ('maxDurationMin' in parsed) return choiceOrNull(parsed.maxDurationMin, DURATION_CHOICES_MIN);
+	if ('playLimitMin' in parsed) return choiceOrNull(parsed.playLimitMin, DURATION_CHOICES_MIN);
+	return null;
+}
+
 function defaults(): Options {
 	return {
 		keybindings: { ...DEFAULT_KEYBINDINGS },
 		currentLightColor: DEFAULT_LIGHT_COLOR,
-		playLimitMin: null,
-		playBreakMin: null,
+		maxDurationMin: null,
 	};
 }
 
@@ -22,7 +32,7 @@ export function loadOptions(): Options {
 	const raw = localStorage.getItem(KEY);
 	if (!raw) return defaults();
 	try {
-		const parsed = JSON.parse(raw) as Partial<Options>;
+		const parsed = JSON.parse(raw) as Partial<Options> & { playLimitMin?: unknown };
 		// Merge saved bindings over defaults, then strip any keys that are no longer
 		// valid Actions (e.g. stale 'flyUp' / 'flyDown' from older saves). Without
 		// this filter, a stale key like { flyUp: 'Space' } would overwrite the
@@ -45,8 +55,7 @@ export function loadOptions(): Options {
 		return {
 			keybindings: filteredBindings,
 			currentLightColor: parsed.currentLightColor ?? DEFAULT_LIGHT_COLOR,
-			playLimitMin: choiceOrNull(parsed.playLimitMin, PLAY_LIMIT_CHOICES_MIN),
-			playBreakMin: choiceOrNull(parsed.playBreakMin, PLAY_BREAK_CHOICES_MIN),
+			maxDurationMin: migrateMaxDuration(parsed),
 		};
 	} catch {
 		return defaults();

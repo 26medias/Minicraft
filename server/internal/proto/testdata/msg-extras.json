@@ -1,0 +1,14 @@
+{
+	"t": "extras",
+	"data": {
+		"inventory": {
+			"1": 5
+		},
+		"tools": [],
+		"hotbar": [
+			1,
+			2
+		],
+		"selected": 0
+	}
+}

@@ -1,0 +1,36 @@
+{
+	"t": "welcome",
+	"you": 2,
+	"world": {
+		"uuid": "7f3c2a1e-0000-4000-8000-000000000001",
+		"name": "Castle",
+		"seed": 123456789,
+		"gen": 3,
+		"height": 256,
+		"mustMine": true
+	},
+	"spawn": {
+		"mode": "near",
+		"x": 10.5,
+		"y": 70,
+		"z": 20.5,
+		"yaw": 0.5,
+		"pitch": 0,
+		"target": 1
+	},
+	"extras": {},
+	"players": [
+		{
+			"id": 1,
+			"name": "Emma",
+			"skin": "rose",
+			"x": 11,
+			"y": 70,
+			"z": 21,
+			"yaw": 3.14,
+			"pitch": 0.1
+		}
+	],
+	"seq": 4242,
+	"catalogMax": 1008
+}

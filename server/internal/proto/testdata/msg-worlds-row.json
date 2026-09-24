@@ -1,0 +1,12 @@
+{
+	"uuid": "7f3c2a1e-0000-4000-8000-000000000001",
+	"name": "Castle",
+	"mustMine": false,
+	"createdAt": 1790000000000,
+	"online": [
+		{
+			"name": "Emma",
+			"skin": "rose"
+		}
+	]
+}

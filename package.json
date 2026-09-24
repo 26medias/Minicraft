@@ -10,6 +10,7 @@
 		"preview": "vite preview",
 		"build-atlas": "tsx scripts/build-atlas.ts",
 		"gen-catalog": "tsx scripts/gen-catalog.ts",
+		"gen-server-catalog": "tsx scripts/gen-server-catalog.ts",
 		"worldgen:kid": "tsx scripts/worldgen-kid.ts",
 		"worldgen:check": "tsx scripts/worldgen-check.ts 1,2,3,5,8,13,21,34 && tsx scripts/worldgen-kid.ts 1,2,3,5,8,13,21,34",
 		"test": "vitest run",

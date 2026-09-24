@@ -69,7 +69,11 @@ export type Ping = { t: 'ping' };
 /** A client batch (≤ 2,000 ops; `cid` increases per connection). */
 export type EditMsg = { t: 'edit'; cid: number; ops: Op[] };
 
-/** Cosmetic. `by` is set by the server when it relays. */
+/**
+ * Cosmetic. `by` is set by the server when it relays. `tier` is the block id of the explosive for
+ * `prime` (the receiver reads its fuse) and `boom` (its break particles); the server relays it as
+ * an opaque int. Absent or unknown falls back to plain TNT.
+ */
 export type FxMsg = { t: 'fx'; kind: FxKind; x: number; y: number; z: number; tier?: number; by?: number };
 
 export type ExtrasMsg = { t: 'extras'; data: ExtrasData };

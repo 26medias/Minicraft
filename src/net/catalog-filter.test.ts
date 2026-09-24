@@ -1,6 +1,7 @@
 import { describe, it, expect } from 'vitest';
-import { catalogBlocks, catalogHotbar } from './catalog-filter';
-import { AIR, BLOCKS, DEFAULT_HOTBAR } from '../data/blocks.data';
+import { catalogBlocks, catalogHotbar, catalogRecipes } from './catalog-filter';
+import { AIR, BLOCKS, BLOCK_BY_NAME, DEFAULT_HOTBAR } from '../data/blocks.data';
+import { RECIPES } from '../data/recipes.data';
 import { resolveHotbar } from '../game/hotbar';
 import { inventoryRows } from '../ui/craft-model';
 
@@ -52,5 +53,24 @@ describe('catalog filter', () => {
 
 	it('a maximum at or above the catalog changes nothing', () => {
 		expect(catalogBlocks(BLOCKS, BLOCKS.length)).toBe(BLOCKS);
+	});
+});
+
+describe('catalog filter: recipes (review of I1)', () => {
+	it('a recipe whose block output is above the maximum is dropped; pickaxes and others stay', () => {
+		const tnt = BLOCK_BY_NAME['tnt'].id;
+		const launch = BLOCK_BY_NAME['launch_pad'].id;
+		// A maximum between TNT and the launch pad: TNT stays craftable, the launch pad does not.
+		const max = Math.max(tnt, BLOCK_BY_NAME['slime_pad'].id);
+		expect(launch).toBeGreaterThan(max);
+		const ids = catalogRecipes(RECIPES, max).map((r) => r.id);
+		expect(ids).toContain('tnt');
+		expect(ids).toContain('wood_pickaxe');
+		expect(ids).not.toContain('launch_pad');
+		for (const r of catalogRecipes(RECIPES, max)) {
+			if (r.output.kind === 'block') expect(BLOCK_BY_NAME[r.output.name].id).toBeLessThanOrEqual(max);
+		}
+		// At or above the whole catalog, nothing is dropped.
+		expect(catalogRecipes(RECIPES, 1e9)).toHaveLength(RECIPES.length);
 	});
 });

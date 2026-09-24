@@ -39,6 +39,7 @@ import { PlaytimeOverlay } from './ui/playtime-overlay';
 import { TICK_MS } from './data/playtime.data';
 import { Inventory } from './ui/inventory';
 import { RECIPES } from './data/recipes.data';
+import { MpLink } from './game/mp-link';
 import { applyCraft } from './game/craft-apply';
 import { hotbarBadges, keycapLabel } from './ui/craft-model';
 import { playCraft, playNope } from './ui/sfx';
@@ -58,8 +59,8 @@ import { MpClient } from './net/mp-client';
 import { MpSync } from './net/mp-sync';
 import { mpApiFromEnv } from './net/mp-api';
 import { decodeSnapshot } from './net/snapshot';
-import { intToColor, PROTO, type ExtrasData, type FxKind, type FxMsg, type Hello, type ServerMsg, type Welcome } from './net/protocol';
-import { catalogBlocks, catalogHotbar } from './net/catalog-filter';
+import { intToColor, PROTO, type ExtrasData, type FxKind, type FxMsg, type Hello, type Welcome } from './net/protocol';
+import { catalogBlocks, catalogHotbar, catalogRecipes } from './net/catalog-filter';
 import { ChunkOverlay } from './engine/world/overlay';
 import { WORLD_CHUNKS_X, WORLD_CHUNKS_Z, type WorldHeight } from './engine/world/coords';
 import { NEWEST_GEN_VERSION } from './engine/world/generation';
@@ -78,18 +79,6 @@ const JOIN_TIMEOUT_MS = 6_000;
 const POS_EVERY_MS = 100;
 const LAMP_ID = BLOCK_BY_NAME['lamp'].id;
 const TNT_ID = BLOCK_BY_NAME['tnt'].id;
-
-/**
- * Buffers server messages between `welcome` and the moment the game is wired (the snapshot is
- * decoded and the world built in between); `route` is set by startGame. `onLost`/`onFatal` freeze
- * the running game.
- */
-type MpLink = {
-	route: ((m: ServerMsg) => void) | null;
-	pending: ServerMsg[];
-	onLost: (() => void) | null;
-	onFatal: (() => void) | null;
-};
 
 /** What startGame needs to run a multiplayer session (spec §7.1). Undefined in solo. */
 type MpSession = {
@@ -194,7 +183,7 @@ async function main() {
 			gen: NEWEST_GEN_VERSION,
 			resume,
 		};
-		const link: MpLink = { route: null, pending: [], onLost: null, onFatal: null };
+		const link = new MpLink();
 		const fatalDeps: FatalDeps = {
 			storage: sessionStorage,
 			reload: () => location.reload(),
@@ -236,18 +225,17 @@ async function main() {
 				void startGame(w.world.uuid, w.world.seed, w.world.name, null, w.world.mustMine, args.duration, { client, welcome: w, overlay, args, link, ui });
 			},
 			onMessage: (m) => {
-				if (link.route) link.route(m);
-				else link.pending.push(m);
+				link.deliver(m);
 			},
 			onState: (state, code) => {
 				if (state === 'fatal') {
 					settled = true;
 					clearTimeout(timer);
-					link.onFatal?.();
+					link.fatal();
 					onFatalClose(code, fatalDeps);
 				} else if (state === 'lost') {
 					if (!settled) failJoin();
-					else link.onLost?.();
+					else link.lost();
 				}
 			},
 		});
@@ -441,7 +429,9 @@ async function main() {
 		const resetKeys = () => {
 			keys.forward = keys.back = keys.left = keys.right = keys.jump = keys.sneak = false;
 		};
-		const inventory = new Inventory(app, atlas, blocks, RECIPES);
+		// Multiplayer: no recipe for a block the server would reject (spec §5 catalogMax).
+		const recipes = mp ? catalogRecipes(RECIPES, mp.welcome.catalogMax) : RECIPES;
+		const inventory = new Inventory(app, atlas, blocks, recipes);
 		/** Every HUD + I-screen view of hotbar, counts and tools. Call after ANY change to them. */
 		const syncHotbar = (flashSlot?: number) => {
 			const badges = hotbarBadges(player.hotbar, player.inventory, mustMine);
@@ -476,7 +466,7 @@ async function main() {
 		};
 		// The Craft button (spec §9). applyCraft owns the rules and the markDirty; here: sound, refresh.
 		inventory.onCraft = (recipeId) => {
-			const recipe = RECIPES.find((r) => r.id === recipeId);
+			const recipe = recipes.find((r) => r.id === recipeId);
 			if (!recipe) return false;
 			const out = applyCraft(player, recipe, mustMine, () => autosave.markDirty());
 			if (!out.ok) return false;
@@ -841,7 +831,7 @@ async function main() {
 			mpFx = (kind, x, y, z, tier) => void client.send({ t: 'fx', kind, x, y, z, tier });
 			loop.onDetonate = (x, y, z, effect, blockId) => mpFx?.(effect === 'firework' ? 'firework' : 'boom', x, y, z, blockId);
 
-			link.route = (m) => {
+			link.setRoute((m) => {
 				switch (m.t) {
 					case 'edit':
 						sync.onEdit(m, you);
@@ -868,8 +858,7 @@ async function main() {
 						break;
 					}
 				}
-			};
-			for (const m of link.pending.splice(0)) link.route(m);
+			});
 
 			let lastPosAt = -Infinity;
 			let lastPos = '';
@@ -899,8 +888,8 @@ async function main() {
 				hud.setMiningProgress(0);
 				if (document.pointerLockElement) document.exitPointerLock();
 			};
-			link.onFatal = freezeForNetwork;
-			link.onLost = () => {
+			// Replays a loss or fatal close that arrived before this point (review of I1).
+			link.wire(() => {
 				if (loop.mpDisconnected) return;
 				freezeForNetwork();
 				ui.showReconnecting();
@@ -916,7 +905,7 @@ async function main() {
 						},
 					),
 				}).start();
-			};
+			}, freezeForNetwork);
 
 			if (import.meta.env.DEV) mpDebug = { sync, client, remote, overlay: mp.overlay };
 		}

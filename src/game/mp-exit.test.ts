@@ -3,7 +3,7 @@ import { onFatalClose, type FatalDeps } from './mp-exit';
 import { AUTOJOIN_KEY } from './boot';
 import { MP_ERROR_KEY } from '../ui/menu';
 import { CLOSE } from '../net/protocol';
-import { Reconnector, RETRY_AT_MS, GIVE_UP_MS } from './mp-reconnect';
+import { Reconnector, GIVE_UP_MS } from './mp-reconnect';
 
 // Gate-2 K2: `mp:autojoin` is cleared BEFORE acting on any fatal close (4001, 4004–4009), so no
 // fatal close can turn into a reconnect loop.
@@ -73,7 +73,8 @@ describe('Reconnector (spec §7.5)', () => {
 		});
 		r.start();
 		await vi.advanceTimersByTimeAsync(29_999);
-		expect(probeAt).toEqual([...RETRY_AT_MS]);
+		// Literal spec values (§7.5): comparing to RETRY_AT_MS could never go red.
+		expect(probeAt).toEqual([1_000, 2_000, 4_000, 8_000, 15_000]);
 		expect(onGiveUp).not.toHaveBeenCalled();
 		await vi.advanceTimersByTimeAsync(1);
 		expect(GIVE_UP_MS).toBe(30_000);

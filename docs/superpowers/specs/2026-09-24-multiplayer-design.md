@@ -200,7 +200,7 @@ A proto version range is exchanged in `hello`. The server accepts `proto` in `[M
 | `pos` | `x,y,z,yaw,pitch` | ≤ 10 Hz while moving or turning |
 | `ping` | — | every 2 s when nothing else was sent; driven by `setInterval`, not rAF, so a hidden tab stays alive |
 | `edit` | `cid, ops: [[x,y,z,id,fluid,color], …]` | ≤ 2,000 ops per message; `cid` increases monotonically per connection; a batch may touch one cell more than once and is applied in order |
-| `fx` | `kind: prime\|boom\|firework, x,y,z, tier?` | cosmetic |
+| `fx` | `kind: prime\|boom\|firework, x,y,z, tier?` | cosmetic; `tier` is the explosive's block id for `prime` (fuse length) and `boom` (particles), relayed as an opaque int; absent or unknown means plain TNT |
 | `extras` | `{inventory,tools,hotbar,selected}` | debounced 5 s, and on leave |
 | `leaving` | `secondsLeft` | §7.4 |
 

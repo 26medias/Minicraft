@@ -1,8 +1,9 @@
 import type { PersistenceAdapter, WorldSummary } from '../persistence/adapter';
 import { newWorldId } from '../persistence/uuid';
 import { loadOptions } from '../persistence/options';
-import { PLAY_BREAK_CHOICES_MIN, PLAY_LIMIT_CHOICES_MIN } from '../data/playtime.data';
-import { applyPlaytimeSetting, clearSession, loadSession, saveSession } from '../persistence/playtime';
+import { DURATION_CHOICES_MIN } from '../data/playtime.data';
+import { applyMaxDuration, clearSession, loadSession, saveSession } from '../persistence/playtime';
+import { formatDuration } from '../game/session-policy';
 import { phaseOf } from '../game/playtime';
 import { menuModel, newWorldFields, planSave, type CardModel, type Staged } from './menu-model';
 import {
@@ -272,7 +273,7 @@ export class MainMenu {
 	/**
 	 * Staged form: the PIN row is last so the parent lands on the schedule, and
 	 * only the World change re-renders the form because only it changes the
-	 * form's shape; the break and time rows are toggled with `hidden`.
+	 * form's shape; the time row is toggled with `hidden`.
 	 */
 	private renderGrownUpsBody(body: HTMLElement, worlds: WorldSummary[]): void {
 		body.innerHTML = '';
@@ -286,8 +287,7 @@ export class MainMenu {
 			this.staged = {
 				// A legacy world is re-listed under its adopted uuid after first play.
 				worldId: armed ? (resolveWorld(armed, worlds)?.id ?? armed.worldId) : '',
-				limitMin: armed ? armed.limitMin : opts.playLimitMin,
-				breakMin: opts.playBreakMin,
+				limitMin: armed ? armed.limitMin : opts.maxDurationMin,
 				startRaw: `${pad(Math.floor(startMin / 60))}:${pad(startMin % 60)}`,
 			};
 		}
@@ -300,22 +300,6 @@ export class MainMenu {
 
 		// Rows that are shown or hidden by the world/limit choice are built first so
 		// the change handlers below can reference them.
-		const brk = document.createElement('select');
-		brk.id = 'playtime-break';
-		const untilUnlock = document.createElement('option');
-		untilUnlock.value = '';
-		untilUnlock.textContent = 'Until a grown-up unlocks';
-		brk.appendChild(untilUnlock);
-		for (const m of PLAY_BREAK_CHOICES_MIN) {
-			const o = document.createElement('option');
-			o.value = String(m);
-			o.textContent = `${m} minutes`;
-			brk.appendChild(o);
-		}
-		brk.value = st.breakMin === null ? '' : String(st.breakMin);
-		brk.onchange = () => { st.breakMin = brk.value === '' ? null : Number(brk.value); };
-		const breakRow = this.labelled('Then break for', brk);
-
 		const time = document.createElement('input');
 		time.type = 'time';
 		time.id = 'sched-start';
@@ -358,29 +342,26 @@ export class MainMenu {
 		if (st.worldId === '') {
 			const off = document.createElement('option');
 			off.value = '';
-			off.textContent = 'Off';
+			off.textContent = 'No limit';
 			limit.appendChild(off);
 		}
-		for (const m of PLAY_LIMIT_CHOICES_MIN) {
+		for (const m of DURATION_CHOICES_MIN) {
 			const o = document.createElement('option');
 			o.value = String(m);
-			o.textContent = `${m} minutes`;
+			o.textContent = formatDuration(m);
 			limit.appendChild(o);
 		}
 		limit.value = st.limitMin === null ? '' : String(st.limitMin);
 		limit.onchange = () => {
 			st.limitMin = limit.value === '' ? null : Number(limit.value);
-			breakRow.hidden = !(st.worldId === '' && st.limitMin !== null);
 		};
 		body.appendChild(this.labelled('Play for', limit));
 
-		// 3. Then break for (no-schedule mode only); 4. Not before (schedule only)
-		breakRow.hidden = !(st.worldId === '' && st.limitMin !== null);
-		body.appendChild(breakRow);
+		// 3. Not before (schedule only)
 		timeRow.hidden = st.worldId === '';
 		body.appendChild(timeRow);
 
-		// 5. Save / Turn off — writes in fail-closed order: the schedule first,
+		// 4. Save / Turn off — writes in fail-closed order: the schedule first,
 		// the session only once the schedule write is proven.
 		const save = document.createElement('button');
 		save.id = 'sched-save';
@@ -391,7 +372,7 @@ export class MainMenu {
 			if (plan.kind === 'error') { fail(plan.message); return; }
 			if (plan.kind === 'none') {
 				if (!clearSchedule()) { fail("Couldn't save — try again"); return; }
-				applyPlaytimeSetting({ playLimitMin: plan.limitMin, playBreakMin: plan.breakMin });
+				applyMaxDuration(plan.limitMin);
 			} else {
 				if (!saveSchedule(plan.schedule)) { fail("Couldn't save — try again"); return; }
 				if (plan.session) saveSession(plan.session); else clearSession();
@@ -413,7 +394,7 @@ export class MainMenu {
 			body.appendChild(off);
 		}
 
-		// 6. Status row + Unlock / Start fresh
+		// 5. Status row + Unlock / Start fresh
 		const now = Date.now();
 		const session = loadSession();
 		if (session && sessionInForce(session, armed, now)) {
@@ -423,7 +404,6 @@ export class MainMenu {
 			const text = document.createElement('span');
 			const btn = document.createElement('button');
 			btn.id = 'playtime-unlock';
-			let show = true;
 			if (phase === 'playing') {
 				const left = Math.max(1, Math.ceil((session.limitMs - session.playedMs) / 60_000));
 				text.textContent = `${left} minute${left === 1 ? '' : 's'} left`;
@@ -432,24 +412,16 @@ export class MainMenu {
 				// Any non-playing in-force session under a schedule is "done for today".
 				text.textContent = `Locked until ${formatStartTime(armed.startMin, now)} tomorrow`;
 				btn.textContent = 'Unlock · play today';
-			} else if (phase === 'over') {
-				show = false;
-			} else if (session.breakMs === null) {
+			} else {
 				text.textContent = 'Locked — ask a grown-up';
 				btn.textContent = 'Unlock';
-			} else {
-				const left = Math.max(1, Math.ceil((session.frozenAt! + session.breakMs - now) / 60_000));
-				text.textContent = `Break, ${left} minute${left === 1 ? '' : 's'} left`;
-				btn.textContent = 'Unlock';
 			}
-			if (show) {
-				btn.onclick = () => { clearSession(); void this.renderHome(); };
-				status.append(text, btn);
-				body.appendChild(status);
-			}
+			btn.onclick = () => { clearSession(); void this.renderHome(); };
+			status.append(text, btn);
+			body.appendChild(status);
 		}
 
-		// 7. PIN row, last: the parent came for the schedule. With a PIN set, the
+		// 6. PIN row, last: the parent came for the schedule. With a PIN set, the
 		// input is hidden behind "Change PIN" so it does not read as "PIN not saved".
 		const pinRow = document.createElement('div');
 		pinRow.className = 'pin-row';

@@ -2,7 +2,7 @@ import { isStale, phaseOf, type PlaytimeSession } from './playtime';
 import type { WorldSummary } from '../persistence/adapter';
 import { isLegacyId, seedFromLegacyId } from '../persistence/uuid';
 
-/** The parent's saved daily schedule. No break: the limit ends play for the day. */
+/** The parent's saved daily schedule. The limit ends play for the day. */
 export type Schedule = {
 	worldId: string;
 	seed: number;
@@ -52,12 +52,10 @@ export function doneForToday(limitMin: number, now: number): PlaytimeSession {
 	return { limitMs, breakMs: null, playedMs: limitMs, frozenAt: now, startedAt: now, updatedAt: now };
 }
 
-export function activeLimits(
-	schedule: Schedule | null,
-	opts: { playLimitMin: number | null; playBreakMin: number | null },
-): { limitMin: number | null; breakMin: number | null } {
-	if (schedule) return { limitMin: schedule.limitMin, breakMin: null };
-	return { limitMin: opts.playLimitMin, breakMin: opts.playBreakMin };
+/** The limit for a new session: the schedule's duration, else the chosen one (null = No limit). */
+export function activeLimits(schedule: Schedule | null, chosenMin: number | null): { limitMin: number | null } {
+	if (schedule) return { limitMin: schedule.limitMin };
+	return { limitMin: chosenMin };
 }
 
 /** Locale short time for `startMin` on the day of `now`. On a spring-forward day a time inside the missing hour renders an hour late; cosmetic. */
@@ -82,8 +80,7 @@ export function canStartNow(loaded: LoadedSchedule, session: PlaytimeSession | n
 	if (loaded.kind === 'broken') return false;
 	const s = loaded.schedule;
 	if (!gateOpen(s.startMin, now)) return false;
-	// Any in-force session that is not playing is "done for today" (a break, if a
-	// stale unscheduled tab wrote one, does not reopen the day).
+	// Any in-force session that is not playing is "done for today".
 	if (session && sessionInForce(session, s, now) && phaseOf(session, now) !== 'playing') return false;
 	return true;
 }

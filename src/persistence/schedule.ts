@@ -1,4 +1,4 @@
-import { PLAY_LIMIT_CHOICES_MIN } from '../data/playtime.data';
+import { DURATION_CHOICES_MIN } from '../data/playtime.data';
 import type { LoadedSchedule, Schedule } from '../game/schedule';
 
 export const SCHEDULE_KEY = 'minicraft:v1:schedule';
@@ -13,7 +13,7 @@ function isSchedule(v: unknown): v is Schedule {
 		typeof o.worldId === 'string' && o.worldId.length > 0 &&
 		typeof o.seed === 'number' && Number.isFinite(o.seed) &&
 		typeof o.name === 'string' &&
-		typeof o.limitMin === 'number' && PLAY_LIMIT_CHOICES_MIN.includes(o.limitMin) &&
+		typeof o.limitMin === 'number' && DURATION_CHOICES_MIN.includes(o.limitMin) &&
 		typeof o.startMin === 'number' && Number.isInteger(o.startMin) && o.startMin >= 0 && o.startMin < 1440
 	);
 }

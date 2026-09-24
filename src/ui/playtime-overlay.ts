@@ -8,7 +8,6 @@ export class PlaytimeOverlay {
 	private warning: HTMLDivElement;
 	private warningTimer: ReturnType<typeof setTimeout> | null = null;
 	private freezeEl: HTMLDivElement;
-	private countdown: HTMLDivElement | null = null;
 
 	constructor(container: HTMLElement) {
 		this.warning = document.createElement('div');
@@ -37,7 +36,8 @@ export class PlaytimeOverlay {
 		this.warning.classList.remove('visible');
 	}
 
-	freeze(breakEndsAt: number | null, lockedText?: string): void {
+	/** No break time: the freeze lasts until a new session (spec §8.3); MENU is the way back. */
+	freeze(lockedText?: string): void {
 		this.hideWarning();
 		this.freezeEl.innerHTML = '';
 		const title = document.createElement('div');
@@ -47,44 +47,19 @@ export class PlaytimeOverlay {
 
 		const line = document.createElement('div');
 		line.className = 'playtime-line';
-		if (breakEndsAt === null) {
-			line.textContent = lockedText ?? 'ASK A GROWN-UP';
-			this.countdown = null;
-			const menuBtn = document.createElement('button');
-			menuBtn.className = 'playtime-button';
-			menuBtn.textContent = 'MENU';
-			// A frozen tab left open overnight has no other way back to the Play button.
-			menuBtn.onclick = () => location.reload();
-			this.freezeEl.appendChild(line);
-			this.freezeEl.appendChild(menuBtn);
-			this.freezeEl.classList.remove('hidden');
-			return;
-		}
-		this.countdown = line;
+		line.textContent = lockedText ?? 'ASK A GROWN-UP';
+		const menuBtn = document.createElement('button');
+		menuBtn.className = 'playtime-button';
+		menuBtn.textContent = 'MENU';
+		// A frozen tab left open overnight has no other way back to the Play button.
+		menuBtn.onclick = () => location.reload();
 		this.freezeEl.appendChild(line);
+		this.freezeEl.appendChild(menuBtn);
 		this.freezeEl.classList.remove('hidden');
-	}
-
-	/** No-op when the overlay has no countdown (no-break freeze) or `ms` is not finite. */
-	setBreakRemaining(ms: number): void {
-		if (!this.countdown || !Number.isFinite(ms)) return;
-		const n = Math.max(1, Math.ceil(ms / 60_000));
-		this.countdown.textContent = `PLAY AGAIN IN ${n} MINUTE${n === 1 ? '' : 'S'}`;
-	}
-
-	offerPlayAgain(onClick: () => void): void {
-		if (!this.countdown) return;
-		const btn = document.createElement('button');
-		btn.className = 'playtime-button';
-		btn.textContent = 'PLAY AGAIN';
-		btn.onclick = onClick;
-		this.countdown.replaceWith(btn);
-		this.countdown = null;
 	}
 
 	unfreeze(): void {
 		this.freezeEl.classList.add('hidden');
 		this.freezeEl.innerHTML = '';
-		this.countdown = null;
 	}
 }

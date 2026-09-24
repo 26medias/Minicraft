@@ -8,13 +8,13 @@ function isFiniteNumber(v: unknown): v is number {
 	return typeof v === 'number' && Number.isFinite(v);
 }
 
+/** Any `breakMs` is accepted (break time was removed); loadSession coerces it to null. */
 function isSession(v: unknown): v is PlaytimeSession {
 	if (typeof v !== 'object' || v === null) return false;
 	const o = v as Record<string, unknown>;
 	return (
 		isFiniteNumber(o.limitMs) &&
 		o.limitMs > 0 &&
-		(o.breakMs === null || (isFiniteNumber(o.breakMs) && o.breakMs > 0)) &&
 		isFiniteNumber(o.playedMs) &&
 		o.playedMs >= 0 &&
 		(o.frozenAt === null || isFiniteNumber(o.frozenAt)) &&
@@ -35,11 +35,13 @@ export function loadSession(): PlaytimeSession | null {
 	try {
 		const parsed: unknown = JSON.parse(raw);
 		if (!isSession(parsed)) return null;
-		const { limitMs, breakMs, playedMs, frozenAt, updatedAt, startedAt } =
+		const { limitMs, playedMs, frozenAt, updatedAt, startedAt } =
 			parsed as PlaytimeSession & { startedAt?: number };
 		return {
 			limitMs,
-			breakMs,
+			// An old record's numeric break is dropped: a freeze now lasts until a
+			// new session per the refresh rule (spec §8.1), or a Parents reset.
+			breakMs: null,
 			playedMs,
 			frozenAt,
 			updatedAt,
@@ -68,16 +70,12 @@ export function clearSession(): void {
 }
 
 /**
- * Menu helper: patch the play-time options, persist them, and drop any stored
- * session. Both dropdowns and both buttons on the menu go through here or
- * through clearSession(), so "the parent changed something" always unlocks.
+ * Parents screen: save the maximum play duration (null = No limit) and drop
+ * any stored session, so "the parent changed something" always unlocks.
  */
-export function applyPlaytimeSetting(
-	patch: Partial<Pick<Options, 'playLimitMin' | 'playBreakMin'>>,
-): Options {
+export function applyMaxDuration(max: number | null): Options {
 	const opts = loadOptions();
-	if ('playLimitMin' in patch) opts.playLimitMin = patch.playLimitMin ?? null;
-	if ('playBreakMin' in patch) opts.playBreakMin = patch.playBreakMin ?? null;
+	opts.maxDurationMin = max;
 	saveOptions(opts);
 	clearSession();
 	return opts;

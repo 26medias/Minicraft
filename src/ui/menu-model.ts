@@ -53,11 +53,12 @@ export function menuModel(i: MenuInput): MenuModel {
 	return card(i.notice, s.name, `${s.limitMin} minutes today`, true, world);
 }
 
-export type Staged = { worldId: string; limitMin: number | null; breakMin: number | null; startRaw: string };
+/** `limitMin`: the schedule's duration, or with no schedule the parent's maximum (null = No limit). */
+export type Staged = { worldId: string; limitMin: number | null; startRaw: string };
 
 export type SavePlan =
 	| { kind: 'schedule'; schedule: Schedule; session: PlaytimeSession | null }
-	| { kind: 'none'; limitMin: number | null; breakMin: number | null }
+	| { kind: 'none'; limitMin: number | null }
 	| { kind: 'error'; message: string };
 
 /**
@@ -66,7 +67,7 @@ export type SavePlan =
  * tonight; the parent has Unlock for "play today".
  */
 export function planSave(staged: Staged, worlds: WorldSummary[], now: number): SavePlan {
-	if (staged.worldId === '') return { kind: 'none', limitMin: staged.limitMin, breakMin: staged.breakMin };
+	if (staged.worldId === '') return { kind: 'none', limitMin: staged.limitMin };
 	const w = worlds.find((x) => x.id === staged.worldId);
 	if (!w) return { kind: 'error', message: 'Pick a world' };
 	if (staged.limitMin === null) return { kind: 'error', message: 'Pick a play time' };

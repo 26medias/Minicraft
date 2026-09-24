@@ -65,8 +65,8 @@ describe('menuModel', () => {
 		expect(m.line.endsWith(' tomorrow')).toBe(true);
 		expect(m.playEnabled).toBe(false);
 	});
-	it('a leftover break-mode session that is over still reads all done', () => {
-		const over = sess({ breakMs: 20 * MIN, playedMs: 45 * MIN, frozenAt: at(7, 7, 55), updatedAt: at(7, 7, 55) });
+	it('a frozen session hours later (no break ever ends it) still reads all done', () => {
+		const over = sess({ playedMs: 45 * MIN, frozenAt: at(7, 7, 55), updatedAt: at(7, 7, 55) });
 		const m = card(base({ session: over, now: at(7, 9, 0) }));
 		expect(m.line.startsWith('All done for today')).toBe(true);
 		expect(m.playEnabled).toBe(false);
@@ -87,21 +87,22 @@ describe('menuModel', () => {
 		expect(m.playEnabled).toBe(true);
 	});
 	it('planSave: schedule after the start time writes a done-for-today session', () => {
-		const p = planSave({ worldId: 'w1', limitMin: 45, breakMin: null, startRaw: '07:00' }, [w1], at(7, 22, 0));
+		const p = planSave({ worldId: 'w1', limitMin: 45, startRaw: '07:00' }, [w1], at(7, 22, 0));
 		expect(p.kind).toBe('schedule');
 		if (p.kind !== 'schedule') return;
 		expect(p.schedule).toEqual({ worldId: 'w1', seed: 42, name: "Noah's World", limitMin: 45, startMin: 420 });
 		expect(p.session?.frozenAt).toBe(at(7, 22, 0));
 	});
 	it('planSave: schedule before the start time writes no session', () => {
-		const p = planSave({ worldId: 'w1', limitMin: 45, breakMin: null, startRaw: '07:00' }, [w1], at(7, 6, 0));
+		const p = planSave({ worldId: 'w1', limitMin: 45, startRaw: '07:00' }, [w1], at(7, 6, 0));
 		expect(p.kind === 'schedule' && p.session).toBeNull();
 	});
-	it('planSave: no schedule passes the limits through; bad inputs are errors', () => {
-		expect(planSave({ worldId: '', limitMin: 30, breakMin: 20, startRaw: '' }, [w1], at(7, 6, 0))).toEqual({ kind: 'none', limitMin: 30, breakMin: 20 });
-		expect(planSave({ worldId: 'nope', limitMin: 30, breakMin: null, startRaw: '07:00' }, [w1], at(7, 6, 0))).toEqual({ kind: 'error', message: 'Pick a world' });
-		expect(planSave({ worldId: 'w1', limitMin: 30, breakMin: null, startRaw: '' }, [w1], at(7, 6, 0))).toEqual({ kind: 'error', message: 'Pick a start time' });
-		expect(planSave({ worldId: 'w1', limitMin: null, breakMin: null, startRaw: '07:00' }, [w1], at(7, 6, 0))).toEqual({ kind: 'error', message: 'Pick a play time' });
+	it('planSave: no schedule passes the maximum through (no break); bad inputs are errors', () => {
+		expect(planSave({ worldId: '', limitMin: 30, startRaw: '' }, [w1], at(7, 6, 0))).toEqual({ kind: 'none', limitMin: 30 });
+		expect(planSave({ worldId: '', limitMin: null, startRaw: '' }, [w1], at(7, 6, 0))).toEqual({ kind: 'none', limitMin: null });
+		expect(planSave({ worldId: 'nope', limitMin: 30, startRaw: '07:00' }, [w1], at(7, 6, 0))).toEqual({ kind: 'error', message: 'Pick a world' });
+		expect(planSave({ worldId: 'w1', limitMin: 30, startRaw: '' }, [w1], at(7, 6, 0))).toEqual({ kind: 'error', message: 'Pick a start time' });
+		expect(planSave({ worldId: 'w1', limitMin: null, startRaw: '07:00' }, [w1], at(7, 6, 0))).toEqual({ kind: 'error', message: 'Pick a play time' });
 	});
 	it('legacy id resolves to the adopted uuid and Play carries it', () => {
 		const leg = { ...schedule, worldId: 'legacy:42' };

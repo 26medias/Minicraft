@@ -490,9 +490,9 @@ async function main() {
 		// a session already in its break must freeze before the first frame.
 		const loadedSchedule = loadSchedule();
 		const schedule = loadedSchedule.kind === 'armed' ? loadedSchedule.schedule : null;
-		const limits = activeLimits(schedule, opts);
-		if (limits.limitMin !== null) {
-			const session = resolveSession(loadSession(), limits.limitMin, limits.breakMin, Date.now(), schedule);
+		const limits = activeLimits(schedule, opts.maxDurationMin);
+		const session = resolveSession(loadSession(), limits.limitMin, Date.now(), schedule);
+		if (session !== null) {
 			saveSession(session);
 			const playtime = new PlaytimeController(session, {
 				overlay: new PlaytimeOverlay(app),

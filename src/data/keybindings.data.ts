@@ -96,8 +96,6 @@ export const DEFAULT_KEYBINDINGS: Record<Action, string> = {
 export type Options = {
 	keybindings: Record<Action, string>;
 	currentLightColor: string;
-	/** Minutes of play per session; null = Off. */
-	playLimitMin: number | null;
-	/** Minutes of break after the limit; null = until a grown-up unlocks. */
-	playBreakMin: number | null;
+	/** The parent's maximum play duration in minutes, from DURATION_CHOICES_MIN; null = No limit. */
+	maxDurationMin: number | null;
 };

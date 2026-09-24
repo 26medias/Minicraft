@@ -27,7 +27,7 @@ afterEach(() => {
 const KEY = 'minicraft:v1:playtime';
 
 function valid(over: Partial<PlaytimeSession> = {}): PlaytimeSession {
-	return { limitMs: 1_800_000, breakMs: 1_200_000, playedMs: 0, frozenAt: null, updatedAt: 1, startedAt: 1, ...over };
+	return { limitMs: 1_800_000, breakMs: null, playedMs: 0, frozenAt: null, updatedAt: 1, startedAt: 1, ...over };
 }
 
 describe('playtime session storage', () => {
@@ -47,6 +47,17 @@ describe('playtime session storage', () => {
 		const { loadSession, saveSession } = await import('./playtime');
 		saveSession(valid({ breakMs: null }));
 		expect(loadSession()?.breakMs).toBeNull();
+	});
+
+	it.each([
+		['a numeric break (old record)', 1_200_000],
+		['breakMs zero', 0],
+		['breakMs absent (JSON drops undefined)', undefined],
+		['breakMs a string', 'x'],
+	])('loads any breakMs as null: %s', async (_name, breakMs) => {
+		store[KEY] = JSON.stringify({ ...valid({ playedMs: 5, frozenAt: 9 }), breakMs });
+		const { loadSession } = await import('./playtime');
+		expect(loadSession()).toEqual(valid({ playedMs: 5, frozenAt: 9 }));
 	});
 
 	it('defaults startedAt to updatedAt for a legacy record', async () => {
@@ -71,8 +82,6 @@ describe('playtime session storage', () => {
 	it.each([
 		['limitMs zero', { limitMs: 0 }],
 		['limitMs string', { limitMs: '1800000' }],
-		['breakMs zero', { breakMs: 0 }],
-		['breakMs absent (JSON drops undefined)', { breakMs: undefined }],
 		['playedMs negative', { playedMs: -1 }],
 		['playedMs null (what JSON makes of NaN)', { playedMs: null }],
 		['frozenAt string', { frozenAt: 'now' }],
@@ -114,22 +123,24 @@ describe('playtime session storage', () => {
 	});
 });
 
-describe('applyPlaytimeSetting', () => {
-	it('saves the patched options and clears the session', async () => {
-		const { applyPlaytimeSetting, saveSession } = await import('./playtime');
+describe('applyMaxDuration', () => {
+	it('saves the maximum and clears the session', async () => {
+		const { applyMaxDuration, saveSession } = await import('./playtime');
 		const { loadOptions } = await import('./options');
 		saveSession(valid());
-		const result = applyPlaytimeSetting({ playLimitMin: 30 });
-		expect(result.playLimitMin).toBe(30);
-		expect(loadOptions().playLimitMin).toBe(30);
+		const result = applyMaxDuration(30);
+		expect(result.maxDurationMin).toBe(30);
+		expect(loadOptions().maxDurationMin).toBe(30);
 		expect(store[KEY]).toBeUndefined();
 	});
 
-	it('keeps playBreakMin when playLimitMin is set to Off', async () => {
-		const { applyPlaytimeSetting } = await import('./playtime');
+	it('No limit saves null and clears the session', async () => {
+		const { applyMaxDuration, saveSession } = await import('./playtime');
 		const { loadOptions } = await import('./options');
-		applyPlaytimeSetting({ playLimitMin: 30, playBreakMin: 20 });
-		applyPlaytimeSetting({ playLimitMin: null });
-		expect(loadOptions().playBreakMin).toBe(20);
+		applyMaxDuration(30);
+		saveSession(valid());
+		applyMaxDuration(null);
+		expect(loadOptions().maxDurationMin).toBeNull();
+		expect(store[KEY]).toBeUndefined();
 	});
 });

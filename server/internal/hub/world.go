@@ -485,7 +485,7 @@ func (w *World) join(c cmdJoin) {
 		ID:      w.nextID,
 		NameKey: c.key,
 		Name:    norm.NFC.String(strings.TrimSpace(c.hello.Name)),
-		Skin:    c.hello.Skin,
+		Skin:    proto.SkinOf(c.hello.Skin),
 		Bid:     c.hello.Bid,
 		sender:  c.s,
 	}
@@ -596,8 +596,10 @@ func (w *World) dropAll(ps []*Player) {
 	}
 }
 
-// drop kicks a player's connection, removes the player and tells everyone else.
+// drop kicks a player's connection, removes the player and tells everyone else. The `error`
+// message comes first (spec §5); for a 4002 the queue is full and it is simply not delivered.
 func (w *World) drop(p *Player, code int, reason string) {
+	p.sender.Send(enc(proto.ErrorMsg{T: proto.TError, Code: code, Message: reason}))
 	p.sender.Kick(code, reason)
 	w.remove(p)
 	w.broadcast(enc(proto.Left{T: proto.TLeft, ID: p.ID}), 0)
@@ -756,7 +758,7 @@ func (w *World) infos(except int) []proto.PlayerInfo {
 	out := make([]proto.PlayerInfo, 0, len(w.players))
 	for id, p := range w.players {
 		if id != except {
-			out = append(out, proto.PlayerInfo{ID: p.ID, Name: p.Name, Skin: p.Skin, X: p.X, Y: p.Y, Z: p.Z, Yaw: p.Yaw, Pitch: p.Pitch})
+			out = append(out, proto.PlayerInfo{ID: p.ID, Name: p.Name, Skin: p.Skin, X: p.X, Y: p.Y, Z: p.Z, Yaw: p.Yaw, Pitch: p.Pitch, HasPos: p.HasPos})
 		}
 	}
 	return out

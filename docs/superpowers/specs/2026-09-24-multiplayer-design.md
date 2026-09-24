@@ -196,7 +196,7 @@ A proto version range is exchanged in `hello`. The server accepts `proto` in `[M
 
 | t | fields | notes |
 |---|---|---|
-| `hello` | `world, name, skin, bid, proto, gen, resume` | first message; `gen` = the client's generator version; `resume: true` on an autojoin reconnect |
+| `hello` | `world, name, skin, bid, proto, gen, resume` | first message; a `skin` over 32 bytes, not UTF-8 or with a control character is stored as `""` (the default colour); `gen` = the client's generator version; `resume: true` on an autojoin reconnect |
 | `pos` | `x,y,z,yaw,pitch` | ≤ 10 Hz while moving or turning |
 | `ping` | — | every 2 s when nothing else was sent; driven by `setInterval`, not rAF, so a hidden tab stays alive |
 | `edit` | `cid, ops: [[x,y,z,id,fluid,color], …]` | ≤ 2,000 ops per message; `cid` increases monotonically per connection; a batch may touch one cell more than once and is applied in order |
@@ -208,7 +208,7 @@ A proto version range is exchanged in `hello`. The server accepts `proto` in `[M
 
 | t | fields | notes |
 |---|---|---|
-| `welcome` | `you, world{uuid,name,seed,gen,height,mustMine}, spawn, extras, players[], seq, catalogMax` | then one binary snapshot frame; the client hides blocks with ids above `catalogMax` from its inventory and hotbar |
+| `welcome` | `you, world{uuid,name,seed,gen,height,mustMine}, spawn, extras, players[{id,name,skin,x,y,z,yaw,pitch,hasPos}], seq, catalogMax` | then one binary snapshot frame; the client hides blocks with ids above `catalogMax` from its inventory and hotbar |
 | *(binary)* | snapshot as of `seq` | format below |
 | `edit` | `seq, by, cid?, ops` | server order; sent to **everyone, author included** |
 | `tick` | `poses: [[id,x,y,z,yaw,pitch], …]` | every 100 ms, one message per recipient, excludes the recipient's own pose *(G1: cuts ~6k msgs/s to 250 at 25 players, and egress)* |

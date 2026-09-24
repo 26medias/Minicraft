@@ -112,7 +112,14 @@ export type PlayerInfo = {
 	z: number;
 	yaw: number;
 	pitch: number;
+	/** False for a player who joined but has not sent `pos` yet: x..pitch are then meaningless. */
+	hasPos: boolean;
 };
+
+/** A welcome player's pose, or null when they have none yet (their first tick places them). */
+export function welcomePose(p: PlayerInfo): { x: number; y: number; z: number; yaw: number; pitch: number } | null {
+	return p.hasPos ? { x: p.x, y: p.y, z: p.z, yaw: p.yaw, pitch: p.pitch } : null;
+}
 
 /** Followed by one binary snapshot frame as of `seq` (see `snapshot.ts`). */
 export type Welcome = {

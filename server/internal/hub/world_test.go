@@ -114,6 +114,20 @@ func (f *fakeSender) count(t string) int {
 	return n
 }
 
+func (f *fakeSender) errors() []proto.ErrorMsg {
+	var out []proto.ErrorMsg
+	for _, m := range f.all() {
+		if !m.bin && typeOf(m.data) == proto.TError {
+			var e proto.ErrorMsg
+			if err := json.Unmarshal(m.data, &e); err != nil {
+				panic(err)
+			}
+			out = append(out, e)
+		}
+	}
+	return out
+}
+
 func (f *fakeSender) edits() []proto.EditOut {
 	var out []proto.EditOut
 	for _, m := range f.all() {
@@ -522,6 +536,10 @@ func TestG12InvalidBatchResync(t *testing.T) {
 	if k := a.kicked(); k[0] != proto.CloseResync {
 		t.Fatalf("kick %v, want 4003", k)
 	}
+	// Spec §5: an `error` with the code comes before the close.
+	if e := a.errors(); len(e) != 1 || e[0].Code != proto.CloseResync {
+		t.Fatalf("error messages %+v, want one with code 4003", e)
+	}
 	w.Submit(edit(bid, b, 1, proto.Op{3, 3, 3, 1, 0, 0}))
 	waitFor(t, "B's echo", func() bool { return len(b.edits()) == 1 })
 	if e := b.edits(); e[0].Seq != 1 || e[0].By != bid {
@@ -529,6 +547,45 @@ func TestG12InvalidBatchResync(t *testing.T) {
 	}
 	if n := a.count(proto.TEdit); n != 0 {
 		t.Fatalf("the rejected author got %d edits", n)
+	}
+}
+
+// ── welcome.players: hasPos, and the skin bound ──
+
+// A player who joined but has not sent `pos` yet is listed with hasPos false, so the client does
+// not draw them at (0,0,0); once they have a pose it is true.
+func TestWelcomePlayersHasPos(t *testing.T) {
+	w := newTestWorld(t, nil, nil)
+	a, b, c := newSender(), newSender(), newSender()
+	aid := mustJoin(t, w, "A", "a", a)
+	mustJoin(t, w, "B", "b", b)
+	pb := b.welcome(t).Players
+	if len(pb) != 1 || pb[0].ID != aid || pb[0].HasPos {
+		t.Fatalf("B's welcome players %+v, want A with hasPos false", pb)
+	}
+	w.Submit(CmdPos{ID: aid, S: a, Pos: proto.Pos{T: proto.TPos, X: 5, Y: 70, Z: 6}})
+	mustJoin(t, w, "C", "c", c)
+	for _, p := range c.welcome(t).Players {
+		if p.ID == aid && (!p.HasPos || p.X != 5) {
+			t.Fatalf("C's welcome lists A as %+v, want hasPos true at x 5", p)
+		}
+	}
+}
+
+// hello.skin is bounded: an oversized skin is stored and relayed as "" (the client's default).
+func TestJoinBoundsSkin(t *testing.T) {
+	w := newTestWorld(t, nil, nil)
+	a, b := newSender(), newSender()
+	h := hello("A", "a")
+	h.Skin = strings.Repeat("x", 1<<20)
+	aid, err := w.Join(h, a)
+	if err != nil {
+		t.Fatal(err)
+	}
+	mustJoin(t, w, "B", "b", b)
+	pb := b.welcome(t).Players
+	if len(pb) != 1 || pb[0].ID != aid.ID || pb[0].Skin != "" {
+		t.Fatalf("B's welcome players skin len %d, want \"\"", len(pb[0].Skin))
 	}
 }
 

@@ -28,7 +28,8 @@
 			"y": 70,
 			"z": 21,
 			"yaw": 3.14,
-			"pitch": 0.1
+			"pitch": 0.1,
+			"hasPos": true
 		}
 	],
 	"seq": 4242,

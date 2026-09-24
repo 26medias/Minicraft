@@ -5,6 +5,7 @@ import {
 	PROTO,
 	colorToInt,
 	intToColor,
+	welcomePose,
 	type EditMsg,
 	type EditOut,
 	type ErrorMsg,
@@ -88,7 +89,7 @@ describe('T1: Go golden messages parse with the TS types, field for field', () =
 		);
 		expect(w.players.length).toBeGreaterThan(0);
 		expect(keysOf(w.players[0])).toEqual(
-			[...fields<PlayerInfo>()('id', 'name', 'skin', 'x', 'y', 'z', 'yaw', 'pitch')].sort(),
+			[...fields<PlayerInfo>()('id', 'name', 'skin', 'x', 'y', 'z', 'yaw', 'pitch', 'hasPos')].sort(),
 		);
 		const row = golden<WorldListing>('msg-worlds-row.json');
 		expect(keysOf(row.online[0])).toEqual([...fields<OnlinePlayer>()('name', 'skin')].sort());
@@ -178,5 +179,17 @@ describe('T4: colour and fluid packing', () => {
 		expect(fluids).toContain(0x8f);
 		expect(go.ops.map((op) => op[5])).toContain(colorToInt('#FFF5E0'));
 		expect(JSON.parse(JSON.stringify(go))).toEqual(go);
+	});
+});
+
+describe('welcomePose', () => {
+	const base: PlayerInfo = { id: 1, name: 'Emma', skin: 'red', x: 11, y: 70, z: 21, yaw: 3, pitch: 0.1, hasPos: true };
+
+	it('returns the pose of a player who has one', () => {
+		expect(welcomePose(base)).toEqual({ x: 11, y: 70, z: 21, yaw: 3, pitch: 0.1 });
+	});
+
+	it('returns null for a player who joined but has not sent pos yet (not drawn at 0,0,0)', () => {
+		expect(welcomePose({ ...base, x: 0, y: 0, z: 0, yaw: 0, pitch: 0, hasPos: false })).toBeNull();
 	});
 });

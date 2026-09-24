@@ -73,11 +73,10 @@ export function decodeSnapshot(buf: ArrayBuffer): { seq: number; cells: Int32Arr
 	let pz = 0;
 	let py = -1;
 	for (; row < count; row++) {
-		let x: number;
 		let y: number;
 		let z: number;
 		const dx = next();
-		x = px + dx;
+		const x = px + dx;
 		if (dx > 0) {
 			z = next();
 			y = next();

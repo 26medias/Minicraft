@@ -98,3 +98,19 @@ func TestG16NameKey(t *testing.T) {
 		t.Errorf("trim: key = %q", k)
 	}
 }
+
+func TestSkinOf(t *testing.T) {
+	cases := map[string]string{
+		"red":                               "red",
+		"skin-léa":                          "skin-léa",
+		strings.Repeat("x", MaxSkinBytes):   strings.Repeat("x", MaxSkinBytes),
+		strings.Repeat("x", MaxSkinBytes+1): "",
+		"bad\xffutf8":                       "",
+		"tab\there":                         "",
+	}
+	for in, want := range cases {
+		if got := SkinOf(in); got != want {
+			t.Errorf("SkinOf(%q) = %q, want %q", in, got, want)
+		}
+	}
+}

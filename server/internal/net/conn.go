@@ -303,7 +303,7 @@ func (c *Conn) route(w *hub.World, id int, b []byte) {
 	case proto.TEdit:
 		var m proto.Edit
 		if json.Unmarshal(b, &m) != nil {
-			c.Kick(proto.CloseResync, "resync")
+			c.refuse(proto.CloseResync, "resync")
 			return
 		}
 		w.Submit(hub.CmdEdit{ID: id, S: c, Cid: m.Cid, Ops: m.Ops})

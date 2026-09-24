@@ -59,7 +59,7 @@ import { MpClient } from './net/mp-client';
 import { MpSync } from './net/mp-sync';
 import { mpApiFromEnv } from './net/mp-api';
 import { decodeSnapshot } from './net/snapshot';
-import { intToColor, PROTO, type ExtrasData, type FxKind, type FxMsg, type Hello, type Welcome } from './net/protocol';
+import { intToColor, PROTO, welcomePose, type ExtrasData, type FxKind, type FxMsg, type Hello, type Welcome } from './net/protocol';
 import { catalogBlocks, catalogHotbar, catalogRecipes } from './net/catalog-filter';
 import { ChunkOverlay } from './engine/world/overlay';
 import { WORLD_CHUNKS_X, WORLD_CHUNKS_Z, type WorldHeight } from './engine/world/coords';
@@ -800,7 +800,8 @@ async function main() {
 			};
 			for (const p of welcome.players) {
 				addPlayer(p.id, p.name, p.skin);
-				if (p.id !== you) remote.pushPose(p.id, performance.now(), { x: p.x, y: p.y, z: p.z, yaw: p.yaw, pitch: p.pitch });
+				const pose = welcomePose(p);
+				if (p.id !== you && pose) remote.pushPose(p.id, performance.now(), pose);
 			}
 			// Extras mined just before a reconnect reload (C4 handoff).
 			sync.resendStashed();

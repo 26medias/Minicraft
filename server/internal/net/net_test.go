@@ -1100,8 +1100,32 @@ func TestResyncKick(t *testing.T) {
 	cl := h.dial()
 	cl.join(hello(w.UUID, "Noah", "b"))
 	cl.send(proto.Edit{T: proto.TEdit, Cid: 1, Ops: []proto.Op{{0, 0, 0, int32(proto.CatalogMax + 1), 0, 0}}})
-	if code := cl.closeCode(3 * time.Second); code != proto.CloseResync {
-		t.Fatalf("close %v, want 4003", code)
+	expectErrorThenClose(t, cl, proto.CloseResync)
+}
+
+// An edit that is not even valid JSON for its type is a 4003 too, with the same error message.
+func TestResyncKickBadEditJSON(t *testing.T) {
+	h := newHarness(t)
+	w := h.world("badjson")
+	cl := h.dial()
+	cl.join(hello(w.UUID, "Noah", "b"))
+	cl.sendRaw([]byte(`{"t":"edit","cid":1,"ops":"nope"}`))
+	expectErrorThenClose(t, cl, proto.CloseResync)
+}
+
+// expectErrorThenClose checks spec §5: an `error` message with the code comes before the close.
+func expectErrorThenClose(t *testing.T, cl *client, code int) {
+	t.Helper()
+	m := cl.until(proto.TError, 3*time.Second, nil)
+	var e proto.ErrorMsg
+	if err := json.Unmarshal(m.data, &e); err != nil {
+		t.Fatal(err)
+	}
+	if e.Code != code {
+		t.Fatalf("error message code %d, want %d", e.Code, code)
+	}
+	if got := cl.closeCode(3 * time.Second); int(got) != code {
+		t.Fatalf("close %v, want %d", got, code)
 	}
 }
 

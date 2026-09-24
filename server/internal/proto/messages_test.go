@@ -24,7 +24,7 @@ func sampleMessages() map[string]any {
 				Seed: 123456789, Gen: 3, Height: 256, MustMine: true},
 			Spawn:   Spawn{Mode: SpawnNear, X: 10.5, Y: 70, Z: 20.5, Yaw: 0.5, Pitch: 0, Target: 1},
 			Extras:  json.RawMessage(`{}`),
-			Players: []PlayerInfo{{ID: 1, Name: "Emma", Skin: "rose", X: 11, Y: 70, Z: 21, Yaw: 3.14, Pitch: 0.1}},
+			Players: []PlayerInfo{{ID: 1, Name: "Emma", Skin: "rose", X: 11, Y: 70, Z: 21, Yaw: 3.14, Pitch: 0.1, HasPos: true}},
 			Seq:     4242, CatalogMax: CatalogMax},
 		"edit-out": EditOut{T: TEdit, Seq: 4243, By: 2, Cid: 17,
 			Ops: []Op{{1, 2, 3, 13, 0x8F, 0}, {4, 5, 6, 1000, 0, 0x1000000}}},
@@ -84,7 +84,7 @@ func TestMessageFieldNames(t *testing.T) {
 	nested := map[string][]string{
 		"world":  {"uuid", "name", "seed", "gen", "height", "mustMine"},
 		"spawn":  {"mode", "x", "y", "z", "yaw", "pitch", "target"},
-		"player": {"id", "name", "skin", "x", "y", "z", "yaw", "pitch"},
+		"player": {"id", "name", "skin", "x", "y", "z", "yaw", "pitch", "hasPos"},
 		"online": {"name", "skin"},
 	}
 	msgs := sampleMessages()

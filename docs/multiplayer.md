@@ -74,7 +74,7 @@ the tables together.
 
 | t | fields | notes |
 |---|---|---|
-| `hello` | `world, name, skin, bid, proto, gen, resume` | first message; `gen` is the client's generator version; `resume: true` on a reconnect reload |
+| `hello` | `world, name, skin, bid, proto, gen, resume` | first message; a `skin` over 32 bytes, not UTF-8 or with a control character is stored as `""` (the default colour); `gen` is the client's generator version; `resume: true` on a reconnect reload |
 | `pos` | `x, y, z, yaw, pitch` | at most 10 Hz, only while moving or turning |
 | `ping` | — | every 2 s when nothing else was sent; driven by `setInterval`, so a hidden tab stays alive |
 | `edit` | `cid, ops` | ≤ 2,000 ops; `cid` increases per connection; a batch may touch one cell more than once and is applied in order |
@@ -86,7 +86,7 @@ the tables together.
 
 | t | fields | notes |
 |---|---|---|
-| `welcome` | `you, world{uuid,name,seed,gen,height,mustMine}, spawn, extras, players[], seq, catalogMax` | then one binary snapshot frame as of `seq`; blocks with ids above `catalogMax` are hidden from the inventory |
+| `welcome` | `you, world{uuid,name,seed,gen,height,mustMine}, spawn, extras, players[{id,name,skin,x,y,z,yaw,pitch,hasPos}], seq, catalogMax` | then one binary snapshot frame as of `seq`; blocks with ids above `catalogMax` are hidden from the inventory |
 | `edit` | `seq, by, cid?, ops` | server order; sent to everyone, author included |
 | `tick` | `poses: [[id, x, y, z, yaw, pitch], …]` | every 100 ms while 2 or more players are online; excludes the recipient's own pose |
 | `join` | `id, name, skin` | a new player (a same-browser takeover sends none) |

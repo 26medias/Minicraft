@@ -168,6 +168,9 @@ type PlayerInfo struct {
 	Z     float64 `json:"z"`
 	Yaw   float64 `json:"yaw"`
 	Pitch float64 `json:"pitch"`
+	// HasPos is false for a player who joined but has not sent `pos` yet: x..pitch are then
+	// meaningless and the client does not place the avatar until the first tick.
+	HasPos bool `json:"hasPos"`
 }
 
 // EditOut is the server-ordered edit sent to everyone, author included.

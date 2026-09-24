@@ -1,19 +1,23 @@
 // scripts/menu-smoke.ts — headless browser smoke of the menus (multiplayer spec §8).
 //
-//   npx tsx scripts/menu-smoke.ts [--port 5173]
+//   npx tsx scripts/menu-smoke.ts [--port 5173] [--mp-url http://127.0.0.1:1 | --mp-url none]
 //
 // Starts its OWN Vite dev server on --port (default 5173, --strictPort: if the port is busy it
 // stops and says so; it never reuses or stops a server it did not start) with
 // VITE_MINICRAFT_API_URL pointed at a dead local port, and drives a headless Chromium:
-// home (three buttons) → Multiplayer stub → Parents (maximum) → Single Player (duration control,
+// home (three buttons) → Multiplayer (name screen, sleeping server, automatic recovery, the
+// name-taken message) → Parents (maximum, multiplayer worlds) → Single Player (duration control,
 // New World → Create → Play: the world loads) → reload (world and duration remembered) →
 // schedule → the card's Parents button asks for the PIN and cancels the schedule.
 // Exit 0 = every check passed, 1 = a check failed, 2 = the page tried to reach a non-localhost
 // host (aborted before it left the machine).
+// --mp-url sets VITE_MINICRAFT_MP_URL (default a dead local port, http://127.0.0.1:1). With
+// `--mp-url none` it is unset and the smoke checks that the Multiplayer button is hidden instead.
+// No real mcserver is needed: the "server wakes up" step answers /worlds from a Playwright route.
 // SAFETY: the save API is blocked twice — every request to the dead API port is aborted, and
 // every request to any host other than localhost/127.0.0.1 (the production site, *.run.app)
 // aborts the whole run. The kid's worlds live at noah.leap-forward.ca: never point this there.
-import { chromium, type Page } from 'playwright';
+import { chromium, type Page, type Route } from 'playwright';
 import { spawn, spawnSync } from 'node:child_process';
 
 function arg(name: string, def: string) {
@@ -23,6 +27,15 @@ function arg(name: string, def: string) {
 const PORT = Number(arg('--port', '5173'));
 const DEAD_API = 'http://127.0.0.1:9099';
 const BASE = `http://localhost:${PORT}/`;
+const MP_ARG = arg('--mp-url', 'http://127.0.0.1:1');
+const MP_URL = MP_ARG === 'none' ? '' : MP_ARG.replace(/\/+$/, '');
+if (MP_URL !== '') {
+	const h = new URL(MP_URL).hostname;
+	if (h !== '127.0.0.1' && h !== 'localhost') throw new Error(`--mp-url must be local (got ${MP_URL})`);
+}
+/** The fake multiplayer server: null = asleep (requests aborted), else the /worlds rows. */
+let mpRows: { uuid: string; name: string; mustMine: boolean; createdAt: number; online: { name: string; skin: string }[] }[] | null = null;
+let mpListCalls = 0;
 
 let stopDev: (() => void) | null = null;
 const failures: string[] = [];
@@ -39,7 +52,7 @@ async function startDev(): Promise<() => void> {
 		if ((e as Error).message.startsWith('port')) throw e;
 	}
 	const p = spawn('npx', ['vite', '--port', String(PORT), '--strictPort'], {
-		env: { ...process.env, VITE_MINICRAFT_API_URL: DEAD_API },
+		env: { ...process.env, VITE_MINICRAFT_API_URL: DEAD_API, VITE_MINICRAFT_MP_URL: MP_URL, VITE_MINICRAFT_MP_TOKEN: 'smoke' },
 		stdio: 'ignore',
 	});
 	// Stop by port only (never pkill by name: it has killed other servers on this machine).
@@ -57,6 +70,7 @@ async function guard(page: Page) {
 	await page.route('**/*', (route) => {
 		const url = new URL(route.request().url());
 		if (url.origin === DEAD_API) return route.abort();  // save API: blocked
+		if (MP_URL !== '' && url.origin === new URL(MP_URL).origin) return fakeMp(route);
 		if (url.hostname === '127.0.0.1' || url.hostname === 'localhost') return route.continue();
 		// Anything else — the production site, the Cloud Function (*.run.app), a CDN — stops the run.
 		console.error(`menu-smoke: ABORT — the page tried to reach ${url.href} (only localhost is allowed)`);
@@ -64,6 +78,41 @@ async function guard(page: Page) {
 		stopDev?.();
 		process.exit(2);
 	});
+}
+
+const CORS = {
+	'Access-Control-Allow-Origin': `http://localhost:${PORT}`,
+	'Access-Control-Allow-Methods': 'GET, POST, DELETE, OPTIONS',
+	'Access-Control-Allow-Headers': 'Authorization, Content-Type',
+};
+
+/** The multiplayer server, faked: asleep (aborted) until `mpRows` is set. DELETE of an occupied world → 409. */
+function fakeMp(route: Route) {
+	const req = route.request();
+	if (req.method() === 'OPTIONS') return route.fulfill({ status: 204, headers: CORS });
+	const path = new URL(req.url()).pathname;
+	if (path === '/worlds' && req.method() === 'GET') mpListCalls++;
+	if (mpRows === null) return route.abort('connectionrefused');
+	if (req.headers()['authorization'] !== 'Bearer smoke') return route.fulfill({ status: 401, headers: CORS });
+	if (path === '/worlds' && req.method() === 'GET') {
+		return route.fulfill({ status: 200, headers: { ...CORS, 'Content-Type': 'application/json' }, body: JSON.stringify(mpRows) });
+	}
+	if (path === '/worlds' && req.method() === 'POST') {
+		const b = JSON.parse(req.postData() ?? '{}') as { name: string; seed: number; mustMine: boolean; gen: number };
+		if (b.gen !== 3 || typeof b.seed !== 'number') return route.fulfill({ status: 400, headers: CORS });
+		const w = { uuid: `w-new-${mpRows.length}`, name: b.name, mustMine: b.mustMine, createdAt: Date.now(), online: [] };
+		mpRows = [...mpRows, w];
+		return route.fulfill({ status: 200, headers: { ...CORS, 'Content-Type': 'application/json' }, body: JSON.stringify(w) });
+	}
+	const del = /^\/worlds\/(.+)$/.exec(path);
+	if (del && req.method() === 'DELETE') {
+		const r = mpRows.find((w) => w.uuid === decodeURIComponent(del[1]));
+		if (!r) return route.fulfill({ status: 404, headers: CORS });
+		if (r.online.length > 0) return route.fulfill({ status: 409, headers: CORS });
+		mpRows = mpRows.filter((w) => w !== r);
+		return route.fulfill({ status: 204, headers: CORS });
+	}
+	return route.fulfill({ status: 404, headers: CORS });
 }
 
 const ls = (page: Page, key: string) => page.evaluate((k) => localStorage.getItem(k), key);
@@ -83,17 +132,77 @@ for (const sig of ['SIGINT', 'SIGTERM', 'SIGHUP'] as const) process.on(sig, () =
 		await page.addInitScript('window.__name = (f) => f;');
 		await page.goto(BASE);
 
-		// 1. Home: three big buttons.
+		// 1. Home: three big buttons (two when the site has no multiplayer server).
 		await page.waitForSelector('#home-single');
-		check(await page.locator('.home-button').count() === 3, 'home shows three big buttons');
-		check(await text(page, '#home-single') === 'Single Player' && await text(page, '#home-multi') === 'Multiplayer' && await text(page, '#home-parents') === 'Parents', 'they read Single Player, Multiplayer, Parents');
+		if (MP_URL === '') {
+			check(await page.locator('.home-button').count() === 2, 'no multiplayer URL: home shows two big buttons');
+			check(await page.locator('#home-multi').count() === 0, 'no multiplayer URL: the Multiplayer button is hidden');
+		} else {
+			check(await page.locator('.home-button').count() === 3, 'home shows three big buttons');
+			check(await text(page, '#home-single') === 'Single Player' && await text(page, '#home-multi') === 'Multiplayer' && await text(page, '#home-parents') === 'Parents', 'they read Single Player, Multiplayer, Parents');
+		}
 		check(await page.locator('text=Grown-ups').count() === 0, 'no "Grown-ups" label left');
 
-		// 2. Multiplayer: the stub, and Back.
-		await page.click('#home-multi');
-		check(await page.locator('.menu-card[data-screen="multi"]').count() === 1, 'Multiplayer opens its screen');
-		await page.click('#menu-back');
-		await page.waitForSelector('#home-single');
+		if (MP_URL !== '') {
+			// 2. Multiplayer. Screen 1: a refused name shows the reason and Next refuses.
+			await page.click('#home-multi');
+			await page.waitForSelector('#mp-name');
+			check(await page.locator('#mp-skins .skin-swatch').count() === 8, 'screen 1 has 8 skin swatches');
+			await page.fill('#mp-name', 'Noah!');
+			await page.click('#mp-next');
+			check(await text(page, '#mp-name-error') === 'Only letters, numbers and spaces', 'a bad name shows "Only letters, numbers and spaces"');
+			check(await page.locator('#mp-name').count() === 1, 'Next refuses a bad name');
+			await page.fill('#mp-name', ' Noah ');
+			await page.click('#mp-skin-blue');
+			await page.click('#mp-next');
+			// Screen 2 on a dead port: the sleeping text, a Retry button, and retries on its own.
+			await page.waitForSelector('#mp-sleeping:not(.hidden)', { timeout: 10_000 });
+			check((await text(page, '#mp-sleeping')).includes('The multiplayer server is sleeping. Ask a parent to wake it up.'), 'a dead server shows the sleeping text');
+			check(await page.locator('#mp-retry').isVisible(), 'the sleeping screen has a Retry button');
+			check((await text(page, '#mp-playing')).includes('Playing as Noah'), 'screen 2 shows "Playing as Noah"');
+			const prefs = JSON.parse((await ls(page, 'minicraft:v1:mp')) ?? '{}');
+			check(prefs.name === 'Noah' && prefs.skin === 'blue' && typeof prefs.bid === 'string', `name, skin and bid are remembered (got ${JSON.stringify(prefs)})`);
+			const before = mpListCalls;
+			await page.waitForTimeout(5_600);
+			check(mpListCalls > before, `the sleeping screen retries on its own every 5 s (${mpListCalls - before} retries in 5.6 s)`);
+			// The server wakes up: the list appears within 6 s with no click, busiest world preselected.
+			mpRows = [
+				{ uuid: 'w-empty', name: 'Empty World', mustMine: false, createdAt: 2, online: [] },
+				{ uuid: 'w-busy', name: 'Busy World', mustMine: true, createdAt: 1, online: [{ name: 'Léo', skin: 'green' }] },
+			];
+			const woke = Date.now();
+			await page.waitForSelector('#mp-worlds .world-row', { timeout: 6_000 }).catch(() => undefined);
+			const rowsShown = await page.locator('#mp-worlds .world-row').count();
+			check(rowsShown === 2, `after the server wakes the world list appears with no click (${rowsShown} rows in ${Date.now() - woke} ms)`);
+			check(await page.locator('#mp-sleeping').isHidden(), 'the sleeping text is gone');
+			const firstRow = page.locator('#mp-worlds .world-row').first();
+			check((await firstRow.innerText()).includes('Busy World') && (await firstRow.innerText()).includes('Léo'), 'the busiest world is listed first, with who is in it');
+			check(await firstRow.evaluate((e) => e.classList.contains('selected')), 'the busiest world is preselected');
+			// New World: Create posts, then lists and selects the new (empty) world over the busy one.
+			await page.click('#mp-new');
+			await page.fill('#mp-w-name', 'Castle');
+			await page.click('#mp-w-create');
+			await page.waitForSelector('#mp-worlds .world-row.selected');
+			const sel = page.locator('#mp-worlds .world-row.selected');
+			check((await sel.innerText()).includes('Castle') && (await sel.innerText()).includes('Sandbox'), 'Create adds the world and selects it');
+			check(JSON.parse((await ls(page, 'minicraft:v1:mp')) ?? '{}').worldId === (await sel.getAttribute('data-id')), 'the created world is remembered');
+						// Kill the server again: back to sleeping, Single Player still unaffected (step 6).
+			mpRows = null;
+			await page.click('#mp-retry').catch(() => undefined);
+			await page.waitForSelector('#mp-sleeping:not(.hidden)', { timeout: 10_000 });
+			check(true, 'a server that goes away shows the sleeping text again');
+			await page.click('#menu-back');
+			await page.waitForSelector('#home-single');
+
+			// 2b. A 4009 reload: screen 1 with the name-taken message.
+			await page.evaluate(() => sessionStorage.setItem('mp:error', 'name_taken'));
+			await page.goto(BASE);
+			await page.waitForSelector('#mp-name');
+			check(await text(page, '#mp-name-error') === 'Someone called Noah is already playing. Pick another name.', 'after a 4009 reload screen 1 says the name is taken');
+			check(await page.evaluate(() => sessionStorage.getItem('mp:error')) === null, 'the 4009 reason is shown once');
+			await page.click('#menu-back');
+			await page.waitForSelector('#home-single');
+		}
 
 		// 3. Single Player under No limit: the default duration is No limit.
 		await page.click('#home-single');
@@ -109,10 +218,34 @@ for (const sig of ['SIGINT', 'SIGTERM', 'SIGHUP'] as const) process.on(sig, () =
 		for (const sel of ['#sched-world', '#sched-start', '#sched-duration', '#sched-save', '#max-duration', '#reset-states', '#pin-set-input', '#pin-save', '#parents-mp-worlds']) {
 			check(await page.locator(sel).count() === 1, `Parents has ${sel}`);
 		}
+		await page.waitForTimeout(1_000);
+		check(await page.locator('#parents-mp-worlds .world-row').count() === 0, 'Parents lists no multiplayer worlds while the server is asleep');
 		await page.selectOption('#max-duration', '45');
 		const opts = JSON.parse((await ls(page, 'minicraft:v1:options')) ?? '{}');
 		check(opts.maxDurationMin === 45, `the maximum is saved (got ${opts.maxDurationMin})`);
 		await page.click('#menu-back');
+
+		if (MP_URL !== '') {
+			// 4b. Parents with the server awake: the multiplayer worlds, Delete (409 while occupied).
+			mpRows = [
+				{ uuid: 'w-busy', name: 'Busy World', mustMine: true, createdAt: 1, online: [{ name: 'Léo', skin: 'green' }] },
+				{ uuid: 'w-empty', name: 'Empty World', mustMine: false, createdAt: 2, online: [] },
+			];
+			const dialogs: string[] = [];
+			page.on('dialog', (d) => dialogs.push(d.message()));
+			await page.click('#home-parents');
+			await page.waitForSelector('#parents-mp-worlds .world-row');
+			check(await page.locator('#parents-mp-worlds .world-row').count() === 2, 'Parents lists the multiplayer worlds when the server is reachable');
+			await page.locator('#parents-mp-worlds .world-row[data-id="w-busy"] .delete').click();
+			await page.waitForSelector('text=Someone is playing in it right now.');
+			check(dialogs.includes('Delete "Busy World" for everyone?'), `Delete confirms with the world's name (got ${JSON.stringify(dialogs)})`);
+			check(mpRows.length === 2, 'an occupied world is not deleted');
+			await page.locator('#parents-mp-worlds .world-row[data-id="w-empty"] .delete').click();
+			await page.waitForFunction(() => document.querySelectorAll('#parents-mp-worlds .world-row').length === 1);
+			check(mpRows.length === 1 && mpRows[0].uuid === 'w-busy', 'an empty world is deleted');
+			mpRows = null;
+			await page.click('#menu-back');
+		}
 
 		// 5. Single Player under a 45 max: the stored 2 h is clamped to 45; steps stop at 45.
 		await page.click('#home-single');

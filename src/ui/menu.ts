@@ -15,10 +15,40 @@ import {
 	clearPin, clearSchedule, loadPin, loadSchedule, savePin, saveSchedule,
 } from '../persistence/schedule';
 import { resolveWorld, sessionInForce } from '../game/schedule';
+import { mpApiFromEnv, type MpApi, type MpWorldRow } from '../net/mp-api';
+import { loadMpPrefs, saveMpPrefs, type MpPrefs } from '../persistence/mp-prefs';
+import { SKINS, skinColor, type SkinId } from '../data/skins.data';
+import { nameError, nameTakenText, preselect, sortRows, validName, NAME_ERROR } from './mp-menu-model';
 
 export type { MenuAction } from './menu-model';
 
 const BADGE_TEXT: Record<SingleRow['badge'], string> = { cloud: 'Cloud', device: 'This device', new: 'New' };
+
+export const MP_SLEEPING_TEXT = 'The multiplayer server is sleeping. Ask a parent to wake it up.';
+/** How often screen 2 refreshes the world list, and how often the sleeping screen retries (spec §8.2). */
+const MP_REFRESH_MS = 5_000;
+/** sessionStorage keys set by main.ts before a reload (Task I1): a close code's reason, and the world to select. */
+export const MP_ERROR_KEY = 'mp:error';
+export const MP_PRESELECT_KEY = 'mp:preselect';
+
+/** Reads and deletes a one-shot sessionStorage entry. */
+function takeSession(key: string): string | null {
+	try {
+		const v = sessionStorage.getItem(key);
+		if (v !== null) sessionStorage.removeItem(key);
+		return v;
+	} catch {
+		return null;
+	}
+}
+
+function peekSession(key: string): boolean {
+	try {
+		return sessionStorage.getItem(key) !== null;
+	} catch {
+		return false;
+	}
+}
 
 /**
  * The main menu (spec §8): a home screen with Single Player, Multiplayer and
@@ -37,10 +67,17 @@ export class MainMenu {
 	private notice: string | null = null;
 	/** A world made by Create: listed and selected, but saved only once played. */
 	private created: CreatedWorld | null = null;
+	/** The multiplayer screen's pending refresh or retry (a chained timeout, so two fetches never overlap). */
+	private mpTimer: ReturnType<typeof setTimeout> | null = null;
 
+	/**
+	 * `mp` is the multiplayer server's API, null when `VITE_MINICRAFT_MP_URL` is
+	 * unset: then the home Multiplayer button is hidden (spec §3).
+	 */
 	constructor(
 		container: HTMLElement,
 		private adapter: PersistenceAdapter,
+		private mp: MpApi | null = mpApiFromEnv(),
 	) {
 		this.root = document.createElement('div');
 		this.root.id = 'menu-root';
@@ -52,7 +89,21 @@ export class MainMenu {
 		this.staged = null;
 		this.notice = notice ?? null;
 		this.root.classList.remove('hidden');
-		void this.renderHome();
+		// After a multiplayer reload that failed (a 4009, a 4008, a rejoin that timed out), main.ts
+		// leaves a reason or a world in sessionStorage: go straight to the Multiplayer screens.
+		const mpPending = peekSession(MP_ERROR_KEY) || peekSession(MP_PRESELECT_KEY);
+		if (this.mp && mpPending && loadSchedule().kind === 'none') this.renderMulti();
+		else void this.renderHome();
+	}
+
+	/** Opens the Multiplayer screens directly (the autojoin failure path, Task I1). */
+	showMultiplayer(onAction: (a: MenuAction) => void): void {
+		this.onAction = onAction;
+		this.staged = null;
+		this.notice = null;
+		this.root.classList.remove('hidden');
+		if (this.mp && loadSchedule().kind === 'none') this.renderMulti();
+		else void this.renderHome();
 	}
 
 	hide() {
@@ -73,6 +124,8 @@ export class MainMenu {
 	private stopRefresh(): void {
 		if (this.refresh !== null) clearInterval(this.refresh);
 		this.refresh = null;
+		if (this.mpTimer !== null) clearTimeout(this.mpTimer);
+		this.mpTimer = null;
 	}
 
 	/** Clears the screen and returns a fresh card with its title. */
@@ -155,7 +208,7 @@ export class MainMenu {
 			const home = document.createElement('div');
 			home.className = 'home-buttons';
 			this.button(home, 'Single Player', 'home-single', () => void this.renderSingle(), 'home-button');
-			this.button(home, 'Multiplayer', 'home-multi', () => this.renderMulti(), 'home-button');
+			if (this.mp) this.button(home, 'Multiplayer', 'home-multi', () => this.renderMulti(), 'home-button');
 			this.button(home, 'Parents', 'home-parents', () => this.renderParents(), 'home-button');
 			card.appendChild(home);
 		}
@@ -396,16 +449,310 @@ export class MainMenu {
 		this.button(card, 'Back', 'menu-back', () => void this.renderSingle(), 'menu-back');
 	}
 
-	// --- Multiplayer (Task P3 replaces this stub) ---------------------------
+	// --- Multiplayer (spec §8.2) --------------------------------------------
 
+	/**
+	 * Entry to the Multiplayer screens: screen 1 (name and skin) unless a name
+	 * is remembered, else screen 2. A one-shot reason left by main.ts before a
+	 * reload (4009, 4008) sends the kid back to screen 1 with the message; a
+	 * world left by a failed rejoin is selected on screen 2.
+	 */
 	private renderMulti(): void {
+		if (!this.mp) { void this.renderHome(); return; }
+		const prefs = loadMpPrefs();
+		const reason = takeSession(MP_ERROR_KEY);
+		const pre = takeSession(MP_PRESELECT_KEY);
+		let force: string | null = null;
+		if (pre !== null) {
+			try {
+				const v: unknown = JSON.parse(pre);
+				const w = typeof v === 'object' && v !== null ? (v as { world?: unknown }).world : null;
+				if (typeof w === 'string' && w !== '') force = w;
+			} catch {
+				// A broken entry only loses the preselect.
+			}
+		}
+		if (reason === 'name_taken') { this.renderMultiName(prefs, nameTakenText(prefs.name ?? 'you')); return; }
+		if (reason === 'bad_name') { this.renderMultiName(prefs, NAME_ERROR); return; }
+		if (prefs.name === null || validName(prefs.name) === null) { this.renderMultiName(prefs, null); return; }
+		const notice = reason === 'unknown_world' ? 'That world is gone. Pick another one.'
+			: reason === 'bad_token' ? "The game couldn't get into the multiplayer server. Ask a parent."
+				: null;
+		this.renderMultiWorlds(force, notice);
+	}
+
+	/** Screen 1: the name field and the 8 skin swatches, then Next. */
+	private renderMultiName(prefs: MpPrefs, message: string | null): void {
 		this.renderGen++;
-		const card = this.newCard('Multiplayer', 'multi');
-		const soon = document.createElement('div');
-		soon.className = 'menu-loading';
-		soon.textContent = 'Coming soon';
-		card.appendChild(soon);
+		const card = this.newCard('Multiplayer', 'multi-name');
+		let skin: SkinId = prefs.skin ?? SKINS[0].id;
+
+		const label = document.createElement('label');
+		label.textContent = 'Your name';
+		label.appendChild(document.createElement('br'));
+		const input = document.createElement('input');
+		input.type = 'text';
+		input.id = 'mp-name';
+		input.maxLength = 24;
+		input.autocomplete = 'off';
+		input.value = prefs.name ?? '';
+		label.appendChild(input);
+		card.appendChild(label);
+		const error = document.createElement('div');
+		error.className = 'menu-error';
+		error.id = 'mp-name-error';
+		error.textContent = message ?? '';
+		card.appendChild(error);
+
+		const sh = document.createElement('div');
+		sh.className = 'menu-section';
+		sh.textContent = 'Your colour';
+		card.appendChild(sh);
+		const swatches = document.createElement('div');
+		swatches.className = 'skin-swatches';
+		swatches.id = 'mp-skins';
+		const paint = () => {
+			for (const el of Array.from(swatches.children) as HTMLElement[]) el.classList.toggle('selected', el.dataset.skin === skin);
+		};
+		for (const s of SKINS) {
+			const b = document.createElement('button');
+			b.className = 'skin-swatch';
+			b.id = `mp-skin-${s.id}`;
+			b.dataset.skin = s.id;
+			b.style.background = s.color;
+			b.setAttribute('aria-label', s.id);
+			b.onclick = () => { skin = s.id; paint(); };
+			swatches.appendChild(b);
+		}
+		card.appendChild(swatches);
+		paint();
+
+		// The reason shows as the kid types; Next stays enabled but refuses a bad name (gate-2 P3).
+		input.oninput = () => { error.textContent = input.value === '' ? '' : (nameError(input.value) ?? ''); };
+		const next = () => {
+			const err = nameError(input.value);
+			const name = validName(input.value);
+			if (err !== null || name === null) { error.textContent = err ?? NAME_ERROR; input.focus(); return; }
+			saveMpPrefs({ ...loadMpPrefs(), name, skin });
+			this.renderMultiWorlds(null, null);
+		};
+		input.onkeydown = (e) => { if (e.key === 'Enter') next(); };
+		this.button(card, 'Next', 'mp-next', next, 'play-big');
 		this.backButton(card);
+		input.focus();
+	}
+
+	/**
+	 * Screen 2: "Playing as ● Noah [change]", the world list (refreshed every
+	 * 5 s, busiest first), New World, the duration and Play. When the list
+	 * can't be fetched the server is sleeping: the text, a Retry button, and a
+	 * retry every 5 s on its own. `force` is a world to select (just created,
+	 * or the world a failed rejoin was for).
+	 */
+	private renderMultiWorlds(force: string | null, notice: string | null): void {
+		const gen = ++this.renderGen;
+		const card = this.newCard('Multiplayer', 'multi');
+		const api = this.mp!;
+		const prefs = loadMpPrefs();
+		const name = prefs.name ?? '';
+		const skin: SkinId = prefs.skin ?? SKINS[0].id;
+
+		const who = document.createElement('div');
+		who.className = 'mp-playing-as';
+		who.id = 'mp-playing';
+		const dot = document.createElement('span');
+		dot.className = 'mp-dot';
+		dot.style.background = skinColor(skin);
+		const whoText = document.createElement('span');
+		whoText.textContent = `Playing as ${name}`;
+		const change = document.createElement('button');
+		change.id = 'mp-change';
+		change.className = 'mp-change';
+		change.textContent = 'change';
+		change.onclick = () => this.renderMultiName(loadMpPrefs(), null);
+		who.append(dot, whoText, change);
+		card.appendChild(who);
+
+		if (notice) {
+			const n = document.createElement('div');
+			n.className = 'menu-warning';
+			n.textContent = notice;
+			card.appendChild(n);
+		}
+
+		const status = document.createElement('div');
+		status.className = 'menu-loading';
+		status.id = 'mp-status';
+		status.textContent = 'Looking for the multiplayer server…';
+		card.appendChild(status);
+		const sleeping = document.createElement('div');
+		sleeping.className = 'mp-sleeping hidden';
+		sleeping.id = 'mp-sleeping';
+		const sleepText = document.createElement('div');
+		sleepText.className = 'menu-warning';
+		sleepText.textContent = MP_SLEEPING_TEXT;
+		sleeping.appendChild(sleepText);
+		card.appendChild(sleeping);
+
+		const worldsBox = document.createElement('div');
+		worldsBox.className = 'hidden';
+		card.appendChild(worldsBox);
+		this.button(worldsBox, 'New World', 'mp-new', () => this.renderMultiNew());
+		const list = document.createElement('div');
+		list.className = 'world-list';
+		list.id = 'mp-worlds';
+		worldsBox.appendChild(list);
+		const empty = document.createElement('div');
+		empty.className = 'menu-hint';
+		empty.textContent = 'No worlds yet. Press New World.';
+		worldsBox.appendChild(empty);
+
+		const max = loadOptions().maxDurationMin;
+		let duration = loadMenuState(max).duration;
+		const dh = document.createElement('div');
+		dh.className = 'menu-section';
+		dh.textContent = 'Play time';
+		worldsBox.appendChild(dh);
+		// The duration is shared with Single Player and remembered in minicraft:v1:menu (spec §8).
+		new DurationControl(worldsBox, duration, max, (v) => { duration = v; saveMenuState({ ...loadMenuState(max), duration: v }); });
+
+		let rows: MpWorldRow[] = [];
+		let selectedId: string | null = null;
+		let listed = false;
+		const play = document.createElement('button');
+		play.id = 'mp-play';
+		play.className = 'play-big';
+		play.textContent = '▶ Play';
+		play.onclick = () => {
+			if (selectedId === null || !rows.some((r) => r.uuid === selectedId)) return;
+			const p = loadMpPrefs();
+			saveMpPrefs({ ...p, worldId: selectedId });
+			this.onAction?.({ type: 'mp', world: selectedId, name, skin, duration });
+		};
+		worldsBox.appendChild(play);
+
+		const paint = () => {
+			list.innerHTML = '';
+			for (const r of rows) {
+				const row = document.createElement('div');
+				row.className = 'world-row';
+				row.dataset.id = r.uuid;
+				row.classList.toggle('selected', r.uuid === selectedId);
+				const label = document.createElement('span');
+				label.className = 'world-name';
+				label.textContent = r.name;
+				const badge = document.createElement('span');
+				badge.className = 'world-badge';
+				badge.textContent = r.mustMine ? 'Mining' : 'Sandbox';
+				const people = document.createElement('span');
+				people.className = 'mp-online';
+				for (const o of r.online) {
+					const d = document.createElement('span');
+					d.className = 'mp-dot';
+					d.style.background = skinColor(o.skin);
+					const n = document.createElement('span');
+					n.className = 'mp-online-name';
+					n.textContent = o.name;
+					people.append(d, n);
+				}
+				row.append(label, people, badge);
+				row.onclick = () => {
+					selectedId = r.uuid;
+					saveMpPrefs({ ...loadMpPrefs(), worldId: r.uuid });
+					paint();
+				};
+				list.appendChild(row);
+			}
+			empty.classList.toggle('hidden', rows.length > 0);
+			play.disabled = selectedId === null;
+		};
+
+		const showSleeping = () => {
+			status.classList.add('hidden');
+			worldsBox.classList.add('hidden');
+			sleeping.classList.remove('hidden');
+			play.disabled = true;
+		};
+
+		const load = async () => {
+			if (this.mpTimer !== null) clearTimeout(this.mpTimer);
+			this.mpTimer = null;
+			let fresh: MpWorldRow[] | null = null;
+			try {
+				fresh = await api.listWorlds();
+			} catch {
+				fresh = null;
+			}
+			if (gen !== this.renderGen) return;
+			if (fresh === null) {
+				showSleeping();
+			} else {
+				rows = sortRows(fresh);
+				// First list (or the selection vanished): pick per spec §8.2. After that the kid's click sticks.
+				if (!listed || selectedId === null || !rows.some((r) => r.uuid === selectedId)) {
+					const wanted = force !== null && rows.some((r) => r.uuid === force) ? force : null;
+					selectedId = wanted ?? preselect(rows, loadMpPrefs().worldId);
+					force = null;
+				}
+				listed = true;
+				status.classList.add('hidden');
+				sleeping.classList.add('hidden');
+				worldsBox.classList.remove('hidden');
+				paint();
+			}
+			// Refresh every 5 s; while sleeping this is the automatic retry.
+			this.mpTimer = setTimeout(() => void load(), MP_REFRESH_MS);
+		};
+		this.button(sleeping, 'Retry', 'mp-retry', () => {
+			sleeping.classList.add('hidden');
+			status.classList.remove('hidden');
+			void load();
+		});
+
+		this.backButton(card);
+		void load();
+	}
+
+	/** New World for multiplayer: name, seed (random), Mining/Sandbox. Create posts, then selects it. */
+	private renderMultiNew(): void {
+		this.renderGen++;
+		const card = this.newCard('New World', 'mp-new');
+		const form = document.createElement('div');
+		form.innerHTML = `
+			<div style="margin: 12px 0;">
+				<label>Name<br/><input type="text" id="mp-w-name" value="Our World" /></label>
+			</div>
+			<div style="margin: 12px 0;">
+				<label>Seed<br/><input type="number" id="mp-w-seed" value="${Math.floor(Math.random() * 1_000_000)}" /></label>
+			</div>
+			<label class="menu-check"><input type="checkbox" id="mp-w-must-mine" /> Must mine blocks to build</label>
+		`;
+		card.appendChild(form);
+		const error = document.createElement('div');
+		error.className = 'menu-error';
+		error.id = 'mp-new-error';
+		const create = this.button(card, 'Create', 'mp-w-create', async () => {
+			const f = newWorldFields({
+				nameRaw: (card.querySelector('#mp-w-name') as HTMLInputElement).value,
+				seedRaw: (card.querySelector('#mp-w-seed') as HTMLInputElement).value,
+				mustMine: (card.querySelector('#mp-w-must-mine') as HTMLInputElement).checked,
+			});
+			create.disabled = true;
+			error.textContent = '';
+			const gen = this.renderGen;
+			try {
+				const w = await this.mp!.createWorld(f.name, f.seed, f.mustMine);
+				if (gen !== this.renderGen) return;
+				saveMpPrefs({ ...loadMpPrefs(), worldId: w.uuid });
+				this.renderMultiWorlds(w.uuid, null);
+			} catch {
+				if (gen !== this.renderGen) return;
+				create.disabled = false;
+				error.textContent = "Couldn't make the world. Try again.";
+			}
+		});
+		card.appendChild(error);
+		this.button(card, 'Back', 'menu-back', () => this.renderMultiWorlds(null, null), 'menu-back');
 	}
 
 	// --- Parents ------------------------------------------------------------
@@ -593,10 +940,68 @@ export class MainMenu {
 		body.appendChild(pinRow);
 		body.appendChild(error);
 
-		// 5. Multiplayer worlds: Task P3 fills this when the server is reachable.
+		// 5. Multiplayer worlds: shown only when the server is reachable (spec §8.3).
 		const mp = document.createElement('div');
 		mp.id = 'parents-mp-worlds';
 		body.appendChild(mp);
+		void this.fillParentsMp(mp);
+	}
+
+	/** The multiplayer world list with Delete; left empty when there is no server or it can't be reached. */
+	private async fillParentsMp(box: HTMLElement): Promise<void> {
+		if (!this.mp) return;
+		let rows: MpWorldRow[];
+		try {
+			rows = sortRows(await this.mp.listWorlds());
+		} catch {
+			return;
+		}
+		// The body was re-rendered (PIN change) or the screen left while this was in flight.
+		if (!box.isConnected) return;
+		box.innerHTML = '';
+		const h = document.createElement('div');
+		h.className = 'menu-section';
+		h.textContent = 'Multiplayer worlds';
+		box.appendChild(h);
+		if (rows.length === 0) {
+			const none = document.createElement('div');
+			none.className = 'menu-hint';
+			none.textContent = 'No multiplayer worlds';
+			box.appendChild(none);
+		}
+		for (const r of rows) {
+			const row = document.createElement('div');
+			row.className = 'world-row';
+			row.dataset.id = r.uuid;
+			const label = document.createElement('span');
+			label.className = 'world-name';
+			label.textContent = r.online.length > 0 ? `${r.name} (${r.online.map((o) => o.name).join(', ')})` : r.name;
+			const del = document.createElement('button');
+			del.className = 'delete';
+			del.textContent = 'Delete';
+			const msg = document.createElement('div');
+			msg.className = 'menu-warning hidden';
+			del.onclick = async () => {
+				if (!confirm(`Delete "${r.name}" for everyone?`)) return;
+				del.disabled = true;
+				try {
+					const res = await this.mp!.deleteWorld(r.uuid);
+					if (res === 'occupied') {
+						del.disabled = false;
+						msg.textContent = 'Someone is playing in it right now.';
+						msg.classList.remove('hidden');
+						return;
+					}
+					await this.fillParentsMp(box);
+				} catch {
+					del.disabled = false;
+					msg.textContent = `Could not delete "${r.name}". It is still there.`;
+					msg.classList.remove('hidden');
+				}
+			};
+			row.append(label, del);
+			box.append(row, msg);
+		}
 	}
 
 	/** A select over the 5-minute duration list, with "No limit" first when `withNoLimit`. */

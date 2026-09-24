@@ -851,3 +851,61 @@
 .menu-card .play-big:hover {
 	background: #4a804a;
 }
+
+/* Multiplayer screens (multiplayer spec §8.2). */
+.menu-card .hidden {
+	display: none;
+}
+.skin-swatches {
+	display: grid;
+	grid-template-columns: repeat(4, 1fr);
+	gap: 10px;
+	margin: 8px 0 16px;
+}
+.menu-card .skin-swatch {
+	height: 48px;
+	margin: 0;
+	padding: 0;
+	border: 3px solid transparent;
+	border-radius: 50%;
+}
+.menu-card .skin-swatch:hover {
+	border-color: rgba(255, 255, 255, 0.5);
+}
+.menu-card .skin-swatch.selected {
+	border-color: #fff;
+	box-shadow: 0 0 0 2px #6fbf6f;
+}
+.mp-playing-as {
+	display: flex;
+	align-items: center;
+	gap: 8px;
+	margin: 0 0 12px;
+	font-size: 18px;
+}
+.menu-card .mp-change {
+	display: inline;
+	width: auto;
+	margin: 0 0 0 4px;
+	padding: 2px 10px;
+	font-size: 13px;
+	background: #383838;
+}
+.mp-dot {
+	display: inline-block;
+	width: 12px;
+	height: 12px;
+	border-radius: 50%;
+	border: 2px solid #fff;
+	flex: none;
+}
+.mp-online {
+	display: flex;
+	align-items: center;
+	gap: 4px;
+	font-size: 13px;
+	opacity: 0.9;
+}
+.mp-online-name {
+	margin-right: 6px;
+}

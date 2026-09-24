@@ -1089,6 +1089,11 @@ func TestShutdown(t *testing.T) {
 	if d := time.Since(start); d > 3*time.Second {
 		t.Fatalf("Shutdown took %v", d)
 	}
+	// Shutdown returns on its own 2 s timer; the connections must really be gone by then too.
+	// Red build: without the 2 s cut armed in Kick, the black-holed one lingers about 5 s.
+	if _, ok := h.waitConns(0, 4*time.Second); !ok || time.Since(start) > 2700*time.Millisecond {
+		t.Fatalf("connections still tracked %v after Shutdown began, want <= 2.7 s", time.Since(start))
+	}
 	if code := b.closeCode(3 * time.Second); code != websocket.StatusGoingAway {
 		t.Fatalf("close %v, want 1001", code)
 	}
@@ -1104,5 +1109,190 @@ func TestShutdown(t *testing.T) {
 	cl.send(hello(w.UUID, "Late", "l"))
 	if code := cl.closeCode(3 * time.Second); code != websocket.StatusGoingAway {
 		t.Fatalf("late join close %v, want 1001", code)
+	}
+}
+
+// ── the B5 cut: a kicked connection is gone within 2 s ──
+
+// waitConns waits until the server tracks n connections, and returns how long that took.
+func (h *harness) waitConns(n int, d time.Duration) (time.Duration, bool) {
+	start := time.Now()
+	for {
+		h.srv.mu.Lock()
+		got := len(h.srv.conns)
+		h.srv.mu.Unlock()
+		if got == n {
+			return time.Since(start), true
+		}
+		if time.Since(start) > d {
+			return time.Since(start), false
+		}
+		time.Sleep(5 * time.Millisecond)
+	}
+}
+
+// Red build: without `time.AfterFunc(closeTimeout, c.cut)` in Kick, the connection to the
+// black-holed peer stays open about 5 s (the library's own close wait), not 2 s.
+func TestKickedBlackholedConnGone(t *testing.T) {
+	h := newHarness(t)
+	kicks := h.logKicks()
+	w := h.world("gone")
+	px := newProxy(t, h.ts.Listener.Addr().String())
+	a, err := dialURL(t, "ws://"+px.ln.Addr().String()+"/ws?token="+testToken, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	a.startReader()
+	a.keepalive()
+	a.join(hello(w.UUID, "Noah", "X"))
+	px.bh.Store(true)
+	a.stopKeepalive()
+
+	// The takeover kicks the black-holed connection 4001.
+	a2 := h.dial()
+	a2.keepalive()
+	start := time.Now()
+	a2.join(hello(w.UUID, "Noah", "X"))
+	select {
+	case <-waitFor(kicks, "noah:4001"):
+	case <-time.After(2 * time.Second):
+		t.Fatalf("old connection not kicked 4001 (kicks %v)", kicks.of("noah"))
+	}
+	// The kick came after start, so 2.7 s from start leaves the 2 s cut 0.7 s of slack.
+	if _, ok := h.waitConns(1, 4*time.Second); !ok || time.Since(start) > 2700*time.Millisecond {
+		t.Fatalf("kicked black-holed connection still tracked %v after the takeover began, want <= 2.7 s", time.Since(start))
+	}
+}
+
+// ── S3/S4 re-gate: forced snapshot bytes do not count toward queuedBytes ──
+
+// Red build: count the snapshot in SendSnapshot (`c.queuedBytes += len(b)`, forced:false): the
+// first tick queued behind the 2 MiB snapshot is refused, which the world turns into a 4002.
+func TestSnapshotBytesNotCounted(t *testing.T) {
+	h := newHarness(t)
+	got := make(chan *Conn, 1)
+	release := make(chan struct{})
+	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		ws, err := websocket.Accept(w, r, nil)
+		if err != nil {
+			return
+		}
+		c := newConn(ws, h.srv)
+		got <- c
+		<-release
+		c.Kick(int(websocket.StatusNormalClosure), "")
+		<-c.wdone
+	}))
+	defer ts.Close()
+	defer close(release)
+
+	cl, err := dialURL(t, "ws"+strings.TrimPrefix(ts.URL, "http"), nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	c := <-got
+
+	// The client is not reading. A forced frame far larger than the loopback buffers leaves the
+	// writer stuck in Write, as a paused client does after its welcome.
+	const stuck = 32 << 20
+	c.SendSnapshot(make([]byte, stuck))
+	for deadline := time.Now().Add(5 * time.Second); ; {
+		c.mu.Lock()
+		n := len(c.queue)
+		c.mu.Unlock()
+		if n == 0 {
+			break
+		}
+		if time.Now().After(deadline) {
+			t.Fatal("writer never took the first frame")
+		}
+		time.Sleep(time.Millisecond)
+	}
+
+	// The join sequence behind it: welcome, a snapshot over 1 MiB, then a second of ticks.
+	if !c.Send([]byte(`{"t":"welcome"}`)) {
+		t.Fatal("welcome refused")
+	}
+	const snap = 2 << 20
+	c.SendSnapshot(make([]byte, snap))
+	const ticks = 20
+	for i := range ticks {
+		if !c.Send([]byte(fmt.Sprintf(`{"t":"tick","seq":%d}`, i))) {
+			t.Fatalf("tick %d refused behind a %d-byte snapshot: the snapshot was counted toward the 1 MiB cap", i, snap)
+		}
+	}
+
+	// The client resumes and gets everything, in order.
+	cl.startReader()
+	want := []struct {
+		bin bool
+		n   int
+		t   string
+	}{{true, stuck, ""}, {false, 0, proto.TWelcome}, {true, snap, ""}}
+	for i, w := range want {
+		m, ok := cl.next(10 * time.Second)
+		if !ok {
+			t.Fatalf("frame %d missing", i)
+		}
+		if m.bin != w.bin || (w.bin && len(m.data) != w.n) || m.t != w.t {
+			t.Fatalf("frame %d: bin=%v len=%d t=%q, want %+v", i, m.bin, len(m.data), m.t, w)
+		}
+	}
+	for deadline := time.Now().Add(5 * time.Second); len(cl.tickTimes()) < ticks; {
+		if time.Now().After(deadline) {
+			t.Fatalf("got %d ticks, want %d", len(cl.tickTimes()), ticks)
+		}
+		time.Sleep(5 * time.Millisecond)
+	}
+}
+
+// ── extras size ──
+
+// A stored extras rides in the welcome, a counted Send. Extras over proto.MaxExtrasBytes are
+// ignored when received, so a player cannot store one that makes every later welcome fail 4002.
+// Red build: drop the size check in the hub's CmdExtras: the rejoin is kicked 4002.
+func TestHugeExtrasIgnored(t *testing.T) {
+	h := newHarness(t)
+	kicks := h.logKicks()
+	w := h.world("stash")
+	// Keep the world loaded between the two connections.
+	keep := h.dial()
+	keep.keepalive()
+	keep.join(hello(w.UUID, "Friend", "f"))
+
+	a := h.dial()
+	a.join(hello(w.UUID, "Noah", "x"))
+	a.send(proto.Extras{T: proto.TExtras, Data: json.RawMessage(`{"selected":3}`)})
+	pad := strings.Repeat("x", 1100<<10)
+	a.send(proto.Extras{T: proto.TExtras, Data: json.RawMessage(`{"pad":"` + pad + `"}`)})
+	a.send(proto.Edit{T: proto.TEdit, Cid: 1, Ops: editOps(1, 1)})
+	a.waitEcho(1, 5*time.Second) // both extras have been handled
+	a.c.Close(websocket.StatusNormalClosure, "")
+	keep.until(proto.TLeft, 5*time.Second, nil)
+
+	b := h.dial()
+	b.send(hello(w.UUID, "Noah", "x"))
+	for {
+		m, ok := b.next(5 * time.Second)
+		if !ok {
+			t.Fatalf("no welcome on rejoin (kicks %v)", kicks.of("noah"))
+		}
+		if m.t != proto.TWelcome {
+			continue
+		}
+		var wl proto.Welcome
+		if err := json.Unmarshal(m.data, &wl); err != nil {
+			t.Fatal(err)
+		}
+		if string(wl.Extras) != `{"selected":3}` {
+			t.Fatalf("welcome extras %.60s, want the last extras under the cap", wl.Extras)
+		}
+		break
+	}
+	// The first connection's own close is a 1001; nothing else.
+	for _, k := range kicks.of("noah") {
+		if k != int(websocket.StatusGoingAway) {
+			t.Fatalf("noah kicked %v", kicks.of("noah"))
+		}
 	}
 }

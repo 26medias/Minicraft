@@ -15,7 +15,10 @@ const (
 // Limits (spec §5).
 const (
 	MaxOpsPerEdit = 2000
-	WorldSize     = 512 // 0 ≤ x, z < WorldSize
+	// MaxExtrasBytes: a larger extras is ignored. The stored extras ride in the welcome, a Send
+	// counted against the 1 MiB queue cap, so an unbounded one would 4002 every later join.
+	MaxExtrasBytes = 256 << 10
+	WorldSize      = 512 // 0 ≤ x, z < WorldSize
 	// FirstPlayerID: player ids start at 1, so `by,omitempty` never drops a real id.
 	FirstPlayerID = 1
 )

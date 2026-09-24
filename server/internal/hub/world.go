@@ -407,7 +407,7 @@ func (w *World) handle(cmd any) {
 			p.HasPos, p.dirty = true, true
 		}
 	case CmdExtras:
-		if p := w.current(c.ID, c.S); p != nil && json.Valid(c.Data) {
+		if p := w.current(c.ID, c.S); p != nil && len(c.Data) <= proto.MaxExtrasBytes && json.Valid(c.Data) {
 			p.Extras = append([]byte(nil), c.Data...)
 			p.dirty = true
 		}

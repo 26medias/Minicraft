@@ -1,0 +1,4 @@
+mc.sqlite*
+# the built binary only: a bare "mcserver" would also ignore cmd/mcserver/
+/mcserver
+backup.sqlite

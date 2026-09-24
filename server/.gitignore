@@ -2,3 +2,7 @@ mc.sqlite*
 # the built binary only: a bare "mcserver" would also ignore cmd/mcserver/
 /mcserver
 backup.sqlite
+# deploy.sh build output
+/bin/
+# the backup package (the repo root ignores backup/ directories)
+!/internal/backup/

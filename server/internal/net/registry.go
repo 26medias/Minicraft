@@ -44,6 +44,9 @@ type Registry struct {
 	afterGetBeforeJoin func()
 	onTryUnload        func()
 	loads, unloads     atomic.Int64
+
+	// used is set on every load; Busy reads and clears it.
+	used atomic.Bool
 }
 
 func newRegistry(st *store.Store) *Registry {
@@ -129,6 +132,7 @@ func (r *Registry) getLocked(uuid string) (*entry, error) {
 	e.w = hub.NewWorld(row, cells, r.st, r.flushCh, hub.WithOnIdle(unloadDelay, func() { r.tryUnload(uuid, e) }))
 	r.loaded[uuid] = e
 	r.loads.Add(1)
+	r.used.Store(true)
 	return e, nil
 }
 
@@ -170,6 +174,16 @@ func (r *Registry) unloadLocked(uuid string, e *entry) {
 	delete(r.loaded, uuid)
 	r.sync()
 	r.unloads.Add(1)
+}
+
+// Busy reports whether a world is loaded now or was loaded since the last call: the hourly
+// backup runs "while any world is loaded" (spec §9), including one played between two ticks.
+func (r *Registry) Busy() bool {
+	used := r.used.Swap(false)
+	r.mu.Lock()
+	n := len(r.loaded)
+	r.mu.Unlock()
+	return used || n > 0
 }
 
 // Online returns the online players of each loaded world, by uuid.

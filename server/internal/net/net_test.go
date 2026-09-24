@@ -980,6 +980,49 @@ func TestUnloadReloadKeepsEdits(t *testing.T) {
 	}
 }
 
+// Busy drives the hourly backup (spec §9): true while a world is loaded, and once more after a
+// world that was loaded between two checks has unloaded; false on an idle server.
+func TestBusy(t *testing.T) {
+	old := unloadDelay
+	unloadDelay = 20 * time.Millisecond
+	defer func() { unloadDelay = old }()
+
+	h := newHarness(t)
+	w := h.world("busy")
+	if h.srv.Busy() {
+		t.Fatal("Busy on a server with nothing loaded")
+	}
+	cl := h.dial()
+	cl.join(hello(w.UUID, "Noah", "b"))
+	if !h.srv.Busy() || !h.srv.Busy() {
+		t.Fatal("not Busy while a world is loaded")
+	}
+	cl.c.Close(websocket.StatusNormalClosure, "")
+	deadline := time.Now().Add(5 * time.Second)
+	for h.srv.reg.unloads.Load() == 0 {
+		if time.Now().After(deadline) {
+			t.Fatal("world never unloaded")
+		}
+		time.Sleep(5 * time.Millisecond)
+	}
+	// Loaded and unloaded since the last check: still owed a backup.
+	cl = h.dial()
+	cl.join(hello(w.UUID, "Noah", "b"))
+	cl.c.Close(websocket.StatusNormalClosure, "")
+	for h.srv.reg.unloads.Load() < 2 {
+		if time.Now().After(deadline) {
+			t.Fatal("world never unloaded again")
+		}
+		time.Sleep(5 * time.Millisecond)
+	}
+	if !h.srv.Busy() {
+		t.Fatal("not Busy after a world was loaded and unloaded between checks")
+	}
+	if h.srv.Busy() {
+		t.Fatal("still Busy on the next check with nothing loaded")
+	}
+}
+
 // ── refused handshakes ──
 
 func TestRefusals(t *testing.T) {

@@ -1,0 +1,30 @@
+# Installed by server/vm-setup.sh as /etc/systemd/system/mcserver.service.
+[Unit]
+Description=Minicraft multiplayer server
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+User=mcserver
+Group=mcserver
+# MC_TOKEN and MC_GCS_BUCKET (written by vm-setup.sh, mode 0640 root:mcserver).
+EnvironmentFile=/etc/mcserver.env
+# gcloud (the backup upload) keeps its config under the service's home.
+Environment=HOME=/var/lib/mcserver
+Environment=CLOUDSDK_CONFIG=/var/lib/mcserver/.gcloud
+WorkingDirectory=/var/lib/mcserver
+# Localhost only: cloudflared is the one way in.
+ExecStart=/usr/local/bin/mcserver -addr 127.0.0.1:8080 -db /var/lib/mcserver/mc.sqlite -backup-dir /var/lib/mcserver
+# SIGTERM: stop accepting, final flush, close sockets (2 s cap), backup (upload 20 s + prune 5 s).
+KillSignal=SIGTERM
+TimeoutStopSec=30
+Restart=on-failure
+RestartSec=2
+NoNewPrivileges=yes
+ProtectSystem=strict
+ProtectHome=yes
+PrivateTmp=yes
+ReadWritePaths=/var/lib/mcserver
+
+[Install]
+WantedBy=multi-user.target

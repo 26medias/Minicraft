@@ -96,6 +96,9 @@ func Open(path string) (*Store, error) {
 	return &Store{db: db}, nil
 }
 
+// DB returns the underlying database, for the backup's VACUUM INTO.
+func (s *Store) DB() *sql.DB { return s.db }
+
 // Close closes the database.
 func (s *Store) Close() error {
 	return s.db.Close()

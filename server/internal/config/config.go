@@ -6,6 +6,7 @@ import (
 	"flag"
 	"io"
 	"os"
+	"path/filepath"
 	"strings"
 )
 
@@ -13,12 +14,13 @@ import (
 const DefaultOrigins = "https://noah.leap-forward.ca,http://localhost:5173,http://127.0.0.1:5173,http://localhost:4173,http://127.0.0.1:4173"
 
 type Config struct {
-	Addr      string
-	DB        string
-	Token     string
-	Origins   []string
+	Addr    string
+	DB      string
+	Token   string
+	Origins []string
+	// BackupDir holds backup.sqlite; it defaults to the database's directory.
 	BackupDir string
-	// GCSBucket is where backups are uploaded; empty disables the upload.
+	// GCSBucket is where backups are uploaded (env MC_GCS_BUCKET); empty disables the upload.
 	GCSBucket string
 }
 
@@ -33,8 +35,8 @@ func FromFlags(args []string) (Config, error) {
 	fs.StringVar(&c.DB, "db", "./mc.sqlite", "SQLite database path")
 	fs.StringVar(&c.Token, "token", "", "shared access token (env MC_TOKEN)")
 	fs.StringVar(&origins, "origins", DefaultOrigins, "comma-separated allowed origins")
-	fs.StringVar(&c.BackupDir, "backup-dir", "", "directory for backup.sqlite")
-	fs.StringVar(&c.GCSBucket, "gcs-bucket", "", "GCS bucket for backups (empty disables upload)")
+	fs.StringVar(&c.BackupDir, "backup-dir", "", "directory for backup.sqlite (default: the -db directory)")
+	fs.StringVar(&c.GCSBucket, "gcs-bucket", "", "GCS bucket for backups (env MC_GCS_BUCKET; empty disables upload)")
 	if err := fs.Parse(args); err != nil {
 		return Config{}, err
 	}
@@ -46,6 +48,12 @@ func FromFlags(args []string) (Config, error) {
 	}
 	if c.Token == "" {
 		return Config{}, errors.New("-token (or MC_TOKEN) is required")
+	}
+	if c.GCSBucket == "" {
+		c.GCSBucket = os.Getenv("MC_GCS_BUCKET")
+	}
+	if c.BackupDir == "" {
+		c.BackupDir = filepath.Dir(c.DB)
 	}
 	c.Origins = splitList(origins)
 	return c, nil

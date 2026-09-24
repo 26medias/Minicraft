@@ -71,6 +71,9 @@ func NewServer(cfg config.Config, st *store.Store) *Server {
 // Handler returns the HTTP handler.
 func (s *Server) Handler() http.Handler { return s.mux }
 
+// Busy reports whether any world is loaded, or was since the last call (the backup ticker).
+func (s *Server) Busy() bool { return s.reg.Busy() }
+
 // Shutdown stops every world (each hands its final flush to the writer), waits for the writer to
 // write it, then signals every connection to close with 1001 and waits for them at most 2 s
 // (spec §3.1 steps 2-4; the caller stops the listener first). Closing comes after the flush, so

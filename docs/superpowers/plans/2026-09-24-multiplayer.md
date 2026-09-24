@@ -90,6 +90,192 @@ that no single unit test pins by itself. Each has an owning test:
 
 ---
 
+## Gate-2 amendments (NORMATIVE — override the task text below)
+
+Every implementer reads **this section's entries for their task** in addition to the task itself.
+Where they conflict, this section wins. Tags: *(K)* kid lens, *(R)* rigour, *(E)* engine,
+*(S)* server.
+
+### Cross-cutting
+- **Wording (K):** the word is **Parents** everywhere. The sleeping text is "The multiplayer server
+  is sleeping. Ask a parent to wake it up." Rename the old "Grown-ups" labels.
+- **Durations (K):** durations of 60 minutes or more display as hours and minutes ("1 h", "1 h
+  30 min"). `formatDuration(min | null)` goes in `src/game/session-policy.ts` (P1) and is
+  unit-tested.
+
+### P1
+- **(R)** Also create `src/data/skins.data.ts` here (moved from C5; the content is as C5 describes).
+  P2 needs `SkinId`.
+- **(R)** Complete file list. P1 also modifies:
+  - `src/ui/menu-model.ts`: drop `breakMin` from `Staged` and `SavePlan`.
+  - `src/ui/playtime-overlay.ts`: drop `offerPlayAgain` and `setBreakRemaining` from the class
+    and from `PlaytimeOverlayLike`.
+  - `src/game/playtime.ts`: drop the `break-over` event and `breakRemainingMs`; `phaseOf` never
+    returns `'over'` for `breakMs === null`.
+  - `src/ui/menu.ts`: the break imports and UI at lines 4–5, 289–316, 364 and 394, minimally.
+  - **`src/main.ts` lines ~493–495:** a named exception to "main.ts: I1 only". P1 may only touch
+    the `activeLimits`/`resolveSession` call to keep it compiling.
+- **(R)** `clampDuration` enforces the 10-minute minimum even when `maxMin === null`.
+- **(R)** `sessionPolicy` treats a **`broken` schedule as active** (keep; fail closed).
+- **(R) An in-force session always wins over the chosen duration.** At Play, if a stored session
+  is in force (not stale), use it, even when the kid picks "No limit". A new session is created
+  only when there is none. Test: a stored frozen session plus the "No limit" choice → the timer
+  runs and is frozen.
+
+### P3
+- **(K)** A name that fails `validName` shows the reason under the field, "Only letters, numbers
+  and spaces", and Next stays enabled but refuses. Test in `mp-menu-model.test.ts`: `nameError("Noah!")`
+  returns that string.
+- **(K)** Sleeping auto-recovery has a smoke step: dead port → "sleeping" shown → start
+  `mcserver` on that port → the world list appears within 6 s with no click.
+
+### C1
+- **(S)** `TestDecodeTSFixture` (Go) is added **unconditionally** and fails if
+  `src/net/testdata/ts-ops.bin` is missing. C1 runs after S1, so it adds the Go test itself.
+- **(S)** Go emits **golden JSON per message type** to `server/internal/proto/testdata/msg-*.json`
+  (S1 with `-update`). C1's T1 parses each one with the TS types and checks the field names.
+- **(S)** `decodeSnapshot` rejects a `count` larger than `remainingBytes / 6` before allocating.
+
+### S1
+- **(S)** The snapshot's `prev` starts at **(0, 0, −1)**. A first row at (0, 0, 0) then encodes
+  `dy = 1`, and the "≥ 1" note holds. Add a (0, 0, 0) cell to `snapshot-small`.
+- **(S)** Every JSON field has an explicit lowercase tag (`json:"x"`, `json:"yaw"`, …). The
+  shorthand in the struct block is **not** literal Go.
+- **(S)** Player ids start at **1** (so `by,omitempty` never drops a real id).
+- **(S)** `CatalogMax` is the **max id** in `BLOCKS`, not `length - 1`.
+
+### S3
+- **(S) B1:** `cmdLeave` carries the `Sender`. `run()` ignores a leave whose `Sender` is not the
+  player's current one.
+  - **G7** (hub) must also assert that the new sender still receives an edit submitted *after*
+    the old reader's leave, and that nobody received `left`.
+- **(S) B4:** every flush, and `Stop()`, includes each **online** player whose pose or extras
+  changed since the last flush. `pos` updates mark the player dirty.
+- **(S)** `flushCh` send is **non-blocking**: `select { case flushCh <- b: default: keep the dirty set for next time }`.
+  `Stop()`'s final hand-off may block, but only after `run()` stops accepting commands.
+- **(S)** `Submit` after `Stop` is a no-op (`select` on a `done` channel). It must not panic or
+  hang.
+- **(S)** A 4002 kick removes the player and **broadcasts `left`**.
+- **(S)** The snapshot frame is **exempt from the 1 MiB queue cap**; `Send` gets a
+  `force bool` variant for it. Add a G-test: a world with a snapshot over 1 MiB is joinable.
+
+### S4
+- **(S) B2:** `registry.Join(uuid, hello, sender)` holds `mu` from `Get` until `run()` has
+  registered the join (it waits on the join reply). `tryUnload` takes `mu`, so the race is closed.
+  - A test hook `afterGetBeforeJoin func()` makes **G14 deterministic**: park there while the
+    unload timer fires, then release; the join must succeed.
+  - The red build (`Join` outside `mu`) must fail it.
+- **(S) B3, G9:** push **≥ 8 MB** in the window, about 220 edit messages of 2,000 ops, and
+  assert the **max** tick gap under 300 ms, not p99. The stalled client gets 4002. G7's latency
+  assertion also uses the max gap.
+- **(S) B5:**
+  - `Kick` never waits on `Close`. The writer goroutine calls `CloseNow()` after at most 2 s of
+    trying to write a close frame, via a `time.AfterFunc` and not a context. **Nothing on the
+    shutdown path waits for a close to finish.**
+  - Shutdown step 4 means signal all, sleep at most 2 s, and move on.
+- **(S) G11:** use a message of **4 MiB − 64 KB**.
+- **(S)** A writer goroutine error is logged and never exits the loop.
+
+### S5
+- **(S) G5:**
+  - Wait for all 10 echoes **before** sending SIGTERM.
+  - Connect **2** black-holed clients.
+  - Assert exit **under 4 s**, and that the edits persist.
+  - The "close before flush" red build must now fail on the 4 s bound. Demonstrate it.
+
+### C3
+- **(E)** Lamp colours are **not** restored in `prepareChunk`, which is dead code there.
+  - `enqueueRemote` calls `lights.add` / `setColor` for every op with a colour, and
+    `lights.remove` for an op on a lamp cell whose id is no longer a lamp, **at receive time,
+    loaded or not**.
+  - At session start (I1), every coloured overlay cell is added to `LightRegistry`.
+  - `drainRemote` then only relights.
+- **(E) T14 lift:**
+  - `liftPlayerIfInside` searches **upward** from `floor(feetY)` for the first y where the feet
+    and head cells are both non-solid, and sets the feet there. It does not use `findSafeSpawn`.
+  - T14 cases: stone in the feet cell; stone in the head cell; and a 2-high tunnel with stone
+    in the feet cell. In the tunnel case the player moves up through the ceiling to the first
+    free 2-high gap: the kid ends up standing on top, which is correct.
+- **(E)** `drainRemote` sets `this.mining = null` when an op hits the mining target.
+- **(E)** In the paused branch, `drainRemote()` runs **before** `flushDirtyChunks()`.
+- **(E) Inventory open in multiplayer does not pause the simulation.** In MP, `simulate` runs
+  unless frozen or disconnected. Add `loop.pauseSimulationWhenPaused` (true in solo, false in MP).
+  - The paused branch checks `this.mp && !this.mpDisconnected && !this.frozenByTimer` → call
+    `drainRemote()` and `simulate(dt)`.
+  - main.ts sets `loop.frozenByTimer`.
+- **(E) T8** compares the cells around P against a snapshot taken **before** the remote op, not
+  "all solid".
+- **(E) T3:** "settle" means the simulated network keeps delivering until no client has written
+  for 20 simulated seconds. Use an inland cell and explicit vitest timeouts (60 s).
+
+### C7
+- **(E)** The `near` ground search, for each candidate column, scans y from `targetY + 4` down to
+  `targetY − 4` for a solid, non-liquid block with two air cells above it.
+- **(E) Toast text** for any `secondsLeft`:
+  - ≥ 90 → "in 2 minutes"
+  - ≥ 45 → "in 1 minute"
+  - > 0 → "in 30 seconds"
+  - 0 → "went home"
+
+  `leavingText(name, secondsLeft)` is exported and unit-tested.
+
+### I1
+- **(R)** I1 owns the **solo duration wiring**: `showMenu`'s callback passes `action.duration` to
+  `startGame`, which builds the session via P1's rule (an in-force session wins; otherwise a new
+  session with the chosen duration; a null duration and no session → no controller).
+  - Test: extend `scripts/menu-smoke.ts`: pick **10 min** → Play → `localStorage['minicraft:v1:playtime'].limitMs === 600000`.
+- **(R) The boot sequence moves to an exported `boot(deps)`** in `src/game/boot.ts`. It returns
+  what main.ts should do (`{kind:'menu'} | {kind:'autojoin', args}`) after applying
+  `bootSession`.
+  - main.ts calls `boot()` first, before anything reads `loadSession()`. That is the normative
+    point, and spec §8.1's "before resolveSession" means the same thing.
+  - **T12b** tests `boot()` directly.
+  - The text-order guard test is **dropped**.
+  - A new **E8** (in I2): no PIN, a stored session, reload → the session is gone. With a PIN →
+    it is kept.
+- **(K) K1, autojoin failure path:** if the probe or `hello` does not get a `welcome` within 6 s,
+  go to the Multiplayer screen (screen 2) in its sleeping state, which auto-retries. **Keep** the
+  autojoin args so the preselect points at the same world.
+- **(K) K2:** clear `mp:autojoin` **before** acting on any fatal close (4001, 4004–4009) and
+  before the Menu link.
+  - Test in I1 (a unit test on the close-code handler): for each fatal code, the flag is cleared
+    before the reload.
+  - An E-step in I2: after a 4009 reload, zero WebSocket constructions, and screen 1 shows the
+    message.
+- **(R) DEV hooks for E5:** `__mc.playtime.setRemaining(ms)` sets `playedMs = limitMs − ms` on the
+  live controller's session. It is DEV only. **No fast clock.**
+- **Session start (E):** lamps from the overlay are added to `LightRegistry` (see C3).
+
+### I2
+- **(E) E2** as the red proof: A pours, then **closes its page about 1 s later**. B alone finishes,
+  and B's hash must equal `refReplay`. The red run (`writeRemote` without the wake) must FAIL
+  here.
+- **(E) E3:** both players stand **outside** the blast radius plus 2, so the reference needs no
+  player box.
+- **(K) E4:** the minimap pixel at A's projected spot is within ΔE < 30 of A's skin colour, and
+  the ring at radius + 1 is white.
+- **(K)(R) E5:** use `__mc.playtime.setRemaining(125_000)` and wait in real time (about 2.2 min).
+  Assert:
+  - the messages;
+  - B's DOM shows "…has to go in 2 minutes", then "…went home";
+  - B has no big-countdown element;
+  - A shows the big 10…1.
+- **(K)(S) E6:**
+  - B stays connected throughout.
+  - A is placed more than 20 blocks from B.
+  - The server is stopped with **`fuser -k -TERM 18080/tcp`** (graceful), then restarted.
+  - A must come back within 1 block of where it was, **not** near B, with the same inventory
+    counts.
+  - A second pass uses `fuser -k -KILL`. A must come back within 1 block of its position as of
+    about 1 s before the kill; the per-second flush makes that true.
+  - Then kill the server **without** restarting it. Press Try again → the sleeping text
+    appears.
+- **E8** (from I1).
+- **4009 step:** a second browser context with a different `bid` joins as A's name → it sees the
+  name message, with zero reconnect loops.
+
+---
+
 ## Dependency graph (for the Workflow)
 
 ```

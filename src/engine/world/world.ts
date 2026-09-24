@@ -4,6 +4,7 @@ import { Chunk } from './chunk';
 import { WORLD_CHUNKS_X, WORLD_CHUNKS_Z, LEGACY_HEIGHT, inBounds, worldToChunk, indexOf, chunkIndexOrNeg, type WorldHeight } from './coords';
 import { generateChunk, worldProfile, NEWEST_GEN_VERSION } from './generation';
 import { fillChunkLights } from './lighting';
+import type { ChunkOverlay } from './overlay';
 
 export type WorldOptions = { height?: WorldHeight; genVersion?: number; saveVersion?: 2 | 3 };
 
@@ -15,6 +16,12 @@ export class World {
 	/** Flat, indexed by exactly cx * WORLD_CHUNKS_Z + cz (spec §3.A). */
 	private chunks: (Chunk | undefined)[] = new Array(WORLD_CHUNKS_X * WORLD_CHUNKS_Z);
 	private count = 0;
+	/** Called with (x,y,z) after every setBlock/setBlockFlow. null in solo. Never called by writeRemote. */
+	onLocalWrite: ((x: number, y: number, z: number) => void) | null = null;
+	/** Multiplayer overlay: applied to a chunk right after generation, before lighting. null in solo. */
+	overlay: ChunkOverlay | null = null;
+	/** Multiplayer sets this false: a modified chunk is evictable (generation + overlay rebuild it, spec §6). */
+	modifiedPins = true;
 
 	constructor(seed: number, opts: WorldOptions = {}) {
 		this.seed = seed;
@@ -55,6 +62,8 @@ export class World {
 		if (!c) {
 			c = new Chunk(cx, cz, this.height);
 			generateChunk(c, this.seed, this.genVersion);
+			// Before lighting (spec §6, G1: an overlay applied after fillChunkLights left a dug shaft at sky 0).
+			if (this.overlay) this.overlay.applyTo(c);
 			this.chunks[i] = c;
 			this.count++;
 			fillChunkLights(this, c);
@@ -113,6 +122,7 @@ export class World {
 		this.markLiquidFrontier(x, y - 1, z);
 		this.markLiquidFrontier(x, y, z + 1);
 		this.markLiquidFrontier(x, y, z - 1);
+		this.onLocalWrite?.(x, y, z);
 	}
 
 	/** Scheduler-only: write a liquid voxel as flow with the given distance from source. */
@@ -132,6 +142,42 @@ export class World {
 		this.markLiquidFrontier(x, y - 1, z);
 		this.markLiquidFrontier(x, y, z + 1);
 		this.markLiquidFrontier(x, y, z - 1);
+		this.onLocalWrite?.(x, y, z);
+	}
+
+	/**
+	 * Remote (server-sequenced) write: setBlock/setBlockFlow semantics — liquid frontier wake included (spec §6,
+	 * G1: without the wake water froze when its simulating client left) — but never the onLocalWrite hook.
+	 * Returns false when the chunk isn't loaded (the caller already updated the overlay) or nothing changed.
+	 * Never calls ensureChunk (G1: 27–51 ms per chunk, and the chunk would be pinned).
+	 */
+	writeRemote(x: number, y: number, z: number, id: BlockId, fluid: number): boolean {
+		if (!this.inBounds(x, y, z)) return false;
+		const { cx, cz, lx, lz } = worldToChunk(x, z);
+		const c = this.getChunk(cx, cz);
+		if (!c) return false;
+		const i = indexOf(lx, y, lz);
+		const oldFluid = c.fluidMeta.get(i) ?? 0;
+		if (c.blocks[i] === id && oldFluid === fluid) return false;
+		c.set(lx, y, lz, id);
+		if (isLiquid(id)) c.hasLiquid = true;
+		if (fluid === 0) c.fluidMeta.delete(i);
+		else c.fluidMeta.set(i, fluid);
+		// Spec §6: a meta-only change (same id, new flow distance) must still remesh.
+		if (oldFluid !== fluid) {
+			c.dirty = true;
+			c.rev++;
+		}
+		c.modified = true;
+
+		this.markLiquidFrontier(x, y, z);
+		this.markLiquidFrontier(x + 1, y, z);
+		this.markLiquidFrontier(x - 1, y, z);
+		this.markLiquidFrontier(x, y + 1, z);
+		this.markLiquidFrontier(x, y - 1, z);
+		this.markLiquidFrontier(x, y, z + 1);
+		this.markLiquidFrontier(x, y, z - 1);
+		return true;
 	}
 
 	markLiquidFrontier(x: number, y: number, z: number): void {

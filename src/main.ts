@@ -46,10 +46,69 @@ import { resolveHotbar } from './game/hotbar';
 import { playerSave, resolvePlayerExtras } from './game/player-extras';
 import { shouldHandleKey, buildKeyToAction, sneakKeyChange } from './game/input-gate';
 import { nextOwnedTier } from './game/tools';
+import type { MenuAction } from './ui/menu';
+import { clampDuration } from './game/session-policy';
+import { beginSolo, boot, clearAutojoin, failRejoin, setAutojoin, type AutojoinArgs } from './game/boot';
+import { onFatalClose, type FatalDeps } from './game/mp-exit';
+import { Reconnector } from './game/mp-reconnect';
+import { LeavingCountdown, leavingText } from './game/leaving';
+import { resolveMpSpawn } from './game/mp-spawn';
+import { tntKey } from './game/tnt';
+import { MpClient } from './net/mp-client';
+import { MpSync } from './net/mp-sync';
+import { mpApiFromEnv } from './net/mp-api';
+import { decodeSnapshot } from './net/snapshot';
+import { intToColor, PROTO, type ExtrasData, type FxKind, type FxMsg, type Hello, type ServerMsg, type Welcome } from './net/protocol';
+import { catalogBlocks, catalogHotbar } from './net/catalog-filter';
+import { ChunkOverlay } from './engine/world/overlay';
+import { WORLD_CHUNKS_X, WORLD_CHUNKS_Z, type WorldHeight } from './engine/world/coords';
+import { NEWEST_GEN_VERSION } from './engine/world/generation';
+import { RemotePlayers } from './engine/render/remote-players';
+import { colorTableFromAtlas } from './engine/render/block-colors';
+import { Minimap } from './ui/minimap';
+import { MpOverlays } from './ui/mp-overlays';
+import { loadMpPrefs } from './persistence/mp-prefs';
+import { skinColor } from './data/skins.data';
+import type { PlayerSave } from './persistence/adapter';
 
 const REACH = 6;
+/** Gate-2 K1: no `welcome` (plus its snapshot) within this long → the Multiplayer screen, sleeping. */
+const JOIN_TIMEOUT_MS = 6_000;
+/** Spec §5: `pos` at most 10 times a second. */
+const POS_EVERY_MS = 100;
+const LAMP_ID = BLOCK_BY_NAME['lamp'].id;
+const TNT_ID = BLOCK_BY_NAME['tnt'].id;
+
+/**
+ * Buffers server messages between `welcome` and the moment the game is wired (the snapshot is
+ * decoded and the world built in between); `route` is set by startGame. `onLost`/`onFatal` freeze
+ * the running game.
+ */
+type MpLink = {
+	route: ((m: ServerMsg) => void) | null;
+	pending: ServerMsg[];
+	onLost: (() => void) | null;
+	onFatal: (() => void) | null;
+};
+
+/** What startGame needs to run a multiplayer session (spec §7.1). Undefined in solo. */
+type MpSession = {
+	client: MpClient;
+	welcome: Welcome;
+	overlay: ChunkOverlay;
+	args: AutojoinArgs;
+	link: MpLink;
+	ui: MpOverlays;
+};
 
 async function main() {
+	// Multiplayer (plan I1): the boot decision comes FIRST, before anything reads the stored play
+	// session. It applies the refresh rule (spec §8.1) and says whether this load is a reconnect.
+	const mpUrl = (import.meta.env.VITE_MINICRAFT_MP_URL as string | undefined) || null;
+	const mpToken = (import.meta.env.VITE_MINICRAFT_MP_TOKEN as string | undefined) ?? '';
+	const booted = boot({ mpUrl, storage: sessionStorage });
+	const mpApi = mpApiFromEnv();
+
 	const app = document.getElementById('app')!;
 	const atlas = await loadAtlas();
 	const renderer = new Renderer(app, atlas);
@@ -67,33 +126,132 @@ async function main() {
 	saveStatus.textContent = cloudAdapter ? 'Saved' : 'Saved on this device';
 	app.appendChild(saveStatus);
 
-	const menu = new MainMenu(app, adapter);
+	const menu = new MainMenu(app, adapter, mpApi);
 	const options = new OptionsMenu(app);
 	const lights = new LightRegistry(renderer.scene);
 	const colorPicker = new ColorPicker(app, LIGHT_PALETTE);
 
 	setupPointerLock(renderer.gl.domElement, (dx, dy) => cam.applyMouseDelta(dx, dy));
 
-	function showMenu(notice?: string) {
-		menu.show((action) => {
-			if (action.type === 'options') {
-				menu.hide();   // stops the card's refresh interval while Options is up
-				options.show(() => showMenu());
-				return;
-			}
-			// Belt and braces under the menu model: never enter startGame (which
-			// hides the menu and registers listeners) when the schedule says no.
-			// Applies to 'new' too, so a re-added New World button cannot bypass it.
-			if (!canStartNow(loadSchedule(), loadSession(), Date.now())) {
+	function onMenuAction(action: MenuAction) {
+		if (action.type === 'options') {
+			menu.hide();   // stops the card's refresh interval while Options is up
+			options.show(() => showMenu());
+			return;
+		}
+		// Belt and braces under the menu model: never enter startGame (which
+		// hides the menu and registers listeners) when the schedule says no.
+		// Applies to 'new' too, so a re-added New World button cannot bypass it.
+		// Multiplayer too: a frozen timer that survives blocks rejoining (spec §7.4).
+		if (!canStartNow(loadSchedule(), loadSession(), Date.now())) {
+			showMenu();
+			return;
+		}
+		if (action.type === 'mp') {
+			if (!mpUrl || !mpApi) {
 				showMenu();
 				return;
 			}
-			if (action.type === 'new') startGame(action.id, action.seed, action.name, null, action.mustMine);
-			else if (action.type === 'continue') startGame(action.id, action.seed, action.name, 'continue');
-		}, notice);
+			const args: AutojoinArgs = { world: action.world, name: action.name, skin: action.skin, duration: action.duration };
+			// Every exit from multiplayer is a reload; while this is set, the reload rejoins (spec §7.5).
+			setAutojoin(sessionStorage, args);
+			startMultiplayer(args, false);
+			return;
+		}
+		if (action.type === 'new') startGame(action.id, action.seed, action.name, null, action.mustMine, action.duration);
+		else if (action.type === 'continue') startGame(action.id, action.seed, action.name, 'continue', false, action.duration);
 	}
 
-	showMenu();
+	function showMenu(notice?: string) {
+		menu.show(onMenuAction, notice);
+	}
+
+	let mpUi: MpOverlays | null = null;
+	if (booted.kind === 'autojoin' && canStartNow(loadSchedule(), loadSession(), Date.now())) {
+		startMultiplayer(booted.args, true);
+	} else {
+		if (booted.kind === 'autojoin') clearAutojoin(sessionStorage);
+		showMenu();
+	}
+
+	/**
+	 * Spec §7.1: join a multiplayer world. Shows "Joining…", opens the socket, and on `welcome`
+	 * plus the snapshot hands a synthetic session to startGame. No `welcome` within 6 s (or the
+	 * socket fails first) → the Multiplayer screen in its sleeping state, the world preselected
+	 * (gate-2 K1, re-gate I1). A fatal close goes through onFatalClose (flag cleared first, K2).
+	 */
+	function startMultiplayer(args: AutojoinArgs, resume: boolean): void {
+		menu.showBuilding('Joining…');
+		// One set of overlays per page, even when a failed join is retried from the menu.
+		const ui = (mpUi ??= new MpOverlays(app));
+		const hello: Hello = {
+			t: 'hello',
+			world: args.world,
+			name: args.name,
+			skin: args.skin,
+			bid: loadMpPrefs().bid,
+			proto: PROTO,
+			gen: NEWEST_GEN_VERSION,
+			resume,
+		};
+		const link: MpLink = { route: null, pending: [], onLost: null, onFatal: null };
+		const fatalDeps: FatalDeps = {
+			storage: sessionStorage,
+			reload: () => location.reload(),
+			showScreen: (kind) => {
+				menu.hide();
+				ui.showFatal(kind, () => location.reload());
+			},
+		};
+		let welcome: Welcome | null = null;
+		let settled = false;
+		const failJoin = () => {
+			if (settled) return;
+			settled = true;
+			clearTimeout(timer);
+			client.close();
+			failRejoin(sessionStorage, args);
+			menu.showMultiplayer(onMenuAction);
+		};
+		const timer = setTimeout(failJoin, JOIN_TIMEOUT_MS);
+		const client: MpClient = new MpClient(mpUrl!, mpToken, hello, {
+			onWelcome: (w) => {
+				welcome = w;
+			},
+			onSnapshot: (buf) => {
+				if (settled || !welcome) return;
+				let cells: Int32Array;
+				try {
+					cells = decodeSnapshot(buf).cells;
+				} catch (err) {
+					console.error('snapshot', err);
+					failJoin();
+					return;
+				}
+				settled = true;
+				clearTimeout(timer);
+				const overlay = new ChunkOverlay();
+				overlay.loadSnapshot(cells);
+				const w: Welcome = welcome;
+				void startGame(w.world.uuid, w.world.seed, w.world.name, null, w.world.mustMine, args.duration, { client, welcome: w, overlay, args, link, ui });
+			},
+			onMessage: (m) => {
+				if (link.route) link.route(m);
+				else link.pending.push(m);
+			},
+			onState: (state, code) => {
+				if (state === 'fatal') {
+					settled = true;
+					clearTimeout(timer);
+					link.onFatal?.();
+					onFatalClose(code, fatalDeps);
+				} else if (state === 'lost') {
+					if (!settled) failJoin();
+					else link.onLost?.();
+				}
+			},
+		});
+	}
 
 	async function startGame(
 		worldId: string,
@@ -101,10 +259,26 @@ async function main() {
 		name: string,
 		mode: null | 'continue',
 		newMustMine = false,
+		duration: number | null = null,
+		mp?: MpSession,
 	) {
-		menu.hide();
+		// Multiplayer keeps "Joining…" up until the spawn is found.
+		if (!mp) menu.hide();
+		// Starting any solo game clears the multiplayer autojoin flag (re-gate I1).
+		if (!mp) beginSolo(sessionStorage);
 		// Clear any lights from a prior session of startGame (returning from main menu to a new world).
 		for (const entry of [...lights.entries()]) lights.remove(entry.x, entry.y, entry.z);
+		// Multiplayer session start (gate-2 C3/I1): every coloured lamp in the overlay joins the registry.
+		if (mp) {
+			for (let cx = 0; cx < WORLD_CHUNKS_X; cx++) {
+				for (let cz = 0; cz < WORLD_CHUNKS_Z; cz++) {
+					for (const c of mp.overlay.colorsIn(cx, cz)) {
+						const hex = intToColor(c.color);
+						if (hex && mp.overlay.get(c.x, c.y, c.z)?.[0] === LAMP_ID) lights.add(c.x, c.y, c.z, hex);
+					}
+				}
+			}
+		}
 
 		// Load BEFORE building anything. A failed load used to console.warn and start
 		// a fresh world, whose first autosave pruned the local copy to zero chunks.
@@ -136,7 +310,7 @@ async function main() {
 		// then delete this session's chunks. Adoption runs only AFTER a successful load,
 		// so a legacy world that refuses to open really has had nothing changed.
 		let activeId = worldId;
-		if (isLegacyId(worldId)) {
+		if (!mp && isLegacyId(worldId)) {
 			const seedOfLegacy = seedFromLegacyId(worldId);
 			activeId = localAdapter.adoptedId(seedOfLegacy) ?? newWorldId();
 			localAdapter.adoptLegacy(seedOfLegacy, activeId);
@@ -144,12 +318,22 @@ async function main() {
 
 		// The World comes from the record (its stored height is authoritative) or,
 		// for a new world, from the newest generator's profile.
-		const world = save ? worldFromSave(save) : World.create(seed);
+		// Multiplayer: seed plus the server's overlay, never a saved record (spec §7.1). A modified chunk
+		// is evictable there: generation plus the overlay rebuild it (spec §6).
+		let world: World;
+		if (mp) {
+			const info = mp.welcome.world;
+			world = new World(seed, { height: info.height as WorldHeight, genVersion: info.gen, saveVersion: 3 });
+			world.overlay = mp.overlay;
+			world.modifiedPins = false;
+		} else {
+			world = save ? worldFromSave(save) : World.create(seed);
+		}
 		// New v3 worlds: the spawn column is searched once, in memory (spec §9). Show the
 		// message and yield TWO frames: the first rAF callback runs before style/layout/paint,
 		// so a single yield lets the synchronous search start before the text is on screen.
 		let v3Spawn: [number, number, number] | null = null;
-		if (!save && world.genVersion >= 3) {
+		if (!save && !mp && world.genVersion >= 3) {
 			menu.showBuilding('Building your world…');
 			const nextFrame = () => new Promise<void>((r) => requestAnimationFrame(() => r()));
 			await nextFrame(); await nextFrame();
@@ -188,23 +372,48 @@ async function main() {
 			}
 		}
 
-		// Ground the player only once every saved chunk is in the world, so there is
-		// something to stand on. New worlds spawn on the generated surface (v2: ~120),
-		// saved ones near where they left off.
-		player.position = findSafeSpawn(world, savedSpawn ?? v3Spawn ?? [256.5, world.height - 1, 256.5]);
+		// Multiplayer: the extras the player comes back with. The stash from before a reconnect
+		// reload may be newer than `welcome.extras` (C4 handoff), so it wins.
+		const stashTag = mp ? `${mp.welcome.world.uuid}:${mp.args.name}` : '';
+		const mpExtras: ExtrasData | null = mp ? (MpSync.readStash(sessionStorage, stashTag) ?? mp.welcome.extras ?? {}) : null;
+		if (mp) {
+			savedHotbar = mpExtras?.hotbar;
+			savedSelected = mpExtras?.selected ?? 0;
+			// Spec §7.2: the server picks the mode, the client the spot. A first join searches the
+			// v3 spawn: show the message and yield two frames first, as a new solo world does.
+			if (mp.welcome.spawn.mode === 'first') {
+				menu.showBuilding('Building your world…');
+				const nextFrame = () => new Promise<void>((r) => requestAnimationFrame(() => r()));
+				await nextFrame(); await nextFrame();
+			}
+			const spawn = resolveMpSpawn(world, seed, mp.welcome.spawn);
+			player.position = spawn.pos;
+			cam.yaw = spawn.yaw;
+			cam.pitch = spawn.pitch;
+			menu.hide();
+		} else {
+			// Ground the player only once every saved chunk is in the world, so there is
+			// something to stand on. New worlds spawn on the generated surface (v2: ~120),
+			// saved ones near where they left off.
+			player.position = findSafeSpawn(world, savedSpawn ?? v3Spawn ?? [256.5, world.height - 1, 256.5]);
+		}
 		// Streaming starts here: everything before (spawn search behind "Building your world…") is a one-time cost.
 		performance.mark('minicraft:world-ready');
 
 		// Nine slots, saved per world. Saves from before the inventory hold the
 		// whole block pool and get the default bar (see resolveHotbar).
 		const opts = loadOptions();
-		const resolved = resolveHotbar(savedHotbar, savedSelected, BLOCKS);
+		// Multiplayer: ids above the server's catalog are hidden for this session (spec §5 catalogMax).
+		const blocks = mp ? catalogBlocks(BLOCKS, mp.welcome.catalogMax) : BLOCKS;
+		const resolved = resolveHotbar(mp ? catalogHotbar(savedHotbar, mp.welcome.catalogMax) : savedHotbar, savedSelected, blocks);
 		player.hotbar = resolved.hotbar;
 		player.selected = resolved.selected;
 		// Counts, pickaxes and the world mode (crafting spec §10). A save from before
 		// crafting has none of them and gets the defaults; a new world takes the New
 		// World screen's choice. The mode is fixed for the life of the world.
-		const extras = resolvePlayerExtras(save?.player, save ? save.mustMine : newMustMine);
+		const extras = mp
+			? resolvePlayerExtras(mpExtras as PlayerSave, mp.welcome.world.mustMine)
+			: resolvePlayerExtras(save?.player, save ? save.mustMine : newMustMine);
 		player.inventory = extras.inventory;
 		player.tools = extras.tools;
 		const mustMine = extras.mustMine;
@@ -232,7 +441,7 @@ async function main() {
 		const resetKeys = () => {
 			keys.forward = keys.back = keys.left = keys.right = keys.jump = keys.sneak = false;
 		};
-		const inventory = new Inventory(app, atlas, BLOCKS, RECIPES);
+		const inventory = new Inventory(app, atlas, blocks, RECIPES);
 		/** Every HUD + I-screen view of hotbar, counts and tools. Call after ANY change to them. */
 		const syncHotbar = (flashSlot?: number) => {
 			const badges = hotbarBadges(player.hotbar, player.inventory, mustMine);
@@ -282,6 +491,8 @@ async function main() {
 			syncHotbar();
 		};
 		const keyToAction: Record<string, Action> = buildKeyToAction(opts.keybindings);
+		/** Multiplayer: sends one cosmetic `fx` (set below once the session is wired). null in solo. */
+		let mpFx: ((kind: FxKind, x: number, y: number, z: number, tier: number) => void) | null = null;
 		/**
 		 * Spec §5: the one equip path (P here; the I screen's pickaxe row in Phase D). An owned tier
 		 * other than the equipped one: equip it, re-arm the mining floor and restart any mine in
@@ -331,7 +542,7 @@ async function main() {
 						const eye = player.eyePosition();
 						const dir = cam.getLookDir();
 						const hit = raycastVoxel(world, eye, [dir.x, dir.y, dir.z], REACH);
-						if (hit) loop.ignite(hit, cam.yaw);
+						if (hit && loop.ignite(hit, cam.yaw)) mpFx?.('prime', hit.x, hit.y, hit.z, world.getBlock(hit.x, hit.y, hit.z));
 					}
 					break;
 				case 'pickLightColor':
@@ -346,6 +557,8 @@ async function main() {
 						colorPicker.onPick = (color) => {
 							if (target) {
 								lights.setColor(target.x, target.y, target.z, color);
+								// Multiplayer (re-gate I1): a colour-only change is an edit too.
+								mpSync?.record(target.x, target.y, target.z);
 								autosave.markDirty();
 							}
 							opts.currentLightColor = color;
@@ -412,29 +625,47 @@ async function main() {
 			perfOverlay.toggle();
 		});
 
-		const autosave = new AutoSave(
-			adapter,
-			world,
-			() => playerSave(player, cam.yaw, cam.pitch),
-			{ id: activeId, name: worldName, createdAt, mustMine },
-			() => {
-				saveStatus.textContent = 'Storage on this device is full';
-			},
-			() => [...lights.entries()],
-		);
-		// Upload the kept local copy even if he only looks around and closes the tab.
-		if (localWon) autosave.markDirty();
-		autosave.onStatus = (status) => {
-			saveStatus.className = status;
-			saveStatus.textContent =
-				status === 'saving'
-					? 'Saving…'
-					: status === 'local-only'
-						? 'Saved on this device only'
-						: status === 'error'
-							? 'Save failed'
-							: 'Saved';
-		};
+		// Multiplayer: MpSync stands in for autosave (spec §7.1). It is AutoSave-shaped, so every
+		// markDirty/flush below works unchanged; nothing is saved to this device or the cloud.
+		let autosave: { markDirty(): void; flush(): Promise<void> };
+		let mpSync: MpSync | null = null;
+		if (mp) {
+			const extrasNow = (): ExtrasData => ({
+				inventory: { ...player.inventory },
+				tools: { owned: [...player.tools.owned], equipped: player.tools.equipped },
+				hotbar: [...player.hotbar],
+				selected: player.selected,
+			});
+			mpSync = new MpSync(world, lights, (m) => void mp.client.send(m), extrasNow, sessionStorage, (ops) => loop.enqueueRemote(ops), stashTag);
+			world.onLocalWrite = mpSync.record;
+			autosave = mpSync;
+			saveStatus.style.display = 'none';
+		} else {
+			const soloSave = new AutoSave(
+				adapter,
+				world,
+				() => playerSave(player, cam.yaw, cam.pitch),
+				{ id: activeId, name: worldName, createdAt, mustMine },
+				() => {
+					saveStatus.textContent = 'Storage on this device is full';
+				},
+				() => [...lights.entries()],
+			);
+			// Upload the kept local copy even if he only looks around and closes the tab.
+			if (localWon) soloSave.markDirty();
+			soloSave.onStatus = (status) => {
+				saveStatus.className = status;
+				saveStatus.textContent =
+					status === 'saving'
+						? 'Saving…'
+						: status === 'local-only'
+							? 'Saved on this device only'
+							: status === 'error'
+								? 'Save failed'
+								: 'Saved';
+			};
+			autosave = soloSave;
+		}
 
 		const particles = new ParticleSystem(renderer.scene, renderer.material, atlas);
 		const overlay = new PrimedOverlay(renderer.scene);
@@ -459,8 +690,11 @@ async function main() {
 				atlas.uvTable,
 			),
 		);
+		/** Multiplayer per-frame work (flush, avatars, minimap, pos); null in solo. */
+		let mpFrame: ((now: number) => void) | null = null;
 		loop.onFrame = (_dt, tickMs, frameMs) => {
 			const now = performance.now();
+			mpFrame?.(now);
 			perfOverlay.tick(now, { t: now, frameMs, tickMs }, () => {
 				const mem = (performance as { memory?: { usedJSHeapSize: number } }).memory;
 				return {
@@ -490,26 +724,44 @@ async function main() {
 		// a session already in its break must freeze before the first frame.
 		const loadedSchedule = loadSchedule();
 		const schedule = loadedSchedule.kind === 'armed' ? loadedSchedule.schedule : null;
-		const limits = activeLimits(schedule, opts.maxDurationMin);
+		// Plan I1: the chosen duration (fitted to the parent's maximum) starts a new session unless
+		// one is already in force (P1's rule); a schedule's own duration wins over both.
+		const limits = activeLimits(schedule, clampDuration(duration, opts.maxDurationMin));
 		const session = resolveSession(loadSession(), limits.limitMin, Date.now(), schedule);
+		// Multiplayer: the leaver's countdown messages (spec §7.4).
+		const leaving = mp ? new LeavingCountdown((secondsLeft) => void mp.client.send({ t: 'leaving', secondsLeft })) : null;
+		let playtime: PlaytimeController | null = null;
 		if (session !== null) {
 			saveSession(session);
-			const playtime = new PlaytimeController(session, {
+			playtime = new PlaytimeController(session, {
 				overlay: new PlaytimeOverlay(app),
 				lockedText: schedule ? `PLAY AGAIN AT ${formatStartTime(schedule.startMin, Date.now()).toUpperCase()} TOMORROW` : undefined,
 				freeze: () => {
 					closeInventory();
 					loop.setLeftMouseDown(false);
 					frozen = true;
+					loop.frozenByTimer = true;
 					updatePaused();
 					resetKeys();
 					hud.setMiningProgress(0);
 					if (document.pointerLockElement) document.exitPointerLock();
+					if (mp) {
+						// Spec §7.4 at 0: "went home" for the others, then the extras, then a normal close.
+						// The flag goes first: nothing may rejoin a finished session.
+						clearAutojoin(sessionStorage);
+						leaving?.update(0);
+						mp.ui.countdown(0);
+						mpSync?.flushFrame();
+						void autosave.flush();
+						mp.client.close(1000);
+						return;
+					}
 					void autosave.flush();
 				},
 				resume: () => {
 					resetKeys();
 					frozen = false;
+					loop.frozenByTimer = false;
 					updatePaused();
 					// Called from the PLAY AGAIN click, a user gesture, so the kid
 					// does not need a second click on the canvas. Chrome returns a
@@ -521,16 +773,163 @@ async function main() {
 				now: () => Date.now(),
 				visible: () => document.visibilityState === 'visible',
 			});
-			playtime.tick();
-			setInterval(() => playtime.tick(), TICK_MS);
-			document.addEventListener('visibilitychange', () => playtime.tick());
+			const pt = playtime;
+			// Multiplayer: the timer is paused while disconnected (spec §7.5); the countdown messages
+			// and the big 10…1 follow every tick (spec §7.4).
+			const tickPlaytime = () => {
+				if (loop.mpDisconnected) return;
+				pt.tick();
+				if (mp && !loop.frozenByTimer) {
+					const left = pt.remainingMs();
+					leaving?.update(left);
+					mp.ui.countdown(Math.ceil(left / 1000));
+				}
+			};
+			tickPlaytime();
+			setInterval(tickPlaytime, TICK_MS);
+			document.addEventListener('visibilitychange', tickPlaytime);
+		}
+		let mpDebug: { sync: MpSync; client: MpClient; remote: RemotePlayers; overlay: ChunkOverlay } | null = null;
+		if (mp && mpSync) wireMultiplayer(mp, mpSync);
+
+		/**
+		 * Spec §7.1–§7.5: everything a multiplayer session adds on top of the shared wiring. Runs
+		 * after the loop, the save stand-in and the timer exist; drains the messages buffered
+		 * since `welcome`.
+		 */
+		function wireMultiplayer(mp: MpSession, sync: MpSync): void {
+			const { client, welcome, link, ui } = mp;
+			const you = welcome.you;
+			loop.mp = { overlay: mp.overlay };
+			const remote = new RemotePlayers(renderer.scene);
+			const minimap = new Minimap(app, colorTableFromAtlas(atlas));
+			const who = new Map<number, { name: string; skin: string }>();
+			const addPlayer = (id: number, name: string, skin: string) => {
+				if (id === you) return;
+				who.set(id, { name, skin });
+				remote.upsert(id, name, skin);
+			};
+			for (const p of welcome.players) {
+				addPlayer(p.id, p.name, p.skin);
+				if (p.id !== you) remote.pushPose(p.id, performance.now(), { x: p.x, y: p.y, z: p.z, yaw: p.yaw, pitch: p.pitch });
+			}
+			// Extras mined just before a reconnect reload (C4 handoff).
+			sync.resendStashed();
+
+			// Cosmetic TNT effects (spec §6): a remote fuse shows until fuse + 2 s, in case the igniter leaves.
+			const remotePrimes = new Map<string, ReturnType<typeof setTimeout>>();
+			const clearRemotePrime = (x: number, y: number, z: number) => {
+				const k = tntKey(x, y, z);
+				const t = remotePrimes.get(k);
+				if (t === undefined) return;
+				clearTimeout(t);
+				remotePrimes.delete(k);
+				overlay.remove(x, y, z);
+			};
+			const onFx = (m: FxMsg) => {
+				if (m.kind === 'prime') {
+					clearRemotePrime(m.x, m.y, m.z);
+					const fuse = (m.tier !== undefined ? BLOCKS[m.tier]?.tnt?.fuse : undefined) ?? BLOCKS[TNT_ID].tnt!.fuse;
+					overlay.add(m.x, m.y, m.z);
+					remotePrimes.set(tntKey(m.x, m.y, m.z), setTimeout(() => clearRemotePrime(m.x, m.y, m.z), (fuse + 2) * 1000));
+					return;
+				}
+				clearRemotePrime(m.x, m.y, m.z);
+				if (m.kind === 'firework') particles.spawnFirework(m.x + 0.5, m.y + 0.5, m.z + 0.5, true);
+				else particles.spawnBreak(m.x, m.y, m.z, m.tier !== undefined && BLOCKS[m.tier] ? m.tier : TNT_ID);
+			};
+			mpFx = (kind, x, y, z, tier) => void client.send({ t: 'fx', kind, x, y, z, tier });
+			loop.onDetonate = (x, y, z, effect, blockId) => mpFx?.(effect === 'firework' ? 'firework' : 'boom', x, y, z, blockId);
+
+			link.route = (m) => {
+				switch (m.t) {
+					case 'edit':
+						sync.onEdit(m, you);
+						break;
+					case 'tick': {
+						const now = performance.now();
+						for (const [id, x, y, z, yaw, pitch] of m.poses) remote.pushPose(id, now, { x, y, z, yaw, pitch });
+						break;
+					}
+					case 'join':
+						addPlayer(m.id, m.name, m.skin);
+						break;
+					case 'left':
+						// Re-gate I1: a plain `left` shows no toast; "went home" comes only from `leaving 0`.
+						who.delete(m.id);
+						remote.remove(m.id);
+						break;
+					case 'fx':
+						onFx(m);
+						break;
+					case 'leaving': {
+						const p = m.by !== undefined ? who.get(m.by) : undefined;
+						if (p) ui.toast(leavingText(p.name, m.secondsLeft), skinColor(p.skin));
+						break;
+					}
+				}
+			};
+			for (const m of link.pending.splice(0)) link.route(m);
+
+			let lastPosAt = -Infinity;
+			let lastPos = '';
+			mpFrame = (now) => {
+				sync.flushFrame();
+				remote.update(now, renderer.camera);
+				minimap.update(now, world, player, cam.yaw, remote.positions());
+				if (now - lastPosAt < POS_EVERY_MS) return;
+				const [x, y, z] = player.position;
+				const key = `${x.toFixed(2)},${y.toFixed(2)},${z.toFixed(2)},${cam.yaw.toFixed(3)},${cam.pitch.toFixed(3)}`;
+				if (key === lastPos) return;
+				if (client.send({ t: 'pos', x, y, z, yaw: cam.yaw, pitch: cam.pitch })) {
+					lastPos = key;
+					lastPosAt = now;
+				}
+			};
+
+			/** Connection lost or fatal: input, the simulation and the timer freeze (spec §7.5). */
+			const freezeForNetwork = () => {
+				if (loop.mpDisconnected) return;
+				loop.mpDisconnected = true;
+				closeInventory();
+				loop.setLeftMouseDown(false);
+				frozen = true;
+				updatePaused();
+				resetKeys();
+				hud.setMiningProgress(0);
+				if (document.pointerLockElement) document.exitPointerLock();
+			};
+			link.onFatal = freezeForNetwork;
+			link.onLost = () => {
+				if (loop.mpDisconnected) return;
+				freezeForNetwork();
+				ui.showReconnecting();
+				new Reconnector({
+					probe: () => (mpApi ? mpApi.listWorlds() : Promise.reject(new Error('no server'))),
+					// The autojoin flag is still set: the reload rejoins with `resume` (spec §7.5).
+					onSuccess: () => location.reload(),
+					onGiveUp: () => ui.showGiveUp(
+						() => location.reload(),
+						() => {
+							clearAutojoin(sessionStorage);
+							location.reload();
+						},
+					),
+				}).start();
+			};
+
+			if (import.meta.env.DEV) mpDebug = { sync, client, remote, overlay: mp.overlay };
 		}
 		// ----------------------------------------------------------------------
 		loop.start();
 		if (import.meta.env.DEV) {
 			// Debug oracle for manual checks at localhost only; tree-shaken from the build.
 			// `apiUrl` lets the bench log which save API the page is wired to (never production).
-			(window as unknown as { __mc: unknown }).__mc = { world, player, loop, apiUrl, cam, highlight, mustMine, syncHotbar, keys };
+			// `playtime.setRemaining(ms)` (plan I1, E5) sets the live session's time left; no fast clock.
+			(window as unknown as { __mc: unknown }).__mc = {
+				world, player, loop, apiUrl, cam, highlight, mustMine, syncHotbar, keys,
+				playtime, mp: mpDebug,
+			};
 		}
 
 		window.addEventListener('mousedown', (e) => {

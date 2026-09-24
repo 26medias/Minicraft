@@ -256,6 +256,10 @@ for (const sig of ['SIGINT', 'SIGTERM', 'SIGHUP'] as const) process.on(sig, () =
 		check(await text(page, '#duration-value') === '40 min', '− steps 5 minutes');
 		const menuState = JSON.parse((await ls(page, 'minicraft:v1:menu')) ?? '{}');
 		check(menuState.duration === 40, `the duration is remembered in minicraft:v1:menu (got ${menuState.duration})`);
+		// Down to the 10-minute floor: Play must start a 10-minute session (plan I1 solo duration wiring).
+		for (let i = 0; i < 6; i++) await page.click('#duration-minus');
+		check(await text(page, '#duration-value') === '10 min', `− stops at 10 min (got ${await text(page, '#duration-value')})`);
+		check(await page.locator('#duration-minus').isDisabled(), '− is disabled at 10 min');
 
 		// 6. New World → Create: listed first and selected. Play: the world loads.
 		await page.click('#single-new');
@@ -266,7 +270,9 @@ for (const sig of ['SIGINT', 'SIGTERM', 'SIGHUP'] as const) process.on(sig, () =
 		const first = page.locator('#single-worlds .world-row').first();
 		check((await first.innerText()).includes('Smoke World') && await first.locator('.badge-new').count() === 1, 'the created world is listed first with the New badge');
 		check(await first.evaluate((e) => e.classList.contains('selected')), 'the created world is selected');
-		check(await text(page, '#duration-value') === '40 min', 'the duration survives Create');
+		check(await text(page, '#duration-value') === '10 min', 'the duration survives Create');
+		// A leftover multiplayer autojoin flag: starting a solo game must clear it (re-gate I1).
+		await page.evaluate(() => sessionStorage.setItem('mp:autojoin', JSON.stringify({ world: 'w-x', name: 'Noah', skin: 'blue', duration: 30 })));
 		await page.click('#single-play');
 		await page.waitForFunction(() => (window as unknown as { __mc?: unknown }).__mc !== undefined, null, { timeout: 60_000 });
 		await page.waitForFunction(() => {
@@ -274,6 +280,10 @@ for (const sig of ['SIGINT', 'SIGTERM', 'SIGHUP'] as const) process.on(sig, () =
 			return m.loop.stats.streamQueue === 0 && m.loop.stats.mounted >= 81;
 		}, null, { timeout: 60_000 });
 		check(true, 'Single Player → New World → Create → Play loads the world');
+		const pt = JSON.parse((await ls(page, 'minicraft:v1:playtime')) ?? '{}');
+		check(pt.limitMs === 600_000, `Play with 10 min starts a 10-minute session (limitMs ${pt.limitMs})`);
+		check(await page.evaluate(() => sessionStorage.getItem('mp:autojoin')) === null, 'starting a solo game clears mp:autojoin');
+		check(await page.evaluate(() => (window as unknown as { __mc: { mp: unknown } }).__mc.mp) === null, 'solo: no multiplayer session objects');
 		// A new world is saved on its first change: mark it dirty and wait for its record.
 		const createdId = JSON.parse((await ls(page, 'minicraft:v1:menu')) ?? '{}').selectedId as string;
 		await page.evaluate(() => (window as unknown as { __mc: { loop: { onWorldMutated: () => void } } }).__mc.loop.onWorldMutated());
@@ -287,7 +297,7 @@ for (const sig of ['SIGINT', 'SIGTERM', 'SIGHUP'] as const) process.on(sig, () =
 		const sel = page.locator('#single-worlds .world-row.selected');
 		check(await sel.count() === 1 && (await sel.innerText()).includes('Smoke World'), 'after a reload the played world is selected');
 		check(await sel.locator('.badge-device').count() === 1, 'it carries the This device badge');
-		check(await text(page, '#duration-value') === '40 min', 'after a reload the duration is remembered');
+		check(await text(page, '#duration-value') === '10 min', 'after a reload the duration is remembered');
 		await page.click('#menu-back');
 
 		// 8. Parents: set a PIN, schedule the world → the card; the card's Parents button asks for

@@ -61,6 +61,22 @@ export class PlaytimeController {
 		this.timer = new PlayTimer(session, deps.now());
 	}
 
+	/** Play time left in this session (0 once frozen). */
+	remainingMs(): number {
+		return this.timer.remainingMs();
+	}
+
+	/**
+	 * DEV oracle (plan I1, E5): set the time left to `ms` on the live session, then tick. No fast
+	 * clock: the rest runs in real time.
+	 */
+	setRemaining(ms: number): void {
+		const s = this.timer.session;
+		s.playedMs = Math.max(0, Math.min(s.limitMs, s.limitMs - ms));
+		this.deps.save(s);
+		this.tick();
+	}
+
 	/** Never throws: an exception would kill the interval and the whole limit. */
 	tick(): void {
 		try {

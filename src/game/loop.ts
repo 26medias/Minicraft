@@ -161,6 +161,8 @@ export class GameLoop {
 	 * tick (`renderer.frame` clamps `dt` at 100 ms, so a 400 ms hitch would otherwise read as 100).
 	 */
 	onFrame: ((dt: number, tickMs: number, frameMs: number) => void) | null = null;
+	/** Multiplayer (plan I1): a local TNT detonated at (x, y, z); main.ts sends `fx:boom`/`fx:firework`. null in solo. */
+	onDetonate: ((x: number, y: number, z: number, effect: 'firework' | null, blockId: BlockId) => void) | null = null;
 	private lastFrameAt = -1;
 
 	constructor(
@@ -851,6 +853,7 @@ export class GameLoop {
 		}
 		if (result.effect === 'firework') this.particles?.spawnFirework(ox + 0.5, oy + 0.5, oz + 0.5, true);
 		else this.particles?.spawnBreak(ox, oy, oz, entry.blockId);
+		this.onDetonate?.(ox, oy, oz, result.effect ?? null, entry.blockId);
 	}
 
 	/** Enqueues the MESH_RADIUS ring into the stream set (spec §3.B) and updates the `moving` flag. */

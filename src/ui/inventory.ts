@@ -3,7 +3,7 @@ import type { Inventory as Counts, PlayerTools } from '../data/crafting.data';
 import type { CraftTab, Recipe } from '../data/recipes.data';
 import type { LoadedAtlas, TileRect } from '../engine/render/atlas';
 import {
-	CRAFT_TABS, NO_DOTS, blockTileView, craftCards, craftTabViews, inventoryRows, pickaxeRow, readyRecipeIds, stepDots, tabRecipes,
+	CRAFT_TABS, NO_DOTS, blockTileView, craftCards, craftTabViews, inventoryRows, matchesSearch, pickaxeRow, searchKey, readyRecipeIds, stepDots, tabRecipes,
 	type CraftCardView, type CraftDots, type HotbarBadge, type InventoryTab, type Picture,
 } from './craft-model';
 
@@ -33,6 +33,7 @@ export class Inventory {
 	private grid: HTMLDivElement;
 	private tiles: Array<{ def: BlockDef; el: HTMLButtonElement; badge: HTMLSpanElement }> = [];
 	private groupHeads: Array<{ el: HTMLDivElement; members: HTMLButtonElement[] }> = [];
+	private search: HTMLInputElement;
 	private nameEl: HTMLDivElement;
 	private strip: HTMLDivElement;
 	private slotEls: HTMLDivElement[] = [];
@@ -79,6 +80,30 @@ export class Inventory {
 		this.pickRow = document.createElement('div');
 		this.pickRow.className = 'pickaxe-row';
 		this.blocksPanel.appendChild(this.pickRow);
+
+		// Search box: filters the tiles by name. Keys typed here never reach the game (number keys, I, Tab, Shift).
+		this.search = document.createElement('input');
+		this.search.type = 'text';
+		this.search.className = 'inventory-search';
+		this.search.placeholder = '🔍 Search blocks';
+		this.search.autocomplete = 'off';
+		this.search.spellcheck = false;
+		this.search.addEventListener('input', () => this.applySearch());
+		this.search.addEventListener('keyup', (e) => e.stopPropagation());
+		this.search.addEventListener('keydown', (e) => {
+			e.stopPropagation();
+			const action = searchKey(e.code, this.search.value);
+			if (action === 'type') return;
+			e.preventDefault();
+			if (action === 'clear') {
+				this.search.value = '';
+				this.applySearch();
+			} else {
+				this.search.blur();
+				this.onClose?.();
+			}
+		});
+		this.blocksPanel.appendChild(this.search);
 
 		for (const b of blocks) this.labels.set(b.id, b.label);
 		this.grid = document.createElement('div');
@@ -274,7 +299,15 @@ export class Inventory {
 			t.el.classList.toggle('dimmed', v.dimmed);
 			t.badge.textContent = v.badge ?? '';
 		}
-		for (const g of this.groupHeads) g.el.classList.toggle('hidden', g.members.every((m) => m.classList.contains('hidden')));
+		this.applySearch();
+	}
+
+	/** Hide tiles whose name does not match the search box, and group headings left with no visible tile. */
+	private applySearch(): void {
+		const q = this.search.value;
+		for (const t of this.tiles) t.el.classList.toggle('search-hidden', !matchesSearch(t.def.label, q));
+		const shown = (m: HTMLElement) => !m.classList.contains('hidden') && !m.classList.contains('search-hidden');
+		for (const g of this.groupHeads) g.el.classList.toggle('hidden', !g.members.some(shown));
 	}
 
 	private renderCraft(): void {

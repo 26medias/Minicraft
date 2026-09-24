@@ -207,7 +207,22 @@ for (const sig of ['SIGINT', 'SIGTERM', 'SIGHUP'] as const) process.on(sig, () =
 		await page.keyboard.press('KeyI');
 		await page.click('.inventory-tab[data-tab="blocks"]');
 		check(!(await page.locator('.inventory-tile[data-block="big_tnt"]').isVisible()), 'Big TNT hidden in the Blocks tab at 0');
+
+		// Search box: typing filters the tiles by name; keys typed there never reach the game.
+		const slotBefore = await mc(page, (m) => m.player.selected);
+		await page.click('.inventory-search');
+		await page.keyboard.type('diamond9');
+		check(await mc(page, (m) => m.player.selected) === slotBefore, 'typing "9" in the search box does not change the hotbar slot');
+		check(await page.locator('#inventory-root').isVisible(), 'typing "i" in the search box does not close the I screen');
+		await page.keyboard.press('Backspace');
+		const shownTiles = await page.locator('.inventory-tile:visible').evaluateAll((els) => els.map((e) => (e as HTMLElement).dataset.block));
+		check(shownTiles.length > 0 && shownTiles.every((n) => n!.includes('diamond')), `"diamond" shows only diamond blocks (${shownTiles.join(', ')})`);
+		check(shownTiles.includes('deepslate_diamond_ore'), '"diamond" finds Deepslate Diamond Ore');
 		await page.keyboard.press('Escape');
+		check(await page.locator('#inventory-root').isVisible() && (await page.locator('.inventory-search').inputValue()) === '', 'Esc with text clears the search and keeps the I screen open');
+		check(await page.locator('.inventory-tile[data-block="stone"]').isVisible(), 'a cleared search shows every block again');
+		await page.keyboard.press('Escape');
+		check(!(await page.locator('#inventory-root').isVisible()), 'Esc on an empty search closes the I screen');
 		await seed(page, recipeFor('block:big_tnt'));
 		const before = await mc(page, (m) => ({ hotbar: m.player.hotbar.slice(), selected: m.player.selected }));
 		await craftVia(page, 'block:big_tnt');

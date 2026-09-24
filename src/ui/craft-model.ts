@@ -7,6 +7,21 @@ import { canCraft, haveOf } from '../game/crafting';
 
 export type InventoryTab = 'blocks' | 'craft';
 
+/** Blocks-tab search: does a block's label contain the query? Case-insensitive, anywhere in the name; blank matches all. */
+export function matchesSearch(label: string, query: string): boolean {
+	const q = query.trim().toLowerCase();
+	return q === '' || label.toLowerCase().includes(q);
+}
+
+/**
+ * What a key does while the Blocks-tab search box has focus: Esc clears the text, or closes the I screen when the
+ * box is already empty; every other key only types, so digits, I, Tab and Shift never reach the game.
+ */
+export function searchKey(code: string, query: string): 'clear' | 'close' | 'type' {
+	if (code === 'Escape') return query === '' ? 'close' : 'clear';
+	return 'type';
+}
+
 /** What a picture shows: a block's north face, or a named atlas tile (pickaxe icons). */
 export type Picture = { kind: 'block'; id: BlockId } | { kind: 'icon'; name: string };
 

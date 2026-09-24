@@ -1,0 +1,18 @@
+# Installed by server/vm-setup.sh as /etc/systemd/system/cloudflared.service.
+# The tunnel (mc.leap-forward.ca -> http://localhost:8080) is configured in the Cloudflare
+# dashboard; this only runs the connector. TUNNEL_TOKEN comes from /etc/cloudflared.env.
+[Unit]
+Description=Cloudflare Tunnel for mcserver
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+EnvironmentFile=/etc/cloudflared.env
+ExecStart=/usr/bin/cloudflared --no-autoupdate tunnel run
+Restart=on-failure
+RestartSec=5
+DynamicUser=yes
+NoNewPrivileges=yes
+
+[Install]
+WantedBy=multi-user.target

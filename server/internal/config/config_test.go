@@ -36,6 +36,7 @@ func TestTokenFlagBeatsEnv(t *testing.T) {
 
 func TestDefaults(t *testing.T) {
 	t.Setenv("MC_TOKEN", "")
+	t.Setenv("MC_GCS_BUCKET", "")
 	c, err := FromFlags([]string{"-token", "t"})
 	if err != nil {
 		t.Fatal(err)
@@ -59,6 +60,28 @@ func TestDefaults(t *testing.T) {
 	}
 	if c.GCSBucket != "" {
 		t.Fatalf("GCSBucket = %q, want empty (upload disabled)", c.GCSBucket)
+	}
+	if c.BackupDir != "." {
+		t.Fatalf("BackupDir = %q, want the -db directory \".\"", c.BackupDir)
+	}
+}
+
+// The systemd unit passes the bucket in /etc/mcserver.env; -backup-dir defaults to the -db dir.
+func TestBackupDefaults(t *testing.T) {
+	t.Setenv("MC_GCS_BUCKET", "minicraft-worlds")
+	c, err := FromFlags([]string{"-token", "t", "-db", "/var/lib/mcserver/mc.sqlite"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if c.GCSBucket != "minicraft-worlds" || c.BackupDir != "/var/lib/mcserver" {
+		t.Fatalf("GCSBucket %q BackupDir %q", c.GCSBucket, c.BackupDir)
+	}
+	c, err = FromFlags([]string{"-token", "t", "-gcs-bucket", "other"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if c.GCSBucket != "other" {
+		t.Fatalf("flag lost to env: GCSBucket %q", c.GCSBucket)
 	}
 }
 

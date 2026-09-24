@@ -4,13 +4,21 @@ import (
 	"io"
 	"net/http"
 	"net/http/httptest"
+	"path/filepath"
 	"testing"
 
 	"minicraft/server/internal/config"
+	mcnet "minicraft/server/internal/net"
+	"minicraft/server/internal/store"
 )
 
 func TestHealth(t *testing.T) {
-	srv := httptest.NewServer(newMux(config.Config{}))
+	st, err := store.Open(filepath.Join(t.TempDir(), "mc.sqlite"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer st.Close()
+	srv := httptest.NewServer(mcnet.NewServer(config.Config{Token: "t"}, st).Handler())
 	defer srv.Close()
 
 	res, err := http.Get(srv.URL + "/health")

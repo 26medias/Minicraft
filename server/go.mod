@@ -3,6 +3,7 @@ module minicraft/server
 go 1.25.0
 
 require (
+	github.com/coder/websocket v1.8.15
 	golang.org/x/text v0.33.0
 	modernc.org/sqlite v1.59.0
 )

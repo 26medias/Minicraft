@@ -8,6 +8,8 @@ import (
 	"os"
 
 	"minicraft/server/internal/config"
+	mcnet "minicraft/server/internal/net"
+	"minicraft/server/internal/store"
 )
 
 func main() {
@@ -16,15 +18,12 @@ func main() {
 		fmt.Fprintln(os.Stderr, "mcserver:", err)
 		os.Exit(2)
 	}
+	st, err := store.Open(cfg.DB)
+	if err != nil {
+		log.Fatal(err)
+	}
+	defer st.Close()
+	srv := mcnet.NewServer(cfg, st)
 	log.Printf("mcserver listening on %s", cfg.Addr)
-	log.Fatal(http.ListenAndServe(cfg.Addr, newMux(cfg)))
-}
-
-func newMux(_ config.Config) *http.ServeMux {
-	mux := http.NewServeMux()
-	mux.HandleFunc("GET /health", func(w http.ResponseWriter, _ *http.Request) {
-		w.Header().Set("Content-Type", "text/plain; charset=utf-8")
-		w.Write([]byte("ok"))
-	})
-	return mux
+	log.Fatal(http.ListenAndServe(cfg.Addr, srv.Handler()))
 }

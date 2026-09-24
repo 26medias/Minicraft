@@ -10,15 +10,7 @@ import { LiquidScheduler } from './liquid-scheduler';
 import { worldToChunk, indexOf, chunkIndex, WORLD_CHUNKS_Z } from '../engine/world/coords';
 import { createPrng, type Prng } from '../engine/prng';
 import type { Op } from '../net/protocol';
-
-// replaced by import in C4
-/** Spec §6 echo rule: skip an own echo when a newer own write to that cell is pending; forget the cell at its own cid. */
-function shouldApplyEcho(pending: Map<string, number>, key: string, cid: number): boolean {
-	const p = pending.get(key);
-	if (p !== undefined && p > cid) return false;
-	if (p === cid) pending.delete(key);
-	return true;
-}
+import { shouldApplyEcho } from '../net/echo';
 
 /** The instrument check: World.writeRemote without the liquid frontier wake (spec rev 1). */
 let REMOTE_NO_WAKE = false;

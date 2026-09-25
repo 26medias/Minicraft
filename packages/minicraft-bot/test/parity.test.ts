@@ -57,6 +57,14 @@ describe('worldgen parity through dist/index.js', () => {
 		expect(fnv1a32(sdk.generateChunkBlocks(seed, gen, cx, cz))).toBe(hash);
 	});
 
+	it("the bundle's BotWorld class exposes no write path, and nothing internal is exported (I-1)", async () => {
+		const sdk = (await loadDist()) as unknown as Record<string, unknown>;
+		const cls = sdk.BotWorld as { prototype: object };
+		const names = [...Object.getOwnPropertyNames(cls.prototype), ...Object.getOwnPropertyNames(cls)];
+		for (const m of ['localSet', 'reset', 'onServerEdit', 'create']) expect(names, m).not.toContain(m);
+		for (const k of ['WorldCore', 'createWorld', 'coreOf']) expect(Object.keys(sdk), k).not.toContain(k);
+	});
+
 	it('the bundle carries the shared constants', async () => {
 		const sdk = await loadDist();
 		expect([sdk.CLIENT_VERSION, sdk.POS_EVERY_MS, sdk.WALK_SPEED, sdk.EYE_HEIGHT]).toEqual([1, 100, 5, 1.6]);
@@ -70,6 +78,8 @@ describe('worldgen parity through dist/index.js', () => {
 		expect(dts).not.toMatch(/from\s+['"]\./);
 		expect(dts).not.toMatch(/import\(['"]\./);
 		expect(dts).not.toMatch(/\b(MpSync|LightRegistry|GameLoop|ChunkOverlay)\b/);
+		// I-1: no write path on the public BotWorld (nor anywhere in the public types).
+		expect(dts).not.toMatch(/\b(localSet|reset|onServerEdit|WorldCore|createWorld|coreOf)\b/);
 		expect(dts).toMatch(/export declare class BotClient/);
 		expect(dts).toMatch(/export declare class BotWorld/);
 	});

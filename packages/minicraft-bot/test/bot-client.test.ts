@@ -14,11 +14,14 @@ import {
 	type ConnectResult,
 } from '../src/index';
 import { BLOCKS, BLOCK_BY_NAME, isSolid } from '../../../src/data/blocks.data';
-import { CLIENT_VERSION, POS_EVERY_MS, PROTO, type Op, type PlayerInfo } from '../../../src/net/protocol';
+import { CLIENT_VERSION, POS_EVERY_MS, PROTO, type Op, type PlayerInfo, type Spawn } from '../../../src/net/protocol';
+import { ChunkOverlay } from '../../../src/engine/world/overlay';
 import { NEWEST_GEN_VERSION } from '../../../src/engine/world/generation';
 import { miningDuration } from '../../../src/game/tools';
 import { EYE_HEIGHT, WALK_SPEED } from '../../../src/game/player-constants';
 import { World } from '../../../src/engine/world/world';
+import { coreOf } from '../src/bot-world';
+import { resolveMpSpawn } from '../../../src/game/mp-spawn';
 import { spawnV3 } from '../../../src/engine/world/v3/spawn';
 import { FakeWS, SEED, snapshot, welcome } from './fixtures';
 
@@ -61,6 +64,29 @@ function groundOf(x: number, z: number, nearY = 250): number | null {
 	return null;
 }
 
+/** The game's own spawn resolution (resolveMpSpawn) on a game World holding the same snapshot cells. */
+function gameSpawn(spawn: Spawn, cells: Op[] = []): { x: number; y: number; z: number; yaw: number; pitch: number } {
+	const w = new World(SEED, { height: 256, genVersion: 3, saveVersion: 3 });
+	const overlay = new ChunkOverlay();
+	overlay.loadSnapshot(Int32Array.from(cells.flat()));
+	w.overlay = overlay;
+	const r = resolveMpSpawn(w, SEED, spawn);
+	return { x: r.pos[0], y: r.pos[1], z: r.pos[2], yaw: r.yaw, pitch: r.pitch };
+}
+
+/** A column whose top non-air block is water, deterministic; its x, z and the water surface + 1. */
+function waterColumn(): { x: number; y: number; z: number } {
+	for (let x = 3; x < 512; x += 7) for (let z = 3; z < 512; z += 7) {
+		for (let y = oracle.height - 1; y >= 0; y--) {
+			const id = oracle.getBlock(x, y, z);
+			if (id === AIR) continue;
+			if (BLOCKS[id].liquid !== 'none' && oracle.getBlock(x, y - 3, z) === id) return { x: x + 0.5, y: y + 1, z: z + 0.5 };
+			break;
+		}
+	}
+	throw new Error('no water column');
+}
+
 /** Top non-air, non-liquid y of a column (oracle). */
 function surfaceOf(x: number, z: number): number {
 	for (let y = oracle.height - 1; y >= 0; y--) {
@@ -78,9 +104,9 @@ const PLAT = { x: 100, y: 200, z: 100 };
 function platform(bot: BotClient, under: number[] = []): { x: number; y: number; z: number } {
 	for (let dx = -3; dx <= 14; dx++) for (let dz = -3; dz <= 3; dz++) {
 		for (let y = PLAT.y - 8; y <= PLAT.y + 8; y++) if (oracle.getBlock(PLAT.x + dx, y, PLAT.z + dz) !== AIR) throw new Error('platform: terrain in the way');
-		bot.world.localSet(PLAT.x + dx, PLAT.y - 1, PLAT.z + dz, STONE);
+		coreOf(bot.world).localSet(PLAT.x + dx, PLAT.y - 1, PLAT.z + dz, STONE);
 	}
-	for (const dx of under) for (let dz = -3; dz <= 3; dz++) bot.world.localSet(PLAT.x + dx, PLAT.y - 7, PLAT.z + dz, STONE);
+	for (const dx of under) for (let dz = -3; dz <= 3; dz++) coreOf(bot.world).localSet(PLAT.x + dx, PLAT.y - 7, PLAT.z + dz, STONE);
 	return { ...PLAT };
 }
 
@@ -144,9 +170,8 @@ describe('connect', () => {
 		expect(ws.of('pos')).toEqual([]);
 		ws.recvBin(snapshot());
 		const res = await p;
-		// Mode 'first' (the fixture's): the world's v3 spawn column, on its topmost block (the game's resolveMpSpawn).
-		const sp = spawnV3(SEED);
-		const first = { x: sp.x + 0.5, y: surfaceOf(sp.x, sp.z) + 1, z: sp.z + 0.5, yaw: 0, pitch: 0 };
+		// Mode 'first' (the fixture's): exactly where the game's own resolveMpSpawn puts a kid.
+		const first = gameSpawn(welcome().spawn);
 		expect(first.y).toBeGreaterThan(64);
 		expect(ws.of('pos')).toEqual([{ t: 'pos', ...first }]);
 		expect(res.you).toBe(4);
@@ -156,35 +181,31 @@ describe('connect', () => {
 		expect(bot.pose()).toEqual(first);
 	});
 
-	it("spawn mode 'return': the saved spot, grounded, with the saved yaw and pitch", async () => {
+	// I-2: parity with the game's resolveMpSpawn (src/game/mp-spawn.ts) run on the game's own World with the
+	// same snapshot overlay, not with a copy of the SDK's rule.
+	const PILLAR: Op[] = [0, 1, 2, 3, 4, 5, 6].map((h) => [300, 140 + h, 310, STONE, 0, 0] as Op);
+	it.each([
+		['first', () => ({ mode: 'first', x: 0, y: 0, z: 0, yaw: 0, pitch: 0 })],
+		['return on land', () => ({ mode: 'return', x: 300.5, y: surfaceOf(300, 310) + 1.4, z: 310.5, yaw: 1.25, pitch: -0.5 })],
+		['return on the snapshot pillar', () => ({ mode: 'return', x: 300.5, y: 160, z: 310.5, yaw: 0, pitch: 0 })],
+		['return in the sky', () => ({ mode: 'return', x: 120.5, y: 250, z: 130.5, yaw: 0, pitch: 0 })],
+		['return over water', () => ({ mode: 'return', ...waterColumn(), yaw: 0.5, pitch: 0 })],
+		['near a target', () => {
+			const sp = spawnV3(SEED);
+			return { mode: 'near', x: sp.x + 0.5, y: surfaceOf(sp.x, sp.z) + 1, z: sp.z + 0.5, yaw: 0.3, pitch: 0, target: 2 };
+		}],
+	] as Array<[string, () => Spawn]>)('spawn %s: the pose the game would give', async (_name, make) => {
+		const spawn = make();
 		const bot = client();
 		const p = bot.connect({ world: 'world-1', name: 'Robo', skin: 'enderman' });
 		const ws = FakeWS.last;
 		ws.open();
-		const x = 300.5, z = 310.5, g = groundOf(x, z, surfaceOf(300, 310) + 1)!;
-		ws.recv(welcome({ spawn: { mode: 'return', x, y: g + 0.4, z, yaw: 1.25, pitch: -0.5 } }));
-		ws.recvBin(snapshot());
+		ws.recv(welcome({ spawn }));
+		ws.recvBin(snapshot(PILLAR));
 		await p;
-		expect(bot.pose()).toEqual({ x, y: g, z, yaw: 1.25, pitch: -0.5 });
-	});
-
-	it("spawn mode 'near': 3–6 blocks from the target on dry ground, facing it", async () => {
-		const bot = client();
-		const p = bot.connect({ world: 'world-1', name: 'Robo', skin: 'enderman' });
-		const ws = FakeWS.last;
-		ws.open();
-		const sp = spawnV3(SEED);
-		const t = { x: sp.x + 0.5, y: surfaceOf(sp.x, sp.z) + 1, z: sp.z + 0.5 };
-		ws.recv(welcome({ spawn: { mode: 'near', ...t, yaw: 0, pitch: 0, target: 2 } }));
-		ws.recvBin(snapshot());
-		await p;
-		const me = bot.pose();
-		const d = Math.hypot(me.x - t.x, me.z - t.z);
-		expect(d).toBeGreaterThanOrEqual(3);
-		expect(d).toBeLessThanOrEqual(6);
-		expect(Math.abs(me.y - t.y)).toBeLessThanOrEqual(4);
-		expect(groundOf(me.x, me.z, me.y)).toBe(me.y);
-		expect(me.yaw).toBeCloseTo(Math.atan2(-(t.x - me.x), -(t.z - me.z)), 9);
+		expect(bot.pose()).toEqual(gameSpawn(spawn, PILLAR));
+		// Over water the game stands the kid on the surface, not on the lake bed.
+		if (_name === 'return over water') expect(bot.pose().y).toBe(spawn.y);
 	});
 
 	it('bid: explicit, else the one saved in statePath, else bot-<fnv1a32(name)>', async () => {
@@ -372,7 +393,7 @@ describe('walkTo', () => {
 		const s = PLAT;
 		const { bot } = await connected({ spawn: { x: s.x + 0.5, y: s.y, z: s.z + 0.5 } });
 		platform(bot);
-		for (let dz = -2; dz <= 2; dz++) for (const h of [0, 1]) bot.world.localSet(s.x + 4, s.y + h, s.z + dz, STONE);
+		for (let dz = -2; dz <= 2; dz++) for (const h of [0, 1]) coreOf(bot.world).localSet(s.x + 4, s.y + h, s.z + dz, STONE);
 		const p = bot.walkTo({ x: s.x + 9.5, z: s.z + 0.5 });
 		const caught = p.then(() => null, (e: unknown) => e);
 		await vi.advanceTimersByTimeAsync(POS_EVERY_MS * 30);
@@ -391,7 +412,7 @@ describe('walkTo', () => {
 		const { bot } = await connected({ spawn: { x: s.x + 0.5, y: s.y, z: s.z + 0.5 } });
 		// A floor 6 below the platform under the wall column: groundY there finds the "cave" floor.
 		platform(bot, [4]);
-		for (let dz = -2; dz <= 2; dz++) for (const h of [0, 1, 2]) bot.world.localSet(s.x + 4, s.y + h, s.z + dz, STONE);
+		for (let dz = -2; dz <= 2; dz++) for (const h of [0, 1, 2]) coreOf(bot.world).localSet(s.x + 4, s.y + h, s.z + dz, STONE);
 		expect(bot.world.groundY(s.x + 4, s.z, s.y)).toBe(s.y - 6);
 		const caught = bot.walkTo({ x: s.x + 9.5, z: s.z + 0.5 }).then(() => null, (e: unknown) => e);
 		await vi.advanceTimersByTimeAsync(POS_EVERY_MS * 30);
@@ -402,7 +423,7 @@ describe('walkTo', () => {
 		const s = PLAT;
 		const { bot } = await connected({ spawn: { x: s.x + 0.5, y: s.y, z: s.z + 0.5 } });
 		platform(bot);
-		for (let dx = 3; dx <= 8; dx++) bot.world.localSet(s.x + dx, s.y, s.z, STONE);
+		for (let dx = 3; dx <= 8; dx++) coreOf(bot.world).localSet(s.x + dx, s.y, s.z, STONE);
 		let r: string | null = null;
 		void bot.walkTo({ x: s.x + 6.5, z: s.z + 0.5 }).then((v) => (r = v));
 		await vi.advanceTimersByTimeAsync(POS_EVERY_MS * 30);
@@ -412,7 +433,7 @@ describe('walkTo', () => {
 
 	it('no ground (off the world edge) → BlockedError{noGround}', async () => {
 		const { bot } = await connected({ spawn: { x: 1.5, y: 200, z: 300.5 } });
-		for (let x = 0; x <= 3; x++) bot.world.localSet(x, 199, 300, STONE);
+		for (let x = 0; x <= 3; x++) coreOf(bot.world).localSet(x, 199, 300, STONE);
 		// Off the world at x < 0: every cell reads AIR.
 		const caught = bot.walkTo({ x: -8, z: 300.5 }).then(() => null, (e: unknown) => e);
 		await vi.advanceTimersByTimeAsync(POS_EVERY_MS * 40);
@@ -427,7 +448,7 @@ describe('walkTo', () => {
 		// A 6-deep drop: the platform is cut away from dx 2 on, over a floor 6 below.
 		const low = s.y - 6;
 		platform(bot, [2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12]);
-		for (let dx = 2; dx <= 12; dx++) for (let dz = -3; dz <= 3; dz++) bot.world.localSet(s.x + dx, s.y - 1, s.z + dz, AIR);
+		for (let dx = 2; dx <= 12; dx++) for (let dz = -3; dz <= 3; dz++) coreOf(bot.world).localSet(s.x + dx, s.y - 1, s.z + dz, AIR);
 		const n0 = ws.of('pos').length;
 		let r: string | null = null;
 		void bot.walkTo({ x: s.x + 8.5, z: s.z + 0.5 }).then((v) => (r = v));
@@ -443,6 +464,29 @@ describe('walkTo', () => {
 			if (poses[i - 1].y > low && poses[i - 1].y < s.y) expect(poses[i].x).toBe(poses[i - 1].x);
 		}
 		expect(sawHover).toBe(true);
+	});
+
+	it('never moves up while falling, even when the ground under it rises mid-drop (M-4)', async () => {
+		const s = PLAT;
+		const { bot } = await connected({ spawn: { x: s.x + 0.5, y: s.y, z: s.z + 0.5 } });
+		platform(bot, [2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12]);
+		for (let dx = 2; dx <= 12; dx++) for (let dz = -3; dz <= 3; dz++) coreOf(bot.world).localSet(s.x + dx, s.y - 1, s.z + dz, AIR);
+		void bot.walkTo({ x: s.x + 8.5, z: s.z + 0.5 }).catch(() => {});
+		let ys: number[] = [bot.pose().y];
+		for (let i = 0; i < 20 && bot.pose().y >= s.y; i++) {
+			await vi.advanceTimersByTimeAsync(POS_EVERY_MS);
+			ys.push(bot.pose().y);
+		}
+		expect(bot.pose().y).toBe(s.y - 2); // mid-drop
+		// A kid fills the column the bot is dropping through, up to above its feet.
+		const col = Math.floor(bot.pose().x);
+		for (let dz = -3; dz <= 3; dz++) coreOf(bot.world).localSet(col, s.y - 1, s.z + dz, STONE);
+		ys = [bot.pose().y];
+		for (let i = 0; i < 5; i++) {
+			await vi.advanceTimersByTimeAsync(POS_EVERY_MS);
+			ys.push(bot.pose().y);
+		}
+		for (let i = 1; i < ys.length; i++) expect(ys[i]).toBeLessThanOrEqual(ys[i - 1]);
 	});
 
 	it('a new walkTo or a move resolves the old one with cancelled, never a rejection', async () => {
@@ -687,6 +731,14 @@ describe('revert', () => {
 		expect(bot.journal()).toEqual([]);
 	});
 
+	it("restores a lamp's colour (M-2)", async () => {
+		const { bot, ws } = await connected({ cells: [[10, 200, 10, LAMP, 0, 0x1000000 | 0x12ab34]] });
+		await bot.place(10, 200, 10, 'stone');
+		expect(bot.journal()[0]).toMatchObject({ oldId: LAMP, newId: STONE, oldColor: '#12AB34' });
+		expect(await bot.revert()).toBe(1);
+		expect(ws.of('edit').at(-1)!.ops).toEqual([[10, 200, 10, LAMP, 0, 0x1000000 | 0x12ab34]]);
+	});
+
 	it('sinceMs (a Date.now() timestamp) reverts only the edits made at or after it', async () => {
 		const { bot } = await connected({ over: { editGapMs: 0 } });
 		const a = bot.world.getBlock(10, 200, 10);
@@ -770,6 +822,27 @@ describe('reconnect', () => {
 		expect(closes).toEqual([1006]);
 		expect(FakeWS.all).toHaveLength(1);
 		expect(() => bot.move(bot.pose())).toThrow(NotConnectedError);
+	});
+
+	it('gives up 30 s after the first loss even when GET /worlds answers but every socket drops (M-1)', async () => {
+		const { bot, ws } = await connected();
+		const closes: Array<[number, number]> = [];
+		const t0 = Date.now();
+		bot.on('close', (c) => closes.push([c, Date.now() - t0]));
+		ws.serverClose(1006);
+		let dropped = 1;
+		for (let t = 0; t < 120_000 && closes.length === 0; t += 100) {
+			await vi.advanceTimersByTimeAsync(100);
+			await flush();
+			// Every reconnect socket fails before the welcome.
+			while (dropped < FakeWS.all.length) FakeWS.all[dropped++].serverClose(1006);
+		}
+		expect(closes).toHaveLength(1);
+		expect(closes[0][0]).toBe(1006);
+		expect(closes[0][1]).toBeGreaterThanOrEqual(30_000);
+		expect(closes[0][1]).toBeLessThanOrEqual(32_000);
+		expect(FakeWS.all.length).toBeLessThan(40);
+		expect(vi.getTimerCount()).toBe(0);
 	});
 
 	it('a fatal close after connect: close, no reconnect', async () => {

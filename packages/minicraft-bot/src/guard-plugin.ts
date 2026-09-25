@@ -30,6 +30,9 @@ export const ALLOWED_FILES = [
 	'src/game/mp-reconnect.ts',
 	'src/game/player-constants.ts',
 	'src/engine/world/apply-remote.ts',
+	// The game's spawn resolution (fix round 1, I-2): three-free, needs only World, v3 spawn, blocks.data and protocol types.
+	'src/game/mp-spawn.ts',
+	'src/game/safe-spawn.ts',
 ] as const;
 /** Runtime dependencies that may be bundled. */
 export const ALLOWED_PACKAGES = ['pako', 'alea', 'simplex-noise'] as const;

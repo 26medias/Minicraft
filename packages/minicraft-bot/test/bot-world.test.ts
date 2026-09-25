@@ -1,6 +1,6 @@
 // Plan Task 5 step 4: BotWorld, the SDK's World + ChunkOverlay pair (spec §6, §12a).
 import { describe, expect, it } from 'vitest';
-import { BotWorld, blockNames } from '../src/bot-world';
+import { BotWorld, blockNames, createWorld } from '../src/bot-world';
 import { World } from '../../../src/engine/world/world';
 import { ChunkOverlay } from '../../../src/engine/world/overlay';
 import { applyRemoteOps } from '../../../src/engine/world/apply-remote';
@@ -19,10 +19,11 @@ type Change = { x: number; y: number; z: number; oldId: number | null; newId: nu
 
 function setup(cells: Op[] = [], you = 1) {
 	const sent: EditMsg[] = [];
-	const world = BotWorld.create(welcome({ you }), snapshot(cells), (m) => sent.push(m as EditMsg), you);
+	// `world` is the SDK-internal core (reads + writes); `view` is the read-only BotWorld bots get.
+	const { core: world, view } = createWorld(welcome({ you }), snapshot(cells), (m) => sent.push(m as EditMsg), you);
 	const changes: Change[] = [];
-	const off = world.onBlockChange((x, y, z, oldId, newId, by) => changes.push({ x, y, z, oldId, newId, by }));
-	return { world, sent, changes, off };
+	const off = view.onBlockChange((x, y, z, oldId, newId, by) => changes.push({ x, y, z, oldId, newId, by }));
+	return { world, view, sent, changes, off };
 }
 
 /** The game's own world for seed 12345 (the oracle). */
@@ -55,7 +56,7 @@ function flatSpot(x0 = 200, z0 = 200): { x: number; y: number; z: number } {
 	throw new Error('no flat spot found');
 }
 
-describe('BotWorld.create / reset', () => {
+describe('createWorld / reset', () => {
 	it('loads the snapshot before the world is used, and reset swaps in a fresh world with the new snapshot', () => {
 		const { x, y, z } = flatSpot();
 		const { world } = setup();
@@ -85,14 +86,14 @@ describe('BotWorld.create / reset', () => {
 
 describe('every coordinate API floors x, y, z', () => {
 	it('getBlock', () => {
-		const { world } = setup([[10, 100, 10, STONE, 0, 0]]);
+		const { view: world } = setup([[10, 100, 10, STONE, 0, 0]]);
 		expect(world.getBlock(10.9, 100.2, 10.5)).toBe(STONE);
 		expect(world.getBlock(-0.5, 100, 10)).toBe(AIR); // floor(−0.5) = −1: out of bounds
 	});
 
 	it('groundY, surfaceY, region and findNearest', () => {
 		const { x, y, z } = flatSpot();
-		const { world } = setup();
+		const { view: world } = setup();
 		expect(world.groundY(x + 0.7, z + 0.2, y + 0.9)).toBe(world.groundY(x, z, y));
 		expect(world.surfaceY(x + 0.99, z + 0.01)).toBe(world.surfaceY(x, z));
 		expect([...world.region({ x: x + 0.5, y: y - 1.5, z: z + 0.5 }, { x: x + 1.9, y: y + 0.5, z: z + 1.1 })]).toEqual([
@@ -244,6 +245,22 @@ describe('blockNames', () => {
 	});
 });
 
+describe('the public BotWorld is read-only (I-1)', () => {
+	const MUTATORS = ['localSet', 'reset', 'onServerEdit', 'create'];
+
+	it('the class and an instance expose no write path', () => {
+		const { view } = setup();
+		const names = new Set<string>();
+		for (let o: object | null = view; o && o !== Object.prototype; o = Object.getPrototypeOf(o)) {
+			for (const k of Object.getOwnPropertyNames(o)) names.add(k);
+		}
+		for (const k of Object.getOwnPropertyNames(BotWorld)) names.add(k);
+		for (const m of MUTATORS) expect(names.has(m), m).toBe(false);
+		expect([...names].filter((n) => /set|write|apply|reset|edit|sync/i.test(n))).toEqual([]);
+		expect(view.getBlock(0, 250, 0)).toBe(AIR);
+	});
+});
+
 describe('localSet', () => {
 	it('writes, flushes one edit, and fires onBlockChange with by = you', () => {
 		const { world, sent, changes } = setup([], 7);
@@ -252,6 +269,13 @@ describe('localSet', () => {
 		expect(sent).toEqual([{ t: 'edit', cid: 1, ops: [[3, 200, 3, STONE, 0, 0]] }]);
 		expect(changes).toEqual([{ x: 3, y: 200, z: 3, oldId: before, newId: STONE, by: 7 }]);
 		expect(world.getBlock(3, 200, 3)).toBe(STONE);
+	});
+
+	it('an out-of-world write stores no lamp colour (M-5)', () => {
+		const { world, sent } = setup();
+		world.localSet(-1, 200, 0, LAMP, '#FF0000');
+		expect(world.colorAt(-1, 200, 0)).toBeNull();
+		expect(sent).toEqual([]);
 	});
 
 	it('sends a lamp colour and validates it; a colour on another block is ignored', () => {

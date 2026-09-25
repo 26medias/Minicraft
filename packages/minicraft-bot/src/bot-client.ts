@@ -10,7 +10,7 @@
 import { existsSync, readFileSync, renameSync, writeFileSync } from 'node:fs';
 import { MpClient, type MpHandlers, type MpState } from '../../../src/net/mp-client';
 import { MpApi } from '../../../src/net/mp-api';
-import { Reconnector } from '../../../src/game/mp-reconnect';
+import { GIVE_UP_MS, Reconnector } from '../../../src/game/mp-reconnect';
 import { isRemovableId, miningDuration } from '../../../src/game/tools';
 import { EYE_HEIGHT, WALK_SPEED } from '../../../src/game/player-constants';
 import { NEWEST_GEN_VERSION } from '../../../src/engine/world/generation';
@@ -33,7 +33,7 @@ import {
 	type WorldListing,
 } from '../../../src/net/protocol';
 import type { StorageLike } from '../../../src/net/mp-sync';
-import { BotWorld, blockId, resolveSpawn, type Pose } from './bot-world';
+import { createWorld, blockId, type BotWorld, type Pose, type WorldCore } from './bot-world';
 import { BlockedError, NotConnectedError, OutdatedClientError, ReplacedError, ServerRefusedError } from './errors';
 
 /** A WebSocket constructor with the standard API (Node ≥ 22's global `WebSocket`, the default). */
@@ -87,7 +87,8 @@ export type ConnectResult = { you: number; spawn: Spawn; players: BotPlayer[]; w
 export type WalkResult = 'arrived' | 'cancelled';
 
 /** One of the bot's own edits: the cell, what was there, what the bot put, and when (`Date.now()`). */
-export type JournalEntry = { x: number; y: number; z: number; oldId: number; newId: number; t: number };
+/** `oldColor`: the lamp colour that was there (#RRGGBB), when there was one; `revert` restores it. */
+export type JournalEntry = { x: number; y: number; z: number; oldId: number; newId: number; t: number; oldColor?: string };
 
 /** A pose update for `move`: yaw and pitch default to the current ones. */
 export type PoseInput = { x: number; y: number; z: number; yaw?: number; pitch?: number };
@@ -107,7 +108,7 @@ export type BotEvents = {
 	leaving: (msg: LeavingMsg) => void;
 	/** The bot is disconnected for good (a fatal close, the reconnect gave up, or `close()`: 1000). */
 	close: (code: number) => void;
-	/** The connection came back; `world` was reset in place and the pose re-sent. */
+	/** The connection came back; `world` was rebuilt in place and the pose re-sent. */
 	reconnect: () => void;
 };
 
@@ -185,7 +186,11 @@ function readState(path: string): SavedState {
 	const o = (s ?? {}) as SavedState;
 	const isEntry = (e: unknown): e is JournalEntry => {
 		const r = e as JournalEntry;
-		return !!r && [r.x, r.y, r.z, r.oldId, r.newId, r.t].every((v) => typeof v === 'number' && Number.isFinite(v));
+		return (
+			!!r &&
+			[r.x, r.y, r.z, r.oldId, r.newId, r.t].every((v) => typeof v === 'number' && Number.isFinite(v)) &&
+			(r.oldColor === undefined || (typeof r.oldColor === 'string' && /^#[0-9a-fA-F]{6}$/.test(r.oldColor)))
+		);
 	};
 	return {
 		bid: typeof o.bid === 'string' ? o.bid : undefined,
@@ -202,6 +207,10 @@ export class BotClient {
 	private state: State = 'idle';
 	private mp: MpClient | null = null;
 	private botWorld: BotWorld | null = null;
+	/** The writable world behind `botWorld`; never handed out. */
+	private core: WorldCore | null = null;
+	/** When the connection was first lost (ms), until the bot is back in the world; bounds the reconnect. */
+	private lostSince: number | null = null;
 	private join: ConnectOptions | null = null;
 	private bidValue: string | null;
 	private me = 0;
@@ -332,7 +341,7 @@ export class BotClient {
 		if (id === LAMP_ID && color !== undefined) colorToInt(color);
 		const fx = Math.floor(x), fy = Math.floor(y), fz = Math.floor(z);
 		return this.edit(() => {
-			if (id === null || !this.placeable(id, name) || !this.botWorld!.inBounds(fx, fy, fz) || this.insideKid(fx, fy, fz)) return false;
+			if (id === null || !this.placeable(id, name) || !this.core!.inBounds(fx, fy, fz) || this.insideKid(fx, fy, fz)) return false;
 			return this.write(fx, fy, fz, id, id === LAMP_ID ? color : undefined);
 		});
 	}
@@ -342,7 +351,7 @@ export class BotClient {
 		this.assertConnected('break');
 		const fx = Math.floor(x), fy = Math.floor(y), fz = Math.floor(z);
 		return this.edit(() => {
-			const w = this.botWorld!;
+			const w = this.core!;
 			if (!w.inBounds(fx, fy, fz)) return false;
 			const id = w.getBlock(fx, fy, fz);
 			if (id === AIR || id === BEDROCK_ID) return false;
@@ -361,7 +370,7 @@ export class BotClient {
 		this.cancelMine();
 		if (this.state !== 'connected') return Promise.resolve(false);
 		const fx = Math.floor(x), fy = Math.floor(y), fz = Math.floor(z);
-		const id = this.botWorld!.getBlock(fx, fy, fz);
+		const id = this.core!.getBlock(fx, fy, fz);
 		if (!isRemovableId(id)) return Promise.resolve(false);
 		this.face(fx + 0.5, fy + 0.5, fz + 0.5);
 		const dur = ms !== undefined ? Math.max(0, Math.round(ms)) : Math.round(miningDuration(BLOCKS[id].hardness, 0, 'none') * 1000);
@@ -403,7 +412,7 @@ export class BotClient {
 		this.assertConnected('revert');
 		const run = (): number => {
 			if (this.state !== 'connected') return 0;
-			const w = this.botWorld!;
+			const w = this.core!;
 			const kept: JournalEntry[] = [];
 			const deferred = new Set<string>();
 			let n = 0;
@@ -420,7 +429,7 @@ export class BotClient {
 					kept.push(e);
 					continue;
 				}
-				w.localSet(e.x, e.y, e.z, e.oldId);
+				w.localSet(e.x, e.y, e.z, e.oldId, e.oldColor);
 				n++;
 			}
 			this.entries = kept.reverse();
@@ -515,8 +524,13 @@ export class BotClient {
 	private onJoined(welcome: Welcome, buf: ArrayBuffer): void {
 		const first = this.botWorld === null;
 		try {
-			if (first) this.botWorld = BotWorld.create(welcome, buf, (m) => this.send(m), welcome.you);
-			else this.botWorld!.reset(welcome, buf, welcome.you);
+			if (first) {
+				const made = createWorld(welcome, buf, (m) => this.send(m), welcome.you);
+				this.botWorld = made.view;
+				this.core = made.core;
+			} else {
+				this.core!.reset(welcome, buf, welcome.you);
+			}
 		} catch (err) {
 			// A malformed snapshot: this connection is useless.
 			const e = new ServerRefusedError(0, `malformed snapshot: ${(err as Error).message}`);
@@ -534,7 +548,8 @@ export class BotClient {
 		this.me = welcome.you;
 		this.catalogMax = welcome.catalogMax;
 		this.others = new Map(welcome.players.filter((p) => p.id !== welcome.you).map((p) => [p.id, toPlayer(p)]));
-		if (first) this.cur = resolveSpawn(this.botWorld!, welcome.spawn);
+		this.lostSince = null;
+		if (first) this.cur = this.core!.spawnPose(welcome.spawn);
 		this.state = 'connected';
 		this.sendPose();
 		this.startPosTimer();
@@ -550,7 +565,7 @@ export class BotClient {
 	private onServerMessage(m: ServerMsg): void {
 		switch (m.t) {
 			case 'edit':
-				this.botWorld?.onServerEdit(m);
+				this.core?.onServerEdit(m);
 				this.emit('edit', m);
 				break;
 			case 'tick':
@@ -594,8 +609,15 @@ export class BotClient {
 			this.finish(code ?? 1006);
 			return;
 		}
-		// Lost: reconnect (spec §6), a new Reconnector each time (it is one-shot).
+		// Lost: reconnect (spec §6), a new Reconnector each time (it is one-shot). The give-up counts from the
+		// first loss, not from each retry, so a server that answers GET /worlds but keeps dropping the socket
+		// still ends in `close` after GIVE_UP_MS.
 		const lostCode = code ?? 1006;
+		this.lostSince ??= Date.now();
+		if (Date.now() - this.lostSince > GIVE_UP_MS) {
+			this.finish(lostCode);
+			return;
+		}
 		this.state = 'reconnecting';
 		this.mp = null;
 		this.stopPosTimer();
@@ -671,12 +693,13 @@ export class BotClient {
 	}
 
 	private stepWalk(w: Walk): void {
-		const world = this.botWorld!;
+		const world = this.core!;
 		const cur = this.cur;
 		if (w.falling) {
 			const g = world.groundY(cur.x, cur.z, cur.y);
 			if (g === null) return this.blocked(w, 'noGround');
-			cur.y = Math.max(g, cur.y - MAX_DROP);
+			// Never up while falling (a block placed under the bot mid-drop must not lift it).
+			cur.y = Math.min(cur.y, Math.max(g, cur.y - MAX_DROP));
 			w.falling = cur.y > g;
 			return;
 		}
@@ -769,11 +792,12 @@ export class BotClient {
 
 	/** The bot's journaled write: applies locally, sends one edit, records it. */
 	private write(x: number, y: number, z: number, id: number, color?: string): boolean {
-		const w = this.botWorld!;
+		const w = this.core!;
 		const oldId = w.getBlock(x, y, z);
+		const oldColor = w.colorAt(x, y, z);
 		w.localSet(x, y, z, id, color);
 		this.lastEditAt = Date.now();
-		this.entries.push({ x, y, z, oldId, newId: id, t: this.lastEditAt });
+		this.entries.push({ x, y, z, oldId, newId: id, t: this.lastEditAt, ...(oldColor ? { oldColor } : {}) });
 		if (this.entries.length > JOURNAL_MAX) this.entries.splice(0, this.entries.length - JOURNAL_MAX);
 		this.persist();
 		return true;

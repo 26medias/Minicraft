@@ -153,11 +153,11 @@ new BotClient({ url, token, bid?, statePath?, editGapMs? })
 | `move(pose)` | Sets the pose (a teleport). It is sent within 100 ms. A jump over 8 blocks snaps on the kids' screens. It cancels a walk. |
 | `walkTo({ x, z })` | Walks there in a straight line (see below). Resolves `'arrived'` or `'cancelled'`. |
 | `lookAt(x, y, z)` | Turns the head toward a point. It only rotates. |
-| `place(x, y, z, name, color?)` | Places a block (`color` `#RRGGBB` for a `lamp`). Resolves `true` when sent. |
+| `place(x, y, z, name, color?)` | Places a block (`color` `#RRGGBB` for a `lamp`), **replacing whatever is in the cell**, as the game's replace does. The replaced block is journaled, so `revert` puts it back. Resolves `true` when sent. |
 | `break(x, y, z)` | Breaks a block instantly (to air). |
 | `mine(x, y, z, ms?)` | Mines like a kid with bare hands: faces the block, the kids see cracks, waits, then breaks it. Resolves `true` when broken. |
 | `fx({ kind, x, y, z, … })` | Sends a raw effect, e.g. `{ kind: 'firework', x, y, z }`. |
-| `journal()` | The bot's own edits, oldest first: `{ x, y, z, oldId, newId, t }`. |
+| `journal()` | The bot's own edits, oldest first: `{ x, y, z, oldId, newId, t, oldColor? }` (`oldColor`: the lamp colour that was replaced). |
 | `revert(sinceMs?)` | Undoes the bot's own edits (see below). |
 | `on(event, cb)` | Events: `join`, `left`, `pose`, `edit`, `fx`, `leaving`, `close(code)`, `reconnect`. Returns an unsubscribe function. |
 | `close()` | Leaves. Emits `close(1000)`. |
@@ -202,7 +202,7 @@ While the bot is reconnecting, `place`, `break` and `mine` resolve `false`, and 
 
 ### The safety net: journal and `revert`
 
-Every edit the bot makes is journaled `{ x, y, z, oldId, newId, t }`, in memory and in `statePath`. The
+Every edit the bot makes is journaled `{ x, y, z, oldId, newId, t, oldColor? }`, in memory and in `statePath`. The
 journal keeps the latest 10,000 edits.
 
 `await bot.revert()` undoes them all, **newest first**. `await bot.revert(Date.now() - 5 * 60_000)`
@@ -211,14 +211,19 @@ undoes only the last 5 minutes (`sinceMs` is a `Date.now()` timestamp). The rule
   never overwritten**.
 - A solid block is not restored into a kid's body. That entry stays in the journal for a later
   `revert`.
+- A lamp the bot replaced comes back with its colour.
 - Revert's own writes are not journaled. They skip the edit gap.
 - It resolves the number of cells restored.
 
 ### Reconnects
 
 On a transient disconnect (the server restarting, a network blip), the bot probes `GET /worlds` at 1,
-2, 4, 8 and 15 s, then rejoins. Then `world` is reset in place, the pose is re-sent, and `reconnect`
-fires. After 30 s with no server it emits `close` and stops. Fatal codes (see `connect`) stop at once.
+2, 4, 8 and 15 s, then rejoins. Then `world` is rebuilt in place (the same object), the pose is re-sent,
+and `reconnect` fires.
+
+It gives up **30 s after the first loss**, counted until the bot is back in the world: then it emits
+`close` and stops. That includes a server that answers `GET /worlds` but keeps dropping the socket.
+Fatal codes (see `connect`) stop at once.
 
 ### `connect` errors
 
@@ -230,11 +235,14 @@ fires. After 30 s with no server it emits `close` and stops. Fatal codes (see `c
 
 ## `BotWorld`
 
+`BotWorld` is **read-only**. A bot changes the world only through `BotClient` (`place`, `break`,
+`mine`, `revert`), so every edit passes the refusals, the edit gap and the journal.
+
 | Call | What it does |
 |---|---|
 | `getBlock(x, y, z)` | The block id. The chunk is generated on first read. Outside the world it is `0` (air). |
 | `blockName(id)`, `blockId(name)` | Converts between id and name. `blockId` returns `null` for an unknown name. |
-| `isSolid(id)`, `isLiquid(id)` | Every block is a full cube. Only air is neither. |
+| `isSolid(id)`, `isLiquid(id)` | Every catalog block is a full cube. Only air and the `retired_*` ids are neither solid nor liquid. |
 | `groundY(x, z, nearY)` | The feet y of the first standable cell at or below `nearY + 2`: solid below, two free cells above. It scans at most 64 down, or returns `null`. It ignores a leaf canopy or a roof above a kid. In a lake it finds the **bed**. |
 | `surfaceY(x, z)` | The topmost block that is not air or liquid, or −1. |
 | `region(min, max)` | The ids of a box, bounds inclusive, as a `Uint16Array` indexed `(y−y0)·dx·dz + (z−z0)·dx + (x−x0)`. At most 32 per side (it throws beyond). A compact view for an AI. |

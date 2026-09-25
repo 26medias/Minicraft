@@ -14,7 +14,7 @@ import { MpSync, type StorageLike } from '../../../src/net/mp-sync';
 import { decodeSnapshot } from '../../../src/net/snapshot';
 import { colorToInt, intToColor, type EditOut, type Op, type Welcome } from '../../../src/net/protocol';
 import { raycastVoxel as gameRaycast, type VoxelHit } from '../../../src/engine/input/raycast';
-import { spawnV3 } from '../../../src/engine/world/v3/spawn';
+import { resolveMpSpawn } from '../../../src/game/mp-spawn';
 import type { Spawn } from '../../../src/net/protocol';
 
 /**
@@ -64,7 +64,12 @@ export function blockNames(): string[] {
 	return BLOCKS.filter((b) => !b.retired).map((b) => b.name);
 }
 
-export class BotWorld {
+/**
+ * The SDK-internal world: the read API plus every write path (local writes, remote edits, reset). Never
+ * exported from index.ts: bots get the read-only `BotWorld` view, and only `BotClient` writes, through
+ * its refusals, edit gap and journal.
+ */
+export class WorldCore {
 	private world!: World;
 	private overlay!: ChunkOverlay;
 	private sync!: MpSync;
@@ -76,17 +81,7 @@ export class BotWorld {
 	private applyingBy = 0;
 	private readonly storage = new MemStorage();
 
-	private constructor(private readonly send: (msg: object) => void) {}
-
-	/**
-	 * Builds the world from a `welcome` and the snapshot frame that follows it. `send` sends one client
-	 * message (the bot client's socket). Called by `BotClient`; bots get the world from `connect()`.
-	 */
-	static create(welcome: Welcome, snapshot: ArrayBuffer, send: (msg: object) => void, you: number): BotWorld {
-		const w = new BotWorld(send);
-		w.reset(welcome, snapshot, you);
-		return w;
-	}
+	constructor(private readonly send: (msg: object) => void) {}
 
 	/**
 	 * Replaces the world in place (a reconnect): a fresh world model with the snapshot loaded before it is
@@ -245,13 +240,10 @@ export class BotWorld {
 	localSet(x: number, y: number, z: number, id: number, color?: string): void {
 		const fx = Math.floor(x), fy = Math.floor(y), fz = Math.floor(z);
 		const key = `${fx},${fy},${fz}`;
-		if (id === LAMP_ID && color !== undefined) {
-			colorToInt(color);
-			this.colors.set(key, color);
-		} else {
-			this.colors.delete(key);
-		}
+		if (id === LAMP_ID && color !== undefined) colorToInt(color);
 		if (!this.world.inBounds(fx, fy, fz)) return;
+		if (id === LAMP_ID && color !== undefined) this.colors.set(key, color);
+		else this.colors.delete(key);
 		const oldId = this.world.getBlock(fx, fy, fz);
 		this.world.setBlock(fx, fy, fz, id);
 		this.sync.flushFrame();
@@ -267,6 +259,17 @@ export class BotWorld {
 	/** Casts a ray through this world (the game's raycast): the first solid cell within `maxDistance`, or null. */
 	raycast(origin: [number, number, number], dir: [number, number, number], maxDistance: number): VoxelHit | null {
 		return gameRaycast(this.world, origin, dir, maxDistance);
+	}
+
+	/** The lamp colour the bot knows for a cell (#RRGGBB), or null. */
+	colorAt(x: number, y: number, z: number): string | null {
+		return this.colors.get(`${Math.floor(x)},${Math.floor(y)},${Math.floor(z)}`) ?? null;
+	}
+
+	/** Where the bot stands after a welcome: the game's own `resolveMpSpawn` (spec §7.2) on this world. */
+	spawnPose(spawn: Spawn): Pose {
+		const s = resolveMpSpawn(this.world, this.world.seed, spawn);
+		return { x: s.pos[0], y: s.pos[1], z: s.pos[2], yaw: s.yaw, pitch: s.pitch };
 	}
 
 	private applyRemote(ops: Op[]): void {
@@ -293,48 +296,115 @@ export class BotWorld {
 	}
 }
 
-/** The game's voxel raycast over a BotWorld: the first solid cell along `dir` within `maxDistance`, or null. */
-export function raycastVoxel(world: BotWorld, origin: [number, number, number], dir: [number, number, number], maxDistance: number): VoxelHit | null {
-	return world.raycast(origin, dir, maxDistance);
+const cores = new WeakMap<BotWorld, WorldCore>();
+
+function core(w: BotWorld): WorldCore {
+	const c = cores.get(w);
+	if (!c) throw new TypeError('not a BotWorld from BotClient.connect()');
+	return c;
 }
 
-/** src/game/mp-spawn.ts's "near" fan: straight ahead of the target first, then ±30°, ±60°, 3–6 blocks away. */
-const NEAR_ANGLES = [0, 30, -30, 60, -60].map((d) => (d * Math.PI) / 180);
-
 /**
- * Where the bot stands after a welcome (spec §7.2: the server picks only the mode, the client the spot).
- * Mirrors the game's `resolveMpSpawn` (src/game/mp-spawn.ts), which the SDK can't bundle: its module
- * pulls in `three` through player.ts.
- * - `first`: the world's v3 spawn column, on its topmost block, facing yaw 0.
- * - `return`: the saved spot, grounded (the first standable cell at or below it), with the saved yaw/pitch.
- * - `near`: 3–6 blocks in front of the target player on dry ground, facing them; else the target's spot.
+ * The bot's live world model, READ-ONLY (spec §6): bots change the world only through `BotClient`
+ * (`place`, `break`, `mine`, `revert`), which apply the refusals, the edit gap and the journal. It stays
+ * the same object across reconnects. Every coordinate API floors x, y, z.
  */
-export function resolveSpawn(world: BotWorld, spawn: Spawn): Pose {
-	if (spawn.mode === 'first') {
-		const s = world.gen === 3 ? spawnV3(world.seed) : { x: 256, z: 256 };
-		const x = s.x + 0.5, z = s.z + 0.5;
-		const top = world.surfaceY(x, z);
-		return { x, y: top >= 0 ? top + 1 : world.height - 1, z, yaw: 0, pitch: 0 };
+export class BotWorld {
+	private constructor() {}
+
+	get seed(): number {
+		return core(this).seed;
 	}
-	if (spawn.mode === 'return') {
-		const g = world.groundY(spawn.x, spawn.z, spawn.y);
-		const top = world.surfaceY(spawn.x, spawn.z);
-		const y = g ?? (top >= 0 ? top + 1 : spawn.y);
-		return { x: spawn.x, y, z: spawn.z, yaw: spawn.yaw, pitch: spawn.pitch };
+
+	/** The world generator version. */
+	get gen(): number {
+		return core(this).gen;
 	}
-	const feetY = Math.floor(spawn.y);
-	for (const a of NEAR_ANGLES) {
-		const dirX = -Math.sin(spawn.yaw + a), dirZ = -Math.cos(spawn.yaw + a);
-		for (let d = 3; d <= 6; d++) {
-			const bx = Math.floor(spawn.x + dirX * d), bz = Math.floor(spawn.z + dirZ * d);
-			const cx = bx + 0.5, cz = bz + 0.5;
-			const dist = Math.hypot(cx - spawn.x, cz - spawn.z);
-			if (dist < 3 || dist > 6 || !world.inBounds(bx, 0, bz)) continue;
-			// The game's groundAt: a dry solid block within ±4 of the target's feet, two air cells above.
-			const g = world.groundY(cx, cz, feetY + 3);
-			if (g === null || g < feetY - 3 || world.getBlock(bx, g, bz) !== AIR || world.getBlock(bx, g + 1, bz) !== AIR || world.isLiquid(world.getBlock(bx, g - 1, bz))) continue;
-			return { x: cx, y: g, z: cz, yaw: Math.atan2(-(spawn.x - cx), -(spawn.z - cz)), pitch: 0 };
-		}
+
+	/** The world height in blocks (y runs 0 … height − 1). */
+	get height(): number {
+		return core(this).height;
 	}
-	return { x: spawn.x, y: spawn.y, z: spawn.z, yaw: spawn.yaw, pitch: 0 };
+
+	/** True when the (floored) cell is inside the world. */
+	inBounds(x: number, y: number, z: number): boolean {
+		return core(this).inBounds(x, y, z);
+	}
+
+	/** The block id at a cell; the chunk is generated on first read. Out of the world: AIR (0). */
+	getBlock(x: number, y: number, z: number): number {
+		return core(this).getBlock(x, y, z);
+	}
+
+	blockName(id: number): string | null {
+		return blockName(id);
+	}
+
+	blockId(name: string): number | null {
+		return blockId(name);
+	}
+
+	/** Solid: a full cube you can stand on (leaves and glass included). */
+	isSolid(id: number): boolean {
+		return isSolidId(id);
+	}
+
+	isLiquid(id: number): boolean {
+		return isLiquidId(id);
+	}
+
+	/**
+	 * The feet y of the first standable cell at or below `nearY + 2` in column (x, z): solid below, and two
+	 * non-solid cells (air or liquid) for the body. Scans at most 64 down; null when there is none. It does
+	 * not land on a leaf canopy or a roof above `nearY + 2`; in water it finds the bed.
+	 */
+	groundY(x: number, z: number, nearY: number): number | null {
+		return core(this).groundY(x, z, nearY);
+	}
+
+	/** The y of the topmost non-air, non-liquid block in column (x, z), or −1. */
+	surfaceY(x: number, z: number): number {
+		return core(this).surfaceY(x, z);
+	}
+
+	/**
+	 * The ids of a box, bounds inclusive (floored), at most 32 per side (throws beyond). Index:
+	 * `(y − y0)·dx·dz + (z − z0)·dx + (x − x0)`. Generates what it needs.
+	 */
+	region(min: Vec3, max: Vec3): Uint16Array {
+		return core(this).region(min, max);
+	}
+
+	/**
+	 * The nearest cell holding block `name` within `radius` (clamped to 32) of `from`, by Euclidean
+	 * distance, ties broken by (y, z, x) order; null when none (or an unknown name). Generates every chunk
+	 * in range first (≤ 25 chunks, ≈ 0.25 s the first time), so the answer never depends on what was read.
+	 */
+	findNearest(name: string, from: Vec3, radius: number): Vec3 | null {
+		return core(this).findNearest(name, from, radius);
+	}
+
+	/** Subscribes to block changes (remote edits that changed the world, and the bot's own writes). Returns the unsubscribe. */
+	onBlockChange(cb: BlockChangeListener): () => void {
+		return core(this).onBlockChange(cb);
+	}
+}
+
+/** SDK-internal: a new read-only view and its writable core. `send` sends one client message. */
+export function createWorld(welcome: Welcome, snapshot: ArrayBuffer, send: (msg: object) => void, you: number): { view: BotWorld; core: WorldCore } {
+	const c = new WorldCore(send);
+	c.reset(welcome, snapshot, you);
+	const view = Object.create(BotWorld.prototype) as BotWorld;
+	cores.set(view, c);
+	return { view, core: c };
+}
+
+/** SDK-internal (and tests): the writable core behind a view. Not exported from index.ts. */
+export function coreOf(view: BotWorld): WorldCore {
+	return core(view);
+}
+
+/** The game's voxel raycast over a BotWorld: the first solid cell along `dir` within `maxDistance`, or null. */
+export function raycastVoxel(world: BotWorld, origin: [number, number, number], dir: [number, number, number], maxDistance: number): VoxelHit | null {
+	return core(world).raycast(origin, dir, maxDistance);
 }

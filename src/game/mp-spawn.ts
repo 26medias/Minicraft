@@ -2,7 +2,7 @@ import type { World } from '../engine/world/world';
 import { spawnV3 } from '../engine/world/v3/spawn';
 import { AIR, isLiquid, isSolid } from '../data/blocks.data';
 import type { Spawn } from '../net/protocol';
-import { findSafeSpawn } from './player';
+import { findSafeSpawn } from './safe-spawn';
 
 export type MpSpawn = { pos: [number, number, number]; yaw: number; pitch: number };
 

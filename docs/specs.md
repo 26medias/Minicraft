@@ -39,7 +39,7 @@ Mobs, combat, health, hunger, damage, public or matchmade multiplayer (the priva
 | Multiplayer server | **Go 1.25**, one binary `mcserver` (`server/`) | One goroutine per world orders, persists and relays edits; installed without sudo in `~/.local/go` |
 | Multiplayer socket | `github.com/coder/websocket` | JSON text frames plus one binary snapshot frame; read limit 4 MiB |
 | Multiplayer storage | **SQLite** (WAL) via `modernc.org/sqlite` | Pure Go, no cgo; the differential cell state per world, flushed every 1 s; hourly `VACUUM INTO` backups to `gs://minicraft-worlds/mp-backups` |
-| Multiplayer hosting | GCE `e2-micro` VM behind a **Cloudflare Tunnel** (`mc.leap-forward.ca`) | No inbound ports, no certificates, no DNS updater; Julien starts the VM by hand |
+| Multiplayer hosting | Julien's desktop, as systemd user services, behind a **Cloudflare Tunnel** (`minicraft-server.leap-forward.ca`); a GCE `e2-micro` VM is the documented alternative | No inbound ports, no certificates, no DNS updater, no hosting cost; the server runs while his machine is on |
 | Multiplayer E2E | headless Playwright (`npm run e2e:mp`) | Two browsers against a local `mcserver`; every non-local host is blocked |
 
 ### Why WebGL2, not WebGPU or raw WebGL
@@ -206,7 +206,7 @@ docs/
 
 Static bundle from `vite build` → upload to a **GCP Cloud Storage** bucket configured for static hosting → fronted by **Cloudflare** on a private subdomain. No server for solo play.
 
-Multiplayer adds one server: `mcserver` on a GCE `e2-micro` VM, reached only through a Cloudflare Tunnel at `mc.leap-forward.ca`. The site reads `VITE_MINICRAFT_MP_URL` and `VITE_MINICRAFT_MP_TOKEN` at build time; without the URL the Multiplayer button is hidden. Setup, deploy and backups: `server/README.md`.
+Multiplayer adds one server: `mcserver`, running on Julien's desktop and reached only through a Cloudflare Tunnel at `minicraft-server.leap-forward.ca` (a GCE `e2-micro` VM is the documented alternative). The site reads `VITE_MINICRAFT_MP_URL` and `VITE_MINICRAFT_MP_TOKEN` at build time; without the URL the Multiplayer button is hidden. Setup, deploy and backups: `server/README.md`.
 
 The save API is a separate concern and does not affect the static bundle: a Gen2
 Cloud Function (`minicraft-api`) over a GCS bucket, deployed with `./deploy.sh`.

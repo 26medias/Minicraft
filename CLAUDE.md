@@ -41,10 +41,12 @@ Per-subsystem docs live in `docs/`: `lighting.md`, `liquids.md`, `movement.md`, 
 at the production site.** Test at `localhost:5173`. `./deploy.sh` deploys the API
 only — the website is deployed by hand.
 
-⚠ **Never point tests at `mc.leap-forward.ca`.** The multiplayer server's data
-lives in the VM's `/var/lib/mcserver` and in `gs://minicraft-worlds/mp-backups`.
-Multiplayer tests start their own local `mcserver` on a temp database.
-`server/deploy.sh` is run by Julien only.
+⚠ **Never point tests at `minicraft-server.leap-forward.ca`.** The live multiplayer
+server runs on Julien's desktop (systemd user units `minicraft-server` and
+`minicraft-tunnel`, worlds in `~/minicraft-mp/mc.sqlite`); runbook in
+`server/README.md`. Multiplayer tests start their own local `mcserver` on a temp
+database. Never write the live multiplayer URL or token to `.env.local`: they are
+passed to the production build only. Never stop the live server with SIGKILL.
 
 ## Assets
 

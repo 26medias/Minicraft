@@ -1,8 +1,8 @@
 # Multiplayer
 
 A private multiplayer mode for two families: Noah and a friend build in the same world from
-two computers. It is a Go + SQLite relay server on a VM that Julien starts by hand, and a
-browser client that syncs block edits and player poses. Solo play is unchanged: no socket, no
+two computers. It is a Go + SQLite relay server, live on Julien's desktop behind a Cloudflare Tunnel
+(`minicraft-server.leap-forward.ca`), and a browser client that syncs block edits and player poses. Solo play is unchanged: no socket, no
 overlay, no minimap, and the same `DualAdapter` autosave.
 
 The design, with the measured evidence behind each rule, is
@@ -14,8 +14,8 @@ stop, deploy, backups, restore) is [`server/README.md`](../server/README.md).
 ```
 browser (static site, hosting unchanged)
   ├── solo:  DualAdapter → localStorage + always-on API          (unchanged)
-  └── multi: MpClient ──wss──▶ Cloudflare ──tunnel──▶ VM: cloudflared ──▶ mcserver :8080 (localhost)
-                                                                     └── SQLite (WAL), persistent disk
+  └── multi: MpClient ──wss──▶ Cloudflare ──tunnel──▶ Beast: cloudflared ──▶ mcserver :8080 (localhost)
+                                                                        └── SQLite (WAL), ~/minicraft-mp/mc.sqlite
 ```
 
 - **The server orders, persists and relays.** It never generates terrain and never runs a
@@ -247,9 +247,17 @@ same id.
 
 ## Running it
 
-Julien runs everything on the VM by hand. See [`server/README.md`](../server/README.md) for the
-first-time setup, starting and stopping the VM, deploying, the backups (hourly and on SIGTERM,
-48 kept in `gs://minicraft-worlds/mp-backups/`) and restoring one.
+Live since 2026-09-24 on Julien's desktop ("Beast"). Two systemd **user** services run it:
+`minicraft-server` (mcserver on `127.0.0.1:8080`, worlds in `~/minicraft-mp/mc.sqlite`) and
+`minicraft-tunnel` (Cloudflare Tunnel to `https://minicraft-server.leap-forward.ca`). They start
+with his login session, so the server is gone while the machine sleeps; the kids then see "The
+multiplayer server is sleeping" and Single Player is unaffected. The backup is
+`~/minicraft-mp/backup.sqlite`, rewritten hourly while anyone plays and on every stop (one copy, no
+GCS upload).
+
+[`server/README.md`](../server/README.md) has the runbook: status, start and stop, updating the
+server, building the site with the multiplayer URL, backups, restoring, and recreating the tunnel.
+The original VM plan is kept there as an alternative that is not in use.
 
 Locally:
 
@@ -261,9 +269,10 @@ cd server && go run ./cmd/mcserver -db ./mc.sqlite -addr :8080 -token dev
 with `VITE_MINICRAFT_MP_URL=http://localhost:8080` and `VITE_MINICRAFT_MP_TOKEN=dev` for the
 site.
 
-⚠ **Never point a test at `mc.leap-forward.ca`.** The multiplayer worlds live in the VM's
-`/var/lib/mcserver` and in `gs://minicraft-worlds/mp-backups`. Tests start their own `mcserver`
-on a temp database.
+⚠ **Never point a test at `minicraft-server.leap-forward.ca`** (or the VM plan's `mc.leap-forward.ca`).
+The kids' multiplayer worlds live in `~/minicraft-mp/mc.sqlite` on Julien's desktop. Tests start
+their own `mcserver` on a temp database, and the live URL and token are passed only to the
+production build, never written to `.env.local`.
 
 ## Tests
 

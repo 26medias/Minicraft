@@ -527,6 +527,10 @@ The home screen has three big buttons: **Single Player**, **Multiplayer** and **
 
 ## 9. Hosting (Julien runs everything; `server/README.md` is the runbook)
 
+> **As deployed (2026-09-24):** Julien chose to run `mcserver` on his own desktop instead of a VM,
+> as systemd user services behind a Cloudflare Tunnel at `minicraft-server.leap-forward.ca`. The VM
+> plan below is kept as the documented alternative. See `server/README.md`.
+
 - **VM:** a GCE `e2-micro` (us-central1, free tier) with a 10 GB persistent disk, running Debian 12.
   - It keeps an ephemeral external IPv4, billed only while running, for outbound traffic.
   - No inbound ports.

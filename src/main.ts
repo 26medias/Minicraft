@@ -695,8 +695,8 @@ async function main() {
 		loop.onFrame = (_dt, tickMs, frameMs) => {
 			const now = performance.now();
 			const mi = loop.miningInfo();
-			if (mi) cracks.set('local', mi.x, mi.y, mi.z, crackStage(mi.elapsedMs, mi.durationMs));
-			else cracks.clear('local');
+			if (mi) cracks.setGroup('local', mi.cells, crackStage(mi.elapsedMs, mi.durationMs));
+			else cracks.clearGroup('local');
 			mpMine?.(mi);
 			mpFrame?.(now);
 			perfOverlay.tick(now, { t: now, frameMs, tickMs }, () => {

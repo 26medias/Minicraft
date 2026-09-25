@@ -65,9 +65,37 @@ export class CrackOverlay {
 		this.meshes.delete(key);
 	}
 
-	/** Remove every key not in `keep` (the remote miners who stopped since last frame). */
+	/**
+	 * An area tool's cracks: one mesh per cell, keyed `${key}#0..cells.length-1`. A later call with
+	 * fewer cells than before drops the group's leftover meshes above the new count (mining-info's
+	 * cells can shrink frame to frame as the aim moves along the area's held zone).
+	 */
+	setGroup(key: string, cells: ReadonlyArray<{ x: number; y: number; z: number }>, stage: number): void {
+		cells.forEach((c, i) => this.set(`${key}#${i}`, c.x, c.y, c.z, stage));
+		const prefix = `${key}#`;
+		for (const k of [...this.meshes.keys()]) {
+			if (!k.startsWith(prefix)) continue;
+			if (Number(k.slice(prefix.length)) >= cells.length) this.clear(k);
+		}
+	}
+
+	/** Remove every `${key}#*` mesh of a group set by setGroup. */
+	clearGroup(key: string): void {
+		const prefix = `${key}#`;
+		for (const k of [...this.meshes.keys()]) if (k.startsWith(prefix)) this.clear(k);
+	}
+
+	/**
+	 * Remove every key not in `keep` (the remote miners who stopped since last frame). A group mesh
+	 * (`${group}#i`) is kept when `keep` has either the mesh's own key or its group — so `keep` can
+	 * hold just `'local'` and every `local#i` mesh of the group survives.
+	 */
 	retain(keep: ReadonlySet<string>): void {
-		for (const key of [...this.meshes.keys()]) if (!keep.has(key)) this.clear(key);
+		for (const key of [...this.meshes.keys()]) {
+			const hash = key.indexOf('#');
+			const group = hash === -1 ? key : key.slice(0, hash);
+			if (!keep.has(key) && !keep.has(group)) this.clear(key);
+		}
 	}
 
 	keys(): string[] {

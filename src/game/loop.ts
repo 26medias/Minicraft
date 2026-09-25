@@ -347,11 +347,22 @@ export class GameLoop {
 		return this.mining ? Math.min(1, this.mining.elapsed / this.mining.duration) : 0;
 	}
 
-	/** The block being mined right now, for the crack overlay and the multiplayer `fx mine`; null when idle. */
-	miningInfo(): { x: number; y: number; z: number; blockId: BlockId; durationMs: number; elapsedMs: number } | null {
+	/**
+	 * The block being mined right now, for the crack overlay and the multiplayer `fx mine`; null when idle.
+	 * `cells` is every cell an area tool will actually remove (the highlight's set, computed the same way —
+	 * removableCells skips air, liquids, hardness-0 and out-of-bounds cells); a single-cell tool always gets
+	 * just the target. `MiningState` keeps no face of its own, so this reads the current aim's, which still
+	 * points at the target: `updateMining` drops `this.mining` the instant the aim leaves it.
+	 */
+	miningInfo(): { x: number; y: number; z: number; blockId: BlockId; durationMs: number; elapsedMs: number; cells: ReadonlyArray<{ x: number; y: number; z: number }> } | null {
 		const m = this.mining;
 		if (!m) return null;
-		return { ...m.target, blockId: m.blockId, durationMs: m.duration * 1000, elapsedMs: m.elapsed * 1000 };
+		const tier = this.equippedTier();
+		const onTarget = this.aim && this.aim.x === m.target.x && this.aim.y === m.target.y && this.aim.z === m.target.z;
+		const cells = onTarget && isMultiBlock(tier)
+			? removableCells(this.world, areaCells(m.target, this.aim!.face, tier))
+			: [{ ...m.target }];
+		return { ...m.target, blockId: m.blockId, durationMs: m.duration * 1000, elapsedMs: m.elapsed * 1000, cells };
 	}
 
 	/**

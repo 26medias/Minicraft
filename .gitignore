@@ -154,3 +154,7 @@ smoke-out/
 
 # Kid's world backups — never commit these
 backup/
+
+# Local bots: per-target/world state, logs, the live acknowledgement, and the live token
+bots/.state/
+bots/.env.live

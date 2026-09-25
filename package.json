@@ -23,7 +23,10 @@
 		"smoke:crafting": "tsx scripts/crafting-smoke.ts",
 		"smoke:menu": "tsx scripts/menu-smoke.ts",
 		"e2e:mp": "tsx scripts/mp-e2e.ts",
-		"format": "prettier --write ."
+		"format": "prettier --write .",
+		"bots:install": "npm run build:bot && npm --prefix bots install",
+		"bots:test": "npm run build:bot && npm --prefix bots test",
+		"bots:e2e": "npm run build:bot && npm --prefix bots run e2e"
 	},
 	"dependencies": {
 		"alea": "^1.0.1",

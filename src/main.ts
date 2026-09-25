@@ -49,6 +49,7 @@ import { resolveHotbar } from './game/hotbar';
 import { playerSave, resolvePlayerExtras } from './game/player-extras';
 import { shouldHandleKey, buildKeyToAction, sneakKeyChange } from './game/input-gate';
 import { isMultiBlock, nextOwnedTier } from './game/tools';
+import { isHandEdit } from './game/hand-edit';
 import type { MenuAction } from './ui/menu';
 import { clampDuration } from './game/session-policy';
 import { beginSolo, boot, clearAutojoin, failRejoin, setAutojoin, type AutojoinArgs } from './game/boot';
@@ -880,6 +881,8 @@ async function main() {
 				if (import.meta.env.DEV && m.t !== 'tick') debugLog.push(m);
 				switch (m.t) {
 					case 'edit':
+						// A friend's place or break swings their arm (spec §7); water flow, drains and explosions don't.
+						if (m.by !== you && isHandEdit(m.ops, loadedBlock)) remote.swing(m.by, performance.now());
 						sync.onEdit(m, you);
 						break;
 					case 'tick': {
@@ -916,12 +919,12 @@ async function main() {
 				if (playtime && !loop.mpDisconnected && !loop.frozenByTimer && document.visibilityState === 'visible') {
 					ui.countdown(Math.ceil(playtime.remainingAt(Date.now()) / 1000));
 				}
-				remote.update(now, renderer.camera);
-				minimap.update(now, world, player, cam.yaw, remote.positions());
 				const keep = new Set<string>(['local']);
+				const miners = new Set<number>();
 				for (const a of remoteMining.active(now, loadedBlock)) {
 					const key = `p:${a.by}`;
 					keep.add(key);
+					miners.add(a.by);
 					cracks.setGroup(key, a.cells, a.stage);
 					// A few chips fly off while a friend mines, like hits on the block.
 					if (now - (lastPuff.get(a.by) ?? -Infinity) >= PUFF_EVERY_MS) {
@@ -930,6 +933,8 @@ async function main() {
 					}
 				}
 				cracks.retain(keep);
+				remote.update(now, renderer.camera, miners);
+				minimap.update(now, world, player, cam.yaw, remote.positions());
 				if (now - lastPosAt < POS_EVERY_MS) return;
 				const [x, y, z] = player.position;
 				const key = `${x.toFixed(2)},${y.toFixed(2)},${z.toFixed(2)},${cam.yaw.toFixed(3)},${cam.pitch.toFixed(3)}`;
@@ -982,7 +987,7 @@ async function main() {
 			// `worldHash` and `refReplay` are the two-client suite's oracles (plan I2, scripts/mp-e2e.ts).
 			(window as unknown as { __mc: unknown }).__mc = {
 				world, player, loop, apiUrl, cam, highlight, mustMine, syncHotbar, keys,
-				playtime, mp: mpDebug, cracks,
+				playtime, mp: mpDebug, cracks, camera: renderer.camera,
 				worldHash: (chunks: Array<[number, number]>) => worldHash(world, chunks),
 				refReplay: (actions: RefAction[], o: Omit<RefReplayOpts, 'seed' | 'height' | 'gen'>) =>
 					refReplay(actions, { ...o, seed: world.seed, height: world.height, gen: world.genVersion }),

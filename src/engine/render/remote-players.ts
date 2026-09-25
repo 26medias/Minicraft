@@ -1,17 +1,19 @@
 import * as THREE from 'three';
 import { PoseBuffer, type Pose } from '../../game/pose-buffer';
 import { skinColor } from '../../data/skins.data';
+import { SkinTextures } from './skin-textures';
+import { RigResources, buildRig, setRigSkin, applyJoints, type Rig } from './player-rig';
+import { newAnimState, step, joints, triggerSwing, type AnimState } from './player-anim';
 
 /**
- * Remote player avatars (spec §7.3): one group per player, a 0.6 × 1.8 × 0.6
- * box in the skin colour with a darker front face showing yaw, and a name
- * label that shows through hills and never shrinks below LABEL_MIN_PX on
- * screen. No collisions: this is render-only.
+ * Remote player avatars (spec docs/superpowers/specs/2026-09-24-player-skins-design.md): one group
+ * per player — a skinned Minecraft rig that turns with yaw, tilts its head with pitch, walks, idles
+ * and swings — and a name label that shows through hills and never shrinks below LABEL_MIN_PX.
+ * No collisions: render-only. Skin textures, geometry and materials are shared, never disposed here.
  */
 
 export const LABEL_MIN_PX = 20;
 
-const BOX_W = 0.6;
 const BOX_H = 1.8;
 /** The label's natural world height, and its centre above the feet. */
 const LABEL_H = 0.35;
@@ -20,14 +22,14 @@ const FONT_PX = 32;
 const PAD_X = 12;
 const BORDER = 4;
 const CANVAS_H = FONT_PX + 2 * (BORDER + 6);
-/** How much darker the front face is. */
-const FRONT_SHADE = 0.55;
 
 type LabelCanvas = HTMLCanvasElement | OffscreenCanvas;
 
 export type RemotePlayersOptions = {
 	/** Canvas factory for the name label; defaults to `document.createElement('canvas')` when there is a DOM. */
 	createCanvas?: () => LabelCanvas | null;
+	/** Shared skin textures; defaults to a fresh (browser-loading) SkinTextures. */
+	textures?: SkinTextures;
 };
 
 type Avatar = {
@@ -35,8 +37,8 @@ type Avatar = {
 	name: string;
 	skin: string;
 	group: THREE.Group;
-	box: THREE.Mesh;
-	boxMats: THREE.MeshBasicMaterial[];
+	rig: Rig;
+	anim: AnimState;
 	label: THREE.Sprite;
 	/** Label world size at its natural scale. */
 	labelW: number;
@@ -49,14 +51,18 @@ function defaultCanvas(): LabelCanvas | null {
 	return document.createElement('canvas');
 }
 
+const NO_MINERS: ReadonlySet<number> = new Set();
+
 export class RemotePlayers {
 	private avatars = new Map<number, Avatar>();
 	private viewportHeight: number;
 	private readonly createCanvas: () => LabelCanvas | null;
+	private readonly res: RigResources;
 	private readonly tmp = new THREE.Vector3();
 
 	constructor(private readonly scene: THREE.Scene, opts: RemotePlayersOptions = {}) {
 		this.createCanvas = opts.createCanvas ?? defaultCanvas;
+		this.res = new RigResources(opts.textures ?? new SkinTextures());
 		this.viewportHeight = typeof window !== 'undefined' ? window.innerHeight : 800;
 	}
 
@@ -70,7 +76,7 @@ export class RemotePlayers {
 		const existing = this.avatars.get(id);
 		if (existing) {
 			if (existing.name === name && existing.skin === skin) return;
-			if (existing.skin !== skin) this.colourBox(existing.boxMats, skin);
+			if (existing.skin !== skin) setRigSkin(existing.rig, this.res, skin);
 			existing.name = name;
 			existing.skin = skin;
 			this.replaceLabel(existing);
@@ -79,13 +85,10 @@ export class RemotePlayers {
 		const group = new THREE.Group();
 		group.name = `remote-player-${id}`;
 		group.visible = false;
-		const boxMats = Array.from({ length: 6 }, () => new THREE.MeshBasicMaterial());
-		this.colourBox(boxMats, skin);
-		const box = new THREE.Mesh(new THREE.BoxGeometry(BOX_W, BOX_H, BOX_W), boxMats);
-		box.position.y = BOX_H / 2;
-		group.add(box);
+		const rig = buildRig(this.res, skin);
+		group.add(rig.root);
 		const a: Avatar = {
-			id, name, skin, group, box, boxMats,
+			id, name, skin, group, rig, anim: newAnimState(Math.random() * 10),
 			label: new THREE.Sprite(), labelW: LABEL_H,
 			buffer: new PoseBuffer(), pose: null,
 		};
@@ -100,8 +103,6 @@ export class RemotePlayers {
 		if (!a) return;
 		this.avatars.delete(id);
 		this.scene.remove(a.group);
-		a.box.geometry.dispose();
-		for (const m of a.boxMats) m.dispose();
 		this.disposeLabel(a.label);
 	}
 
@@ -110,8 +111,8 @@ export class RemotePlayers {
 		this.avatars.get(id)?.buffer.push(t, pose);
 	}
 
-	/** Moves every avatar to its interpolated pose and keeps each label at least LABEL_MIN_PX tall. */
-	update(now: number, camera: THREE.Camera): void {
+	/** Moves every avatar to its interpolated pose, animates it and keeps each label at least LABEL_MIN_PX tall. */
+	update(now: number, camera: THREE.Camera, miners: ReadonlySet<number> = NO_MINERS): void {
 		for (const a of this.avatars.values()) {
 			const p = a.buffer.sample(now);
 			a.pose = p;
@@ -122,8 +123,17 @@ export class RemotePlayers {
 			a.group.visible = true;
 			a.group.position.set(p.x, p.y, p.z);
 			a.group.rotation.set(0, p.yaw, 0);
+			const inp = { now, x: p.x, z: p.z, pitch: Math.max(-Math.PI / 2, Math.min(Math.PI / 2, p.pitch)), mining: miners.has(a.id) };
+			step(a.anim, inp);
+			applyJoints(a.rig, joints(a.anim, inp));
 			this.scaleLabel(a, camera);
 		}
+	}
+
+	/** A friend placed or broke a block: one arm swing. */
+	swing(id: number, now: number): void {
+		const a = this.avatars.get(id);
+		if (a) triggerSwing(a.anim, now);
 	}
 
 	positions(): Array<{ id: number; name: string; skin: string; x: number; y: number; z: number }> {
@@ -133,13 +143,6 @@ export class RemotePlayers {
 			out.push({ id: a.id, name: a.name, skin: a.skin, x: a.pose.x, y: a.pose.y, z: a.pose.z });
 		}
 		return out;
-	}
-
-	private colourBox(mats: THREE.MeshBasicMaterial[], skin: string): void {
-		const c = new THREE.Color(skinColor(skin));
-		// Face order: +x, −x, +y, −y, +z, −z. The front is −z, the camera's forward at yaw 0.
-		for (let i = 0; i < 6; i++) mats[i].color.copy(c);
-		mats[5].color.multiplyScalar(FRONT_SHADE);
 	}
 
 	private buildLabel(a: Avatar): void {

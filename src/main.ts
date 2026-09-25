@@ -695,6 +695,19 @@ async function main() {
 			};
 			autosave = soloSave;
 		}
+		// DEV oracle (cheat codes spec §11 test 9): count calls into the real AutoSave/MpSync
+		// markDirty. Every caller goes through `autosave`, so the wrapper sees them all.
+		let markDirtyCalls = 0;
+		if (import.meta.env.DEV) {
+			const inner = autosave;
+			autosave = {
+				markDirty: () => {
+					markDirtyCalls++;
+					inner.markDirty();
+				},
+				flush: () => inner.flush(),
+			};
+		}
 
 		const particles = new ParticleSystem(renderer.scene, renderer.material, atlas);
 		const overlay = new PrimedOverlay(renderer.scene);
@@ -1025,6 +1038,7 @@ async function main() {
 			(window as unknown as { __mc: unknown }).__mc = {
 				world, player, loop, apiUrl, cam, highlight, mustMine, syncHotbar, keys,
 				playtime, mp: mpDebug, cracks, camera: renderer.camera,
+				markDirtyCalls: () => markDirtyCalls,
 				worldHash: (chunks: Array<[number, number]>) => worldHash(world, chunks),
 				refReplay: (actions: RefAction[], o: Omit<RefReplayOpts, 'seed' | 'height' | 'gen'>) =>
 					refReplay(actions, { ...o, seed: world.seed, height: world.height, gen: world.genVersion }),

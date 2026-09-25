@@ -324,6 +324,28 @@ describe('the loop', () => {
 		await run.handle.stop();
 	});
 
+	it('the follow floor (Task 7 R3): a brain that always says watch (0.9) still follows a kid walking away at 3 b/s, 3 blocks off', async () => {
+		const world = new FakeWorld();
+		platform(world);
+		const body = new FakeBody();
+		body.current = { x: 100.5, y: FLOOR, z: 100.5, yaw: 0, pitch: 0 };
+		body.walkImpl = () => new Promise(() => undefined);
+		const brain = fakeBrain(() => answer('watch', { watch: 0.9 }));
+		// Tick 0: 3 away and still (one pose sample: speed 0) — the near band, so the brain is asked.
+		body.list = [kidAt(103.5, FLOOR, 100.5)];
+		const run = start(body, world, { brain });
+		await advance(0);
+		expect(run.log.decisions[0]).toMatchObject({ action: 'watch', reason: 'brain' });
+		expect(brain.asks).toHaveLength(1);
+		// Tick 1: 1.5 further in 0.5 s (3 b/s) — 4.5 away, still inside followDist + 3 = 5, so only
+		// the moving condition can fire the floor.
+		body.list = [kidAt(105, FLOOR, 100.5)];
+		await advance(500);
+		expect(run.log.decisions[1]).toMatchObject({ action: 'follow', reason: 'rule:follow-floor', brain: 'rule' });
+		expect(brain.asks).toHaveLength(1);
+		await run.handle.stop();
+	});
+
 	it('the follow floor (Fix round 1): at 4 away and still (the near band), the brain\'s watch is used', async () => {
 		const world = new FakeWorld();
 		platform(world);

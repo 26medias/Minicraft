@@ -441,6 +441,7 @@ async function runLeg(server: McServer, mode: Mode, brain: Brain | null, runDir:
 	await sleep(4000);
 
 	// 4. Turned away BEFORE the first placement, never facing the cells; N outside every buffer.
+	const t4 = Date.now();
 	const n4 = L(site, 0, -2, g);
 	const away = Lp(site, -20, 10, g + 30);
 	kid.lookAt(away.x, away.y, away.z);
@@ -478,14 +479,15 @@ async function runLeg(server: McServer, mode: Mode, brain: Brain | null, runDir:
 	const hopsBefore = handle?.stats.hops ?? 0;
 	const tCourse = Date.now();
 	phase = 'course-walk';
-	await kid.walkTo(Lp(site, 1, -2, g));
-	await kid.walkTo(Lp(site, 7, -2, g));
-	await kid.walkTo(Lp(site, 10, -2, g));
+	const courseWalks: string[] = [];
+	courseWalks.push(await kid.walkTo(Lp(site, 1, -2, g)));
+	courseWalks.push(await kid.walkTo(Lp(site, 7, -2, g)));
+	courseWalks.push(await kid.walkTo(Lp(site, 10, -2, g)));
 	phase = 'course-fly';
 	const over = Lp(site, 14, -2, g);
 	await kid.flyTo({ x: over.x, y: g, z: over.z }).catch((e: Error) => info(`kid flyTo: ${e.message}`));
 	phase = 'course-walk';
-	await kid.walkTo(Lp(site, 24, -2, g));
+	courseWalks.push(await kid.walkTo(Lp(site, 24, -2, g)));
 	const tCourseEnd = Date.now();
 	const hopsCourse = (handle?.stats.hops ?? 0) - hopsBefore;
 
@@ -540,6 +542,10 @@ async function runLeg(server: McServer, mode: Mode, brain: Brain | null, runDir:
 	/** Asserted in the companion leg; reported (not asserted) in the Laya leg. */
 	const must = (ok: boolean, what: string) => (mode === 'companion' ? check(ok, what) : info(`${ok ? '(holds)' : '(does not hold)'} ${what}`));
 	if (mode === 'idle') {
+		const seen = [...stand, ...walk].filter((s) => s.bot !== null);
+		const ds = seen.map((s) => dist3(s.kid, s.bot!));
+		check(seen.length === stand.length + walk.length && seen.length > 0, `idle baseline: the kid saw the idle bot in ${seen.length}/${stand.length + walk.length} samples (all non-null)`);
+		info(`idle baseline distances: min ${Math.min(...ds).toFixed(1)}, max ${Math.max(...ds).toFixed(1)}`);
 		check(!aOk, `idle baseline FAILS (a): ${aText}`);
 		return;
 	}
@@ -553,8 +559,9 @@ async function runLeg(server: McServer, mode: Mode, brain: Brain | null, runDir:
 	const n2Placed = botEdits.some((e) => sameCell(e.cell, n3b));
 	check(bad.length === 0 && !n2Placed, `(c) no bot edit in any kid's buffer or body box (${bad.length} of ${botEdits.length}${bad.length ? `: ${bad.map((e) => cellStr(e.cell)).join(' ')}` : ''}); N2 ${cellStr(n3b)} placed: ${n2Placed}`);
 
-	const c2 = botEdits.filter((e) => sameCell(e.cell, n4));
-	check(c2.length === 0, `(c2) no bot block from step 4's turned-away line (N ${cellStr(n4)}): ${c2.length}`);
+	// Any bot edit from the start of step 4 until the kid's break in step 5, not only at N.
+	const c2 = botEdits.filter((e) => e.t >= t4 && e.t < t5);
+	check(c2.length === 0, `(c2) no bot edit between step 4 (turned-away line, N ${cellStr(n4)}) and step 5: ${c2.length}${c2.length ? `: ${c2.map((e) => cellStr(e.cell)).join(' ')}` : ''}`);
 
 	const after5 = botEdits.filter((e) => e.t >= t5);
 	check(botBlock !== null && after5.length === 0, `(d) no bot edit after step 5 (${after5.length}${after5.length ? `: ${after5.map((e) => cellStr(e.cell)).join(' ')}` : ''})`);
@@ -580,24 +587,29 @@ async function runLeg(server: McServer, mode: Mode, brain: Brain | null, runDir:
 	);
 
 	// The rotation.
-	const rotOk = rotationMs !== null && rotationMs <= TUNING.idleSwitchMs + 2000;
-	must(rotOk, `rotation: switched to Kid2 ${rotationMs === null ? 'never' : `${(rotationMs / 1000).toFixed(1)} s`} after Kid went idle (≤ ${(TUNING.idleSwitchMs + 2000) / 1000} s); logged: ${events.filter((e) => e.event === 'target').map((e) => `${e.from}→${e.to}`).join(', ')}`);
+	const rotOk = rotationMs !== null && rotationMs >= TUNING.idleSwitchMs - 1000 && rotationMs <= TUNING.idleSwitchMs + 2000;
+	must(rotOk, `rotation: switched to Kid2 ${rotationMs === null ? 'never' : `${(rotationMs / 1000).toFixed(1)} s`} after Kid went idle (${(TUNING.idleSwitchMs - 1000) / 1000}–${(TUNING.idleSwitchMs + 2000) / 1000} s); logged: ${events.filter((e) => e.event === 'target').map((e) => `${e.from}→${e.to}`).join(', ')}`);
 
-	// The staircase/wall stretch.
+	// The staircase/wall stretch (ruling R1). A single sample compares the kid's LOCAL pose with the
+	// bot's pose as RELAYED by the server (≤ 100 ms send interval + relay ≈ 0.4 of extra lag at
+	// walking speed), so the max of single samples flakes around any tight bound (measured 5.2–6.0
+	// walking, up to 6.4 flying on unmodified code). Instead: ≥ 95% of samples within followDist + 4
+	// horizontally, walking and flying alike, and a hard 3D maximum of 8 (the kids' snap threshold).
 	const course = samples.filter((s) => s.t >= tCourse && s.t <= tCourseEnd && s.bot !== null);
-	let maxD = 0, maxFlyD = 0, maxJump = 0;
+	const courseTotal = samples.filter((s) => s.t >= tCourse && s.t <= tCourseEnd).length;
+	const hIn = course.filter((s) => Math.hypot(s.kid.x - s.bot!.x, s.kid.z - s.bot!.z) <= FD + 4).length;
+	let max3 = 0, maxJump = 0, kidMaxY = -Infinity;
 	for (let i = 0; i < course.length; i++) {
-		const d = dist3(course[i].kid, course[i].bot!);
-		if (course[i].phase === 'course-fly') maxFlyD = Math.max(maxFlyD, d);
-		else maxD = Math.max(maxD, d);
+		max3 = Math.max(max3, dist3(course[i].kid, course[i].bot!));
+		kidMaxY = Math.max(kidMaxY, course[i].kid.y);
 		if (i > 0) maxJump = Math.max(maxJump, dist3(course[i].bot!, course[i - 1].bot!));
 	}
-	// Walking: followDist + 4 (plan); while the kid flies: followDist + 5 (controller ruling, flying kid).
-	const courseOk = maxD <= FD + 4 && maxFlyD <= FD + 5 && maxJump <= 8 && hopsCourse === 0;
+	const courseOk = course.length === courseTotal && course.length > 0 && hIn / course.length >= 0.95 && max3 <= 8 && maxJump <= 8 && hopsCourse === 0;
 	must(
 		courseOk,
-		`stairs/wall: max distance walking ${maxD.toFixed(2)}, (≤ followDist+4 = ${FD + 4}), flying ${maxFlyD.toFixed(2)} (≤ followDist+5 = ${FD + 5}); max pose jump ${maxJump.toFixed(2)} (≤ 8); hops ${hopsCourse} (session ${hopsTotal}); ${((tCourseEnd - tCourse) / 1000).toFixed(1)} s`,
+		`stairs/wall: ${hIn}/${course.length} = ${pct(hIn, course.length)} within followDist+4 = ${FD + 4} horizontally (≥ 95%); max 3D distance ${max3.toFixed(2)} (≤ 8); max pose jump ${maxJump.toFixed(2)} (≤ 8); hops ${hopsCourse} (session ${hopsTotal}); ${((tCourseEnd - tCourse) / 1000).toFixed(1)} s`,
 	);
+	check(courseWalks.every((w) => w === 'walked') && kidMaxY >= g + 4, `the course was really walked: walkTo results ${courseWalks.join(',')}; the kid's max y ${kidMaxY.toFixed(2)} (≥ g+4 = ${g + 4})`);
 	info(`bot edits seen by the kid: ${botEdits.map((e) => `${cellStr(e.cell)}#${e.id}@${((e.t - tArrive) / 1000).toFixed(1)}s`).join(' ') || 'none'}; leg ${((tEnd - tStart) / 1000).toFixed(0)} s; log ${logPath}`);
 
 	if (mode === 'laya') {
@@ -607,6 +619,10 @@ async function runLeg(server: McServer, mode: Mode, brain: Brain | null, runDir:
 		const byReason: Record<string, number> = {};
 		for (const d of decisions) byReason[d.reason] = (byReason[d.reason] ?? 0) + 1;
 		check(noRule.length > 0 && answered.length / noRule.length >= 0.8, `laya: ${answered.length}/${noRule.length} = ${pct(answered.length, noRule.length)} of the kid-present, no-rule ticks have a brain answer (≥ 80%); reasons ${JSON.stringify(byReason)}`);
+		// Ruling R2: a logged count, not an assertion. With help_build taken by rule and follow taken
+		// by the follow floor whenever the kid is far, high or moving, the brain only decides for a
+		// still, near kid, where the script offers watch/idle (and follow only at 3–5 blocks): too few
+		// ticks where a "non-default" choice is even possible to assert one exists.
 		const nonDefault = answered.filter((d) => d.reason === 'brain' && d.action !== (d.candidates.includes('follow') ? 'follow' : 'watch'));
 		const actions: Record<string, number> = {};
 		for (const d of answered) actions[d.action] = (actions[d.action] ?? 0) + 1;
@@ -738,7 +754,12 @@ async function main(): Promise<void> {
 		}
 		if (want('cli')) await leg('cli', 'the real CLI: SIGINT exit and --revert-on-exit', cliLeg);
 	} finally {
-		await server?.stop();
+		try {
+			await server?.stop();
+		} catch (e) {
+			console.error(`FAIL server stop: ${(e as Error).message}`);
+			results.push({ id: 'server-stop', ok: false, notes: [(e as Error).message] });
+		}
 		removeBuild();
 		if (results.every((r) => r.ok) && !process.env.BOTS_E2E_KEEP) rmSync(runDir, { recursive: true, force: true });
 		else console.log(`logs kept in ${runDir}`);

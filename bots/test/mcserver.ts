@@ -128,11 +128,19 @@ async function startOn(bin: string, port: number): Promise<McServer> {
 			if (r.status !== 200 && r.status !== 201) throw new Error(`createWorld ${name}: HTTP ${r.status}`);
 			return ((await r.json()) as { uuid: string }).uuid;
 		},
+		/** SIGTERM to our PID; throws (after SIGKILL to OUR child only) if it has not exited 15 s later. */
 		async stop() {
 			if (child.exitCode === null && child.signalCode === null) {
-				const exited = new Promise<void>((r) => child.once('exit', () => r()));
+				const exited = new Promise<boolean>((r) => child.once('exit', () => r(true)));
 				process.kill(pid, 'SIGTERM');
-				await Promise.race([exited, sleep(15_000)]);
+				const clean = await Promise.race([exited, sleep(15_000).then(() => false)]);
+				if (!clean) {
+					console.error(`\n!!! mcserver pid ${pid} (port ${port}) did not exit 15 s after SIGTERM; sending SIGKILL to that pid (ours) !!!\n`);
+					child.kill('SIGKILL');
+					await Promise.race([exited, sleep(5000)]);
+					cleanupDb();
+					throw new Error(`mcserver pid ${pid} ignored SIGTERM for 15 s (killed with SIGKILL)`);
+				}
 			}
 			cleanupDb();
 		},

@@ -17,6 +17,7 @@ import { scriptedDecide } from '../brain/scripted.js';
 import type { CompanionTuning } from '../config.js';
 import type { Body, WorldView } from '../port.js';
 import type { Candidate, Snapshot } from '../types.js';
+import { MOVING_SPEED_THRESHOLD } from '../types.js';
 import { createFollowState, followTick, landTick, observeKid, stopMoving, watchPoint } from '../body/act.js';
 import type { FollowState } from '../body/act.js';
 import { markLineUsed, planCandidates, VERTICAL_FOLLOW } from '../body/candidates.js';
@@ -126,10 +127,10 @@ export function question(s: Snapshot, plan: CandidatePlan): Choice {
 }
 
 /**
- * Fix round 1: true when the target kid is far enough (or steep enough) that `follow` must win
+ * Fix round 1: true when the target kid is far enough (or steep enough, or — Task 7 R3 — moving) that `follow` must win
  * outright, without asking the brain — the loop's own safety floor under whatever the real brain
- * says. Requires `follow` to actually be offered (spec §6/§12b's own condition for that is a
- * strict subset of this one, so in practice it always is whenever this is true, but the check stays
+ * says. Requires `follow` to actually be offered (every condition here implies candidates.ts's own
+ * offer condition for it, so in practice it always is whenever this is true, but the check stays
  * explicit and defensive). Pure: reads only `s` and `offered`.
  */
 export function followFloorTriggers(s: Snapshot, offered: readonly Candidate[]): boolean {
@@ -138,7 +139,11 @@ export function followFloorTriggers(s: Snapshot, offered: readonly Candidate[]):
 	const bot = s.bot.pose;
 	const horizontal = Math.hypot(kid.pose.x - bot.x, kid.pose.z - bot.z);
 	const vertical = Math.abs(kid.pose.y - bot.y);
-	return horizontal > s.followDist + FOLLOW_FLOOR_MARGIN || vertical > VERTICAL_FOLLOW;
+	// Task 7 fix round 1 (ruling R3): a kid who is walking (the same 0.3 s speed signal perception
+	// and candidates use for "moving") is followed outright too — measured live, Laya answered
+	// `watch` while the kid walked off and the bot trailed to 6.5 blocks. The brain now decides only
+	// for a still, near kid.
+	return horizontal > s.followDist + FOLLOW_FLOOR_MARGIN || vertical > VERTICAL_FOLLOW || kid.speedLast0_3s >= MOVING_SPEED_THRESHOLD;
 }
 
 /** max(p) over the offered options (a missing option counts as 0). Never the brain's own field. */

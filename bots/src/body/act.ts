@@ -22,8 +22,12 @@
  *   > `followDist + 1` away horizontally, and he is flying at > 1 b/s or 3 walks were blocked. The cell
  *   is dry, outside every kid's buffer, and closer to the kid horizontally. With no cell, the bot watches.
  *
- * **Stop:** following holds still when the kid is within `followDist + 1` (3D) and his speed over the
- * last 0.3 s is < 0.5 b/s, so the bot never flies into a kid who stops.
+ * **Stop:** following holds still (looking at him) when the kid is within `followDist + 1` (3D), at the
+ * bot's level (|dy| ≤ 1.5, ruling R-a), and his speed over the last 0.3 s is < 0.5 b/s, so the bot
+ * never flies into a kid who stops.
+ *
+ * The fly trigger is the kid **above** the bot (kid.y − bot.y > 1.5), not |dy|: a kid below is
+ * reached by walking down (walkTo steps down up to 2 per step) or by landing.
  */
 import { BlockedError, EYE_HEIGHT } from 'minicraft-bot';
 import type { Body, WorldView } from '../port.js';
@@ -263,10 +267,12 @@ export function followTick(f: FollowState, body: Body, world: WorldView, input: 
 	const reach = world.groundY(Math.floor(bot.x), Math.floor(bot.z), bot.y);
 	const botAirborne = reach === null || bot.y - reach > AIRBORNE_EPS;
 
-	// Stop: close and the kid is still over the last 0.3 s (never fly into a kid who stops).
-	const settled = dist3(kid.pose, bot) <= followDist + 1 && kid.speedLast0_3s < MOVING_SPEED_THRESHOLD;
+	// Stop: close, at his level, and still over the last 0.3 s (never fly into a kid who stops). The
+	// §12b vertical trigger wins (ruling R-a): with |dy| > 1.5 the bot goes up or down beside him.
+	const settled = Math.abs(kid.pose.y - bot.y) <= VERTICAL_FOLLOW && dist3(kid.pose, bot) <= followDist + 1 && kid.speedLast0_3s < MOVING_SPEED_THRESHOLD;
 	if (settled && !(botAirborne && kidGroundedLong)) {
 		if (f.move.inFlight) stopMoving(f, body);
+		body.lookAt(kid.pose.x, kid.pose.y + EYE_HEIGHT, kid.pose.z);
 		return 'settled';
 	}
 

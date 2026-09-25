@@ -254,6 +254,12 @@ export function runCompanion(deps: CompanionDeps): CompanionHandle {
 			log.event('help_build-recheck', { cell: n, why: 'kid' });
 			return 'recheck-failed: N is next to a kid';
 		}
+		// A stop that started during the ask (the kid broke a bot block) cancels the place.
+		const target = lastSnapshot?.target?.name ?? null;
+		if (target !== null && stop.activeFor(target, clock())) {
+			log.event('help_build-recheck', { cell: n, why: 'stop' });
+			return 'recheck-failed: stop signal';
+		}
 		body.lookAt(n.x + 0.5, n.y + 0.5, n.z + 0.5);
 		const placed = body.place(n.x, n.y, n.z, hb.block);
 		guard.lastEditMs = now;
@@ -313,9 +319,9 @@ export function runCompanion(deps: CompanionDeps): CompanionHandle {
 			decidedBy = 'scripted';
 		} else if (stats.scriptedSession) {
 			action = scriptedDecide(snapshot, offered).best as Candidate;
+			// Ruling R-c: the count stops here; the status line shows SCRIPTED-FALLBACK instead.
 			reason = 'fallback:session';
 			decidedBy = 'scripted';
-			stats.fallbacks++;
 		} else {
 			const t0 = clock();
 			try {

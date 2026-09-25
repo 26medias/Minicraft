@@ -1,16 +1,20 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { BlockedError, EYE_HEIGHT, FLY_SPEED, WALK_SPEED } from 'minicraft-bot';
 import type { BotPlayer, PoseInput, WalkResult } from 'minicraft-bot';
-import { hopCell } from '../src/body/act.js';
+import { hopCell, watchPoint } from '../src/body/act.js';
 import { columnKey, kidBuffer } from '../src/body/guard.js';
 import { DECISION_KEYS, jsonlLogger } from '../src/body/log.js';
 import type { DecisionEntry, Logger } from '../src/body/log.js';
 import type { Answer, Brain, Choice } from '../src/brain/brain.js';
 import { runCompanion } from '../src/bots/companion.js';
 import type { CompanionHandle } from '../src/bots/companion.js';
-import { brainRefusal, parseCommand } from '../src/cli.js';
+import { mkdtempSync, rmSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
+import type { BotClient, BotClientOptions } from 'minicraft-bot';
+import { brainRefusal, main, parseCommand, shutdown } from '../src/cli.js';
 import type { CompanionTuning } from '../src/config.js';
-import type { Vec3 } from '../src/types.js';
+import type { KidInfo, Vec3 } from '../src/types.js';
 import { AIR, FakeBody, FakeWorld, id, player } from './fake-port.js';
 
 /**
@@ -251,8 +255,49 @@ describe('the loop', () => {
 		const line = run.handle.statusLine();
 		expect(line).toContain('SCRIPTED-FALLBACK');
 		expect(line).toContain(`fallbacks ${run.handle.stats.fallbacks}`);
+		// Ruling R-c: once scripted for the session, the fallback count stops at the 5 real failures.
+		expect(run.log.decisions.length).toBeGreaterThan(8);
+		expect(run.handle.stats.fallbacks).toBe(5);
+		expect(line).toContain('fallbacks 5');
 		await run.handle.stop();
 	});
+
+	it('only failures IN A ROW switch to scripted: 4 timeouts, 1 answer, 4 timeouts → still asking the brain', async () => {
+		const world = new FakeWorld();
+		platform(world);
+		const body = new FakeBody();
+		body.current = { x: 100.5, y: FLOOR, z: 100.5, yaw: 0, pitch: 0 };
+		body.walkImpl = () => new Promise(() => undefined);
+		body.list = [kidAt(110.5, FLOOR, 100.5)];
+		let n = 0;
+		const brain = fakeBrain(() => (++n === 5 ? answer('watch', { watch: 1 }) : new Promise<Answer>(() => undefined)));
+		const run = start(body, world, { brain, brainTimeoutMs: 400 });
+		// Ask k (from 0) starts at 500·k; the 9th (k = 8) times out at 4400, the 10th starts at 4500.
+		await advance(4450);
+		expect(brain.asks).toHaveLength(9);
+		expect(run.log.decisions.map((d) => d.reason)).toEqual([...Array(4).fill('fallback:timeout'), 'brain', ...Array(4).fill('fallback:timeout')]);
+		expect(run.handle.stats.scriptedSession).toBe(false);
+		await run.handle.stop();
+	});
+
+	for (const [p, reason, action] of [
+		[0.4, 'brain', 'watch'],
+		[0.39, 'low-confidence', 'follow'],
+	] as const) {
+		it(`confidence boundary: max(p) = ${p} → ${reason}`, async () => {
+			const world = new FakeWorld();
+			platform(world);
+			const body = new FakeBody();
+			body.current = { x: 100.5, y: FLOOR, z: 100.5, yaw: 0, pitch: 0 };
+			body.walkImpl = () => new Promise(() => undefined);
+			body.list = [kidAt(110.5, FLOOR, 100.5)];
+			const brain = fakeBrain(() => answer('watch', { watch: p, follow: 0.3 }, 1));
+			const run = start(body, world, { brain });
+			await advance(0);
+			expect(run.log.decisions[0]).toMatchObject({ reason, action });
+			await run.handle.stop();
+		});
+	}
 
 	it('an answer outside the candidates is a fallback, not an action', async () => {
 		const world = new FakeWorld();
@@ -397,6 +442,71 @@ describe('follow: a standing intent', () => {
 	}
 });
 
+describe('follow: vertical and settled (ruling R-a)', () => {
+	it('the kid 2 above, 1 away horizontally, standing still → a flyTo beside him within one tick (not "settled")', async () => {
+		const world = new FakeWorld();
+		platform(world);
+		world.fill({ x: 101, y: FLOOR, z: 100 }, { x: 101, y: FLOOR + 1, z: 100 }, 'stone');
+		const body = new FakeBody();
+		body.current = { x: 100.5, y: FLOOR, z: 100.5, yaw: 0, pitch: 0 };
+		body.flyImpl = () => new Promise(() => undefined);
+		body.list = [kidAt(101.5, FLOOR + 2, 100.5)];
+		const run = start(body, world);
+		await advance(0);
+		expect(run.log.decisions[0].action).toBe('follow');
+		expect(run.log.decisions[0].result).not.toBe('settled');
+		const flights = calls(body, 'flyTo');
+		expect(flights).toHaveLength(1);
+		expect(Math.abs((flights[0].args[0] as Vec3).y - (FLOOR + 2))).toBeLessThanOrEqual(0.5);
+		await run.handle.stop();
+	});
+
+	it('settled (the bot got close while the brain thought) → no walk, and it looks at the kid', async () => {
+		const world = new FakeWorld();
+		platform(world);
+		const body = new FakeBody();
+		body.current = { x: 100.5, y: FLOOR, z: 100.5, yaw: 0, pitch: 0 };
+		body.walkImpl = () => new Promise(() => undefined);
+		const kid = kidAt(110.5, FLOOR, 100.5);
+		body.list = [kid];
+		// Its walk carried it to 2 from him during the ask.
+		const brain = fakeBrain(() => {
+			body.current = { ...body.current, x: 108.5 };
+			return answer('follow', { follow: 1 });
+		});
+		const run = start(body, world, { brain });
+		await advance(0);
+		expect(run.log.decisions[0]).toMatchObject({ action: 'follow', result: 'settled' });
+		expect(calls(body, 'walkTo')).toHaveLength(0);
+		expect(calls(body, 'lookAt').map((c) => c.args)).toContainEqual([kid.x, kid.y + EYE_HEIGHT, kid.z]);
+		await run.handle.stop();
+	});
+
+	it('the kid below the bot (on the ground 5 lower, 8 away) → it walks down, it does not fly', async () => {
+		const world = new FakeWorld();
+		platform(world);
+		world.fill({ x: 101, y: FLOOR, z: 90 }, { x: 115, y: FLOOR + 4, z: 110 }, 'stone');
+		const body = new FakeBody();
+		body.current = { x: 104.5, y: FLOOR + 5, z: 100.5, yaw: 0, pitch: 0 };
+		body.walkImpl = () => new Promise(() => undefined);
+		body.flyImpl = () => new Promise(() => undefined);
+		body.list = [kidAt(96.5, FLOOR, 100.5)];
+		const run = start(body, world);
+		await advance(0);
+		expect(run.log.decisions[0].action).toBe('follow');
+		expect(calls(body, 'walkTo')).toHaveLength(1);
+		expect(calls(body, 'flyTo')).toHaveLength(0);
+		await run.handle.stop();
+	});
+
+	it('watchPoint: the look target\'s centre when he is still, his eye when he moves', () => {
+		const k = { pose: { x: 1, y: 64, z: 2, yaw: 0, pitch: 0 }, lookTarget: { x: 3, y: 4, z: 5 }, speedLast0_3s: 0 } as KidInfo;
+		expect(watchPoint(k)).toEqual({ x: 3.5, y: 4.5, z: 5.5 });
+		expect(watchPoint({ ...k, speedLast0_3s: 2 })).toEqual({ x: 1, y: 64 + EYE_HEIGHT, z: 2 });
+		expect(watchPoint({ ...k, lookTarget: null })).toEqual({ x: 1, y: 64 + EYE_HEIGHT, z: 2 });
+	});
+});
+
 describe('follow modes (§12b)', () => {
 	it('walk → fly on BlockedError', async () => {
 		const world = new FakeWorld();
@@ -511,6 +621,48 @@ describe('follow modes (§12b)', () => {
 	});
 });
 
+describe('landing rules', () => {
+	const wet = (world: FakeWorld, x: number, y: number, z: number) => world.isLiquid(world.getBlock(x, y, z)) || world.isLiquid(world.getBlock(x, y + 1, z));
+
+	it('the kid landed beside water, the bot is over it → it never lands in liquid (flights succeed)', async () => {
+		const world = new FakeWorld();
+		platform(world);
+		world.fill({ x: 93, y: FLOOR, z: 90 }, { x: 115, y: FLOOR + 1, z: 110 }, 'water');
+		const body = new SimBody(world);
+		body.current = { x: 94.5, y: FLOOR + 4, z: 100.5, yaw: 0, pitch: 0 };
+		body.list = [kidAt(91.5, FLOOR, 100.5)];
+		const run = start(body, world);
+		for (let t = 0; t < 6000; t += 100) {
+			await advance(100);
+			const p = body.pose();
+			expect(wet(world, p.x, Math.floor(p.y), p.z)).toBe(false);
+		}
+		await run.handle.stop();
+		for (const f of calls(body, 'flyTo')) {
+			const t = f.args[0] as Vec3;
+			expect(wet(world, t.x, Math.floor(t.y), t.z)).toBe(false);
+		}
+	});
+
+	it('the kid on a ledge, the bot over the drop → it never lands more than 1.5 below him (flights succeed)', async () => {
+		const world = new FakeWorld();
+		platform(world);
+		world.fill({ x: 101, y: FLOOR, z: 90 }, { x: 115, y: FLOOR + 4, z: 110 }, 'stone');
+		const body = new SimBody(world);
+		const kidY = FLOOR + 5;
+		body.current = { x: 99.5, y: kidY, z: 100.5, yaw: 0, pitch: 0 };
+		body.list = [kidAt(102.5, kidY, 100.5)];
+		const run = start(body, world);
+		let minY = Infinity;
+		for (let t = 0; t < 6000; t += 100) {
+			await advance(100);
+			minY = Math.min(minY, body.pose().y);
+		}
+		await run.handle.stop();
+		expect(minY).toBeGreaterThanOrEqual(kidY - 1.5);
+	});
+});
+
 describe('hops: the last resort', () => {
 	/** A flying kid 20 away and 6 up, moving at 2 b/s; the bot on the platform. */
 	function flyingAway(body: FakeBody): void {
@@ -596,6 +748,55 @@ describe('hops: the last resort', () => {
 		expect(calls(body, 'flyTo').length).toBeGreaterThanOrEqual(2);
 	});
 
+	it('a hovering kid far away but slow (not > 1 b/s), flights blocked → 0 hops: the speed condition decides', async () => {
+		const world = new FakeWorld();
+		platform(world);
+		const body = new SimBody(world);
+		body.current = { x: 90.5, y: FLOOR, z: 100.5, yaw: 0, pitch: 0 };
+		body.walkImpl = blocked;
+		body.flyImpl = blocked;
+		body.list = [kidAt(110.5, FLOOR + 6, 100.5)];
+		const run = start(body, world);
+		for (let t = 0; t < 6000; t += 100) {
+			body.list = [{ ...body.list[0], z: body.list[0].z + 0.05 }];
+			await advance(100);
+		}
+		await run.handle.stop();
+		expect(run.log.decisions.some((d) => d.snapshot.target?.flying)).toBe(true);
+		expect(calls(body, 'flyTo').length).toBeGreaterThanOrEqual(2);
+		expect(body.hops).toHaveLength(0);
+	});
+
+	it('an unreachable grounded kid far away, walks blocked 3 times in a row (flights too) → a hop', async () => {
+		const world = new FakeWorld();
+		platform(world);
+		const body = new SimBody(world);
+		body.current = { x: 90.5, y: FLOOR, z: 100.5, yaw: 0, pitch: 0 };
+		body.walkImpl = blocked;
+		body.flyImpl = blocked;
+		body.list = [kidAt(110.5, FLOOR, 100.5)];
+		const run = start(body, world);
+		await advance(4000);
+		await run.handle.stop();
+		expect(run.log.decisions.every((d) => !d.snapshot.target?.flying)).toBe(true);
+		expect(body.hops.length).toBeGreaterThanOrEqual(1);
+		const h = body.hops[0];
+		expect(dist3(h.from, h.to)).toBeLessThanOrEqual(7.5);
+		expect(hdist(h.to, h.kids[0])).toBeLessThan(hdist(h.from, h.kids[0]));
+	});
+
+	it('hopCell measures the CENTRED final pose in 3D: a raised ledge within 7.5 horizontally is refused', () => {
+		const world = new FakeWorld();
+		platform(world);
+		// A plateau from x = 106 on, 5 high: its nearest cell centre is 6 away horizontally but
+		// √(6² + 5²) ≈ 7.8 in 3D (its corner would be ≈ 7.45).
+		world.fill({ x: 106, y: FLOOR, z: 90 }, { x: 115, y: FLOOR + 4, z: 110 }, 'stone');
+		const bot = { x: 100.5, y: FLOOR, z: 100.5 };
+		const kid = { x: 130.5, y: FLOOR + 5, z: 100.5 };
+		const cell = hopCell(world, bot, kid, [kid]);
+		expect(cell).toEqual({ x: 105.5, y: FLOOR, z: 100.5 });
+	});
+
 	it('a swimming kid: no walk, flight or hop ever ends in liquid', async () => {
 		const world = new FakeWorld();
 		platform(world);
@@ -655,7 +856,7 @@ describe('help_build', () => {
 		return kidAt(k.x, k.y, k.z, { yaw: Math.atan2(-dx, -dz), pitch: Math.atan2(dy, Math.hypot(dx, dz)) });
 	}
 
-	function setup(opts: { brain: Brain; noEdits?: boolean }) {
+	function setup(opts: { brain: Brain; noEdits?: boolean; tuning?: Partial<CompanionTuning> }) {
 		const world = new FakeWorld();
 		platform(world);
 		const body = new FakeBody();
@@ -663,7 +864,7 @@ describe('help_build', () => {
 		body.walkImpl = () => new Promise(() => undefined);
 		const kid = builder();
 		body.list = [kid];
-		const run = start(body, world, { brain: opts.brain, noEdits: opts.noEdits });
+		const run = start(body, world, { brain: opts.brain, noEdits: opts.noEdits, tuning: opts.tuning });
 		return { world, body, kid, run };
 	}
 
@@ -720,6 +921,91 @@ describe('help_build', () => {
 		expect(s.run.log.events.some((e) => e.kind === 'help_build-recheck')).toBe(true);
 		// The line was still valid after N cleared: only the spent line keeps it from being offered.
 		expect(world.getBlock(N.x, N.y, N.z)).toBe(AIR);
+	});
+
+	/** A second line, one higher: A2 104, B2 105, C2 106 at y FLOOR + 1 → N2 (107, FLOOR + 1, 100). */
+	const A2 = { x: 104, y: FLOOR + 1, z: 100 };
+	const B2 = { x: 105, y: FLOOR + 1, z: 100 };
+	const C2 = { x: 106, y: FLOOR + 1, z: 100 };
+
+	/** He turns to look at B2, then places A2, B2, C2 100 ms apart. */
+	async function placeLine2(world: FakeWorld, body: FakeBody): Promise<void> {
+		const k = body.list[0];
+		const dx = B2.x + 0.5 - k.x, dy = B2.y + 0.5 - (k.y + EYE_HEIGHT), dz = B2.z + 0.5 - k.z;
+		body.list = [{ ...k, yaw: Math.atan2(-dx, -dz), pitch: Math.atan2(dy, Math.hypot(dx, dz)) }];
+		for (const cell of [A2, B2, C2]) {
+			await advance(100);
+			body.kidEdit(world, body.list[0], cell, id(BLOCK));
+		}
+	}
+
+	it('the edit budget: two lines with editBudget 1 → exactly 1 place', async () => {
+		const brain = eager();
+		const { world, body, kid, run } = setup({ brain, tuning: { editBudget: 1, editEveryMs: 0 } });
+		await placeLine(world, body, kid);
+		await advance(2500);
+		expect(calls(body, 'place')).toHaveLength(1);
+		await placeLine2(world, body);
+		await advance(4000);
+		await run.handle.stop();
+		expect(calls(body, 'place')).toHaveLength(1);
+		expect(run.handle.statusLine()).toContain('edits 1/1');
+	});
+
+	it('the edit interval: a second line < editEveryMs after the first place is deferred until the interval has passed', async () => {
+		const brain = eager();
+		const { world, body, kid, run } = setup({ brain });
+		const times: number[] = [];
+		body.placeImpl = async () => {
+			times.push(Date.now());
+			return true;
+		};
+		await placeLine(world, body, kid);
+		for (let i = 0; i < 40 && times.length === 0; i++) await advance(100);
+		expect(times).toHaveLength(1);
+		await placeLine2(world, body);
+		await advance(4000);
+		await run.handle.stop();
+		expect(times).toHaveLength(2);
+		expect(times[1] - times[0]).toBeGreaterThanOrEqual(TUNING.editEveryMs);
+		expect(calls(body, 'place')[1].args).toEqual([107, FLOOR + 1, 100, BLOCK]);
+	});
+
+	it('a stop that starts during the ask (he breaks a bot block) → no place', async () => {
+		const ref: { s: ReturnType<typeof setup> | null } = { s: null };
+		let offers = 0;
+		const brain = eager(() => {
+			if (++offers !== 1) return;
+			const s = ref.s!;
+			const cell = { x: 120, y: FLOOR, z: 120 };
+			s.world.set(cell.x, cell.y, cell.z, 'stone');
+			s.body.entries = [{ ...cell, oldId: AIR, newId: id('stone'), t: Date.now() - 1000 }];
+			s.body.kidEdit(s.world, s.body.list[0], cell, AIR);
+		});
+		const s = (ref.s = setup({ brain }));
+		await placeLine(s.world, s.body, s.kid);
+		await advance(3500);
+		await s.run.handle.stop();
+		expect(offers).toBe(1);
+		expect(calls(s.body, 'place')).toHaveLength(0);
+		expect(s.run.log.decisions.find((d) => d.action === 'help_build')?.result).toBe('recheck-failed: stop signal');
+	});
+
+	it('the kid steps into N\'s buffer during the ask → no place', async () => {
+		const ref: { s: ReturnType<typeof setup> | null } = { s: null };
+		let offers = 0;
+		const brain = eager(() => {
+			if (++offers !== 1) return;
+			const s = ref.s!;
+			s.body.list = [{ ...s.body.list[0], x: 107.5, z: 101.5 }];
+		});
+		const s = (ref.s = setup({ brain }));
+		await placeLine(s.world, s.body, s.kid);
+		await advance(3500);
+		await s.run.handle.stop();
+		expect(offers).toBe(1);
+		expect(calls(s.body, 'place')).toHaveLength(0);
+		expect(s.run.log.decisions.find((d) => d.action === 'help_build')?.result).toBe('recheck-failed: N is next to a kid');
 	});
 
 	it('--no-edits → never place, and help_build is never offered', async () => {
@@ -807,6 +1093,77 @@ describe('cli helpers', () => {
 		expect(parseCommand(['companion', '--no-edits'])).toEqual({ command: 'companion', flags: ['--no-edits'] });
 		expect(parseCommand(['--target', 'local'])).toEqual({ command: 'companion', flags: ['--target', 'local'] });
 		expect(() => parseCommand(['dance'])).toThrow(/unknown bot/);
+	});
+
+	function fakeShutdown(opts: { revert?: () => Promise<number>; stop?: () => Promise<void> } = {}) {
+		const order: string[] = [];
+		const printed: string[] = [];
+		const handle = {
+			stop: async () => {
+				order.push('stop');
+				await opts.stop?.();
+			},
+		};
+		const client = {
+			revert: async () => {
+				order.push('revert');
+				return opts.revert ? opts.revert() : 3;
+			},
+			close: () => void order.push('close'),
+		};
+		return { order, printed, handle, client, print: (l: string) => void printed.push(l) };
+	}
+
+	it('shutdown: stop → revert → close with --revert-on-exit; stop → close without', async () => {
+		const a = fakeShutdown();
+		await shutdown({ ...a, revertOnExit: true });
+		expect(a.order).toEqual(['stop', 'revert', 'close']);
+		expect(a.printed).toContain('reverted 3 cells');
+		const b = fakeShutdown();
+		await shutdown({ ...b, revertOnExit: false });
+		expect(b.order).toEqual(['stop', 'close']);
+	});
+
+	it('shutdown: close still runs when revert rejects (reported) or stop throws', async () => {
+		const a = fakeShutdown({ revert: () => Promise.reject(new Error('socket gone')) });
+		await shutdown({ ...a, revertOnExit: true });
+		expect(a.order).toEqual(['stop', 'revert', 'close']);
+		expect(a.printed.some((l) => l.includes('revert failed: socket gone'))).toBe(true);
+		const b = fakeShutdown({ stop: () => Promise.reject(new Error('boom')) });
+		await expect(shutdown({ ...b, revertOnExit: true })).rejects.toThrow('boom');
+		expect(b.order).toEqual(['stop', 'close']);
+	});
+
+	it('the revert subcommand connects with the companion\'s statePath, reverts, prints the count and closes', async () => {
+		vi.useRealTimers();
+		const root = mkdtempSync(join(tmpdir(), 'bots-cli-'));
+		try {
+			const made: BotClientOptions[] = [];
+			const order: string[] = [];
+			const printed: string[] = [];
+			const makeClient = (opts: BotClientOptions) => {
+				made.push(opts);
+				return {
+					listWorlds: async () => [{ uuid: 'u-1', name: 'Home', mustMine: false, createdAt: 0, online: [] }],
+					connect: async (o: { world: string; name: string }) => {
+						order.push(`connect ${o.world} ${o.name}`);
+						return {};
+					},
+					revert: async () => {
+						order.push('revert');
+						return 2;
+					},
+					close: () => void order.push('close'),
+				} as unknown as BotClient;
+			};
+			await main(['revert', '--target', 'local', '--world', 'Home', '--name', 'Robo'], { makeClient, stateRoot: root, env: {}, readFile: () => null, print: (l) => void printed.push(l) });
+			expect(made).toHaveLength(2);
+			expect(made[1].statePath).toBe(`${root}/local/u-1/Robo.json`);
+			expect(order).toEqual(['connect u-1 Robo', 'revert', 'close']);
+			expect(printed).toContain('reverted 2 cells');
+		} finally {
+			rmSync(root, { recursive: true, force: true });
+		}
 	});
 });
 

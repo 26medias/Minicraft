@@ -74,11 +74,11 @@ the tables together.
 
 | t | fields | notes |
 |---|---|---|
-| `hello` | `world, name, skin, bid, proto, gen, resume` | first message; a `skin` over 32 bytes, not UTF-8 or with a control character is stored as `""` (the default colour); `gen` is the client's generator version; `resume: true` on a reconnect reload |
+| `hello` | `world, name, skin, bid, proto, gen, resume` | first message; `skin` is a character id (`milo`, `jj`, …; unknown ids fall back to Milo on the client); a `skin` over 32 bytes, not UTF-8 or with a control character is stored as `""` (Milo); `gen` is the client's generator version; `resume: true` on a reconnect reload |
 | `pos` | `x, y, z, yaw, pitch` | at most 10 Hz, only while moving or turning |
 | `ping` | — | every 2 s when nothing else was sent; driven by `setInterval`, so a hidden tab stays alive |
 | `edit` | `cid, ops` | ≤ 2,000 ops; `cid` increases per connection; a batch may touch one cell more than once and is applied in order |
-| `fx` | `kind, x, y, z, tier?, dur?` | cosmetic: `prime`, `boom` or `firework` (`tier` is the explosive's block id); `mine` (a player started mining x,y,z: `tier` is the block id, `dur` the full mining time in ms; the others draw the cracks from it until the block changes, a `mine-stop`, or `dur` + 1 s) and `mine-stop` |
+| `fx` | `kind, x, y, z, tier?, dur?, tool?, face?` | cosmetic: `prime`, `boom` or `firework` (`tier` is the explosive's block id); `mine` (a player started mining x,y,z: `tier` is the block id, `dur` the full mining time in ms; the others draw the cracks from it until the block changes, a `mine-stop`, or `dur` + 1 s) and `mine-stop`. `tool` (the miner's pickaxe tier) and `face` (the aimed face) are only sent with a multi-block `tool`, so a friend cracks the whole area instead of just the aimed block; the server drops a `face` it doesn't recognise (and `tool` with it) |
 | `extras` | `data: {inventory, tools, hotbar, selected}` | debounced 5 s, and on leave; opaque to the server |
 | `leaving` | `secondsLeft` | the play-time countdown (see [Play time](#play-time)) |
 
@@ -91,7 +91,7 @@ the tables together.
 | `tick` | `poses: [[id, x, y, z, yaw, pitch], …]` | every 100 ms while 2 or more players are online; excludes the recipient's own pose |
 | `join` | `id, name, skin` | a new player (a same-browser takeover sends none) |
 | `left` | `id` | the avatar disappears; no toast |
-| `fx` | `by, kind, x, y, z, tier?` | relayed to the others, not echoed |
+| `fx` | `by, kind, x, y, z, tier?, dur?, tool?, face?` | relayed to the others, not echoed |
 | `leaving` | `by, secondsLeft` | relayed to the others, not echoed |
 | `ping` | — | every 2 s while fewer than 2 players are online |
 | `error` | `code, message` | followed by a close with the same code |
@@ -217,14 +217,22 @@ warnings and a big 10 … 1. Everyone else gets a small toast with the leaver's 
 timer is paused while disconnected, and a reconnect reload keeps the session (see
 `docs/playtime.md`).
 
+### Other players
+
+Other players are Minecraft-style skinned rigs (six characters, `src/data/skins.data.ts`; the
+PNGs are in `src/assets/skins/`): the body turns with yaw, the head tilts with pitch, the legs
+walk, the right arm swings while mining or after a place/break. Old colour ids render as Milo.
+Each has a name label with the character's colour as its border. The design is
+`docs/superpowers/specs/2026-09-24-player-skins-design.md`.
+
 ### Minimap
 
 A 160 px round map, bottom-right, in multiplayer only. It covers 48 blocks around the player and
 rotates with the player (forward is up). Each column is coloured by its highest non-air block;
 liquids are drawn at 70 %, unloaded chunks dark grey. Heights are cached per chunk by `rev`,
-rebuilding at most 4 chunks per redraw, and it redraws at 10 Hz. Other players are skin-colour
-dots with a white outline, a ▲/▼ when more than 8 blocks above or below, clamped to the rim
-beyond the radius. Its cost is in `docs/performance.md`.
+rebuilding at most 4 chunks per redraw, and it redraws at 10 Hz. Other players are dots in their
+character's colour with a white outline, a ▲/▼ when more than 8 blocks above or below, clamped to
+the rim beyond the radius. Its cost is in `docs/performance.md`.
 
 ## Server internals, in one paragraph each
 

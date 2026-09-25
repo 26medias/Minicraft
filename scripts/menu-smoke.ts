@@ -29,6 +29,8 @@ const DEAD_API = 'http://127.0.0.1:9099';
 const BASE = `http://localhost:${PORT}/`;
 const MP_ARG = arg('--mp-url', 'http://127.0.0.1:1');
 const MP_URL = MP_ARG === 'none' ? '' : MP_ARG.replace(/\/+$/, '');
+// No default: the caller passes it. An embedded default here could point at another live session's directory.
+const MENU_SMOKE_SCRATCH = process.env.MENU_SMOKE_SCRATCH ?? '';
 if (MP_URL !== '') {
 	const h = new URL(MP_URL).hostname;
 	if (h !== '127.0.0.1' && h !== 'localhost') throw new Error(`--mp-url must be local (got ${MP_URL})`);
@@ -147,21 +149,37 @@ for (const sig of ['SIGINT', 'SIGTERM', 'SIGHUP'] as const) process.on(sig, () =
 			// 2. Multiplayer. Screen 1: a refused name shows the reason and Next refuses.
 			await page.click('#home-multi');
 			await page.waitForSelector('#mp-name');
-			check(await page.locator('#mp-skins .skin-swatch').count() === 8, 'screen 1 has 8 skin swatches');
+			check(await page.locator('#mp-skins .skin-swatch').count() === 6, 'screen 1 has the 6 character buttons');
+			await page.waitForFunction(() => Array.from(document.querySelectorAll<HTMLCanvasElement>('#mp-skins canvas')).every((c) => {
+				const ctx = c.getContext('2d');
+				if (!ctx) return false;
+				const d = ctx.getImageData(0, 0, c.width, c.height).data;
+				for (let i = 3; i < d.length; i += 4) if (d[i] > 0) return true;
+				return false;
+			}), null, { timeout: 10_000 });
+			check(true, 'every character preview canvas painted non-transparent pixels');
 			await page.fill('#mp-name', 'Noah!');
 			await page.click('#mp-next');
 			check(await text(page, '#mp-name-error') === 'Only letters, numbers and spaces', 'a bad name shows "Only letters, numbers and spaces"');
 			check(await page.locator('#mp-name').count() === 1, 'Next refuses a bad name');
 			await page.fill('#mp-name', ' Noah ');
-			await page.click('#mp-skin-blue');
+			await page.click('#mp-skin-jj');
+			if (MENU_SMOKE_SCRATCH !== '') {
+				for (const w of ['360px', '480px']) {
+					await page.evaluate((width) => { (document.querySelector('.menu-card') as HTMLElement).style.width = width; }, w);
+					await page.locator('.menu-card').screenshot({ path: `${MENU_SMOKE_SCRATCH}/picker-${parseInt(w, 10)}.png` });
+				}
+				await page.evaluate(() => { (document.querySelector('.menu-card') as HTMLElement).style.width = ''; });
+			}
 			await page.click('#mp-next');
 			// Screen 2 on a dead port: the sleeping text, a Retry button, and retries on its own.
 			await page.waitForSelector('#mp-sleeping:not(.hidden)', { timeout: 10_000 });
 			check((await text(page, '#mp-sleeping')).includes('The multiplayer server is sleeping. Ask a parent to wake it up.'), 'a dead server shows the sleeping text');
 			check(await page.locator('#mp-retry').isVisible(), 'the sleeping screen has a Retry button');
-			check((await text(page, '#mp-playing')).includes('Playing as Noah'), 'screen 2 shows "Playing as Noah"');
+			check((await text(page, '#mp-playing')).includes('Playing as Noah (JJ)'), 'screen 2 shows "Playing as Noah (JJ)"');
+			check(await page.locator('#mp-playing .mp-mini').count() === 1, 'screen 2 shows a mini full-body preview instead of a colour dot');
 			const prefs = JSON.parse((await ls(page, 'minicraft:v1:mp')) ?? '{}');
-			check(prefs.name === 'Noah' && prefs.skin === 'blue' && typeof prefs.bid === 'string', `name, skin and bid are remembered (got ${JSON.stringify(prefs)})`);
+			check(prefs.name === 'Noah' && prefs.skin === 'jj' && typeof prefs.bid === 'string', `name, skin and bid are remembered (got ${JSON.stringify(prefs)})`);
 			const before = mpListCalls;
 			await page.waitForTimeout(5_600);
 			check(mpListCalls > before, `the sleeping screen retries on its own every 5 s (${mpListCalls - before} retries in 5.6 s)`);
@@ -200,6 +218,26 @@ for (const sig of ['SIGINT', 'SIGTERM', 'SIGHUP'] as const) process.on(sig, () =
 			await page.waitForSelector('#mp-name');
 			check(await text(page, '#mp-name-error') === 'Someone called Noah is already playing. Pick another name.', 'after a 4009 reload screen 1 says the name is taken');
 			check(await page.evaluate(() => sessionStorage.getItem('mp:error')) === null, 'the 4009 reason is shown once');
+			await page.click('#menu-back');
+			await page.waitForSelector('#home-single');
+
+			// 2c. A returning player with a pre-skins save: a remembered name but an old colour id
+			// ("red") that no longer maps to a character. Screen 1 must show once (final-fix brief),
+			// not skip straight to screen 2 with a made-up character.
+			await page.evaluate(() => localStorage.setItem('minicraft:v1:mp', JSON.stringify({ name: 'Noah', skin: 'red', worldId: null, bid: 'smoke-bid' })));
+			await page.goto(BASE);
+			await page.click('#home-multi');
+			await page.waitForSelector('#mp-name');
+			check(await page.locator('#mp-name').inputValue() === 'Noah', 'a saved name with no valid character still shows screen 1, name pre-filled');
+			check(await page.locator('#mp-skin-milo').evaluate((e) => e.classList.contains('selected')), 'screen 1 pre-selects Milo when the saved skin is invalid');
+			await page.click('#mp-skin-jj');
+			await page.click('#mp-next');
+			await page.waitForSelector('#mp-sleeping:not(.hidden)', { timeout: 10_000 });
+			check((await text(page, '#mp-playing')).includes('Playing as Noah (JJ)'), 'after picking a character once, screen 2 shows it');
+			await page.goto(BASE);
+			await page.click('#home-multi');
+			await page.waitForSelector('#mp-sleeping:not(.hidden)', { timeout: 10_000 });
+			check(true, 'a second visit goes straight to screen 2: the character is only picked once');
 			await page.click('#menu-back');
 			await page.waitForSelector('#home-single');
 		}
@@ -272,7 +310,7 @@ for (const sig of ['SIGINT', 'SIGTERM', 'SIGHUP'] as const) process.on(sig, () =
 		check(await first.evaluate((e) => e.classList.contains('selected')), 'the created world is selected');
 		check(await text(page, '#duration-value') === '10 min', 'the duration survives Create');
 		// A leftover multiplayer autojoin flag: starting a solo game must clear it (re-gate I1).
-		await page.evaluate(() => sessionStorage.setItem('mp:autojoin', JSON.stringify({ world: 'w-x', name: 'Noah', skin: 'blue', duration: 30 })));
+		await page.evaluate(() => sessionStorage.setItem('mp:autojoin', JSON.stringify({ world: 'w-x', name: 'Noah', skin: 'jj', duration: 30 })));
 		await page.click('#single-play');
 		await page.waitForFunction(() => (window as unknown as { __mc?: unknown }).__mc !== undefined, null, { timeout: 60_000 });
 		await page.waitForFunction(() => {

@@ -481,9 +481,9 @@ async function minimapBench(page: Page): Promise<MinimapResult> {
 		const [x0, y0, z0] = mc.player.position;
 		const pos: [number, number, number] = [x0, y0, z0];
 		const others = [
-			{ x: x0 + 10, y: y0, z: z0 + 5, skin: 'red' },
-			{ x: x0 - 30, y: y0 + 12, z: z0 - 20, skin: 'blue' },
-			{ x: x0 + 200, y: y0, z: z0, skin: 'green' },
+			{ x: x0 + 10, y: y0, z: z0 + 5, skin: 'milo' },
+			{ x: x0 - 30, y: y0 + 12, z: z0 - 20, skin: 'jj' },
+			{ x: x0 + 200, y: y0, z: z0, skin: 'mikey' },
 		];
 		let now = 0;
 		let yaw = 0;

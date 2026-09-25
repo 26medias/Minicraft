@@ -4,6 +4,7 @@
  * against the Go golden files `server/internal/proto/testdata/msg-*.json`.
  */
 import type { PlayerSave } from '../persistence/adapter';
+import type { Face } from '../data/blocks.data';
 
 /** Protocol version sent in `hello`. The server accepts [1, 1]. */
 export const PROTO = 1;
@@ -74,8 +75,11 @@ export type EditMsg = { t: 'edit'; cid: number; ops: Op[] };
  * `prime` (the receiver reads its fuse) and `boom` (its break particles); the server relays it as
  * an opaque int. Absent or unknown falls back to plain TNT. `mine` (a player started mining the block at
  * x,y,z) carries the block's id in `tier` and the full mining time in ms in `dur`; `mine-stop` ends it early.
+ * `tool` (the miner's pickaxe tier) and `face` (the aimed face) are only sent with a multi-block `tool`,
+ * so a friend can crack the whole area; both optional, so an old client/server drops them and the
+ * receiver falls back to a single crack on x,y,z. The server strips an unrecognised `face` (and its `tool`).
  */
-export type FxMsg = { t: 'fx'; kind: FxKind; x: number; y: number; z: number; tier?: number; dur?: number; by?: number };
+export type FxMsg = { t: 'fx'; kind: FxKind; x: number; y: number; z: number; tier?: number; dur?: number; by?: number; tool?: number; face?: Face };
 
 export type ExtrasMsg = { t: 'extras'; data: ExtrasData };
 

@@ -1,4 +1,4 @@
-import type { Face } from '../data/blocks.data';
+import { BLOCKS, isSolid, type Face } from '../data/blocks.data';
 import { AREA_FLOOR_ARMED, AREA_FLOOR_HELD, PICKAXES, type PickaxeDef, type PickaxeTier, type PlayerTools } from '../data/crafting.data';
 
 /** Pickaxe rules (spec §5). Pure. */
@@ -14,10 +14,31 @@ const NORMAL: Readonly<Record<Face, Vec3>> = {
 const AXES: Readonly<Record<Face, [0 | 1 | 2, 0 | 1 | 2, 0 | 1 | 2]>> = {
 	px: [0, 1, 2], nx: [0, 1, 2], py: [1, 0, 2], ny: [1, 0, 2], pz: [2, 0, 1], nz: [2, 0, 1],
 };
+const FACES: readonly Face[] = ['px', 'nx', 'py', 'ny', 'pz', 'nz'];
+
+/** True for exactly the six face strings — validates a face string that crossed the network. */
+export function isFace(s: string | undefined): s is Face {
+	return s !== undefined && (FACES as readonly string[]).includes(s);
+}
 
 /** An unknown tier (a newer save on an older bundle) mines like the hand. */
 function def(tier: number): PickaxeDef {
 	return PICKAXES[tier] ?? PICKAXES[0];
+}
+
+/**
+ * removeBlocks' rule for one cell, by block id alone: −1 (out of bounds, or — for a multiplayer
+ * receiver — a chunk not loaded) is never removable, and neither is air or hardness 0 (bedrock).
+ * Shared by loop.ts's `removableCells` (the local highlight/mining) and crack.ts's `RemoteMining`
+ * (a friend's area cracks, read through the receiver's own world), so the rule lives in one place.
+ */
+export function isRemovableId(id: number): boolean {
+	return id >= 0 && isSolid(id) && (BLOCKS[id]?.hardness ?? 0) > 0;
+}
+
+/** The cells of `cells` that removeBlocks would actually remove, reading each one through `getBlock`. */
+export function removableCellsBy(getBlock: (x: number, y: number, z: number) => number, cells: ReadonlyArray<Cell>): Cell[] {
+	return cells.filter((c) => isRemovableId(getBlock(c.x, c.y, c.z)));
 }
 
 /**

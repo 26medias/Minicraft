@@ -19,7 +19,7 @@ import { updateLightsForBlockChange } from '../engine/world/lighting';
 import { LiquidScheduler } from './liquid-scheduler';
 import { chunkIndex, chunkIndexOrNeg, indexOf, WORLD_CHUNKS_Z } from '../engine/world/coords';
 import { planFrame, chebyshev, budgetFor, MESH_RADIUS, UNMOUNT_RADIUS, DATA_RADIUS } from './chunk-scheduler';
-import { areaBounds, areaCells, inHeldZone, isMultiBlock, miningDuration, type AreaBounds } from './tools';
+import { areaBounds, areaCells, inHeldZone, isMultiBlock, isRemovableId, miningDuration, removableCellsBy, type AreaBounds } from './tools';
 import type { PickaxeTier } from '../data/crafting.data';
 import type { ChunkOverlay } from '../engine/world/overlay';
 import { intToColor, type Op } from '../net/protocol';
@@ -65,13 +65,12 @@ export type BlockBrokenEvent = {
 /** removeBlocks' rule for one cell: in bounds, solid, and breakable (hardness > 0 — bedrock never is). */
 export function isRemovable(world: World, x: number, y: number, z: number): boolean {
 	if (!world.inBounds(x, y, z)) return false;
-	const id = world.getBlock(x, y, z);
-	return isSolid(id) && (BLOCKS[id]?.hardness ?? 0) > 0;
+	return isRemovableId(world.getBlock(x, y, z));
 }
 
 /** The cells of `cells` that removeBlocks would actually remove: what the area highlight glows. */
 export function removableCells(world: World, cells: ReadonlyArray<{ x: number; y: number; z: number }>): Array<{ x: number; y: number; z: number }> {
-	return cells.filter((c) => isRemovable(world, c.x, c.y, c.z));
+	return removableCellsBy((x, y, z) => (world.inBounds(x, y, z) ? world.getBlock(x, y, z) : -1), cells);
 }
 
 /** Time a new chunk needs (generate + light, measured ≈ 7.5 ms median on v3): don't start one with less left. */
@@ -347,11 +346,24 @@ export class GameLoop {
 		return this.mining ? Math.min(1, this.mining.elapsed / this.mining.duration) : 0;
 	}
 
-	/** The block being mined right now, for the crack overlay and the multiplayer `fx mine`; null when idle. */
-	miningInfo(): { x: number; y: number; z: number; blockId: BlockId; durationMs: number; elapsedMs: number } | null {
+	/**
+	 * The block being mined right now, for the crack overlay and the multiplayer `fx mine`; null when idle.
+	 * `cells` is every cell an area tool will actually remove (the highlight's set, computed the same way —
+	 * removableCells skips air, liquids, hardness-0 and out-of-bounds cells); a single-cell tool always gets
+	 * just the target. `tier` and `face` let `main.ts` tell friends the area too (spec: friends see every
+	 * block an area tool is cracking). `MiningState` keeps no face of its own, so this reads the current
+	 * aim's, which still points at the target: `updateMining` drops `this.mining` the instant the aim leaves it.
+	 */
+	miningInfo(): { x: number; y: number; z: number; blockId: BlockId; durationMs: number; elapsedMs: number; cells: ReadonlyArray<{ x: number; y: number; z: number }>; tier: PickaxeTier; face: Face } | null {
 		const m = this.mining;
 		if (!m) return null;
-		return { ...m.target, blockId: m.blockId, durationMs: m.duration * 1000, elapsedMs: m.elapsed * 1000 };
+		const tier = this.equippedTier();
+		const onTarget = this.aim && this.aim.x === m.target.x && this.aim.y === m.target.y && this.aim.z === m.target.z;
+		const face = this.aim!.face; // never null while m is: updateMining nulls `mining` the instant the aim leaves the target
+		const cells = onTarget && isMultiBlock(tier)
+			? removableCells(this.world, areaCells(m.target, face, tier))
+			: [{ ...m.target }];
+		return { ...m.target, blockId: m.blockId, durationMs: m.duration * 1000, elapsedMs: m.elapsed * 1000, cells, tier, face };
 	}
 
 	/**

@@ -1,7 +1,12 @@
 // scripts/mp-e2e.ts — the two-client multiplayer end-to-end suite (plan I2, spec §10 E1–E7, plus E8
-// and the 4009 step from the gate-2 amendments).
+// and the 4009 step from the gate-2 amendments, E9 (a friend's mining cracks) and E10 (rendered
+// skins: JJ, slim Milo, a back view, the upgraded Enderman, walk and swing; skins spec §8.11)).
 //
-//   npx tsx scripts/mp-e2e.ts [--only E2,E6]
+//   MP_E2E_SCRATCH=<your scratch dir> npx tsx scripts/mp-e2e.ts [--only E2,E6]
+//
+// MP_E2E_SCRATCH is REQUIRED: the directory for the mcserver binary, its temp DB and the E10
+// screenshots. There is no default (a default once pointed at another session's directory); the
+// script exits 1 before starting anything when it is unset.
 //
 // Setup: builds `mcserver` into the scratchpad and runs it on 127.0.0.1:18080 against a temp DB
 // (token `e2e`), and starts its OWN Vite dev servers on :5174 (and :5175 for E7) with
@@ -17,12 +22,18 @@ import { chromium, type Browser, type BrowserContext, type Page } from 'playwrig
 import { spawn, spawnSync, type ChildProcess } from 'node:child_process';
 import { mkdtempSync, existsSync, mkdirSync } from 'node:fs';
 import { join } from 'node:path';
+import sharp from 'sharp';
+import { skinColor, skinOf } from '../src/data/skins.data';
+import { upgradeLegacySkin } from '../src/engine/render/skin-legacy';
 
 /* eslint-disable @typescript-eslint/no-explicit-any */
 
 const ROOT = new URL('..', import.meta.url).pathname;
-const SCRATCH = process.env.MP_E2E_SCRATCH
-	?? '/tmp/claude-1000/-home-julien-Projects-Minicraft/025905b6-e89d-412e-8343-fd1da268b0f3/scratchpad';
+const SCRATCH = process.env.MP_E2E_SCRATCH ?? '';
+if (SCRATCH === '') {
+	console.error('mp-e2e: set MP_E2E_SCRATCH to your own scratch directory (mcserver binary, temp DB, screenshots); there is no default');
+	process.exit(1);
+}
 const MC_PORT = 18080;
 const VITE_PORT = 5174;
 const VITE_DEAD_PORT = 5175;
@@ -376,10 +387,130 @@ function deltaE(a: number[], b: number[]): number {
 const hexRgb = (h: string) => [1, 3, 5].map((i) => parseInt(h.slice(i, i + 2), 16));
 
 // ---------------------------------------------------------------------------------------------
+// E10: rendered skins. The oracle is the PNG itself, read with sharp, and the vanilla skin layout
+// typed by hand below (not the rig's own tables).
+
+type Rect = [number, number, number, number];
+/** Skin px per world unit's inverse: the 32-px-tall model is 1.8 blocks. */
+const SKIN_PX = 1.8 / 32;
+
+/** A face to sample: the base rect, and the overlay rect drawn over it (vanilla 64×64 layout). */
+type FaceRef = { mesh: string; face: 'front' | 'back'; base: Rect; overlay: Rect };
+const FACES = {
+	headFront: { mesh: 'head', face: 'front', base: [8, 8, 8, 8], overlay: [40, 8, 8, 8] },
+	headBack: { mesh: 'head', face: 'back', base: [24, 8, 8, 8], overlay: [56, 8, 8, 8] },
+	bodyFront: { mesh: 'body', face: 'front', base: [20, 20, 8, 12], overlay: [20, 36, 8, 12] },
+	bodyBack: { mesh: 'body', face: 'back', base: [32, 20, 8, 12], overlay: [32, 36, 8, 12] },
+	rightArmFront: { mesh: 'rightArm', face: 'front', base: [44, 20, 4, 12], overlay: [44, 36, 4, 12] },
+	rightArmFrontSlim: { mesh: 'rightArm', face: 'front', base: [44, 20, 3, 12], overlay: [44, 36, 3, 12] },
+	leftLegFront: { mesh: 'leftLeg', face: 'front', base: [20, 52, 4, 12], overlay: [4, 52, 4, 12] },
+} satisfies Record<string, FaceRef>;
+
+const skinCache = new Map<string, Uint8ClampedArray>();
+/** A skin's 64×64 RGBA (a legacy 64×32 upgraded), decoded from `src/assets/skins/`. */
+async function skinRgba(id: string): Promise<Uint8ClampedArray> {
+	let px = skinCache.get(id);
+	if (px) return px;
+	const { data, info } = await sharp(join(ROOT, 'src/assets/skins', skinOf(id).file)).ensureAlpha().raw().toBuffer({ resolveWithObject: true });
+	const raw = new Uint8ClampedArray(data.buffer, data.byteOffset, data.length);
+	if (info.width !== 64 || (info.height !== 64 && info.height !== 32)) throw new Error(`${id}: ${info.width}×${info.height}`);
+	px = info.height === 32 ? upgradeLegacySkin(raw) : new Uint8ClampedArray(raw);
+	skinCache.set(id, px);
+	return px;
+}
+
+/** The expected colour at a face's sample texel (x + ⌊w/2⌋, y + ⌊h/2⌋): the overlay's when it is opaque. */
+async function skinPixel(id: string, f: FaceRef): Promise<number[]> {
+	const px = await skinRgba(id);
+	const at = (r: Rect) => {
+		const i = ((r[1] + Math.floor(r[3] / 2)) * 64 + r[0] + Math.floor(r[2] / 2)) * 4;
+		return [px[i], px[i + 1], px[i + 2], px[i + 3]];
+	};
+	const o = at(f.overlay);
+	return (o[3] >= 128 ? o : at(f.base)).slice(0, 3);
+}
+
+/**
+ * CSS px, on `viewer`'s canvas, of the centre of texel (x + ⌊w/2⌋, y + ⌊h/2⌋) of the named player's
+ * face, pushed 0.001 outward. A face's rect runs left→right as seen from outside it: on the front
+ * (−z) that is from the character's right (+x) to its left, on the back the other way, so that
+ * texel sits (⌊w/2⌋ + ½ − w/2) px towards −x on the front, +x on the back, and ½ px down.
+ */
+async function facePixel(viewer: Page, name: string, f: FaceRef): Promise<{ x: number; y: number }> {
+	const [w, h] = [f.base[2], f.base[3]];
+	const dx = (Math.floor(w / 2) + 0.5 - w / 2) * SKIN_PX * (f.face === 'front' ? -1 : 1);
+	const dy = -(Math.floor(h / 2) + 0.5 - h / 2) * SKIN_PX;
+	return viewer.evaluate(async ([name, mesh, face, dx, dy]) => {
+		const mc = (window as any).__mc;
+		if (window.devicePixelRatio !== 1) throw new Error(`devicePixelRatio ${window.devicePixelRatio}`);
+		let av: any = null;
+		for (const a of mc.mp.remote.avatars.values()) if (a.name === name) av = a;
+		if (!av) throw new Error(`no avatar named ${name}`);
+		await mc.mp.remote.res.textures.ready(av.skin);
+		const m = av.group.getObjectByName(mesh);
+		if (!m) throw new Error(`${name} has no mesh ${mesh}`);
+		const g = m.geometry;
+		if (!g.boundingBox) g.computeBoundingBox();
+		const bb = g.boundingBox;
+		m.updateWorldMatrix(true, false);
+		const p = m.position.clone().set(
+			(bb.min.x + bb.max.x) / 2 + dx,
+			(bb.min.y + bb.max.y) / 2 + dy,
+			face === 'front' ? bb.min.z - 0.001 : bb.max.z + 0.001,
+		);
+		p.applyMatrix4(m.matrixWorld);
+		const cam = mc.camera;
+		cam.updateMatrixWorld();
+		p.project(cam);
+		const r = (document.querySelector('canvas') as HTMLCanvasElement).getBoundingClientRect();
+		return { x: r.left + ((p.x + 1) / 2) * r.width, y: r.top + ((1 - p.y) / 2) * r.height };
+	}, [name, f.mesh, f.face, dx, dy] as const);
+}
+
+/** A viewport screenshot (optionally saved), decoded to raw RGB(A). */
+async function shot(page: Page, file?: string): Promise<(x: number, y: number) => number[]> {
+	const buf = await page.screenshot(file ? { path: file } : {});
+	const { data, info } = await sharp(buf).raw().toBuffer({ resolveWithObject: true });
+	return (x, y) => {
+		const i = (Math.floor(y) * info.width + Math.floor(x)) * info.channels;
+		return [data[i], data[i + 1], data[i + 2]];
+	};
+}
+
+/** Flying, at (x, y, z) feet, looking along `yaw` with the given pitch. */
+async function place(page: Page, p: number[], yaw: number, pitch = 0): Promise<void> {
+	await page.evaluate(([x, y, z, yaw, pitch]) => {
+		const mc = (window as any).__mc;
+		mc.player.flying = true;
+		mc.player.vy = 0;
+		mc.player.position = [x, y, z];
+		mc.cam.yaw = yaw;
+		mc.cam.pitch = pitch;
+	}, [p[0], p[1], p[2], yaw, pitch] as const);
+}
+
+/** The named player's pivot rotation.x on `viewer`, sampled every 50 ms for `ms`. */
+async function sampleJoint(viewer: Page, name: string, pivot: string, ms: number): Promise<number[]> {
+	return viewer.evaluate(async ([name, pivot, ms]) => {
+		const mc = (window as any).__mc;
+		let av: any = null;
+		for (const a of mc.mp.remote.avatars.values()) if (a.name === name) av = a;
+		if (!av) throw new Error(`no avatar named ${name}`);
+		const out: number[] = [];
+		const t = performance.now();
+		while (performance.now() - t < ms) {
+			out.push(av.group.getObjectByName(pivot).rotation.x);
+			await new Promise((r) => setTimeout(r, 50));
+		}
+		return out;
+	}, [name, pivot, ms] as const);
+}
+
+// ---------------------------------------------------------------------------------------------
 // The run
 
-const A_WHO: Who = { name: 'Ana', skin: 'red' };
-const B_WHO: Who = { name: 'Bo', skin: 'blue' };
+const A_WHO: Who = { name: 'Ana', skin: 'milo' };
+const B_WHO: Who = { name: 'Bo', skin: 'jj' };
 
 (async () => {
 	if (!existsSync(SCRATCH)) mkdirSync(SCRATCH, { recursive: true });
@@ -406,7 +537,7 @@ const B_WHO: Who = { name: 'Bo', skin: 'blue' };
 	const ctxB = await browser.newContext({ viewport: { width: 960, height: 600 } });
 	let A: Page | null = null;
 	let B: Page | null = null;
-	const needMp = ['E1', 'E2', 'E3', 'E4', 'E5', 'E6', 'E9', '4009'].some(want);
+	const needMp = ['E1', 'E2', 'E3', 'E4', 'E5', 'E6', 'E9', 'E10', '4009'].some(want);
 	try {
 		// ------------------------------------------------------------------ E7 (part 1)
 		if (want('E7')) {
@@ -516,6 +647,138 @@ const B_WHO: Who = { name: 'Bo', skin: 'blue' };
 			});
 		}
 
+		// ------------------------------------------------------------------ E10
+		if (want('E10') && A && B) {
+			const a = A, b = B;
+			await scenario('E10', 'rendered skins: JJ, slim Milo, a back view and the upgraded Enderman match their PNGs; B walks and swings on A', async () => {
+				const TOL = 40;
+				const out = (f: string) => join(SCRATCH, f);
+				// The crosshair sits where a face centre projects; hide it on both pages (restored at the end).
+				const hud = (p: Page, v: string) => p.evaluate((v) => { const e = document.getElementById('hud-crosshair'); if (e) e.style.visibility = v; }, v);
+				await hud(a, 'hidden');
+				await hud(b, 'hidden');
+				/** Samples `faces` of `name` on `viewer` against `skin`; returns the worst per-channel difference. */
+				const compare = async (viewer: Page, name: string, skin: string, faces: FaceRef[], file: string, what: string): Promise<number> => {
+					const pts = [];
+					for (const f of faces) pts.push(await facePixel(viewer, name, f));
+					const px = await shot(viewer, out(file));
+					let worst = 0;
+					for (let i = 0; i < faces.length; i++) {
+						const got = px(pts[i].x, pts[i].y);
+						const want = await skinPixel(skin, faces[i]);
+						const d = got.map((v, k) => Math.abs(v - want[k]));
+						worst = Math.max(worst, ...d);
+						console.log(`   ${what} ${faces[i].mesh} ${faces[i].face} at (${pts[i].x.toFixed(1)}, ${pts[i].y.toFixed(1)}): rgb(${got}) vs skin rgb(${want}), |Δ| ${JSON.stringify(d)}`);
+					}
+					return worst;
+				};
+				// A hangs high in open sky, looking along −z (yaw 0); B stands 3 blocks in front, facing A.
+				const at = await a.evaluate(() => {
+					const mc = (window as any).__mc;
+					const p = mc.player.position;
+					return [Math.floor(p[0]) + 0.5, mc.world.height - 12, Math.floor(p[2]) + 0.5];
+				});
+				const front = [at[0], at[1], at[2] - 3];
+				await place(a, at, 0);
+				await place(b, front, Math.PI);
+				await sleep(1_000);
+
+				// 1. Measure first: A's view of JJ's front.
+				const d1 = await compare(a, B_WHO.name, B_WHO.skin, [FACES.headFront, FACES.bodyFront, FACES.rightArmFront], 'e10-front.png', 'A sees JJ');
+				console.log(`   measured: worst per-channel difference ${d1} (tolerance ${TOL})`);
+				check(d1 <= TOL, `A sees JJ's head, body and right-arm fronts in JJ's skin colours (worst |Δ| ${d1} ≤ ${TOL})`);
+
+				// 2. The slim model, seen by B: Milo's head front and 3-px right-arm front.
+				const d2 = await compare(b, A_WHO.name, A_WHO.skin, [FACES.headFront, FACES.rightArmFrontSlim], 'e10-milo.png', 'B sees Milo');
+				check(d2 <= TOL, `B sees Milo's head and slim right-arm fronts in Milo's colours (worst |Δ| ${d2} ≤ ${TOL})`);
+
+				// 3. The back view: B turns its back to A.
+				await place(b, front, 0);
+				await sleep(1_000);
+				const d3 = await compare(a, B_WHO.name, B_WHO.skin, [FACES.headBack, FACES.bodyBack], 'e10-back.png', "A sees JJ's back");
+				check(d3 <= TOL, `A sees JJ's head and body backs in JJ's skin colours (worst |Δ| ${d3} ≤ ${TOL})`);
+
+				// 4. The Enderman (a legacy 64×32 skin, upgraded): a third player in its own browser context.
+				const ctxC = await browser.newContext({ viewport: { width: 960, height: 600 } });
+				try {
+					const c = await newPage(ctxC, { name: 'Cy', skin: 'enderman' }, 'C');
+					await joinWorld(c, BASE, WORLD, null);
+					// B steps out of A's view (behind A, 10 blocks off) so C stands alone in front of A.
+					await place(b, [at[0] + 8, at[1], at[2] + 6], 0);
+					await place(c, front, Math.PI);
+					await sleep(1_500);
+					const d4 = await compare(a, 'Cy', 'enderman', [FACES.headFront, FACES.leftLegFront], 'e10-enderman.png', 'A sees the Enderman');
+					check(d4 <= TOL, `A sees the Enderman's head front and upgraded left-leg front in its colours (worst |Δ| ${d4} ≤ ${TOL})`);
+					// Both minimaps with every friend on them: A's (JJ red, Enderman purple) and B's (Milo cyan, Enderman).
+					await a.locator('#minimap').screenshot({ path: out('e10-minimap.png') });
+					await b.locator('#minimap').screenshot({ path: out('e10-minimap-b.png') });
+				} finally {
+					await ctxC.close();
+				}
+
+				// 5. Walk: B faces A and slides along −x across A's view; A sees B's right leg swing both ways.
+				await place(b, [at[0] + 3, at[1], at[2] - 3], Math.PI);
+				await sleep(1_500);
+				const walk = b.evaluate(() => new Promise<void>((done) => {
+					const mc = (window as any).__mc;
+					const t0 = performance.now();
+					const tick = () => {
+						const p = mc.player.position;
+						mc.player.position = [p[0] - 0.07, p[1], p[2]];
+						if (performance.now() - t0 < 1_500) requestAnimationFrame(tick);
+						else done();
+					};
+					requestAnimationFrame(tick);
+				}));
+				const legP = sampleJoint(a, B_WHO.name, 'rightLegPivot', 2_000);
+				await sleep(900);
+				await shot(a, out('e10-walk.png'));
+				await walk;
+				const leg = await legP;
+				const fwd = Math.max(...leg), back = Math.min(...leg);
+				check(fwd > 0.2 && back < -0.2, `A sees B's right leg swing both ways while B walks (rotation.x from ${back.toFixed(2)} to ${fwd.toFixed(2)}, need beyond ±0.2)`);
+
+				// 6. Swing, with a negative control: standing still, no swing; mining, a swing.
+				await place(b, front, Math.PI);
+				await sleep(1_800);
+				const idle = await sampleJoint(a, B_WHO.name, 'rightArmPivot', 500);
+				const idleMean = idle.reduce((s, v) => s + v, 0) / idle.length;
+				const idleRange = Math.max(...idle) - Math.min(...idle);
+				check(idleRange < 0.1, `standing still, B's right arm does not swing on A (rotation.x range ${idleRange.toFixed(3)} < 0.1)`);
+				// B mines the block under its feet (nothing comes between B and A).
+				const cell = await b.evaluate(() => {
+					const mc = (window as any).__mc;
+					const p = mc.player.position;
+					const c = [Math.floor(p[0]), Math.floor(p[1]) - 1, Math.floor(p[2])];
+					mc.world.setBlock(c[0], c[1], c[2], 1);
+					mc.cam.pitch = -1.5;
+					return c;
+				});
+				check(await a.evaluate(async (c) => {
+					const t = performance.now();
+					while (performance.now() - t < 3000) {
+						if ((window as any).__mc.world.getBlock(c[0], c[1], c[2]) === 1) return true;
+						await new Promise((r) => setTimeout(r, 10));
+					}
+					return false;
+				}, cell), `A has B's stone under B at (${cell})`);
+				await sleep(600);
+				await b.evaluate(() => (window as any).__mc.loop.setLeftMouseDown(true));
+				const swingP = sampleJoint(a, B_WHO.name, 'rightArmPivot', 500);
+				await sleep(250);
+				await shot(a, out('e10-swing.png'));
+				const swing = await swingP;
+				await b.evaluate(() => (window as any).__mc.loop.setLeftMouseDown(false));
+				const peak = Math.max(...swing);
+				check(peak > idleMean + 0.3, `once B mines, A sees B's right arm chop forward within 500 ms (peak rotation.x ${peak.toFixed(2)} vs idle mean ${idleMean.toFixed(2)}, need > +0.3)`);
+				await b.evaluate(() => { (window as any).__mc.cam.pitch = 0; });
+
+				await hud(a, '');
+				await hud(b, '');
+				for (const f of ['e10-front.png', 'e10-milo.png', 'e10-back.png', 'e10-enderman.png', 'e10-walk.png', 'e10-swing.png', 'e10-minimap.png', 'e10-minimap-b.png']) console.log(`   screenshot ${out(f)}`);
+			});
+		}
+
 		// ------------------------------------------------------------------ E4
 		if (want('E4') && A && B) {
 			const a = A, b = B;
@@ -552,7 +815,7 @@ const B_WHO: Who = { name: 'Bo', skin: 'blue' };
 					}
 					return { centre: at(0, 0), ring, clamped: p.clamped, map: [p.x, p.y] };
 				}, A_WHO.name);
-				const skin = hexRgb('#E53935');
+				const skin = hexRgb(skinColor(A_WHO.skin));
 				const dSkin = deltaE(px.centre, skin);
 				check(!px.clamped && dSkin < 30, `the minimap pixel at A's projected spot (${px.map.map((v: number) => v.toFixed(1))}) is A's skin colour: rgb(${px.centre}) ΔE ${dSkin.toFixed(1)} < 30`);
 				const white = px.ring.filter((c: number[]) => deltaE(c, [255, 255, 255]) < 30).length;
@@ -762,7 +1025,7 @@ const B_WHO: Who = { name: 'Bo', skin: 'blue' };
 				const solo = await newPage(ctx, null, 'solo-dead');
 				await soloPlay(solo, BASE2);
 				check(await solo.evaluate(() => (window as any).__wsCount as number) === 0, 'solo with the multiplayer URL on a dead port: no WebSocket, and the world loads');
-				const multi = await newPage(ctx, { name: 'Cy', skin: 'green' }, 'multi-dead');
+				const multi = await newPage(ctx, { name: 'Cy', skin: 'mikey' }, 'multi-dead');
 				await multi.goto(BASE2);
 				await multi.click('#home-multi');
 				await multi.waitForSelector('#mp-sleeping:not(.hidden)', { timeout: 15_000 });
@@ -809,7 +1072,7 @@ const B_WHO: Who = { name: 'Bo', skin: 'blue' };
 			await scenario('4009', "a second computer using A's name is told to pick another; A is untouched", async () => {
 				await a.evaluate(() => { (window as any).__marker = 1; });
 				const ctx = await browser.newContext();
-				const c = await newPage(ctx, { name: A_WHO.name, skin: 'green' }, 'C');
+				const c = await newPage(ctx, { name: A_WHO.name, skin: 'mikey' }, 'C');
 				await c.goto(BASE);
 				await c.click('#home-multi');
 				await c.waitForSelector(`#mp-worlds .world-row[data-id="${WORLD}"]`, { timeout: 15_000 });

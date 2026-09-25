@@ -35,7 +35,7 @@ const stored: PlaytimeSession = {
 	startedAt: NOW - 20 * 60_000,
 	updatedAt: NOW - 1_000,
 };
-const ARGS: AutojoinArgs = { world: 'w-1', name: 'Noah', skin: 'blue', duration: 30 };
+const ARGS: AutojoinArgs = { world: 'w-1', name: 'Noah', skin: 'jj', duration: 30 };
 const URL_ = 'http://localhost:18081';
 
 function armSchedule() {

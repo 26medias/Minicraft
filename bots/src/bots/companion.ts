@@ -356,6 +356,18 @@ export function runCompanion(deps: CompanionDeps): CompanionHandle {
 			// every following tick inside the band.
 			action = 'follow';
 			reason = 'rule:follow-floor';
+			decidedBy = 'rule';
+		} else if (offered.includes('help_build')) {
+			// Fix round 2: help_build's own offer conditions (3 collinear placements, aimed at the
+			// next cell, held ≥ 1 s) already ARE the intent signal — Laya picked it 0/5 in the
+			// measured near-band cases, so the loop takes it outright, never asking the brain. Every
+			// existing guard in `helpBuild()` below (markLineUsed, the pre-place re-read of N, the
+			// buffer/stop re-checks, the budget/interval checks) still runs unchanged; `--no-edits`
+			// already keeps `help_build` out of `offered` entirely (`editsAllowed()`), so this rule
+			// never fires under `--no-edits`.
+			action = 'help_build';
+			reason = 'rule:help-build';
+			decidedBy = 'rule';
 		} else {
 			const t0 = clock();
 			try {

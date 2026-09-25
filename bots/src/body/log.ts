@@ -17,12 +17,14 @@ export interface DecisionEntry {
 	/** The text state the brain read (`renderText`). */
 	text: string;
 	candidates: Candidate[];
-	/** The brain that decided: its name, or `scripted`. */
+	/** The brain that decided: its name, `scripted`, or `rule` (Fix round 2: a loop rule decided
+	 *  without asking it — `reason` says which one; the real brain wasn't asked that tick). */
 	brain: string;
 	/** The brain's raw answer, the error it failed with, or `null` when it wasn't asked. */
 	raw: unknown;
 	action: Candidate;
-	/** `brain`, `low-confidence`, `fallback:<err>` or `scripted`. */
+	/** `brain`, `low-confidence`, `fallback:<err>`, `scripted`, or `rule:<name>` (e.g.
+	 *  `rule:follow-floor`, `rule:help-build`). */
 	reason: string;
 	/** What acting did, e.g. `walk 12.5,64.0,3.0`, `placed oak_planks at 1,2,3`, `recheck-failed: …`. */
 	result: string;

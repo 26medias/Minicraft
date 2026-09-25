@@ -311,14 +311,14 @@ describe('the loop', () => {
 		body.list = [kidAt(106.5, FLOOR, 100.5)];
 		const run = start(body, world, { brain });
 		await advance(0);
-		expect(run.log.decisions[0]).toMatchObject({ action: 'follow', reason: 'rule:follow-floor' });
+		expect(run.log.decisions[0]).toMatchObject({ action: 'follow', reason: 'rule:follow-floor', brain: 'rule' });
 		expect(brain.asks).toHaveLength(0);
 
 		// Close horizontally (1 away) but 2 above: beyond VERTICAL_FOLLOW (1.5).
 		body.list = [kidAt(101.5, FLOOR + 2, 100.5)];
 		await advance(500);
 		const last = run.log.decisions[run.log.decisions.length - 1];
-		expect(last).toMatchObject({ action: 'follow', reason: 'rule:follow-floor' });
+		expect(last).toMatchObject({ action: 'follow', reason: 'rule:follow-floor', brain: 'rule' });
 		expect(brain.asks).toHaveLength(0);
 		expect(run.handle.stats.fallbacks).toBe(0);
 		await run.handle.stop();
@@ -941,30 +941,50 @@ describe('help_build', () => {
 		expect(run.handle.statusLine()).toContain('edits 1/50');
 	});
 
-	it('re-reads N before place: N became non-air during the ask → no place, logged; the line is spent (R2)', async () => {
-		const ref: { world: FakeWorld | null } = { world: null };
-		let helpOffers = 0;
-		const brain = eager(() => {
-			helpOffers++;
-			if (helpOffers === 1) {
-				// A kid's edit lands on N while the brain thinks; it is gone again 100 ms later.
-				const w = ref.world!;
-				w.set(N.x, N.y, N.z, 'stone');
-				setTimeout(() => w.set(N.x, N.y, N.z, AIR), 100);
-			}
-		});
-		const s = setup({ brain });
-		const world = (ref.world = s.world);
-		await placeLine(world, s.body, s.kid);
+	it('the help_build rule (Fix round 2): a brain that always says watch still places, once help_build is offered', async () => {
+		const dumbBrain = fakeBrain(() => answer('watch', { watch: 0.9 }));
+		const { world, body, kid, run } = setup({ brain: dumbBrain });
+		await placeLine(world, body, kid);
 		await advance(3500);
-		await s.run.handle.stop();
-		expect(helpOffers).toBe(1);
-		expect(calls(s.body, 'place')).toHaveLength(0);
-		const d = s.run.log.decisions.find((e) => e.action === 'help_build');
-		expect(d?.result).toMatch(/^recheck-failed/);
-		expect(s.run.log.events.some((e) => e.kind === 'help_build-recheck')).toBe(true);
-		// The line was still valid after N cleared: only the spent line keeps it from being offered.
-		expect(world.getBlock(N.x, N.y, N.z)).toBe(AIR);
+		await run.handle.stop();
+		const places = calls(body, 'place');
+		expect(places).toHaveLength(1);
+		expect(places[0].args).toEqual([N.x, N.y, N.z, BLOCK]);
+		const d = run.log.decisions.find((e) => e.action === 'help_build');
+		expect(d).toMatchObject({ reason: 'rule:help-build', brain: 'rule' });
+		// The brain is never asked once help_build is offered: no ask ever carries it as an option.
+		expect(dumbBrain.asks.some((a) => 'help_build' in a.q.options)).toBe(false);
+	});
+
+	it('the follow floor (Fix round 1) still wins over the help_build rule when the kid is out of reach', async () => {
+		const world = new FakeWorld();
+		platform(world);
+		const body = new FakeBody();
+		// The bot stays at floor height; the kid (and his line) are 2 above — out of reach
+		// vertically for follow (> VERTICAL_FOLLOW = 1.5) — even though N stays within the bot's
+		// 6-block reach: the whole scene is the standard help_build layout translated up by 2.
+		body.current = { x: 108.5, y: FLOOR, z: 100.5, yaw: 0, pitch: 0 };
+		body.walkImpl = () => new Promise(() => undefined);
+		const kY = FLOOR + 2;
+		const highA = { x: 104, y: kY, z: 100 };
+		const highB = { x: 105, y: kY, z: 100 };
+		const highC0 = { x: 106, y: kY, z: 100 };
+		const kPos = { x: 105.5, y: kY, z: 97.5 };
+		const dx = highB.x + 0.5 - kPos.x, dy = highB.y + 0.5 - (kPos.y + EYE_HEIGHT), dz = highB.z + 0.5 - kPos.z;
+		const kid = kidAt(kPos.x, kPos.y, kPos.z, { yaw: Math.atan2(-dx, -dz), pitch: Math.atan2(dy, Math.hypot(dx, dz)) });
+		body.list = [kid];
+		const brain = fakeBrain(() => answer('watch', { watch: 0.9 }));
+		const run = start(body, world, { brain });
+		for (const cell of [highA, highB, highC0]) {
+			await advance(100);
+			body.kidEdit(world, kid, cell, id(BLOCK));
+		}
+		await advance(3500);
+		await run.handle.stop();
+		expect(calls(body, 'place')).toHaveLength(0);
+		const withHelpBuildOffered = run.log.decisions.find((d) => d.candidates.includes('help_build'));
+		expect(withHelpBuildOffered).toBeTruthy();
+		expect(withHelpBuildOffered).toMatchObject({ action: 'follow', reason: 'rule:follow-floor', brain: 'rule' });
 	});
 
 	/** A second line, one higher: A2 104, B2 105, C2 106 at y FLOOR + 1 → N2 (107, FLOOR + 1, 100). */
@@ -1015,41 +1035,48 @@ describe('help_build', () => {
 		expect(calls(body, 'place')[1].args).toEqual([107, FLOOR + 1, 100, BLOCK]);
 	});
 
-	it('a stop that starts during the ask (he breaks a bot block) → no place', async () => {
-		const ref: { s: ReturnType<typeof setup> | null } = { s: null };
-		let offers = 0;
-		const brain = eager(() => {
-			if (++offers !== 1) return;
-			const s = ref.s!;
-			const cell = { x: 120, y: FLOOR, z: 120 };
-			s.world.set(cell.x, cell.y, cell.z, 'stone');
-			s.body.entries = [{ ...cell, oldId: AIR, newId: id('stone'), t: Date.now() - 1000 }];
-			s.body.kidEdit(s.world, s.body.list[0], cell, AIR);
-		});
-		const s = (ref.s = setup({ brain }));
-		await placeLine(s.world, s.body, s.kid);
+	it('(Fix round 2, adjusted) a stop already active before the line completes → help_build never offered, no place', async () => {
+		// Previously this test broke a bot block INSIDE the brain's ask callback, exploiting the
+		// async gap between the offer and the place. Ruling #1 (Fix round 2) removed that gap for
+		// help_build entirely (it is taken by rule, never asked), so there is no longer a window to
+		// race: the stop must already be active by the time perceive() runs, which means
+		// editsAllowed() already refuses the offer — the guard fires earlier (never offered) rather
+		// than later (offered, then recheck fails), but the outcome — no place, ever — is the same.
+		const brain = eager();
+		const { world, body, kid, run } = setup({ brain });
+		const cell = { x: 120, y: FLOOR, z: 120 };
+		world.set(cell.x, cell.y, cell.z, 'stone');
+		body.entries = [{ ...cell, oldId: AIR, newId: id('stone'), t: Date.now() - 1000 }];
+		body.kidEdit(world, kid, cell, AIR);
+		await placeLine(world, body, kid);
 		await advance(3500);
-		await s.run.handle.stop();
-		expect(offers).toBe(1);
-		expect(calls(s.body, 'place')).toHaveLength(0);
-		expect(s.run.log.decisions.find((d) => d.action === 'help_build')?.result).toBe('recheck-failed: stop signal');
+		await run.handle.stop();
+		expect(calls(body, 'place')).toHaveLength(0);
+		expect(run.log.decisions.some((d) => d.candidates.includes('help_build'))).toBe(false);
 	});
 
-	it('the kid steps into N\'s buffer during the ask → no place', async () => {
-		const ref: { s: ReturnType<typeof setup> | null } = { s: null };
-		let offers = 0;
-		const brain = eager(() => {
-			if (++offers !== 1) return;
-			const s = ref.s!;
-			s.body.list = [{ ...s.body.list[0], x: 107.5, z: 101.5 }];
-		});
-		const s = (ref.s = setup({ brain }));
-		await placeLine(s.world, s.body, s.kid);
+	it('(Fix round 2, adjusted) the kid already stands in N\'s buffer → help_build never offered, no place', async () => {
+		// Previously this test moved the kid INTO the buffer INSIDE the brain's ask callback, for the
+		// same reason as above: that async gap no longer exists for help_build. The kid is placed in
+		// N's buffer from the start instead (mirroring candidates.test.ts's pure "NOT offered when N
+		// is in the target kid's buffer" case) — the offer never happens, so there is nothing to
+		// place, end to end through the real companion loop.
+		const world = new FakeWorld();
+		platform(world);
+		const body = new FakeBody();
+		body.current = { x: 108.5, y: FLOOR, z: 100.5, yaw: 0, pitch: 0 };
+		body.walkImpl = () => new Promise(() => undefined);
+		const kPos = { x: 107.5, y: FLOOR, z: 100.5 };
+		const dx = B.x + 0.5 - kPos.x, dy = B.y + 0.5 - (kPos.y + EYE_HEIGHT), dz = B.z + 0.5 - kPos.z;
+		const kid = kidAt(kPos.x, kPos.y, kPos.z, { yaw: Math.atan2(-dx, -dz), pitch: Math.atan2(dy, Math.hypot(dx, dz)) });
+		body.list = [kid];
+		const brain = eager();
+		const run = start(body, world, { brain });
+		await placeLine(world, body, kid);
 		await advance(3500);
-		await s.run.handle.stop();
-		expect(offers).toBe(1);
-		expect(calls(s.body, 'place')).toHaveLength(0);
-		expect(s.run.log.decisions.find((d) => d.action === 'help_build')?.result).toBe('recheck-failed: N is next to a kid');
+		await run.handle.stop();
+		expect(calls(body, 'place')).toHaveLength(0);
+		expect(run.log.decisions.some((d) => d.candidates.includes('help_build'))).toBe(false);
 	});
 
 	it('--no-edits → never place, and help_build is never offered', async () => {

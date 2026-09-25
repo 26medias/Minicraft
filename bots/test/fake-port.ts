@@ -194,6 +194,11 @@ export class FakeBody implements Body {
 		for (const cb of [...this.editCbs]) cb(e);
 	}
 
+	/** Test-only: delivers an fx to every `onFx` subscriber. */
+	emitFx(fx: FxMsg): void {
+		for (const cb of [...this.fxCbs]) cb(fx);
+	}
+
 	/** Test-only: a kid's single-op edit of one cell, applied to `world` (old id read from it). */
 	kidEdit(world: FakeWorld, by: BotPlayer, cell: Vec3, newId: number, opCount = 1): void {
 		const oldId = world.getBlock(cell.x, cell.y, cell.z);

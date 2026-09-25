@@ -82,6 +82,12 @@ describe('StopSignal', () => {
 		expect(s.anyActive(T0)).toBe(false);
 	});
 
+	it('no stop when the cell still ends up holding the bot block (newId === the journal newId)', () => {
+		const s = new StopSignal(STOP_MS);
+		expect(s.onEdit(edit('Noah', [{ x: 10, y: 70, z: 10, oldId: PLANKS, newId: PLANKS }]), journal, T0)).toBeNull();
+		expect(s.anyActive(T0)).toBe(false);
+	});
+
 	it('a multi-op edit (e.g. TNT) that includes a bot block counts', () => {
 		const s = new StopSignal(STOP_MS);
 		const tnt = edit('Noah', [

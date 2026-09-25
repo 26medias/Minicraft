@@ -34,6 +34,7 @@ function makeKid(overrides: Partial<KidInfo> = {}): KidInfo {
 		lookBlock: null,
 		lookDistance: null,
 		lookHeldMs: 0,
+		miningCell: null,
 		placements: [],
 		idleSinceMs: null,
 		...overrides,

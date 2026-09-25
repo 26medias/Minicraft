@@ -159,6 +159,62 @@ describe('target rotation (spec §12b)', () => {
 		expect(s.switchedFrom!.idleMs).toBeGreaterThanOrEqual(30_000);
 	});
 
+	it('R1: an idle near kid and an ACTIVE kid 140 blocks away → switch to the far kid, and no flip-back', () => {
+		setKids(kid('Noah', 1, 204, 200), kid('Julien', 2, 340, 200));
+		expect(tick().target?.name).toBe('Noah');
+		const seen: { at: number; name: string }[] = [];
+		advance(80_000, 500, (snap) => {
+			seen.push({ at: now - T0, name: snap.target!.name });
+			wiggle('Julien');
+		});
+		const firstJulien = seen.find((x) => x.name === 'Julien')!;
+		expect(firstJulien.at).toBe(30_000);
+		// Julien is 140 away and stays the target: no distance drop, no flip back to the near idle kid.
+		expect(seen.filter((x) => x.at >= 30_000).every((x) => x.name === 'Julien')).toBe(true);
+	});
+
+	it('all idle, 3 kids → round-robin, least recently targeted first: nobody is starved', () => {
+		setKids(kid('Noah', 1, 204, 200), kid('Julien', 2, 212, 200), kid('Mia', 3, 218, 200));
+		const switches: { at: number; to: string }[] = [];
+		let last = tick().target!.name;
+		advance(95_000, 500, (snap) => {
+			if (snap.target!.name !== last) {
+				switches.push({ at: now - T0, to: snap.target!.name });
+				last = snap.target!.name;
+			}
+		});
+		// Noah → Julien (nearest never-targeted) → Mia (never targeted, though Noah is nearer) → Noah → Julien.
+		expect(switches).toEqual([
+			{ at: 30_000, to: 'Julien' },
+			{ at: 50_000, to: 'Mia' },
+			{ at: 70_000, to: 'Noah' },
+			{ at: 90_000, to: 'Julien' },
+		]);
+	});
+
+	it('a NEARER idle kid vs a FARTHER active kid → the active one wins (§12b: the idle one is not eligible)', () => {
+		setKids(kid('Noah', 1, 204, 200), kid('Julien', 2, 207, 200), kid('Mia', 3, 230, 200));
+		expect(tick().target?.name).toBe('Noah');
+		const s = advance(30_000, 500, () => wiggle('Mia'));
+		expect(s.target?.name).toBe('Mia');
+	});
+
+	it('a kid who rejoins is active from the rejoin time (his idle clock restarts)', () => {
+		setKids(kid('Noah', 1, 204, 200));
+		let s = advance(20_000);
+		expect(s.target!.idleSinceMs).toBe(T0);
+		setKids();
+		now += 500;
+		tick();
+		setKids(kid('Noah', 7, 204, 200));
+		now += 500;
+		const rejoin = now;
+		s = tick();
+		expect(s.target!.idleSinceMs).toBeNull();
+		now += 500;
+		expect(tick().target!.idleSinceMs).toBe(rejoin);
+	});
+
 	it('a single idle kid → no switch, ever', () => {
 		setKids(kid('Noah', 1, 204, 200));
 		advance(90_000, 500, (snap) => expect(snap.target?.name).toBe('Noah'));
@@ -234,6 +290,24 @@ describe('the flying flag (§12a)', () => {
 		expect(tick().target!.flying).toBe(true);
 	});
 
+	it('the hold is strictly MORE than 0.5 s: exactly 500 ms → not yet, 501 ms → flying', () => {
+		setKids(player({ id: 1, name: 'Noah', x: X, y: feet(X, Z) + 20, z: Z }));
+		tick();
+		now += 500;
+		expect(tick().target!.flying).toBe(false);
+		now += 1;
+		expect(tick().target!.flying).toBe(true);
+	});
+
+	it('no ground within 64 below (groundY null) counts as high above ground → flying', () => {
+		const y = feet(X, Z) + 70;
+		expect(world.groundY(X, Z, y)).toBeNull();
+		setKids(player({ id: 1, name: 'Noah', x: X, y, z: Z }));
+		tick();
+		now += 600;
+		expect(tick().target!.flying).toBe(true);
+	});
+
 	it('a jump apex of 1.33 → never flying', () => {
 		setKids(player({ id: 1, name: 'Noah', x: X, y: feet(X, Z) + 1.33, z: Z }));
 		advance(3000, 250, (s) => expect(s.target!.flying).toBe(false));
@@ -303,6 +377,40 @@ describe('look target', () => {
 		expect(tick().target!.lookHeldMs).toBe(0);
 		now += 700;
 		expect(tick().target!.lookHeldMs).toBe(700);
+	});
+});
+
+describe('mining (fx mine / mine-stop)', () => {
+	it('tracks the cell a kid mines, until mine-stop, his break of it, or its mining time', () => {
+		const noah = kid('Noah', 1, 206, 200);
+		setKids(noah);
+		tick();
+		const cell = { x: 207, y: 100, z: 200 };
+		body.emitFx({ t: 'fx', kind: 'mine', ...cell, tier: 3, dur: 1500, by: 1 });
+		now += 100;
+		expect(tick().target!.miningCell).toEqual(cell);
+		body.emitFx({ t: 'fx', kind: 'mine-stop', ...cell, by: 1 });
+		now += 100;
+		expect(tick().target!.miningCell).toBeNull();
+		body.emitFx({ t: 'fx', kind: 'mine', ...cell, tier: 3, dur: 1500, by: 1 });
+		now += 100;
+		expect(tick().target!.miningCell).toEqual(cell);
+		body.kidEdit(world, noah, cell, AIR);
+		now += 100;
+		expect(tick().target!.miningCell).toBeNull();
+		body.emitFx({ t: 'fx', kind: 'mine', ...cell, tier: 3, dur: 1500, by: 1 });
+		now += 1500;
+		expect(tick().target!.miningCell).toBeNull(); // its mining time is over
+	});
+
+	it("another player's mining is not this kid's", () => {
+		setKids(kid('Noah', 1, 206, 200), kid('Julien', 2, 212, 200));
+		tick();
+		body.emitFx({ t: 'fx', kind: 'mine', x: 1, y: 2, z: 3, dur: 5000, by: 2 });
+		now += 100;
+		const s = tick();
+		expect(s.target!.miningCell).toBeNull();
+		expect(s.others[0].miningCell).toEqual({ x: 1, y: 2, z: 3 });
 	});
 });
 
@@ -384,6 +492,7 @@ describe('renderText: exact fixtures', () => {
 			lookBlock: null,
 			lookDistance: null,
 			lookHeldMs: 0,
+			miningCell: null,
 			placements: [],
 			idleSinceMs: null,
 			...over,
@@ -452,6 +561,16 @@ describe('renderText: exact fixtures', () => {
 		expect(renderText(s)).toBe(
 			'Noah is 5.0 blocks south, 4.0 below you, swimming. Noah is not looking at any block. Noah placed 2 blocks in the last 20 seconds. You have not done anything yet.',
 		);
+	});
+
+	it('no bearing straight above/below or on the spot (bearing(0, 0) is not "south")', () => {
+		expect(bearing(0, 0)).toBeNull();
+		const above = snap({ target: k({ pose: { x: 0.2, y: 70, z: -0.1, yaw: 0, pitch: 0 }, flying: true }) });
+		expect(renderText(above)).toBe('Noah is 6.0 blocks directly above you, flying. Noah is not looking at any block. You have not done anything yet.');
+		const below = snap({ target: k({ pose: { x: 0, y: 60, z: 0, yaw: 0, pitch: 0 } }) });
+		expect(renderText(below)).toMatch(/^Noah is 4\.0 blocks directly below you, standing still\./);
+		const here = snap({ target: k({ pose: { x: 0.3, y: 64.5, z: 0, yaw: 0, pitch: 0 } }) });
+		expect(renderText(here)).toMatch(/^Noah is right here, standing still\./);
 	});
 
 	it('is deterministic: the same snapshot renders the same text', () => {

@@ -88,6 +88,9 @@ export interface KidInfo {
 	/** How long (ms) `lookTarget` has been the same cell (`null` counts as a cell too). §12a's
 	 *  `help_build` needs it held ≥ 1 s while he placed nothing. */
 	lookHeldMs: number;
+	/** The cell he is mining right now (from `fx mine`, until `mine-stop`, his break of it, or its
+	 *  mining time), or `null`. `help_build` is not offered while he mines. */
+	miningCell: Vec3 | null;
 	/** This kid's own last placements, most recent last (§6 keeps 5; §12a's `help_build` rule only
 	 *  ever needs the last 3). */
 	placements: Placement[];

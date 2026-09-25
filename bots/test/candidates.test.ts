@@ -1,6 +1,6 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { EYE_HEIGHT } from 'minicraft-bot';
-import { candidates, planCandidates } from '../src/body/candidates.js';
+import { candidates, markLineUsed, planCandidates } from '../src/body/candidates.js';
 import type { EditGuard } from '../src/body/candidates.js';
 import { inBodyBox, kidBuffer } from '../src/body/guard.js';
 import type { KidInfo, Placement, Snapshot, Vec3 } from '../src/types.js';
@@ -46,6 +46,7 @@ function kid(over: Partial<KidInfo> = {}): KidInfo {
 		lookBlock: null,
 		lookDistance: null,
 		lookHeldMs: 1500,
+		miningCell: null,
 		placements: [],
 		idleSinceMs: null,
 		...over,
@@ -71,7 +72,7 @@ function guard(over: Partial<EditGuard> = {}): EditGuard {
 		budgetLeft: 50,
 		editEveryMs: 2000,
 		lastEditMs: null,
-		offeredLines: new Set(),
+		usedLines: new Set(),
 		wanderTether: 12,
 		anchor: { x: 100, y: Y, z: 100 },
 		rng: mulberry32(1),
@@ -231,9 +232,20 @@ describe('help_build (§12a)', () => {
 		expect(offersHelp(snap({ target: builder() }), guard({ lastEditMs: T0 - 2000 }))).toBe(true);
 	});
 
-	it('offered at most once per line', () => {
+	it('candidates() is PURE: two calls give identical results and leave the guard untouched (R2)', () => {
 		const g = guard();
-		expect(offersHelp(snap({ target: builder() }), g)).toBe(true);
+		const s = snap({ target: builder() });
+		const first = planCandidates(s, world, g);
+		const second = planCandidates(s, world, g);
+		expect(second).toEqual(first);
+		expect(first.candidates).toContain('help_build');
+		expect(g.usedLines.size).toBe(0);
+	});
+
+	it('once per line: after markLineUsed (the loop CHOSE help_build), that line is not offered again', () => {
+		const g = guard();
+		const plan = planCandidates(snap({ target: builder() }), world, g);
+		markLineUsed(g, plan.helpBuild!.line);
 		expect(offersHelp(snap({ target: builder() }), g)).toBe(false);
 		// The kid extends the same line himself (B, C0, N): still the same line → not again.
 		world.set(N.x, N.y, N.z, 'oak_planks');
@@ -244,6 +256,32 @@ describe('help_build (§12a)', () => {
 		for (const x of [103, 104, 105]) world.set(x, Y, 102, 'oak_planks');
 		const parallel = builder({ placements: [{ cell: row(103), block: 'oak_planks', ageMs: 3000 }, { cell: row(104), block: 'oak_planks', ageMs: 2000 }, { cell: row(105), block: 'oak_planks', ageMs: 1500 }], lookTarget: row(105) });
 		expect(offersHelp(snap({ target: parallel }), g)).toBe(true);
+	});
+
+	it('NOT offered on a broken line: C0 (or B) no longer holds the placed block', () => {
+		world.set(C0.x, C0.y, C0.z, AIR);
+		// He looks at the ground under N, a valid aim, so only the broken-line rule refuses it.
+		const aim = { lookTarget: { x: 106, y: Y - 1, z: 100 } };
+		expect(offersHelp(snap({ target: builder(aim) }))).toBe(false);
+		world.set(C0.x, C0.y, C0.z, 'oak_planks');
+		world.set(B.x, B.y, B.z, 'stone');
+		expect(offersHelp(snap({ target: builder(aim) }))).toBe(false);
+		world.set(B.x, B.y, B.z, 'oak_planks');
+		expect(offersHelp(snap({ target: builder(aim) }))).toBe(true);
+	});
+
+	it('NOT offered while the kid mines C0 while looking at it', () => {
+		expect(offersHelp(snap({ target: builder({ lookTarget: C0, miningCell: C0 }) }))).toBe(false);
+	});
+
+	it.each<[string, [number, number, number], boolean]>([
+		['A → B exactly 4000 ms → offered', [5500, 1500, 1200], true],
+		['A → B 4001 ms → not', [5501, 1500, 1200], false],
+		['B → C0 exactly 4000 ms → offered', [6000, 5000, 1000], true],
+		['B → C0 4001 ms → not', [6001, 5001, 1000], false],
+		['C0 3999 ms old → offered', [5000, 4500, 3999], true],
+	])('gap boundaries: %s', (_label, ages, want) => {
+		expect(offersHelp(snap({ target: builder({ placements: line(ages) }) }))).toBe(want);
 	});
 });
 

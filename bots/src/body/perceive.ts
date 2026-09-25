@@ -4,11 +4,13 @@
  *
  * - **Kids** are non-bot players with a pose. Everything about a kid is tracked by NAME, so a kid who
  *   reconnects (new id, same name) keeps his target status, motion history and placements.
- * - **The target** is the nearest kid, sticky, until he leaves or goes more than 48 blocks away, or
- *   (§12b) he has been idle for `idleSwitchMs` while another kid is online: then the nearest other
- *   kid, preferring kids who aren't idle; when every other kid is idle too, round-robin (the least
- *   recently targeted, nearest first). A new target is kept at least `minTargetMs`.
- * - **Idle** (§12b): horizontal speed over the last 1 s < 0.3 b/s and no edit by him.
+ * - **The target** is the nearest kid, sticky, until he leaves, or (§12b) he has been idle for
+ *   `idleSwitchMs` while another kid is online: then the nearest other kid who isn't idle, whatever
+ *   the distance (ruling R1: there is no distance drop, the bot flies to a far kid); when every other
+ *   kid is idle too, round-robin (the least recently targeted, nearest first). A new target is kept
+ *   at least `minTargetMs`.
+ * - **Idle** (§12b): horizontal speed over the last 1 s < 0.3 b/s and no edit by him. Joining (or
+ *   rejoining) counts as activity.
  * - **Motion** comes from pose samples taken on the bot's clock at each `perceive` call.
  * - **Flying** (§12a): not in liquid (feet or feet + 1), and feet more than 1.5 above `groundY` on
  *   every column his box overlaps, for longer than 0.5 s.
@@ -16,6 +18,7 @@
  *   last 5 are kept.
  */
 import { EYE_HEIGHT } from 'minicraft-bot';
+import type { FxMsg } from 'minicraft-bot';
 import type { Body, PlayerView, WorldView } from '../port.js';
 import type { Candidate, EditEvent, KidInfo, Placement, Snapshot, Vec3 } from '../types.js';
 import { IDLE_SPEED_THRESHOLD, MOVING_SPEED_THRESHOLD } from '../types.js';
@@ -28,8 +31,6 @@ export interface PerceptionTuning {
 	minTargetMs: number;
 }
 
-/** The target is dropped beyond this distance (spec §6). */
-export const TARGET_DROP_DIST = 48;
 /** The look-target raycast's reach (spec §6). */
 export const LOOK_REACH = 6;
 /** Feet more than this above `groundY` on every box column counts toward flying (§12a). */
@@ -38,6 +39,8 @@ export const FLY_HEIGHT = 1.5;
 export const FLY_HOLD_MS = 500;
 /** §6: the kid's last 5 placements are kept. */
 export const PLACEMENTS_KEPT = 5;
+/** A `fx mine` with no `dur` is taken to last at most this long. */
+const MINE_DEFAULT_MS = 10_000;
 /** Pose samples older than this are dropped (the longest window is 1 s). */
 const SAMPLE_KEEP_MS = 2000;
 
@@ -56,6 +59,16 @@ interface KidTrack {
 	lookKey: string;
 	lookSinceMs: number;
 	placements: { cell: Vec3; block: string; t: number }[];
+	/** The cell he is mining and until when (from `fx mine`), or `null`. */
+	mining: { cell: Vec3; until: number } | null;
+	/** Whether he was online at the previous `perceive` (a rejoin resets his activity and samples). */
+	present: boolean;
+}
+
+interface TimedFx {
+	fx: FxMsg;
+	byName: string | null;
+	t: number;
 }
 
 interface TimedEdit {
@@ -69,6 +82,8 @@ export interface PerceptionState {
 	readonly stop: StopSignal | null;
 	/** Edits heard since the last `perceive`, stamped with `clock()` when they arrived. */
 	inbox: TimedEdit[];
+	/** `fx mine` / `mine-stop` heard since the last `perceive`, with the author's name at arrival. */
+	fxInbox: TimedFx[];
 	kids: Map<string, KidTrack>;
 	targetName: string | null;
 	targetSinceMs: number;
@@ -91,6 +106,7 @@ export function createPerception(body: Body, opts: PerceptionOptions): Perceptio
 		clock: opts.clock,
 		stop: opts.stop ?? null,
 		inbox: [],
+		fxInbox: [],
 		kids: new Map(),
 		targetName: null,
 		targetSinceMs: 0,
@@ -99,9 +115,19 @@ export function createPerception(body: Body, opts: PerceptionOptions): Perceptio
 		lastActions: [],
 		unsubscribe: () => undefined,
 	};
-	state.unsubscribe = body.onEdit((edit) => {
+	const offEdit = body.onEdit((edit) => {
 		state.inbox.push({ edit, t: state.clock() });
 	});
+	const offFx = body.onFx((fx) => {
+		if (fx.kind !== 'mine' && fx.kind !== 'mine-stop') return;
+		const author = body.players().find((p) => p.id === fx.by);
+		const byName = author && !author.bot ? author.name : null;
+		state.fxInbox.push({ fx, byName, t: state.clock() });
+	});
+	state.unsubscribe = () => {
+		offEdit();
+		offFx();
+	};
 	return state;
 }
 
@@ -112,7 +138,7 @@ export function recordAction(state: PerceptionState, action: Candidate): void {
 }
 
 function newTrack(now: number): KidTrack {
-	return { samples: [], lastActiveMs: now, airborneSinceMs: null, lookKey: '', lookSinceMs: now, placements: [] };
+	return { samples: [], lastActiveMs: now, airborneSinceMs: null, lookKey: '', lookSinceMs: now, placements: [], mining: null, present: false };
 }
 
 function track(state: PerceptionState, name: string, now: number): KidTrack {
@@ -149,6 +175,20 @@ function isEditActivity(edit: EditEvent, world: WorldView): boolean {
 	return edit.cells.some((c) => !world.isLiquid(c.newId));
 }
 
+function drainFx(state: PerceptionState): void {
+	const inbox = state.fxInbox;
+	state.fxInbox = [];
+	for (const { fx, byName, t } of inbox) {
+		if (byName === null) continue;
+		const tr = track(state, byName, t);
+		if (fx.kind === 'mine') {
+			tr.mining = { cell: { x: fx.x, y: fx.y, z: fx.z }, until: t + (fx.dur ?? MINE_DEFAULT_MS) };
+		} else {
+			tr.mining = null;
+		}
+	}
+}
+
 function drainEdits(state: PerceptionState, world: WorldView): void {
 	const inbox = state.inbox;
 	state.inbox = [];
@@ -156,6 +196,8 @@ function drainEdits(state: PerceptionState, world: WorldView): void {
 		if (edit.byBot || edit.byName === null) continue;
 		const tr = track(state, edit.byName, t);
 		if (isEditActivity(edit, world)) tr.lastActiveMs = Math.max(tr.lastActiveMs, t);
+		// Breaking the cell he was mining ends the mine.
+		if (tr.mining && edit.cells.some((c) => c.x === tr.mining!.cell.x && c.y === tr.mining!.cell.y && c.z === tr.mining!.cell.z)) tr.mining = null;
 		if (edit.opCount !== 1 || edit.cells.length !== 1) continue;
 		const cell = edit.cells[0];
 		if (!world.isSolid(cell.newId) || world.isLiquid(cell.newId)) continue;
@@ -192,6 +234,13 @@ function lookOf(p: PlayerView, world: WorldView): { cell: Vec3; distance: number
 
 function updateKid(state: PerceptionState, p: PlayerView, world: WorldView, now: number): KidInfo {
 	const tr = track(state, p.name, now);
+	if (!tr.present) {
+		// Joined or rejoined: a fresh start for his activity clock and motion history.
+		tr.present = true;
+		tr.lastActiveMs = now;
+		tr.samples = [];
+		tr.airborneSinceMs = null;
+	}
 	tr.samples.push({ t: now, x: p.x, y: p.y, z: p.z });
 	while (tr.samples.length > 1 && tr.samples[0].t < now - SAMPLE_KEEP_MS) tr.samples.shift();
 
@@ -213,6 +262,7 @@ function updateKid(state: PerceptionState, p: PlayerView, world: WorldView, now:
 		tr.lookSinceMs = now;
 	}
 
+	if (tr.mining && now >= tr.mining.until) tr.mining = null;
 	const placements: Placement[] = tr.placements.map((pl) => ({ cell: { ...pl.cell }, block: pl.block, ageMs: now - pl.t }));
 	return {
 		name: p.name,
@@ -227,6 +277,7 @@ function updateKid(state: PerceptionState, p: PlayerView, world: WorldView, now:
 		lookBlock: look ? world.blockName(world.getBlock(look.cell.x, look.cell.y, look.cell.z)) : null,
 		lookDistance: look ? look.distance : null,
 		lookHeldMs: now - tr.lookSinceMs,
+		miningCell: tr.mining ? { ...tr.mining.cell } : null,
 		placements,
 		idleSinceMs: tr.lastActiveMs === now ? null : tr.lastActiveMs,
 	};
@@ -236,9 +287,14 @@ function idleFor(k: KidInfo, now: number): number {
 	return k.idleSinceMs === null ? 0 : now - k.idleSinceMs;
 }
 
+/** Plain code-unit order (deterministic, locale-free). */
+export function compareNames(a: string, b: string): number {
+	return a < b ? -1 : a > b ? 1 : 0;
+}
+
 /** Nearest first, ties by name (deterministic). */
 function byDistance(bot: Vec3): (a: KidInfo, b: KidInfo) => number {
-	return (a, b) => hdist(a.pose, bot) - hdist(b.pose, bot) || a.name.localeCompare(b.name);
+	return (a, b) => hdist(a.pose, bot) - hdist(b.pose, bot) || compareNames(a.name, b.name);
 }
 
 function selectTarget(state: PerceptionState, kids: KidInfo[], bot: Vec3, now: number): KidInfo | null {
@@ -251,8 +307,8 @@ function selectTarget(state: PerceptionState, kids: KidInfo[], bot: Vec3, now: n
 		return k;
 	};
 
-	let current = kids.find((k) => k.name === state.targetName) ?? null;
-	if (current && hdist(current.pose, bot) > TARGET_DROP_DIST) current = null;
+	// Sticky by name until he leaves (ruling R1: no distance drop).
+	const current = kids.find((k) => k.name === state.targetName) ?? null;
 	if (!current) {
 		const nearest = [...kids].sort(byDistance(bot))[0];
 		if (!nearest) {
@@ -282,11 +338,12 @@ function selectTarget(state: PerceptionState, kids: KidInfo[], bot: Vec3, now: n
  */
 export function perceive(state: PerceptionState, body: Body, world: WorldView, nowMs: number): { snapshot: Snapshot; state: PerceptionState } {
 	drainEdits(state, world);
+	drainFx(state);
 	const botPose = body.pose();
-	const kids = body
-		.players()
-		.filter((p) => !p.bot && p.hasPos)
-		.map((p) => updateKid(state, p, world, nowMs));
+	const online = body.players().filter((p) => !p.bot && p.hasPos);
+	const onlineNames = new Set(online.map((p) => p.name));
+	for (const [name, tr] of state.kids) if (!onlineNames.has(name)) tr.present = false;
+	const kids = online.map((p) => updateKid(state, p, world, nowMs));
 	const target = selectTarget(state, kids, botPose, nowMs);
 	const others = kids.filter((k) => k !== target).sort(byDistance(botPose));
 	const snapshot: Snapshot = {
@@ -308,8 +365,13 @@ export function perceive(state: PerceptionState, body: Body, world: WorldView, n
 
 const COMPASS = ['north', 'north-east', 'east', 'south-east', 'south', 'south-west', 'west', 'north-west'];
 
-/** The 8-point bearing of a horizontal offset, with north = −z and east = +x. */
-export function bearing(dx: number, dz: number): string {
+/** Below this horizontal distance there is no meaningful bearing ("right here", "directly above"). */
+export const HERE_DIST = 0.5;
+
+/** The 8-point bearing of a horizontal offset, with north = −z and east = +x; `null` when the offset
+ *  is under `HERE_DIST` (there is no direction to name). */
+export function bearing(dx: number, dz: number): string | null {
+	if (Math.hypot(dx, dz) < HERE_DIST) return null;
 	const deg = (Math.atan2(dx, -dz) * 180) / Math.PI;
 	const i = ((Math.round(deg / 45) % 8) + 8) % 8;
 	return COMPASS[i];
@@ -370,6 +432,20 @@ function lastActionText(action: Candidate | undefined, target: string | null): s
 	}
 }
 
+/**
+ * Where a kid is, from the bot: "6.2 blocks north-east", "…, 4.0 above you" when |dy| > 1.5; with no
+ * horizontal bearing, "6.0 blocks directly above you" / "directly below you", or "right here".
+ */
+function whereText(p: Vec3, bot: Vec3): string {
+	const dx = p.x - bot.x, dy = p.y - bot.y, dz = p.z - bot.z;
+	const dist = Math.hypot(dx, dy, dz).toFixed(1);
+	const dir = bearing(dx, dz);
+	const vertical = Math.abs(dy) > 1.5;
+	const updown = dy > 0 ? 'above' : 'below';
+	if (dir === null) return vertical ? `${dist} blocks directly ${updown} you` : 'right here';
+	return `${dist} blocks ${dir}${vertical ? `, ${Math.abs(dy).toFixed(1)} ${updown} you` : ''}`;
+}
+
 /** The deterministic text state for the brain, built from the snapshot only. */
 export function renderText(s: Snapshot): string {
 	const bot = s.bot.pose;
@@ -377,10 +453,7 @@ export function renderText(s: Snapshot): string {
 	const k = s.target;
 	if (!k) return `No one is here. ${lastActionText(last, null)}`;
 	const parts: string[] = [];
-	const dx = k.pose.x - bot.x, dy = k.pose.y - bot.y, dz = k.pose.z - bot.z;
-	const dist = Math.hypot(dx, dy, dz);
-	const height = Math.abs(dy) > 1.5 ? `, ${Math.abs(dy).toFixed(1)} ${dy > 0 ? 'above' : 'below'} you` : '';
-	parts.push(`${k.name} is ${dist.toFixed(1)} blocks ${bearing(dx, dz)}${height}, ${motionWord(k)}.`);
+	parts.push(`${k.name} is ${whereText(k.pose, bot)}, ${motionWord(k)}.`);
 	if (k.lookTarget && k.lookBlock !== null && k.lookDistance !== null) {
 		parts.push(`${k.name} is looking at ${k.lookBlock} ${k.lookDistance.toFixed(1)} blocks ahead.`);
 	} else {
@@ -390,7 +463,7 @@ export function renderText(s: Snapshot): string {
 	if (placed) parts.push(placed);
 	if (s.switchedFrom) parts.push(`You came to ${k.name} because ${s.switchedFrom.name} stood still for ${Math.floor(s.switchedFrom.idleMs / 1000)} seconds.`);
 	if (s.others.length > 0) {
-		const list = s.others.map((o) => `${o.name}, ${Math.hypot(o.pose.x - bot.x, o.pose.y - bot.y, o.pose.z - bot.z).toFixed(1)} blocks ${bearing(o.pose.x - bot.x, o.pose.z - bot.z)}`);
+		const list = s.others.map((o) => `${o.name}, ${whereText(o.pose, bot)}`);
 		parts.push(`Also here: ${list.join('; ')}.`);
 	}
 	if (s.stopActiveForTarget) parts.push(`${k.name} broke one of your blocks: do not build for ${k.name} now.`);

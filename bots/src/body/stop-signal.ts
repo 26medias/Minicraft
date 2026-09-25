@@ -43,7 +43,7 @@ export class StopSignal {
 	active(now: number): { name: string; remainingMs: number }[] {
 		const out: { name: string; remainingMs: number }[] = [];
 		for (const [name, t] of this.until) if (t > now) out.push({ name, remainingMs: t - now });
-		return out.sort((a, b) => a.name.localeCompare(b.name));
+		return out.sort((a, b) => (a.name < b.name ? -1 : a.name > b.name ? 1 : 0));
 	}
 }
 

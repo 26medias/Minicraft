@@ -11,8 +11,9 @@
  * | `idle`       | always |
  *
  * `planCandidates` also returns what the loop (Task 4) needs to act: the `help_build` cell and block,
- * and the wander spot. Offering `help_build` records its line in `guard.offeredLines`: it is offered
- * **at most once per line** (§12a).
+ * and the wander spot. Both functions are PURE: they never write to `guard`. `help_build` is offered
+ * **at most once per line** (§12a, ruling R2): the loop calls `markLineUsed(guard, plan.line)` when it
+ * CHOOSES `help_build` — even if the pre-place re-check then fails — and that line is not offered again.
  */
 import { EYE_HEIGHT } from 'minicraft-bot';
 import type { WorldView } from '../port.js';
@@ -29,8 +30,8 @@ export interface EditGuard {
 	editEveryMs: number;
 	/** When the bot last edited (its clock), or `null` before its first edit. */
 	lastEditMs: number | null;
-	/** Lines `help_build` was already offered for; candidates adds to it when it offers one. */
-	offeredLines: Set<string>;
+	/** Lines `help_build` was already chosen for (`markLineUsed`); never offered again. */
+	usedLines: Set<string>;
 	wanderTether: number;
 	/** The last kid position, or the spawn: the wander tether's centre. */
 	anchor: Vec3;
@@ -109,7 +110,7 @@ function editsAllowed(s: Snapshot, world: WorldView, guard: EditGuard): boolean 
 
 /**
  * §12a `help_build`: the line rule, without the edit-permission checks. Returns the plan, or `null`.
- * Does not record the line; `planCandidates` does that when it offers it.
+ * Pure: it reads `guard.usedLines` and never writes it.
  */
 export function helpBuildPlan(s: Snapshot, world: WorldView, guard: EditGuard): HelpBuildPlan | null {
 	const kid = s.target;
@@ -134,7 +135,14 @@ export function helpBuildPlan(s: Snapshot, world: WorldView, guard: EditGuard): 
 
 	// At most once per line.
 	const line = lineKey(kid.name, c0.cell, d, c0.block);
-	if (guard.offeredLines.has(line)) return null;
+	if (guard.usedLines.has(line)) return null;
+
+	// The line is still there: B and C0 hold the blocks he placed (a broken line is not continued).
+	if (world.blockName(world.getBlock(b.cell.x, b.cell.y, b.cell.z)) !== b.block) return null;
+	if (world.blockName(world.getBlock(c0.cell.x, c0.cell.y, c0.cell.z)) !== c0.block) return null;
+
+	// He is not mining anything (e.g. taking C0 back out while looking at it).
+	if (kid.miningCell !== null) return null;
 
 	// N: AIR, outside every kid's buffer and body box, within reach of the bot's eye.
 	if (world.getBlock(n.x, n.y, n.z) !== AIR) return null;
@@ -184,7 +192,7 @@ export function wanderSpot(s: Snapshot, world: WorldView, guard: EditGuard): Vec
 	return null;
 }
 
-/** The candidates and what acting on them needs. Records an offered `help_build` line in `guard`. */
+/** The candidates and what acting on them needs. Pure: `guard` is only read. */
 export function planCandidates(s: Snapshot, world: WorldView, guard: EditGuard): CandidatePlan {
 	const out: Candidate[] = [];
 	const kid = s.target;
@@ -200,10 +208,7 @@ export function planCandidates(s: Snapshot, world: WorldView, guard: EditGuard):
 		out.push('watch');
 		if (editsAllowed(s, world, guard)) {
 			helpBuild = helpBuildPlan(s, world, guard);
-			if (helpBuild) {
-				guard.offeredLines.add(helpBuild.line);
-				out.push('help_build');
-			}
+			if (helpBuild) out.push('help_build');
 		}
 	}
 	if (allKids(s).length === 0) {
@@ -214,7 +219,15 @@ export function planCandidates(s: Snapshot, world: WorldView, guard: EditGuard):
 	return { candidates: out, helpBuild, wander };
 }
 
-/** The feasible candidates this tick (spec §6). See `planCandidates` for the side effect on `guard`. */
+/** The feasible candidates this tick (spec §6). Pure. */
 export function candidates(s: Snapshot, world: WorldView, guard: EditGuard): Candidate[] {
 	return planCandidates(s, world, guard).candidates;
+}
+
+/**
+ * Spends a `help_build` line (§12a, ruling R2). The loop calls it when it CHOOSES `help_build`, whether
+ * or not the place then happens (the pre-place re-check can refuse it): that line is never offered again.
+ */
+export function markLineUsed(guard: EditGuard, line: string): void {
+	guard.usedLines.add(line);
 }

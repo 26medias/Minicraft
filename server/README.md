@@ -91,6 +91,36 @@ fields the server adds (`welcome.hasPos`, the mining `fx` `dur`).
 restart the server, then rebuild and redeploy the site. Clients built with the old token get
 `4007 bad_token`.
 
+### Forcing a client update
+
+`docs/protocol.md` §6 (Versioning): a cached bundle from before a breaking change (in practice,
+mostly the bot SDK falling behind the game) needs to be refused rather than let it desync from
+the server. This is what `CLIENT_VERSION`/`ver` and `MC_MIN_CLIENT`/`MinClient` are for — kept
+separate from `proto`, which only moves for an actual wire-shape change.
+
+1. **Bump `CLIENT_VERSION`** in `src/net/protocol.ts`.
+2. **Build and deploy the site** — see [Building and deploying the site for
+   it](#building-and-deploying-the-site-for-it) above.
+3. **Check that the bare `/minicraft/` URL serves the new bundle hash:**
+   ```bash
+   curl -s https://noah.leap-forward.ca/minicraft/ | grep -o 'index-[A-Za-z0-9_]*\.js'
+   ```
+4. **Rebuild the bots** — anyone running `minicraft-bot` needs `npm run build:bot` again
+   (see [`packages/minicraft-bot/README.md`](../packages/minicraft-bot/README.md)); an old build
+   now gets `OutdatedClientError`.
+5. **Set `MC_MIN_CLIENT=<new>`** in `~/minicraft-mp/env`, alongside the existing `MC_TOKEN` line.
+6. **`systemctl --user restart minicraft-server`.**
+
+A client below `MC_MIN_CLIENT` gets the `error {code: 4004, message: "outdated", min}` refusal
+then a matching close. The game client gets one guarded automatic reload if its cached bundle was
+already rebuilt (a stale one still shows the click-to-reload screen); a bot gets
+`OutdatedClientError` and has to be rebuilt by hand — see `docs/protocol.md` for exactly which
+close codes and messages this involves.
+
+On the VM path (below, not in use), `vm-setup.sh` writes `/etc/mcserver.env` with only `MC_TOKEN`
+and `MC_GCS_BUCKET`: **`MC_MIN_CLIENT` has to be added to that file by hand** if the VM setup is
+ever brought back into use. This has no effect on the live Beast unit above.
+
 ### Backups at home
 
 The server writes `~/minicraft-mp/backup.sqlite` (a consistent `VACUUM INTO` copy) every hour
@@ -179,6 +209,7 @@ In the site's `.env.local`, set `VITE_MINICRAFT_MP_URL=http://localhost:8080` an
 | `-db` | `./mc.sqlite` | database |
 | `-token` | env `MC_TOKEN` | shared access token, required |
 | `-origins` | the site, `localhost:5173`, `localhost:4173` | allowed browser origins |
+| `-min-client` | env `MC_MIN_CLIENT`, else `0` | lowest client build (`hello.ver`) admitted; the flag wins only when explicitly passed (see [Forcing a client update](#forcing-a-client-update)) |
 | `-backup-dir` | the `-db` directory | where `backup.sqlite` is written |
 | `-gcs-bucket` | env `MC_GCS_BUCKET` | backup upload bucket; empty disables the upload |
 

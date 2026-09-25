@@ -65,7 +65,7 @@ After that, the 12-hour stale rule still applies.
 - **In multiplayer** the same timer runs. The player also sends `leaving` at 2 minutes,
   1 minute, 30 seconds and 0 left; friends see small toasts ("Noah has to go in 2 minutes" …
   "Noah went home") and the leaver sees a big 10 … 1. The timer is paused while the connection is
-  lost. See `docs/multiplayer.md`.
+  lost. See `docs/multiplayer.md`, and `docs/protocol.md` for the `leaving` message itself.
 - **Parents PIN.** Four digits, stored under `minicraft:v1:pin`. Once set, it is required to open
   Parents. Forgotten: run `localStorage.removeItem('minicraft:v1:pin')` in the browser console on
   the game's tab; nothing else is lost.

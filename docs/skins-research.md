@@ -99,7 +99,7 @@ hip, driven by horizontal speed. A mining swing would need an event the protocol
 Skins need `NearestFilter` and alpha-tested overlays. The texture is 64 px, so each skin is a tiny
 texture or a slot in a small skin atlas.
 
-**Protocol:** `skin` is already a string of up to 32 bytes (`docs/multiplayer.md`), so ids like
+**Protocol:** `skin` is already a string of up to 32 bytes (`docs/protocol.md`), so ids like
 `milo` and `enderman` fit with no wire change. Colour ids already stored on the server (`red`,
 `blue`, …) must keep resolving to something: a default skin, or the current coloured box. The
 name-label colour needs a per-skin colour.

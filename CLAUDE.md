@@ -16,7 +16,7 @@ Minicraft is a **deliberately minimal** Minecraft-style voxel sandbox for a 7-ye
 - Mod loading, custom resource packs
 - Achievements, quests, progression systems
 
-**Multiplayer exists as a private two-family feature** (Noah and a friend in the same world, on a server Julien starts by hand). It is not a platform: keep it that small. See `docs/multiplayer.md`.
+**Multiplayer exists as a private two-family feature** (Noah and a friend in the same world, on a server Julien starts by hand). It is not a platform: keep it that small. See `docs/multiplayer.md` (design and UX) and `docs/protocol.md` (the wire protocol).
 
 When in doubt about scope, lean toward removing features, not adding them. See `README.md` for the full feature list and target UX.
 
@@ -34,7 +34,7 @@ holds `mcserver`, the Go + SQLite multiplayer relay (runbook: `server/README.md`
 Go is at `~/.local/go/bin`).
 
 Per-subsystem docs live in `docs/`: `lighting.md`, `liquids.md`, `movement.md`, `worldgen.md`, `performance.md`,
-`persistence.md`, `inventory.md`, `crafting.md`, `playtime.md`, `multiplayer.md`. `docs/specs.md` is the source of truth for the tech stack.
+`persistence.md`, `inventory.md`, `crafting.md`, `playtime.md`, `multiplayer.md`, `protocol.md`. `docs/specs.md` is the source of truth for the tech stack.
 
 ⚠ **The kid's real worlds live in the localStorage of
 `https://noah.leap-forward.ca` and in `gs://minicraft-worlds`. Never point tests

@@ -56,96 +56,11 @@ is unset, the Multiplayer button is hidden.
 
 ## Protocol
 
-JSON text frames, except the snapshot, which is one binary frame. The client sends `hello`
-first. The server accepts `proto` in `[1, 1]`. The read limit is 4 MiB on both ends, and a client
-batch is split to at most 2,000 ops per `edit` message.
-
-An op is `[x, y, z, id, fluid, color]`:
-- `fluid` is the raw `Chunk.fluidMeta`: `0` = none or source, `0x80 | d` = a flow at distance d
-  (a flow at distance 0 is `0x80`, not 0).
-- `color` is `0` for no colour, otherwise `0x1000000 | rgb` (`colorToInt` / `intToColor`). A
-  lamp and its colour travel in the same op.
-
-The tables below are checked against `src/net/protocol.ts` and
-`server/internal/proto/proto.go` by `src/net/multiplayer-docs.test.ts`. Change the code and
-the tables together.
-
-### Client → server
-
-| t | fields | notes |
-|---|---|---|
-| `hello` | `world, name, skin, bid, proto, gen, resume` | first message; `skin` is a character id (`milo`, `jj`, …; unknown ids fall back to Milo on the client); a `skin` over 32 bytes, not UTF-8 or with a control character is stored as `""` (Milo); `gen` is the client's generator version; `resume: true` on a reconnect reload |
-| `pos` | `x, y, z, yaw, pitch` | at most 10 Hz, only while moving or turning |
-| `ping` | — | every 2 s when nothing else was sent; driven by `setInterval`, so a hidden tab stays alive |
-| `edit` | `cid, ops` | ≤ 2,000 ops; `cid` increases per connection; a batch may touch one cell more than once and is applied in order |
-| `fx` | `kind, x, y, z, tier?, dur?, tool?, face?` | cosmetic: `prime`, `boom` or `firework` (`tier` is the explosive's block id); `mine` (a player started mining x,y,z: `tier` is the block id, `dur` the full mining time in ms; the others draw the cracks from it until the block changes, a `mine-stop`, or `dur` + 1 s) and `mine-stop`. `tool` (the miner's pickaxe tier) and `face` (the aimed face) are only sent with a multi-block `tool`, so a friend cracks the whole area instead of just the aimed block; the server drops a `face` it doesn't recognise (and `tool` with it) |
-| `extras` | `data: {inventory, tools, hotbar, selected}` | debounced 5 s, and on leave; opaque to the server |
-| `leaving` | `secondsLeft` | the play-time countdown (see [Play time](#play-time)) |
-
-### Server → client
-
-| t | fields | notes |
-|---|---|---|
-| `welcome` | `you, world{uuid,name,seed,gen,height,mustMine}, spawn, extras, players[{id,name,skin,x,y,z,yaw,pitch,hasPos}], seq, catalogMax` | then one binary snapshot frame as of `seq`; blocks with ids above `catalogMax` are hidden from the inventory |
-| `edit` | `seq, by, cid?, ops` | server order; sent to everyone, author included |
-| `tick` | `poses: [[id, x, y, z, yaw, pitch], …]` | every 100 ms while 2 or more players are online; excludes the recipient's own pose |
-| `join` | `id, name, skin` | a new player (a same-browser takeover sends none) |
-| `left` | `id` | the avatar disappears; no toast |
-| `fx` | `by, kind, x, y, z, tier?, dur?, tool?, face?` | relayed to the others, not echoed |
-| `leaving` | `by, secondsLeft` | relayed to the others, not echoed |
-| `ping` | — | every 2 s while fewer than 2 players are online |
-| `error` | `code, message` | followed by a close with the same code |
-
-Player ids start at 1.
-
-### Close and error codes
-
-| code | `CLOSE` key | meaning | client reaction |
-|---|---|---|---|
-| 4001 | `replaced` | a newer connection from this browser took over | "You opened the game somewhere else." with one Menu button; no reconnect |
-| 4002 | `slow` | the server's send queue for this client passed 1 MiB | reconnect |
-| 4003 | `resync` | the server rejected a batch (an invalid op) | reconnect; after 2 in a row, the 4004 screen |
-| 4004 | `proto` | proto version out of range | full screen "Minicraft was updated — click to reload" |
-| 4005 | `genUnsupported` | generator version not supported | same as 4004 |
-| 4006 | `unknownWorld` | the world doesn't exist | back to the world list |
-| 4007 | `badToken` | wrong token | back to the world list |
-| 4008 | `badName` | the name failed the name rule | back to the name screen |
-| 4009 | `nameTaken` | the name is online from another browser | name screen: "Someone called Noah is already playing. Pick another name." |
-
-A close with a code that does not reconnect (4001, 4004–4009) clears `mp:autojoin` **before**
-it shows anything or reloads, so it can never loop.
-
-### Validation and names
-
-- An op must have `0 ≤ x, z < 512`, `0 ≤ y < height`, and `id ≤ catalogMax`. The server gets
-  `catalogMax` at build time from `blocks.catalog.ids.json` (`npm run gen-server-catalog`).
-- **Any invalid op rejects the whole batch** with 4003. The author's screen is already wrong, so
-  a silent drop would leave a divergence nobody sees.
-- Names: 1–16 characters of letters, digits and spaces, after trimming. The server's
-  `name_key` is the lowercase NFC form. The client checks the same rule only to explain it
-  ("Only letters, numbers and spaces").
-
-### Snapshot frame
-
-A header `u32 seq, u32 count`, then one row per edited cell sorted by `(x, z, y)`, then
-deflated. Each row is varints: `dx` from the previous row, then `z` and `y` (delta-coded when `x`
-repeats; `prev` starts at (0, 0, −1)), then `id`, `fluid`, `color`. The decoder rejects a
-`count` larger than the remaining bytes allow before it allocates. Go and TS share the fixtures
-in `server/internal/proto/testdata/` and `src/net/testdata/`.
-
-### HTTP
-
-`/ws` and `/worlds` take `?token=` or `Authorization: Bearer`. The browser origins allowed by CORS and
-by the WebSocket accept are one list: the site, and `localhost` or `127.0.0.1` on ports 5173
-and 4173 (`-origins` overrides it).
-
-| Request | Response |
-|---|---|
-| `GET /ws?token=…` | the WebSocket, one per player |
-| `GET /worlds` | `[{uuid, name, mustMine, createdAt, online: [{name, skin}]}]`, busiest first, then newest |
-| `POST /worlds {name, seed, mustMine, gen}` | the new world |
-| `DELETE /worlds/{uuid}` | 204, or 409 while anyone is online in it; offered only from Parents |
-| `GET /health` | `ok`, no token |
+The full wire protocol — every message and its fields, close and error codes, the snapshot
+binary format, versioning (`proto`, the client-build gate, `gen`), pose conventions and the HTTP
+API — moved to **[`docs/protocol.md`](protocol.md)**, the single tested reference for it (checked
+against `src/net/protocol.ts` and `server/internal/proto/proto.go` by
+`src/net/protocol-docs.test.ts`). It's also where the bot SDK's authors should start.
 
 ## Consistency model
 
@@ -291,4 +206,5 @@ production build, never written to `.env.local`.
   the leaving countdown, the reconnect schedule and boot.
 - `npm run e2e:mp`: two headless browsers against a local `mcserver`. It blocks every
   non-local host.
-- `src/net/multiplayer-docs.test.ts`: this document's tables against the code.
+- `src/net/protocol-docs.test.ts`: `docs/protocol.md`'s tables against the code (see
+  [Protocol](#protocol) above).

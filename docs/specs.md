@@ -4,7 +4,7 @@ Status: **committed** as of 2026-04-20. Source of truth for stack and architectu
 
 ## 1. Purpose
 
-A minimal Minecraft-style voxel sandbox for the author's 7-year-old son. Deployed as a static web bundle behind Cloudflare on a private subdomain. Single-player, no mobs, no survival mechanics — mine and place blocks, and that's it. A private multiplayer mode (added 2026-09) lets two families build in the same world; see `docs/multiplayer.md`.
+A minimal Minecraft-style voxel sandbox for the author's 7-year-old son. Deployed as a static web bundle behind Cloudflare on a private subdomain. Single-player, no mobs, no survival mechanics — mine and place blocks, and that's it. A private multiplayer mode (added 2026-09) lets two families build in the same world; see `docs/multiplayer.md` and its wire protocol, `docs/protocol.md`.
 
 Primary target environment: **Ubuntu + Chrome + desktop GPU**. Other browsers/OSes are not supported in Phase 1.
 
@@ -20,7 +20,7 @@ Acceptance test for "done enough to ship to Noah": hand him the laptop, he place
 - New block = one row in `blocks.data.ts` — no cross-file edits
 
 ### Non-goals (do not design for these, ever)
-Mobs, combat, health, hunger, damage, public or matchmade multiplayer (the private two-family mode in `docs/multiplayer.md` is the only exception), accounts, day/night affecting gameplay, weather, redstone, command blocks, automation, farming, mods, custom resource packs, progression, achievements, iPad/touch controls, Safari, Firefox parity.
+Mobs, combat, health, hunger, damage, public or matchmade multiplayer (the private two-family mode in `docs/multiplayer.md` / `docs/protocol.md` is the only exception), accounts, day/night affecting gameplay, weather, redstone, command blocks, automation, farming, mods, custom resource packs, progression, achievements, iPad/touch controls, Safari, Firefox parity.
 
 ## 3. Tech Stack
 

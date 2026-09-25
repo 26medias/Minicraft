@@ -8,26 +8,15 @@ import {
 	colorToInt,
 	intToColor,
 	welcomePose,
-	type EditMsg,
 	type EditOut,
-	type ErrorMsg,
-	type ExtrasMsg,
-	type FxMsg,
 	type Hello,
-	type Join,
-	type Left,
-	type LeavingMsg,
-	type OnlinePlayer,
 	type Op,
-	type Ping,
 	type PlayerInfo,
-	type Pos,
-	type Spawn,
 	type Tick,
 	type Welcome,
-	type WorldInfo,
 	type WorldListing,
 } from './protocol';
+import { WIRE_FIELDS } from './wire-fields';
 
 const GO_TESTDATA = 'server/internal/proto/testdata';
 
@@ -35,39 +24,35 @@ function golden<T>(name: string): T {
 	return JSON.parse(readFileSync(`${GO_TESTDATA}/${name}`, 'utf8')) as T;
 }
 
-/**
- * `fields<T>()(...keys)` compiles only when `keys` names every property of T (and only those):
- * the TS type and this runtime list cannot drift apart, so comparing the list with the Go golden
- * file's keys compares the TS type with the Go struct.
- */
-function fields<T>() {
-	return <const K extends readonly (keyof T & string)[]>(
-		...keys: K & ([Exclude<keyof T, K[number]>] extends [never] ? unknown : { missing: Exclude<keyof T, K[number]> })
-	): readonly string[] => keys;
-}
-
 function keysOf(v: unknown): string[] {
 	return Object.keys(v as object).sort();
 }
 
+/** `msg-edit-out.json` → `edit-out` (the golden name WIRE_FIELDS and fields.json use). */
+function goldenKeyFromFile(file: string): string {
+	return file.replace(/^msg-/, '').replace(/\.json$/, '');
+}
+
 describe('T1: Go golden messages parse with the TS types, field for field', () => {
-	// Every msg-*.json the Go side emits, with the TS type's full field list.
-	const cases: Record<string, readonly string[]> = {
-		'msg-hello.json': fields<Hello>()('t', 'world', 'name', 'skin', 'bid', 'proto', 'gen', 'resume', 'ver', 'bot'),
-		'msg-pos.json': fields<Pos>()('t', 'x', 'y', 'z', 'yaw', 'pitch'),
-		'msg-ping.json': fields<Ping>()('t'),
-		'msg-edit.json': fields<EditMsg>()('t', 'cid', 'ops'),
-		'msg-fx.json': fields<FxMsg>()('t', 'kind', 'x', 'y', 'z', 'tier', 'dur', 'by', 'tool', 'face'),
-		'msg-extras.json': fields<ExtrasMsg>()('t', 'data'),
-		'msg-leaving.json': fields<LeavingMsg>()('t', 'secondsLeft', 'by'),
-		'msg-welcome.json': fields<Welcome>()('t', 'you', 'world', 'spawn', 'extras', 'players', 'seq', 'catalogMax'),
-		'msg-edit-out.json': fields<EditOut>()('t', 'seq', 'by', 'cid', 'ops'),
-		'msg-tick.json': fields<Tick>()('t', 'poses'),
-		'msg-join.json': fields<Join>()('t', 'id', 'name', 'skin', 'bot'),
-		'msg-left.json': fields<Left>()('t', 'id'),
-		'msg-error.json': fields<ErrorMsg>()('t', 'code', 'message', 'min'),
-		'msg-worlds-row.json': fields<WorldListing>()('uuid', 'name', 'mustMine', 'createdAt', 'online'),
-	};
+	// Every msg-*.json the Go side emits, checked against the shared WIRE_FIELDS list.
+	const files = [
+		'msg-hello.json',
+		'msg-pos.json',
+		'msg-ping.json',
+		'msg-edit.json',
+		'msg-fx.json',
+		'msg-extras.json',
+		'msg-leaving.json',
+		'msg-welcome.json',
+		'msg-edit-out.json',
+		'msg-tick.json',
+		'msg-join.json',
+		'msg-left.json',
+		'msg-error.json',
+		'msg-worlds-row.json',
+	];
+	const cases: Record<string, readonly string[]> = {};
+	for (const file of files) cases[file] = WIRE_FIELDS[goldenKeyFromFile(file)];
 
 	it('covers every golden message file Go wrote', () => {
 		const onDisk = readdirSync(GO_TESTDATA).filter((f) => /^msg-.*\.json$/.test(f)).sort();
@@ -83,18 +68,12 @@ describe('T1: Go golden messages parse with the TS types, field for field', () =
 
 	it('nested welcome/world/spawn/player and worlds-row online fields match', () => {
 		const w = golden<Welcome>('msg-welcome.json');
-		expect(keysOf(w.world)).toEqual(
-			[...fields<WorldInfo>()('uuid', 'name', 'seed', 'gen', 'height', 'mustMine')].sort(),
-		);
-		expect(keysOf(w.spawn)).toEqual(
-			[...fields<Spawn>()('mode', 'x', 'y', 'z', 'yaw', 'pitch', 'target')].sort(),
-		);
+		expect(keysOf(w.world)).toEqual([...WIRE_FIELDS['welcome.world']].sort());
+		expect(keysOf(w.spawn)).toEqual([...WIRE_FIELDS['welcome.spawn']].sort());
 		expect(w.players.length).toBeGreaterThan(0);
-		expect(keysOf(w.players[0])).toEqual(
-			[...fields<PlayerInfo>()('id', 'name', 'skin', 'x', 'y', 'z', 'yaw', 'pitch', 'hasPos', 'bot')].sort(),
-		);
+		expect(keysOf(w.players[0])).toEqual([...WIRE_FIELDS['welcome.players']].sort());
 		const row = golden<WorldListing>('msg-worlds-row.json');
-		expect(keysOf(row.online[0])).toEqual([...fields<OnlinePlayer>()('name', 'skin')].sort());
+		expect(keysOf(row.online[0])).toEqual([...WIRE_FIELDS['worlds-row.online']].sort());
 	});
 
 	it('values carry the types the TS side expects', () => {

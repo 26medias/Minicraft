@@ -55,7 +55,10 @@ All 16 ore names, `tnt`, `big_tnt` (1000), `mega_tnt` (1001), `slime_pad` (1002)
   keeps its text and the filter stays as it was. There is no `<form>`.
 - **The box is not focused on open.** A kid in a real browser pressed I and typed "I am so rich!"
   straight away. His keys went to the game: the second I closed the screen, Space jumped, and P
-  swapped the pickaxe. J1 fixes this.
+  swapped the pickaxe. J1 fixes this. Two more traps were found by probe. First, the I keydown that
+  opens the screen (main.ts `case 'inventory'`) never calls `preventDefault()`, so a box focused
+  inside that handler receives the "i". Second, the tile, tab and pickaxe-row buttons call `blur()`
+  on click, so focus falls to BODY and the next I closes the screen.
 - **Counts** (`src/game/inventory.ts`). The inventory is `Record<blockName, number>`, and an absent
   key counts as `STARTING_COUNT` (0). Counts have **no upper cap** anywhere: not in the client model,
   not in `resolvePlayerExtras`, and not in the API schema (an integer ≥ 0, at most 2000 keys).
@@ -112,12 +115,24 @@ export function matchCheat(text: string, cheats = CHEATS): Cheat | null
 
 ## 5. Focus and Enter handling
 
-**Focus (J1).** `Inventory.open()` on the Blocks tab, and `setTab('blocks')`, call
-`this.search.focus()`. With focus in the box, every key, including I, P, Space and the digits, is
-typed into the box. The existing `stopPropagation()` keeps those keys from the game. Esc keeps its
-behaviour: it clears the text, or closes the screen when the box is empty. The I key closes the
-screen only when the box does not have focus (for example on the Craft tab). `close()` blurs the
-box.
+**Focus (J1).**
+
+- **The opening I is not typed.** main.ts's `'inventory'` action calls `e.preventDefault()` on the
+  keydown that opens the screen. Without it the box would read "iI am so rich!".
+- **When focus happens.** `Inventory.open()` removes `.hidden`, then calls `this.search.focus()` if
+  the Blocks tab is active. `setTab('blocks')` focuses only when `isOpen`, because it also runs in
+  the constructor while the screen is hidden.
+- **Keys go to the box.** With focus there, every key, including I, P, Space and the digits, is
+  typed into the box. The existing `stopPropagation()` keeps them from the game.
+- **Esc** keeps its behaviour: it clears the text, or closes the screen when the box is empty. The
+  I key closes the screen only when the box does not have focus, for example on the Craft tab.
+- `close()` blurs the box.
+- **Clicks keep focus in the box.** On the Blocks tab, a click on a tile, a tab button or the
+  pickaxe row re-focuses the search box instead of calling `blur()`. The blur only existed to stop
+  Space re-firing a focused tile, and focusing the box prevents that too. The card's non-input areas
+  call `preventDefault()` on `mousedown`, so a click never takes focus out of the box.
+- **Held keys.** The box ignores `e.repeat` keydowns for printable keys, so holding I or W does not
+  type "iiww".
 
 **Keys.** The signature becomes
 `searchKey(code, query, isComposing = false, key = ''): 'clear' | 'close' | 'submit' | 'type'`.
@@ -203,14 +218,15 @@ kind: 'mp' | 'cheat' = 'mp')`. It keeps the `#mp-toasts`, `.mp-toast`, `.mp-toas
 `startMultiplayer`. `MpOverlays` receives that instance in its constructor and no longer builds a
 host; `MpOverlays.toast` delegates to it. Run E5 before and after this commit.
 
-**Cap: at most 2 toasts visible.** When a new toast goes over the cap, the oldest *cheat* toast is
-evicted first. Only if there is none does the oldest multiplayer toast go. A "Noah has to go"
-warning is therefore never pushed out by code mashing.
+**Cap: at most one cheat toast is visible.** A new cheat toast replaces the one on screen.
+Cheat toasts never evict multiplayer toasts, and multiplayer toast behaviour (no cap, 6 s each) is
+unchanged. A "Noah has to go" warning is therefore never pushed out by code mashing.
 
 **Placement.** In multiplayer the stack stays where it is (top 12 px, right 12 px, z-index 20), above
 the open I screen (z-index 15). In solo the stack sits below the `#save-status` pill (top 10 px,
 right 12 px, z-index 40), for example with `top: 44px` under a `.solo` modifier, so the pill never
-covers it. The cheat toast's dot is gold (`#f5c542`).
+covers it. `startGame` toggles `.solo` on the toast host: on in solo, off in multiplayer. The cheat
+toast's dot is gold (`#f5c542`).
 
 | Code | Toast (`message` in the row; pinned by the data test) |
 |---|---|
@@ -267,9 +283,11 @@ Each test must be able to fail. "Red on" names the broken build that turns it re
      code.
    - *counts are positive integers*.
 2. `src/data/cheats-docs.test.ts` (J4, both directions)
-   - Every row's `code`, each alias and its `message` appear in `docs/cheats.md`.
-   - Every code line in the doc (a fixed marker format, e.g. a `| "…" |` table row) is a code or
-     alias in `CHEATS`.
+   - `docs/cheats.md` has one markdown table with the columns `code | also | reward`, one row per
+     code. `also` holds the aliases, comma-separated, or is empty. `reward` holds the row's
+     `message`. The test parses exactly this table.
+   - Every `CHEATS` row has a table row with the same code, aliases and message.
+   - Every table row is a `CHEATS` row.
    - Red on a data row without documentation, and on documentation for a code that is gone or
      renamed.
 3. `src/game/cheats.test.ts`
@@ -287,7 +305,7 @@ Each test must be able to fail. "Red on" names the broken build that turns it re
      - Red on an idempotent grant or an assignment.
    - *pure, and dirty exactly once*: the input objects are unchanged, and a `markDirty` spy is
      called once per grant.
-   - *hotbar untouched*, in both `mustMine` values.
+   - *hotbar untouched* (a single check, since `applyCheat` takes no `mustMine`).
    - *pickaxe rules* (`pickaxeChanged` in brackets):
      - `{[0],0}` + Mole Man → `{[0,4],4}` (true).
      - `{[0,6],6}` + Mole Man → `{[0,4,6],6}` (false).
@@ -305,29 +323,46 @@ Each test must be able to fail. "Red on" names the broken build that turns it re
      `searchKey('Enter','x', true)` (IME).
    - The existing Escape and "other keys" cases are kept, and `KeyI` and `KeyP` return `'type'`.
    - Red on an Enter that is not distinguished, an empty-box submit, or a lost IME guard.
+5. `src/ui/toasts.test.ts`: the cap rule is a pure `nextToasts(current, incoming)` list function.
+   - 2 MP toasts + 1 cheat → both MP toasts remain, plus the cheat.
+   - 1 cheat + 1 cheat → only the new cheat remains.
+   - 3 MP toasts → all 3 remain.
+   - Red on a global cap, or on a cheat that evicts an MP toast.
 
 **Browser, solo** (headless Chromium, its own Vite on a **free port, never 5173**, API blocked,
-never prod). Either `scripts/crafting-smoke.ts`, made headless, or a new `cheat-smoke`:
+never prod). A new leg in `scripts/crafting-smoke.ts` (already headless) or a new `cheat-smoke`:
 
-5. *I then type at once (J1)*
-   - Press I, then with no click type "I am so rich!" + Enter.
-   - The screen is still open, the player has not jumped, the equipped pickaxe is unchanged, and
-     `deepslate_emerald_ore` is 500.
-   - Red on a build that does not focus the box, or that lets I close the screen while the box is
-     focused.
-6. *No match keeps the box*: "diamond" + Enter → the box still says "diamond", and the grid is still
+6. *I then type at once (J1)*
+   - Press I, then with no click type "I am so rich!".
+   - Before Enter, the box's value is **exactly** "I am so rich!", with no leading "i".
+   - Press Enter. The screen is still open and `deepslate_emerald_ore` is 500.
+   - Then, still with no click, type "Jump!" + Enter. The screen is still open, the equipped
+     pickaxe is unchanged even though "Jump!" contains a P, and `slime_pad` is 50.
+   - Red on: no focus; the opening I typed into the box; I closing the screen while the box is
+     focused; P reaching the game.
+7. *Click, then type*
+   - Click a block tile, then type "Tunnel this!" + Enter with no further click.
+   - The screen is still open and `tunnel_tnt` rose by 50.
+   - Red on a tile click that blurs to BODY, where the next I closes the screen.
+8. *No match keeps the box*: "diamond" + Enter → the box still says "diamond", and the grid is still
    filtered.
-7. *Grant, toast and markDirty*
-   - `__mc` exposes the autosave dirty state (or a `markDirty` counter). Assert it is clean first.
-   - "  big BOOM!! " + Enter → in the **same** `evaluate`, the state is dirty, the box is empty and
-     the Big TNT tile shows `50`.
+9. *Grant, toast and markDirty*
+   - `__mc` exposes a `markDirty` call counter.
+   - Inside **one** `evaluate`: read the counter, set the box to "  big BOOM!! ", dispatch the Enter
+     keydown, then read the counter again. It rose by **exactly 1**, the box is empty and the Big
+     TNT tile shows `50`.
+     - AutoSave stays dirty while the cloud save fails, and the API is blocked, so the test does not
+       check a "clean" state.
    - A toast containing "Big Boom!" exists, and its computed z-index is above `#inventory-root`'s.
      Compare z-index rather than `elementFromPoint`, since toasts have `pointer-events: none`.
-   - Its top is below the bottom of `#save-status`.
-   - Enter the code again → 100. Reload → still 100.
-   - Red on a missing solo toast host, a toast under the pill, or a grant without `markDirty`. That
-     last one is caught even though other actions would have saved the state anyway.
-8. "Mole Power!" → the HUD shows the diamond icon.
+   - The toast's top is below the bottom of `#save-status`. Take that bottom while the pill is
+     visible; if it is hidden, use its solo position (top 10 px plus its height).
+   - A second Big Boom → 100; a second cheat toast replaces the first, so exactly one is visible.
+   - Reload → still 100.
+   - Red on: a missing solo toast host; a toast under the pill; a grant without `markDirty`, which
+     the counter catches even though other actions would have saved the state; more than one cheat
+     toast.
+10. "Mole Power!" → the HUD shows the diamond icon.
 
 **Multiplayer: `scripts/mp-e2e.ts`, new scenario `E13`**
 
@@ -337,22 +372,33 @@ and Vite on :5174. Never 8080, never `minicraft-server.leap-forward.ca`.
 E13 runs before E5 and E6. It joins the `needMp` list and the "A comes back" list (`mp-e2e.ts`
 ≈ line 1087), and it reassigns `A` after its rejoin.
 
-9. `E13` "a cheat code grants, persists on the server, and places for real". Steps in order:
-   1. A presses I and types "Big Boom" + Enter.
-   2. In the **same** `evaluate`, `sessionStorage['mp:extras']` already holds `big_tnt` raised by 50.
-      The box is empty and a toast is shown.
-   3. "I am Mole Man" → `tools.owned` includes 4. "I am so rich!" → `deepslate_emerald_ore` is 500.
-   4. **Before any pick or place**, wait more than 5 s (the debounce), then close A's **page**, not
-      its context. Wait until B's `mp.log` shows A `left`, which avoids the 4009 `nameTaken` race.
-   5. Rejoin in a **fresh context** with the same name. Its empty sessionStorage means only the
-      server can supply the state. Check that `big_tnt`, `deepslate_emerald_ore` 500 and tier 4 are
-      all back.
-   6. Place one Big TNT through the real right-click path, with pointer lock (not `setBlock`). B's
-      log shows the `edit` with id 1000, there is no 4003, and A's count drops by 1.
-   - **Red on** a build whose grant passes `() => {}` as `markDirty`: step 2 fails, because the stash
-     is not written. Nothing else in E13 dirties the extras before the rejoin, so step 5 fails too.
-     This must be verified once by running E13 against that sabotaged build.
-10. `E5` (the leaving toasts) runs before and after the toast-extraction commit, and stays green.
+11. `E13` "a cheat code grants, persists on the server, and places for real". Steps in order:
+    0. Wait until A has been idle for more than 5 s, so no earlier extras send is pending.
+    1. A presses I and types "Big Boom".
+    2. Inside **one** `evaluate`:
+       - read `big_tnt` from `sessionStorage['mp:extras']`;
+       - dispatch the Enter keydown;
+       - read the stash again: `big_tnt` has risen by exactly 50.
+
+       Also check that the box is empty and a toast is shown. Record `big_tnt` as *before + 50*.
+    3. "I am Mole Man" → `tools.owned` includes 4. "I am so rich!" → `deepslate_emerald_ore` is 500.
+    4. **Before any pick or place:**
+       - Wait more than 5 s, counted from the **last** grant.
+       - Close A's **page**. Wait until B's `mp.log` shows A `left`, which avoids the 4009
+         `nameTaken` race.
+    5. Rejoin as A in a **fresh context**, never the old `ctxA`, with
+       `joinWorld(page, BASE, WORLD, '10 min')`. E5 needs its `playtime`.
+       - The empty sessionStorage means only the server can supply the state.
+       - `big_tnt` equals the recorded before + 50 exactly, `deepslate_emerald_ore` is 500, and
+         tier 4 is owned.
+    6. A opens I, picks the Big TNT tile (J2 keeps grants off the hotbar), closes I, and places the
+       block through the real right-click path with pointer lock (not `setBlock`).
+       - B's log shows the `edit` with id 1000, and there is no 4003.
+       - A's count drops by 1.
+    - **Red on** a build whose grant passes `() => {}` as `markDirty`. Step 2 fails because the stash
+      is not written. Step 5 fails too: the idle wait means nothing else dirties the extras before
+      the rejoin. Verify this once by running E13 against that sabotaged build.
+12. `E5` (the leaving toasts) runs before and after the toast-extraction commit, and stays green.
     `E6`'s "same inventory counts" check is unaffected.
 
 ## 12. Decisions and remaining risks
@@ -371,6 +417,5 @@ E13 runs before E5 and E6. It joins the `needMp` list and the "A comes back" lis
   Craft tab will show green dots.
 - **Auto-focus changes the I screen for everyone.** Digits and P no longer act while the Blocks tab
   is open, because they are typed into the box. The hotbar strip and pickaxe row stay clickable.
-  Test 5 covers the new behaviour.
-- **Toast refactor.** It touches multiplayer UI that works today. It goes in its own commit, guarded
-  by E5.
+  Tests 6 and 7 cover the new behaviour.
+- **Toast refactor.** It touches multiplayer UI that works today. It goes in its own commit, guarded by E5 and unit test 5.

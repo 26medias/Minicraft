@@ -1,6 +1,9 @@
 // scripts/mp-e2e.ts — the two-client multiplayer end-to-end suite (plan I2, spec §10 E1–E7, plus E8
 // and the 4009 step from the gate-2 amendments, E9 (a friend's mining cracks) and E10 (rendered
-// skins: JJ, slim Milo, a back view, the upgraded Enderman, walk and swing; skins spec §8.11)).
+// skins: JJ, slim Milo, a back view, the upgraded Enderman, walk and swing; skins spec §8.11)), E11 (a
+// minicraft-bot SDK bot beside A: badge, visibility, not online, walk, place, edits both ways, cracks)
+// and E12 (the version gate: MC_MIN_CLIENT above the build; the SDK's OutdatedClientError and the
+// browser's one automatic reload; protocol-bots spec §9 rows 7–8, §12a).
 //
 //   MP_E2E_SCRATCH=<your scratch dir> npx tsx scripts/mp-e2e.ts [--only E2,E6]
 //
@@ -22,9 +25,17 @@ import { chromium, type Browser, type BrowserContext, type Page } from 'playwrig
 import { spawn, spawnSync, type ChildProcess } from 'node:child_process';
 import { mkdtempSync, existsSync, mkdirSync } from 'node:fs';
 import { join } from 'node:path';
+import { pathToFileURL } from 'node:url';
 import sharp from 'sharp';
 import { skinColor, skinOf } from '../src/data/skins.data';
 import { upgradeLegacySkin } from '../src/engine/render/skin-legacy';
+import { CLIENT_VERSION } from '../src/net/protocol';
+
+/**
+ * The bot SDK's types come from its source; the code is the BUILT bundle, loaded at run time (the root
+ * typecheck includes scripts/, and nothing in it may import dist statically: spec §12a).
+ */
+type BotSdk = typeof import('../packages/minicraft-bot/src/index');
 
 /* eslint-disable @typescript-eslint/no-explicit-any */
 
@@ -80,6 +91,11 @@ async function scenario(id: string, title: string, body: () => Promise<void>): P
 
 const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
 
+/** The built SDK (`npm run build:bot`, run in setup when E11 or E12 is selected). */
+async function loadSdk(): Promise<BotSdk> {
+	return (await import(pathToFileURL(join(ROOT, 'packages/minicraft-bot/dist/index.js')).href)) as BotSdk;
+}
+
 // ---------------------------------------------------------------------------------------------
 // Servers (ours only, stopped by port)
 
@@ -118,10 +134,13 @@ function buildServer(): string {
 }
 
 let serverBin = '';
-async function startMc(): Promise<void> {
+/** Starts the suite's mcserver. Every start drops an inherited MC_MIN_CLIENT; only `extraEnv` (E12) sets one. */
+async function startMc(extraEnv: Record<string, string> = {}): Promise<void> {
 	const env = { ...process.env };
 	delete env.MC_GCS_BUCKET;
 	delete env.MC_TOKEN;
+	delete env.MC_MIN_CLIENT;
+	Object.assign(env, extraEnv);
 	mc = spawn(serverBin, [
 		'-addr', `127.0.0.1:${MC_PORT}`,
 		'-db', join(dbDir, 'mc.sqlite'),
@@ -215,6 +234,20 @@ async function newPage(ctx: BrowserContext, who: Who | null, label: string): Pro
 		for (const k of ['CONNECTING', 'OPEN', 'CLOSING', 'CLOSED']) (Spy as any)[k] = Native[k];
 		w.WebSocket = Spy;
 	}, MC_PORT);
+	// E11's label oracle: every string drawn with fillText on a 2D canvas (a Set: the minimap redraws
+	// every frame, so a list would grow without bound).
+	await page.addInitScript(() => {
+		const w = window as any;
+		w.__fillTexts = new Set<string>();
+		for (const C of [w.CanvasRenderingContext2D, w.OffscreenCanvasRenderingContext2D]) {
+			if (!C) continue;
+			const native = C.prototype.fillText;
+			C.prototype.fillText = function (this: unknown, text: unknown, ...rest: unknown[]) {
+				w.__fillTexts.add(String(text));
+				return native.call(this, text, ...rest);
+			};
+		}
+	});
 	if (who) {
 		await page.addInitScript(([n, s]) => {
 			if (!localStorage.getItem('minicraft:v1:mp')) localStorage.setItem('minicraft:v1:mp', JSON.stringify({ name: n, skin: s, worldId: null }));
@@ -518,6 +551,11 @@ const B_WHO: Who = { name: 'Bo', skin: 'jj' };
 		if (await portBusy(p)) throw new Error(`port ${p} is busy: stop that server yourself; this script never reuses or stops a server it did not start`);
 	}
 	serverBin = buildServer();
+	if (want('E11') || want('E12')) {
+		// The SDK bundle E11 and E12 load (spec §9 row 7: setup runs build:bot).
+		const r = spawnSync('npm', ['run', 'build:bot'], { cwd: ROOT, stdio: 'inherit' });
+		if (r.status !== 0) throw new Error('npm run build:bot failed');
+	}
 	dbDir = mkdtempSync(join(SCRATCH, 'mp-e2e-db-'));
 	console.log(`mcserver ${serverBin}, DB ${dbDir}`);
 	await startMc();
@@ -537,7 +575,7 @@ const B_WHO: Who = { name: 'Bo', skin: 'jj' };
 	const ctxB = await browser.newContext({ viewport: { width: 960, height: 600 } });
 	let A: Page | null = null;
 	let B: Page | null = null;
-	const needMp = ['E1', 'E2', 'E3', 'E4', 'E5', 'E6', 'E9', 'E10', '4009'].some(want);
+	const needMp = ['E1', 'E2', 'E3', 'E4', 'E5', 'E6', 'E9', 'E10', 'E11', '4009'].some(want);
 	try {
 		// ------------------------------------------------------------------ E7 (part 1)
 		if (want('E7')) {
@@ -776,6 +814,184 @@ const B_WHO: Who = { name: 'Bo', skin: 'jj' };
 				await hud(a, '');
 				await hud(b, '');
 				for (const f of ['e10-front.png', 'e10-milo.png', 'e10-back.png', 'e10-enderman.png', 'e10-walk.png', 'e10-swing.png', 'e10-minimap.png', 'e10-minimap-b.png']) console.log(`   screenshot ${out(f)}`);
+			});
+		}
+
+		// ------------------------------------------------------------------ E11
+		// After E10 (so no bot is around for its pixel checks) and immediately before E4; the bot has
+		// left before E4 runs.
+		if (want('E11') && A && B) {
+			const a = A;
+			await scenario('E11', 'a minicraft-bot SDK bot beside A: 🤖 label, visible, not online, walks, places, sees A, mines with cracks', async () => {
+				const sdk = await loadSdk();
+				const BOT = 'Robo';
+				// A walks (E10 left it flying high) and stands on the ground of its column.
+				await a.evaluate(() => { (window as any).__mc.player.flying = false; });
+				const a0 = await pos(a);
+				const pa = await standAt(a, Math.floor(a0[0]), Math.floor(a0[2]));
+				await waitInGame(a);
+				await sleep(1_000);
+				const [fx, fy, fz] = [Math.floor(pa[0]), Math.floor(pa[1]), Math.floor(pa[2])];
+				// Only labels drawn from here on count.
+				await a.evaluate(() => (window as any).__fillTexts.clear());
+				const bot = new sdk.BotClient({ url: MP_URL, token: TOKEN });
+				try {
+					await bot.connect({ world: WORLD, name: BOT, skin: 'enderman' });
+					const tJoin = Date.now();
+
+					// 1. The robot badge, drawn by A's label code.
+					const labelled = await a.waitForFunction((n) => (window as any).__fillTexts.has(`🤖 ${n}`), BOT, { timeout: 3_000 }).then(() => true, () => false);
+					const drawn = await a.evaluate(() => [...(window as any).__fillTexts as Set<string>].filter((t) => /[^\d\s.:]/.test(t)).slice(0, 12));
+					check(labelled, `A drew "🤖 ${BOT}" ${Date.now() - tJoin} ms after the bot joined, limit 3 s (label strings drawn: ${JSON.stringify(drawn)})`);
+
+					// 2. Visible: A has Robo with a pose, flagged as a bot, its avatar in the scene.
+					await a.waitForFunction((n) => (window as any).__mc.mp.remote.positions().some((p: any) => p.name === n), BOT, { timeout: 3_000 }).catch(() => undefined);
+					const seen = await a.evaluate((n) => {
+						const r = (window as any).__mc.mp.remote;
+						const p = r.positions().find((q: any) => q.name === n) ?? null;
+						let inScene = false, visible = false;
+						for (const av of r.avatars.values()) {
+							if (av.name !== n) continue;
+							for (let o = av.group; o; o = o.parent) if (o.type === 'Scene') inScene = true;
+							visible = av.group.visible;
+						}
+						return { p, inScene, visible };
+					}, BOT);
+					check(seen.p !== null && seen.p.bot === true, `A's remote.positions() has ${BOT} with a pose and bot: true (${JSON.stringify(seen.p)})`);
+					check(seen.inScene && seen.visible, `A's scene has ${BOT}'s visible avatar (inScene ${seen.inScene}, visible ${seen.visible})`);
+					const roboId = seen.p?.id as number;
+
+					// 3. Not listed online (A is, so the list is not vacuous).
+					const rows = await (await fetch(`${MP_URL}/worlds`, { headers: { Authorization: `Bearer ${TOKEN}` } })).json() as Array<{ uuid: string; online: Array<{ name: string }> }>;
+					const online = (rows.find((r) => r.uuid === WORLD)?.online ?? []).map((o) => o.name);
+					check(online.includes(A_WHO.name) && !online.includes(BOT), `GET /worlds online lists ${A_WHO.name} and not ${BOT} (${JSON.stringify(online)})`);
+
+					// 4. Walk: from 6 blocks off, 3 blocks toward A; A sees the pose move.
+					const roboOnA = () => a.evaluate((n) => (window as any).__mc.mp.remote.positions().find((q: any) => q.name === n) ?? null, BOT) as Promise<{ x: number; y: number; z: number } | null>;
+					let walked: { from: number[]; to: number[]; result: string } | null = null;
+					const blocked: string[] = [];
+					for (const [dx, dz] of [[1, 0], [-1, 0], [0, 1], [0, -1], [1, 1], [-1, -1], [1, -1], [-1, 1]]) {
+						const d = Math.hypot(dx, dz);
+						const sx = pa[0] + (6 * dx) / d, sz = pa[2] + (6 * dz) / d;
+						const sy = bot.world.groundY(sx, sz, pa[1]);
+						if (sy === null || Math.abs(sy - pa[1]) > 3) continue;
+						bot.move({ x: sx, y: sy, z: sz });
+						await sleep(800);
+						const r0 = await roboOnA();
+						if (!r0) continue;
+						try {
+							const result = await bot.walkTo({ x: sx - (3 * dx) / d, z: sz - (3 * dz) / d });
+							await sleep(800);
+							const r1 = await roboOnA();
+							if (r1) walked = { from: [r0.x, r0.y, r0.z], to: [r1.x, r1.y, r1.z], result };
+							break;
+						} catch (e) {
+							if (!(e instanceof sdk.BlockedError)) throw e;
+							blocked.push(`(${dx},${dz}) ${e.reason}`);
+						}
+					}
+					const moved = walked ? distXZ(walked.from, walked.to) : 0;
+					check(walked !== null && walked.result === 'arrived' && moved > 2, `the bot walks 3 blocks toward A and A sees its pose move ${moved.toFixed(2)} blocks, need > 2 (${JSON.stringify(walked)}${blocked.length ? `; blocked: ${blocked.join(', ')}` : ''})`);
+
+					// The picture for the report: A looks at Robo, Robo looks back.
+					const me = bot.pose();
+					bot.lookAt(pa[0], pa[1] + sdk.EYE_HEIGHT, pa[2]);
+					await a.evaluate(([x, y, z]) => {
+						const mc = (window as any).__mc;
+						const e = mc.player.eyePosition();
+						const dx = x - e[0], dy = y + 1.0 - e[1], dz = z - e[2];
+						mc.cam.yaw = Math.atan2(-dx, -dz);
+						mc.cam.pitch = Math.atan2(dy, Math.hypot(dx, dz));
+					}, [me.x, me.y, me.z] as const);
+					await sleep(800);
+					await shot(a, join(SCRATCH, 'bot-e11.png'));
+					console.log(`   screenshot ${join(SCRATCH, 'bot-e11.png')}`);
+
+					// Cells around A, read on both sides: air at the feet level (to place in), solid below (to break).
+					await loadBlocks(a);
+					const cells = await a.evaluate(([fx, fy, fz]) => {
+						const w = window as any;
+						const { world } = w.__mc;
+						const B = w.__blocks;
+						const air: number[][] = [], solid: number[][] = [];
+						for (const [dx, dz] of [[2, 0], [-2, 0], [0, 2], [0, -2], [2, 2], [-2, -2], [2, -2], [-2, 2], [3, 0], [-3, 0], [0, 3], [0, -3]]) {
+							const x = fx + dx, z = fz + dz;
+							if (world.getBlock(x, fy, z) === 0 && world.getBlock(x, fy + 1, z) === 0) air.push([x, fy, z]);
+							const g = world.getBlock(x, fy - 1, z);
+							if (B.isSolid(g) && !B.isLiquid(g) && g !== B.BLOCK_BY_NAME.bedrock.id) solid.push([x, fy - 1, z]);
+						}
+						return { air, solid };
+					}, [fx, fy, fz] as const);
+					const agree = (c: number[]) => bot.world.getBlock(c[0], c[1], c[2]);
+					const airCells = cells.air.filter((c) => agree(c) === 0);
+					const solidCells = cells.solid.filter((c) => bot.world.isSolid(agree(c)) && !bot.world.isLiquid(agree(c)));
+					check(airCells.length >= 1 && solidCells.length >= 2, `A and the bot agree on free and solid cells around A (${airCells.length} air, ${solidCells.length} solid)`);
+
+					// 5. The bot places stone; A sees it within 500 ms.
+					const STONE = sdk.blockId('stone')!;
+					const pc = airCells[0];
+					const tPlace = Date.now();
+					const placed = await bot.place(pc[0], pc[1], pc[2], 'stone');
+					const onA = await a.evaluate(async ([x, y, z, id]) => {
+						const t = performance.now();
+						while (performance.now() - t < 3000) {
+							if ((window as any).__mc.world.getBlock(x, y, z) === id) return true;
+							await new Promise((r) => setTimeout(r, 10));
+						}
+						return false;
+					}, [pc[0], pc[1], pc[2], STONE] as const);
+					const placeMs = Date.now() - tPlace;
+					check(placed && onA && placeMs <= 500, `the bot places stone at (${pc}); A sees it ${placeMs} ms after the call, limit 500 ms (place → ${placed})`);
+
+					// 6. A breaks a block; the bot's world sees air within 500 ms.
+					const ac = solidCells[0];
+					const before = bot.world.getBlock(ac[0], ac[1], ac[2]);
+					// The clock starts before A's call: the relay can reach the bot before evaluate() returns.
+					const tBreak = Date.now();
+					await a.evaluate(([x, y, z]) => (window as any).__mc.world.setBlock(x, y, z, 0), [ac[0], ac[1], ac[2]] as const);
+					let botAir = false;
+					while (Date.now() - tBreak < 3_000) {
+						if (bot.world.getBlock(ac[0], ac[1], ac[2]) === 0) { botAir = true; break; }
+						await sleep(10);
+					}
+					const breakMs = Date.now() - tBreak;
+					check(before !== 0 && botAir && breakMs <= 500, `A sets air at (${ac}); the bot's world goes from ${sdk.blockName(before)} to air ${breakMs} ms after A's call, limit 500 ms`);
+
+					// 7. The bot mines a solid cell: A draws its crack at that cell, stage by stage, then air, then no crack.
+					const mc7 = solidCells[1];
+					const minedP = bot.mine(mc7[0], mc7[1], mc7[2], 2_000);
+					const cr = await a.evaluate(async ([x, y, z, id]) => {
+						const mc = (window as any).__mc;
+						const key = `p:${id}#0`;
+						const stages = new Set<number>();
+						let sawCrack = false, atCell = false, air = false, clearedAfterAir = false;
+						const t = performance.now();
+						while (performance.now() - t < 10000) {
+							const mesh = (mc.cracks as any).meshes.get(key);
+							if (mesh) {
+								sawCrack = true;
+								if (mesh.position.x === x + 0.5 && mesh.position.y === y + 0.5 && mesh.position.z === z + 0.5) atCell = true;
+								stages.add((mc.cracks as any).materials.indexOf(mesh.material));
+							}
+							if (mc.world.getBlock(x, y, z) === 0) air = true;
+							if (air && !mesh) { clearedAfterAir = true; break; }
+							await new Promise((r) => setTimeout(r, 30));
+						}
+						return { sawCrack, atCell, stages: [...stages].sort((p, q) => p - q), air, clearedAfterAir };
+					}, [mc7[0], mc7[1], mc7[2], roboId] as const);
+					const mined = await minedP;
+					check(cr.sawCrack && cr.atCell, `A draws the bot's crack (p:${roboId}) on the mined cell (${mc7}) (saw ${cr.sawCrack}, at the cell ${cr.atCell})`);
+					check(cr.stages.length >= 3, `the crack advances through stages on A (saw ${JSON.stringify(cr.stages)})`);
+					check(mined && cr.air && cr.clearedAfterAir, `the mine resolves true (${mined}), A sees air, then the crack is gone (air ${cr.air}, cleared ${cr.clearedAfterAir})`);
+				} finally {
+					bot.close();
+				}
+				// Gone from A before E4 runs.
+				const gone = await a.waitForFunction((n) => {
+					const r = (window as any).__mc.mp.remote;
+					return !r.positions().some((p: any) => p.name === n) && ![...r.avatars.values()].some((av: any) => av.name === n);
+				}, BOT, { timeout: 10_000 }).then(() => true, () => false);
+				check(gone, `after bot.close(), A no longer has ${BOT}`);
 			});
 		}
 
@@ -1166,6 +1382,71 @@ const B_WHO: Who = { name: 'Bo', skin: 'jj' };
 				const all = [10, 9, 8, 7, 6, 5, 4, 3, 2, 1].every((n) => seen.includes(n));
 				check(all, `A showed the big 10…1 (${JSON.stringify(seen)})`);
 				check(await a.evaluate(() => sessionStorage.getItem('mp:autojoin')) === null, 'A cleared its autojoin flag at 0');
+			});
+		}
+
+		// ------------------------------------------------------------------ E12
+		// Last: it restarts the server with a minimum above this build. B (if still here) is refused on its
+		// reconnect and reloads by itself; harmless, since E12 counts loads only on its own fresh page.
+		if (want('E12')) {
+			await scenario('E12', 'the version gate: the SDK gets OutdatedClientError; a fresh browser reloads once, then shows the click screen', async () => {
+				const MIN = CLIENT_VERSION + 1;
+				if (mc) await killMc('TERM');
+				await startMc({ MC_MIN_CLIENT: String(MIN) });
+				try {
+					// (a) The SDK is refused with a typed error.
+					const sdk = await loadSdk();
+					const bot = new sdk.BotClient({ url: MP_URL, token: TOKEN });
+					let err: unknown = null;
+					try {
+						await bot.connect({ world: WORLD, name: 'Robo', skin: 'enderman' });
+					} catch (e) {
+						err = e;
+					} finally {
+						bot.close();
+					}
+					const oe = err instanceof sdk.OutdatedClientError ? err : null;
+					check(oe !== null && oe.min === MIN && oe.ver === CLIENT_VERSION, `the SDK's connect rejects with OutdatedClientError { ver ${CLIENT_VERSION}, min ${MIN} } (got ${err instanceof Error ? `${err.name}: ${err.message}` : String(err)})`);
+
+					// (b) A fresh browser joins through the menu.
+					const ctx = await browser.newContext({ viewport: { width: 960, height: 600 } });
+					try {
+						const p = await newPage(ctx, { name: 'Eli', skin: 'mikey' }, 'E12');
+						// Page LOADS in this tab (framenavigated also fires on same-document navigations).
+						await p.addInitScript(() => {
+							if (window.top !== window) return;
+							sessionStorage.setItem('e2e:loads', String(Number(sessionStorage.getItem('e2e:loads') ?? '0') + 1));
+						});
+						const loads = async (): Promise<number> => {
+							for (let i = 0; i < 20; i++) {
+								const n = await p.evaluate(() => Number(sessionStorage.getItem('e2e:loads') ?? '0')).catch(() => null);
+								if (n !== null) return n;
+								await sleep(250);
+							}
+							return -1;
+						};
+						await p.goto(BASE);
+						await p.click('#home-multi');
+						await p.waitForSelector(`#mp-worlds .world-row[data-id="${WORLD}"]`, { timeout: 20_000 });
+						await p.click(`#mp-worlds .world-row[data-id="${WORLD}"]`);
+						await p.click('#mp-play');
+						const updating = await p.waitForSelector('#mp-updating', { timeout: 20_000 }).then(() => true, () => false);
+						check(updating && (await p.locator('#mp-updating').innerText().catch(() => '')).includes('Updating Minicraft…'), 'the page shows "Updating Minicraft…"');
+						const navigated = await p.waitForURL(/[?&]v=\d+/, { timeout: 10_000 }).then(() => true, () => false);
+						check(navigated, `then it reloads itself with v= in the URL (${p.url()})`);
+						// The reloaded page rejoins by autojoin, is refused again, and falls back to the click screen.
+						const clickScreen = await p.waitForSelector('#mp-fatal[data-kind="updated"]', { timeout: 30_000 }).then(() => true, () => false);
+						check(clickScreen && (await p.locator('#mp-fatal').innerText().catch(() => '')).includes('Minicraft was updated — click to reload'), 'after the reload it shows "Minicraft was updated — click to reload"');
+						await sleep(5_000);
+						const n = await loads();
+						check(n === 2, `watched 5 s more: ${n} page loads in the tab, exactly 2 (the first and one automatic reload)`);
+						check(await p.locator('#mp-fatal[data-kind="updated"]').count().catch(() => 0) === 1, 'the click screen is still up');
+					} finally {
+						await ctx.close();
+					}
+				} finally {
+					await killMc('TERM');
+				}
 			});
 		}
 	} finally {

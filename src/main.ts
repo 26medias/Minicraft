@@ -197,6 +197,14 @@ async function main() {
 				menu.hide();
 				ui.showFatal(kind, () => location.reload());
 			},
+			showUpdating: () => {
+				menu.hide();
+				ui.showUpdating();
+			},
+			replace: (url) => location.replace(url),
+			href: location.href,
+			now: () => Date.now(),
+			setTimeout: (fn, ms) => setTimeout(fn, ms),
 		};
 		let welcome: Welcome | null = null;
 		let settled = false;
@@ -233,12 +241,12 @@ async function main() {
 			onMessage: (m) => {
 				link.deliver(m);
 			},
-			onState: (state, code) => {
+			onState: (state, code, err) => {
 				if (state === 'fatal') {
 					settled = true;
 					clearTimeout(timer);
 					link.fatal();
-					onFatalClose(code, fatalDeps);
+					onFatalClose(code, err, fatalDeps);
 				} else if (state === 'lost') {
 					if (!settled) failJoin();
 					else link.lost();
@@ -805,13 +813,13 @@ async function main() {
 			const remote = new RemotePlayers(renderer.scene);
 			const minimap = new Minimap(app, colorTableFromAtlas(atlas));
 			const who = new Map<number, { name: string; skin: string }>();
-			const addPlayer = (id: number, name: string, skin: string) => {
+			const addPlayer = (id: number, name: string, skin: string, bot: boolean) => {
 				if (id === you) return;
 				who.set(id, { name, skin });
-				remote.upsert(id, name, skin);
+				remote.upsert(id, name, skin, bot);
 			};
 			for (const p of welcome.players) {
-				addPlayer(p.id, p.name, p.skin);
+				addPlayer(p.id, p.name, p.skin, p.bot ?? false);
 				const pose = welcomePose(p);
 				if (p.id !== you && pose) remote.pushPose(p.id, performance.now(), pose);
 			}
@@ -890,7 +898,7 @@ async function main() {
 						break;
 					}
 					case 'join':
-						addPlayer(m.id, m.name, m.skin);
+						addPlayer(m.id, m.name, m.skin, m.bot ?? false);
 						break;
 					case 'left':
 						// Re-gate I1: a plain `left` shows no toast; "went home" comes only from `leaving 0`.

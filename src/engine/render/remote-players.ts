@@ -36,6 +36,8 @@ type Avatar = {
 	id: number;
 	name: string;
 	skin: string;
+	/** Robot badge (protocol/bots plan, task 3): the label draws `🤖 ${name}`. */
+	bot: boolean;
 	group: THREE.Group;
 	rig: Rig;
 	anim: AnimState;
@@ -71,14 +73,15 @@ export class RemotePlayers {
 		this.viewportHeight = px;
 	}
 
-	/** Adds a player, or updates an existing one's name and skin. */
-	upsert(id: number, name: string, skin: string): void {
+	/** Adds a player, or updates an existing one's name, skin and bot badge. */
+	upsert(id: number, name: string, skin: string, bot = false): void {
 		const existing = this.avatars.get(id);
 		if (existing) {
-			if (existing.name === name && existing.skin === skin) return;
+			if (existing.name === name && existing.skin === skin && existing.bot === bot) return;
 			if (existing.skin !== skin) setRigSkin(existing.rig, this.res, skin);
 			existing.name = name;
 			existing.skin = skin;
+			existing.bot = bot;
 			this.replaceLabel(existing);
 			return;
 		}
@@ -88,7 +91,7 @@ export class RemotePlayers {
 		const rig = buildRig(this.res, skin);
 		group.add(rig.root);
 		const a: Avatar = {
-			id, name, skin, group, rig, anim: newAnimState(Math.random() * 10),
+			id, name, skin, bot, group, rig, anim: newAnimState(Math.random() * 10),
 			label: new THREE.Sprite(), labelW: LABEL_H,
 			buffer: new PoseBuffer(), pose: null,
 		};
@@ -136,11 +139,11 @@ export class RemotePlayers {
 		if (a) triggerSwing(a.anim, now);
 	}
 
-	positions(): Array<{ id: number; name: string; skin: string; x: number; y: number; z: number }> {
-		const out: Array<{ id: number; name: string; skin: string; x: number; y: number; z: number }> = [];
+	positions(): Array<{ id: number; name: string; skin: string; x: number; y: number; z: number; bot: boolean }> {
+		const out: Array<{ id: number; name: string; skin: string; x: number; y: number; z: number; bot: boolean }> = [];
 		for (const a of this.avatars.values()) {
 			if (!a.pose) continue;
-			out.push({ id: a.id, name: a.name, skin: a.skin, x: a.pose.x, y: a.pose.y, z: a.pose.z });
+			out.push({ id: a.id, name: a.name, skin: a.skin, x: a.pose.x, y: a.pose.y, z: a.pose.z, bot: a.bot });
 		}
 		return out;
 	}
@@ -150,7 +153,8 @@ export class RemotePlayers {
 		const canvas = this.createCanvas();
 		let aspect = 3;
 		if (canvas) {
-			aspect = drawLabel(canvas, a.name, skinColor(a.skin));
+			const labelText = a.bot ? `🤖 ${a.name}` : a.name;
+			aspect = drawLabel(canvas, labelText, skinColor(a.skin));
 			const tex = new THREE.CanvasTexture(canvas);
 			tex.colorSpace = THREE.SRGBColorSpace;
 			tex.minFilter = THREE.LinearFilter;

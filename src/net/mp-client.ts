@@ -5,7 +5,7 @@
  *   when nothing was sent for 2 s, and 6 s without any message closes the socket as `lost`.
  * - Reconnecting is the caller's job (a page reload, spec §7.5); this class reports the state once.
  */
-import { CLOSE, type Hello, type ServerMsg, type Welcome } from './protocol';
+import { CLOSE, type ErrorMsg, type Hello, type ServerMsg, type Welcome } from './protocol';
 import type { StorageLike } from './mp-sync';
 
 export type MpState = 'connecting' | 'open' | 'lost' | 'fatal';
@@ -16,8 +16,12 @@ export type MpHandlers = {
 	onSnapshot: (buf: ArrayBuffer) => void;
 	/** Every other server message except `ping`. `error` is passed through; its close follows. */
 	onMessage: (m: ServerMsg) => void;
-	/** `lost` and `fatal` are terminal and reported once; `code` is the close code when there is one. */
-	onState: (state: MpState, code?: number) => void;
+	/**
+	 * `lost` and `fatal` are terminal and reported once; `code` is the close code when there is one.
+	 * `err` is the last `error` message received before this close, or undefined (the synthetic
+	 * two-4003 → 4004 path never has one).
+	 */
+	onState: (state: MpState, code?: number, err?: ErrorMsg) => void;
 };
 
 export type Clock = {
@@ -63,6 +67,8 @@ export class MpClient {
 	private done = false;
 	/** `welcome.you`, once known. */
 	private you: number | null = null;
+	/** The last `error` message received, for the fatal-close handler (spec §5). */
+	private lastError: ErrorMsg | undefined = undefined;
 
 	constructor(
 		url: string,
@@ -124,6 +130,7 @@ export class MpClient {
 			this.handlers.onWelcome(m);
 			return;
 		}
+		if (m.t === 'error') this.lastError = m;
 		if (m.t === 'edit' && m.by === this.you) this.setResync(0);
 		this.handlers.onMessage(m);
 	}
@@ -135,13 +142,14 @@ export class MpClient {
 			const n = this.getResync() + 1;
 			this.setResync(n);
 			if (n >= 2) {
+				// Synthetic fatal (two 4003s in a row): no `error` message ever preceded this close.
 				this.handlers.onState('fatal', CLOSE.proto);
 				return;
 			}
 			this.handlers.onState('lost', code);
 			return;
 		}
-		this.handlers.onState(FATAL.has(code) ? 'fatal' : 'lost', code);
+		this.handlers.onState(FATAL.has(code) ? 'fatal' : 'lost', code, this.lastError);
 	}
 
 	private check(): void {

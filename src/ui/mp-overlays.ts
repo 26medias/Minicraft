@@ -90,6 +90,24 @@ export class MpOverlays {
 		this.fatalEl = el;
 	}
 
+	/**
+	 * Spec §5 outdated auto-reload: "Updating Minicraft…" for UPDATING_SCREEN_MS, no button — the
+	 * caller schedules the reload itself.
+	 */
+	showUpdating(): void {
+		this.hideReconnecting();
+		this.fatalEl?.remove();
+		const el = document.createElement('div');
+		el.id = 'mp-updating';
+		el.className = 'mp-screen';
+		const title = document.createElement('div');
+		title.className = 'mp-screen-title';
+		title.textContent = 'Updating Minicraft…';
+		el.appendChild(title);
+		this.app.appendChild(el);
+		this.fatalEl = el;
+	}
+
 	private hideReconnecting(): void {
 		this.reconnectEl?.remove();
 		this.reconnectEl = null;

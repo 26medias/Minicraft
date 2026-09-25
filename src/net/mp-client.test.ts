@@ -1,7 +1,7 @@
 // Multiplayer plan task C4: MpClient — liveness (spec §3.1), close codes (§5) and the 4003 counter (§7.5).
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 import { MpClient, type MpState, type Clock } from './mp-client';
-import { CLIENT_VERSION, PROTO, type Hello, type Welcome } from './protocol';
+import { CLIENT_VERSION, PROTO, type ErrorMsg, type Hello, type Welcome } from './protocol';
 
 class FakeWS {
 	static instances: FakeWS[] = [];
@@ -66,6 +66,7 @@ const welcome = { t: 'welcome', you: 1, world: { uuid: 'w1', name: 'W', seed: 1,
 function make(storage = new MemStorage()) {
 	const clock = new FakeClock();
 	const states: Array<[MpState, number | undefined]> = [];
+	const errors: Array<ErrorMsg | undefined> = [];
 	const got: unknown[] = [];
 	const welcomes: Welcome[] = [];
 	const snaps: ArrayBuffer[] = [];
@@ -73,10 +74,10 @@ function make(storage = new MemStorage()) {
 		onWelcome: (w) => welcomes.push(w),
 		onSnapshot: (b) => snaps.push(b),
 		onMessage: (m) => got.push(m),
-		onState: (s, code) => states.push([s, code]),
+		onState: (s, code, err) => { states.push([s, code]); errors.push(err); },
 	}, clock, storage);
 	const ws = FakeWS.instances[FakeWS.instances.length - 1];
-	return { client, clock, ws, states, got, welcomes, snaps, storage };
+	return { client, clock, ws, states, errors, got, welcomes, snaps, storage };
 }
 
 beforeEach(() => {
@@ -200,6 +201,30 @@ describe('MpClient close codes (spec §5)', () => {
 		b.ws.recv(welcome);
 		b.ws.serverClose(4003);
 		expect(b.states.at(-1)).toEqual(['fatal', 4004]);
+	});
+
+	it('a server error ({outdated, min 2}) followed by close 4004 passes the error to the fatal handler', () => {
+		const { ws, states, errors } = make();
+		ws.open();
+		ws.recv({ t: 'error', code: 4004, message: 'outdated', min: 2 });
+		ws.serverClose(4004);
+		expect(states.at(-1)).toEqual(['fatal', 4004]);
+		expect(errors.at(-1)?.message).toBe('outdated');
+		expect(errors.at(-1)?.min).toBe(2);
+	});
+
+	it('the synthetic two-4003 → 4004 fatal path passes no error', () => {
+		const storage = new MemStorage();
+		const a = make(storage);
+		a.ws.open();
+		a.ws.recv(welcome);
+		a.ws.serverClose(4003);
+		const b = make(storage);
+		b.ws.open();
+		b.ws.recv(welcome);
+		b.ws.serverClose(4003);
+		expect(b.states.at(-1)).toEqual(['fatal', 4004]);
+		expect(b.errors.at(-1)).toBeUndefined();
 	});
 
 	it('an accepted own edit (its echo) resets the 4003 counter', () => {

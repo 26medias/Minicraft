@@ -129,6 +129,37 @@ describe('RemotePlayers', () => {
 		expect(canvas.height).toBeGreaterThan(0);
 	});
 
+	it('a bot gets a 🤖 badge on its label, and positions() reports bot: true (protocol/bots plan, task 3)', () => {
+		const scene = new THREE.Scene();
+		const { canvas, calls } = fakeCanvas();
+		const rp = new RemotePlayers(scene, { textures: fakeTextures(), createCanvas: () => canvas });
+		rp.upsert(1, 'Robo', 'enderman', true);
+		const text = calls.find((c) => c.startsWith('fillText:'))!;
+		expect(text).toMatch(/^fillText:🤖 Robo:/);
+		rp.pushPose(1, 0, pose(0, 0, 0));
+		rp.update(0, new THREE.PerspectiveCamera());
+		expect(rp.positions()).toEqual([{ id: 1, name: 'Robo', skin: 'enderman', x: 0, y: 0, z: 0, bot: true }]);
+	});
+
+	it('a non-bot label has no badge (bot defaults to false)', () => {
+		const scene = new THREE.Scene();
+		const { canvas, calls } = fakeCanvas();
+		const rp = new RemotePlayers(scene, { textures: fakeTextures(), createCanvas: () => canvas });
+		rp.upsert(1, 'Noah', 'jj');
+		const text = calls.find((c) => c.startsWith('fillText:'))!;
+		expect(text).toMatch(/^fillText:Noah:/);
+	});
+
+	it('re-upserting the same id with a changed bot flag redraws the label', () => {
+		const scene = new THREE.Scene();
+		const { canvas, calls } = fakeCanvas();
+		const rp = new RemotePlayers(scene, { textures: fakeTextures(), createCanvas: () => canvas });
+		rp.upsert(1, 'Noah', 'jj', false);
+		rp.upsert(1, 'Noah', 'jj', true);
+		const texts = calls.filter((c) => c.startsWith('fillText:'));
+		expect(texts).toEqual(['fillText:Noah:bold 32px system-ui, sans-serif:#000000', 'fillText:🤖 Noah:bold 32px system-ui, sans-serif:#000000']);
+	});
+
 	it('update places the group at the interpolated pose (feet on the ground) and turns it to face yaw', () => {
 		const scene = new THREE.Scene();
 		const rp = new RemotePlayers(scene, { textures: fakeTextures() });
@@ -148,7 +179,7 @@ describe('RemotePlayers', () => {
 		// (spec §5 inflate 0.25 px) overhangs it by 0.25 px = 0.0140625 world units.
 		expect(Math.abs(box.min.y - g.position.y)).toBeLessThan(0.02);
 		expect(Math.abs(box.max.y - (g.position.y + 1.8))).toBeLessThan(0.05); // overlay adds a little
-		expect(rp.positions()).toEqual([{ id: 1, name: 'Noah', skin: 'jj', x: 1, y: 64, z: 0 }]);
+		expect(rp.positions()).toEqual([{ id: 1, name: 'Noah', skin: 'jj', x: 1, y: 64, z: 0, bot: false }]);
 	});
 
 	it('a player with no pose yet is hidden and not listed in positions()', () => {

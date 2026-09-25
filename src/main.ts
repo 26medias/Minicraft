@@ -147,8 +147,7 @@ async function main() {
 				return;
 			}
 			const args: AutojoinArgs = { world: action.world, name: action.name, skin: action.skin, duration: action.duration };
-			// Every exit from multiplayer is a reload; while this is set, the reload rejoins (spec §7.5).
-			setAutojoin(sessionStorage, args);
+			// The rejoin flag is NOT set here: only the game's own rejoin reloads set it (a plain F5 → menu).
 			startMultiplayer(args, false);
 			return;
 		}
@@ -201,7 +200,11 @@ async function main() {
 				menu.hide();
 				ui.showUpdating();
 			},
-			replace: (url) => location.replace(url),
+			// The automatic update reload rejoins the same world (mp-exit's `auto` ruling).
+			replace: (url) => {
+				setAutojoin(sessionStorage, args);
+				location.replace(url);
+			},
 			href: location.href,
 			now: () => Date.now(),
 			setTimeout: (fn, ms) => setTimeout(fn, ms),
@@ -399,6 +402,8 @@ async function main() {
 			// saved ones near where they left off.
 			player.position = findSafeSpawn(world, savedSpawn ?? v3Spawn ?? [256.5, world.height - 1, 256.5]);
 		}
+		// Which world is this? Top-left, solo and multiplayer (multiplayer's name comes from `welcome`).
+		hud.setWorldName(worldName);
 		// Streaming starts here: everything before (spawn search behind "Building your world…") is a one-time cost.
 		performance.mark('minicraft:world-ready');
 
@@ -952,6 +957,11 @@ async function main() {
 				}
 			};
 
+			/** A deliberate rejoin: arm the one-shot flag (boot consumes it), then reload. */
+			const rejoinReload = () => {
+				setAutojoin(sessionStorage, mp.args);
+				location.reload();
+			};
 			/** Connection lost or fatal: input, the simulation and the timer freeze (spec §7.5). */
 			const freezeForNetwork = () => {
 				if (loop.mpDisconnected) return;
@@ -971,10 +981,10 @@ async function main() {
 				ui.showReconnecting();
 				new Reconnector({
 					probe: () => (mpApi ? mpApi.listWorlds() : Promise.reject(new Error('no server'))),
-					// The autojoin flag is still set: the reload rejoins with `resume` (spec §7.5).
-					onSuccess: () => location.reload(),
+					// Arm the one-shot rejoin flag, then reload: the page rejoins with `resume` (spec §7.5).
+					onSuccess: () => rejoinReload(),
 					onGiveUp: () => ui.showGiveUp(
-						() => location.reload(),
+						() => rejoinReload(),
 						() => {
 							clearAutojoin(sessionStorage);
 							location.reload();

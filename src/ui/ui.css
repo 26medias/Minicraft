@@ -1035,3 +1035,20 @@
 	z-index: 30;
 	pointer-events: none;
 }
+
+/* The world's name, top-left: which world am I in? (the F3 overlay, when open, sits over it) */
+#world-name {
+	position: fixed;
+	top: 10px;
+	left: 12px;
+	padding: 4px 10px;
+	border-radius: 4px;
+	background: rgba(0, 0, 0, 0.45);
+	color: #fff;
+	font: 600 16px system-ui, sans-serif;
+	pointer-events: none;
+	max-width: 40vw;
+	overflow: hidden;
+	text-overflow: ellipsis;
+	white-space: nowrap;
+}

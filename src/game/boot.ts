@@ -11,7 +11,11 @@ import { loadPin, loadSchedule } from '../persistence/schedule';
 import { MP_PRESELECT_KEY } from '../ui/menu';
 import { bootSession } from './boot-session';
 
-/** sessionStorage: set while the goal of the next reload is to rejoin this world (spec §7.1, §7.5). */
+/**
+ * sessionStorage, one-shot: written by the game only right before its own rejoin reload (a
+ * reconnect, "Try again", the automatic update reload) and consumed by the next {@link boot}. A
+ * plain F5 therefore finds no flag and lands on the menu, like any refresh (spec §7.1, §7.5).
+ */
 export const AUTOJOIN_KEY = 'mp:autojoin';
 
 export type AutojoinArgs = { world: string; name: string; skin: SkinId; duration: number | null };
@@ -72,6 +76,8 @@ export function boot(deps: BootDeps): BootResult {
 		remove(deps.storage, AUTOJOIN_KEY);
 		args = null;
 	}
+	// One-shot: this load is the rejoin; a later F5 in the rejoined game must go to the menu.
+	if (args) remove(deps.storage, AUTOJOIN_KEY);
 	bootSession({ pin: loadPin(), schedule: loadSchedule(), autojoin: args !== null }, loadSession, clearSession);
 	return args ? { kind: 'autojoin', args } : { kind: 'menu' };
 }

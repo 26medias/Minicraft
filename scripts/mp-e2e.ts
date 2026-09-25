@@ -605,6 +605,11 @@ const B_WHO: Who = { name: 'Bo', skin: 'jj' };
 			await scenario('E1', 'a placed block relays within 500 ms; a mined one comes back as air', async () => {
 				const p = await pos(a);
 				const cell = [Math.floor(p[0]) + 1, Math.floor(p[1]) + 3, Math.floor(p[2]) + 1];
+				// Julien: "idk the world's name" — both screens say which world this is.
+				for (const [who, pg] of [['A', a], ['B', b]] as const) {
+					const label = (await pg.locator('#world-name').textContent())?.trim();
+					check(label === 'E2E', `${who} shows the world's name top-left (got ${JSON.stringify(label)})`);
+				}
 				check(await b.evaluate((c) => (window as any).__mc.world.getBlock(c[0], c[1], c[2]), cell) === 0, `the cell (${cell}) starts as air on B`);
 				await a.evaluate((c) => (window as any).__mc.world.setBlock(c[0], c[1], c[2], 1), cell);
 				const t0 = Date.now();
@@ -1215,7 +1220,7 @@ const B_WHO: Who = { name: 'Bo', skin: 'jj' };
 					check(distXZ(after.pos, b1) > 10, `A is not put next to B (${distXZ(after.pos, b1).toFixed(1)} blocks from B)`);
 					check(after.inv === before.inv, `A has the same inventory counts (${after.inv === before.inv ? 'same' : `${before.inv} → ${after.inv}`})`);
 					check(leftAtRejoin >= 0 && Math.abs(leftAtRejoin - leftAtKill) <= 2_000, `A's remaining time is unchanged ±2 s (${leftAtKill} ms at the kill → ${leftAtRejoin} ms at the rejoin; ${after.left} ms once streamed in)`);
-					check(after.aj !== null, 'the autojoin flag is still set while playing');
+					check(after.aj === null, 'the one-shot rejoin flag was consumed by the rejoin (a later F5 goes to the menu)');
 					const hashAfter = await hashOf(a, chunks);
 					check(hashAfter === hashBefore && hashAfter !== null, `the world around A is unchanged (${hashBefore} → ${hashAfter})`);
 				}
@@ -1328,6 +1333,26 @@ const B_WHO: Who = { name: 'Bo', skin: 'jj' };
 				const kept = await p.evaluate(() => localStorage.getItem('minicraft:v1:playtime'));
 				check(kept !== null && JSON.parse(kept).playedMs === 120_000, 'with a PIN: the reload kept the session');
 				await ctx.close();
+			});
+		}
+
+		// ------------------------------------------------------------------ F5
+		if (want('F5')) {
+			await scenario('F5', 'a plain F5 in a multiplayer game lands on the menu, not back in the world', async () => {
+				// Julien: "if I refresh the page I get back in the game instead of on the menu".
+				const ctx = await browser.newContext({ viewport: { width: 960, height: 600 } });
+				try {
+					const f = await newPage(ctx, { name: 'Fi', skin: 'milo' }, 'F');
+					await joinWorld(f, BASE, WORLD, null);
+					check(await f.evaluate(() => (window as any).__mc?.mp != null), 'Fi is in the multiplayer world');
+					await f.reload();
+					await f.waitForSelector('#home-single', { timeout: 15_000 }).catch(() => undefined);
+					await sleep(3_000);
+					check(await f.locator('#home-single').isVisible(), 'after F5: the home screen, not the world');
+					check(await f.evaluate(() => (window as any).__wsCount as number) === 0, 'after F5: no game socket was opened');
+				} finally {
+					await ctx.close();
+				}
 			});
 		}
 

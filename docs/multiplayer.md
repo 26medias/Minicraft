@@ -113,6 +113,10 @@ against `src/net/protocol.ts` and `server/internal/proto/proto.go` by
   success it reloads with `sessionStorage['mp:autojoin']`, sends `hello.resume`, and rebuilds the
   world from seed plus a fresh snapshot. Unacknowledged local writes are discarded. After 30 s it
   shows "Try again" and a small Menu link.
+- **`mp:autojoin` is one-shot.** The game writes it only right before its own rejoin reload (a
+  reconnect, "Try again", the automatic update reload), and the next boot consumes it. Joining
+  from the menu does not set it, so a plain F5 in a multiplayer game lands on the menu like any
+  refresh (end-to-end scenario F5).
 - **A failed rejoin** (no `welcome` within 6 s) moves the args to `mp:preselect`, clears
   `mp:autojoin`, and lands on the Multiplayer screen in its sleeping state, which retries on its
   own.

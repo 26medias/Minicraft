@@ -98,8 +98,16 @@ describe('boot() (T12b, boot-level)', () => {
 		setAutojoin(session, ARGS);
 		expect(boot({ mpUrl: URL_, storage: session })).toEqual({ kind: 'autojoin', args: ARGS });
 		expect(loadSession()?.playedMs).toBe(stored.playedMs);
-		// The flag stays until the game decides (a reconnect reload needs it again).
-		expect(session.getItem(AUTOJOIN_KEY)).not.toBeNull();
+		// One-shot: consumed by this boot. The game writes it again only right before its own rejoin reload.
+		expect(session.getItem(AUTOJOIN_KEY)).toBeNull();
+	});
+
+	it('a plain F5 after that rejoin goes to the menu, like any refresh (Julien: "if I refresh I get back in the game")', () => {
+		setAutojoin(session, ARGS);
+		expect(boot({ mpUrl: URL_, storage: session }).kind).toBe('autojoin');
+		// The kid presses F5 in the rejoined game: nothing re-armed the flag.
+		expect(boot({ mpUrl: URL_, storage: session })).toEqual({ kind: 'menu' });
+		expect(loadSession()).toBeNull(); // no PIN: an ordinary refresh discards the session
 	});
 
 	it('autojoin flag but no MP URL: menu, flag cleared, and the session is NOT exempted', () => {

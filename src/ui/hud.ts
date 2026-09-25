@@ -149,6 +149,17 @@ export class Hud {
 		);
 	}
 
+	/** The world's name, top-left, so you always know which world you are in. */
+	setWorldName(name: string): void {
+		let el = document.getElementById('world-name');
+		if (!el) {
+			el = document.createElement('div');
+			el.id = 'world-name';
+			this.root.appendChild(el);
+		}
+		el.textContent = name;
+	}
+
 	setFlySpeed(tier: number | null) {
 		this.flyEl.classList.toggle('visible', tier !== null);
 		const filled = tier ?? 0;

@@ -23,6 +23,11 @@ count and tool rules that crafting already uses.
 - **J1: the search box takes focus.** Opening the I screen on the Blocks tab, or switching to that
   tab, focuses the search box. Typing, including the letter I, goes into the box. I no longer
   closes the screen while the box has focus; Esc does (it clears first, then closes).
+- **J5 (gate 2): Esc only.** While the box has focus, the I key always types into it and never
+  closes the screen. Esc closes it: once on an empty box, twice when there is text (the first Esc
+  clears).
+- **J6 (gate 2): numbers type.** While the box has focus, digits type into it like letters. There
+  is no hotbar selection by number on the I screen then; the strip stays clickable.
 - **J2: grid only.** Granted items never go on the hotbar.
 - **J3: "I'm" forms.** "I'm Mole Man" and "I'm so rich!" also work, through a per-row alias list
   kept as data.
@@ -124,8 +129,9 @@ export function matchCheat(text: string, cheats = CHEATS): Cheat | null
   the constructor while the screen is hidden.
 - **Keys go to the box.** With focus there, every key, including I, P, Space and the digits, is
   typed into the box. The existing `stopPropagation()` keeps them from the game.
-- **Esc** keeps its behaviour: it clears the text, or closes the screen when the box is empty. The
-  I key closes the screen only when the box does not have focus, for example on the Craft tab.
+- **Esc** keeps its behaviour: it clears the text, or closes the screen when the box is empty.
+  While the box has focus, I never closes the screen (J5: Esc only). The Craft tab has no box, so
+  there I still closes the screen, as today.
 - `close()` blurs the box, and so does `setTab('craft')`.
 - **Focus comes back.** Tab, Shift+Tab (Tab is his hotbar-cycle key) or a click on the dark backdrop
   (`#inventory-root` outside the card) would otherwise take focus out of the box. The box's `blur`
@@ -429,7 +435,8 @@ E13 runs before E5 and E6. It joins the `needMp` list and the "A comes back" lis
   equal to a code (say "jump") followed by Enter still grants, which is harmless.
 - **Progression.** The codes bypass must-mine and crafting on purpose. After "I am so rich!" the
   Craft tab will show green dots.
-- **Auto-focus changes the I screen for everyone.** Digits and P no longer act while the Blocks tab
-  is open, because they are typed into the box. The hotbar strip and pickaxe row stay clickable.
-  Tests 6 and 7 cover the new behaviour.
+- **Auto-focus changes the I screen for everyone. This is Julien's choice (J5, J6).** While the box
+  has focus, I, P and the digits type into it: I never closes the screen (Esc does), and there is no
+  number-key hotbar selection there. The hotbar strip and pickaxe row stay clickable. Tests 6 and 7
+  cover the new behaviour.
 - **Toast refactor.** It touches multiplayer UI that works today. It goes in its own commit, guarded by E5 and unit test 5.

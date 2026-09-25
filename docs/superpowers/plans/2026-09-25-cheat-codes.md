@@ -8,7 +8,7 @@
 
 **Tech Stack:** TypeScript, Vite 5, vitest (node environment), Playwright (headless Chromium), the Go `mcserver` built by `scripts/mp-e2e.ts`.
 
-**Spec:** `docs/superpowers/specs/2026-09-25-cheat-codes-design.md` (rev 4, 12d7d9d). The spec is the authority; each task cites the sections it implements. Where this plan and the spec disagree, the spec wins; stop and report.
+**Spec:** `docs/superpowers/specs/2026-09-25-cheat-codes-design.md` (rev 4 plus Julien's gate-2 decisions J5 "Esc only" and J6 "numbers type"). The spec is the authority; each task cites the sections it implements. Where this plan and the spec disagree, the spec wins; stop and report.
 
 ## Global Constraints
 
@@ -25,6 +25,7 @@
   Claude-Session: https://claude.ai/code/session_01Wv64SyRKwvGQi2fmEPuX21
   ```
 - Work only in `/home/julien/Projects/Minicraft/.claude/worktrees/cheats` (branch `cheats`).
+- Never run `npm ci` or `npm install` in a worktree; deps come through the symlink (`ln -s ../../../node_modules node_modules` if missing). The symlink is not matched by `.gitignore`'s `node_modules/`: never stage it.
 - **mp-e2e runs:**
   - Always as `MP_E2E_SCRATCH=/tmp/claude-1000/-home-julien-Projects-Minicraft/b79f7b62-dcf5-4bf5-9b80-08b74dcaef7e/scratchpad/cheats-e2e rtk proxy npx tsx scripts/mp-e2e.ts --only …`, after `mkdir -p` on that directory.
   - Ports 18080, 5174 and 5175 must be free; the script refuses to start otherwise.
@@ -36,10 +37,10 @@
 
 ## Review Focus
 
-1. **Scrolling the Blocks grid** with the wheel still works after the card's `mousedown` `preventDefault` (the grid is long, and he scrolls it). Test: Task 6, leg "grid still scrolls".
+1. **Scrolling the Blocks grid with the mouse wheel** still works after the card's `mousedown` `preventDefault` (the grid is long, and he scrolls it). Test: Task 6, leg "wheel scrolls the grid". Dragging the grid's scrollbar was probed at gate 2 with real 15 px scrollbars and still works with the `mousedown` rule; it has no automated leg.
 2. **Clicking a hotbar slot in the I screen's strip** still selects that slot, and focus returns to the box. Digits no longer work while typing, so the strip is his only way. Test: Task 6, leg "strip click".
 3. **Esc right after a grant** closes the screen in one press, because the box is already empty. It must not need two presses or leave focus stuck. Test: Task 6, leg "Esc after grant".
-4. **Craft tab and back:** after visiting Craft, returning to Blocks puts focus back in the box, and I on the Craft tab still closes the screen. Test: Task 6, leg "craft round trip".
+4. **Craft tab and back:** after visiting Craft, returning to Blocks puts focus back in the box. The Craft tab has no box, so I there still closes the screen (J5 governs only the focused box). Test: Task 6, leg "craft round trip".
 5. **Reopening the I screen after a grant** opens with an empty, focused box, and typing a second code works at once. Test: Task 6, leg "reopen".
 
 ---
@@ -65,11 +66,14 @@ Spec §8 (extraction, cap, placement) and §11 unit test 5.
   - `export class Toasts { constructor(app: HTMLElement); setSolo(solo: boolean): void; show(text: string, color?: string, kind?: ToastKind): void }`
   - The DOM names are unchanged: `#mp-toasts`, `.mp-toast`, `.mp-toast-text`, `.mp-dot`.
 
-- [ ] **Step 1: Install and baseline**
+- [ ] **Step 1: Dependencies and baseline**
+
+Never `npm ci` or `npm install` here: `node_modules` must be the symlink to the shared `/home/julien/Projects/Minicraft/node_modules`, and a reinstall would wipe it for the main checkout and every worktree.
 
 ```bash
 cd /home/julien/Projects/Minicraft/.claude/worktrees/cheats
-npm ci
+[ -e node_modules ] || ln -s ../../../node_modules node_modules
+ls -la node_modules   # must print a symlink to ../../../node_modules
 npm test && npm run typecheck && npm run lint
 mkdir -p /tmp/claude-1000/-home-julien-Projects-Minicraft/b79f7b62-dcf5-4bf5-9b80-08b74dcaef7e/scratchpad/cheats-e2e
 fuser 18080/tcp 5174/tcp 5175/tcp   # no output = all free
@@ -441,7 +445,7 @@ Expected: PASS. If the collision test fails, a block label really collides. Stop
 
 - [ ] **Step 7: Prove red (three mutations, one at a time)**
 
-1. In `normalizeCode`, remove `.replace(/\p{M}/gu, '')`. `cheats.test.ts` fails on "I am so rích". Revert.
+1. In `normalizeCode`, remove `.normalize('NFKD')`. `cheats.test.ts` fails on "I am so rích", "Ünder 9" and "ＪＵＭＰ". Revert. (Never use removing `.replace(/\p{M}/gu, '')` as a mutation: the final `[^a-z0-9]` strips the marks anyway, so it stays green. The `\p{M}` step is kept only for clarity.)
 2. In `matchCheat`, use `cheatKeys(c).some((key) => key.startsWith(k))`. The whole-string test fails on "mole". Revert.
 3. In `cheats.data.ts`, add `block('flatten_tnt', 50)` to Big Boom. The pin test fails. Revert.
 
@@ -625,7 +629,7 @@ Claude-Session: https://claude.ai/code/session_01Wv64SyRKwvGQi2fmEPuX21"
 
 Spec §5 (all of it), §7 (main.ts is the only caller) and §11 unit test 4.
 
-The DOM behaviour in this task (focus, refocus, clicks, the opening key) has no node-environment test. Its red tests are the Task 6 browser legs, whose prove-red steps mutate the code written here. This task still runs the existing crafting smoke as a regression check, because J1 changes how the I screen takes keys.
+**Reviewer note:** the DOM behaviour in this task (focus, refocus, clicks, the opening key, the repeat guard, J5 "Esc only" and J6 "numbers type") has no node-environment test. It is proven red in Task 6: every row of Task 6's prove-red table mutates code written here. J5 and J6 need no extra code: the focused box already swallows I and the digits (`stopPropagation`, and `searchKey` returns `'type'`). This task still runs the existing crafting smoke as a regression check, because J1 changes how the I screen takes keys.
 
 **Files:**
 - Modify: `src/ui/craft-model.ts` (`searchKey`)
@@ -1082,8 +1086,13 @@ const mc = <T>(page: Page, fn: (m: Mc) => T) => page.evaluate(`(${fn.toString()}
 const inv = (page: Page, name: string) => mc(page, (m) => m.player.inventory).then((i) => i[name] ?? 0);
 const isOpen = (page: Page) => page.locator('#inventory-root').isVisible();
 const boxValue = (page: Page) => page.locator('.inventory-search').inputValue();
-/** The blur→rAF refocus lands one frame later: wait for it before typing (else "Jump!" loses its J). */
-const boxFocused = (page: Page) => page.waitForFunction(() => document.activeElement === document.querySelector('.inventory-search'), null, { timeout: 2_000 });
+/**
+ * The blur→rAF refocus lands one frame later: wait for it before typing (else "Jump!" loses its J).
+ * Resolves true/false, never throws, so a missing refocus prints a FAIL line through check().
+ */
+const boxFocused = (page: Page) => page.waitForFunction(() => document.activeElement === document.querySelector('.inventory-search'), null, { timeout: 2_000 }).then(() => true, () => false);
+/** Blur events on the search box so far (the listener is installed after the world loads). */
+const blurs = (page: Page) => page.evaluate(() => (window as unknown as { __searchBlurs: number }).__searchBlurs);
 const badge = (page: Page, name: string) => page.locator(`.inventory-tile[data-block="${name}"] .count-badge`).innerText().then((s) => s.trim());
 
 async function enterWorld(page: Page) {
@@ -1112,7 +1121,27 @@ for (const sig of ['SIGINT', 'SIGTERM', 'SIGHUP'] as const) process.on(sig, () =
 		await page.click('#w-create');
 		await page.click('#single-play');
 		await enterWorld(page);
-		const tier0 = await mc(page, (m) => m.player.tools.equipped);
+		// Count blur events on the box: the refocus hides a blur from activeElement, not from this counter.
+		await page.evaluate(() => {
+			const w = window as unknown as { __searchBlurs: number };
+			w.__searchBlurs = 0;
+			document.querySelector('.inventory-search')!.addEventListener('blur', () => { w.__searchBlurs++; });
+		});
+
+		// --- Held keys: a repeat keydown for a letter is swallowed (spec §5). ---
+		// A synthetic keydown never types, so the oracle is defaultPrevented: the guard calls preventDefault.
+		await page.keyboard.press('KeyI');
+		const held = await page.evaluate(() => {
+			const box = document.querySelector('.inventory-search') as HTMLInputElement;
+			const fire = (code: string, key: string) => {
+				const ev = new KeyboardEvent('keydown', { code, key, repeat: true, bubbles: true, cancelable: true });
+				box.dispatchEvent(ev);
+				return ev.defaultPrevented;
+			};
+			return { i: fire('KeyI', 'i'), w: fire('KeyW', 'w'), box: box.value };
+		});
+		check(held.i && held.w && held.box === '', `held I and W repeats are swallowed (I ${held.i}, W ${held.w}, box ${JSON.stringify(held.box)})`);
+		await page.keyboard.press('Escape'); // empty box: closes
 
 		// --- Test 6: I then type at once (J1). ---
 		await page.keyboard.press('KeyI');
@@ -1122,22 +1151,28 @@ for (const sig of ['SIGINT', 'SIGTERM', 'SIGHUP'] as const) process.on(sig, () =
 		check(await isOpen(page), 'the I screen is still open after typing "I am so rich!"');
 		check(await inv(page, 'deepslate_emerald_ore') === 500, 'deepslate_emerald_ore is 500');
 		check(await boxValue(page) === '', 'a granted code empties the box');
+		// Own a second pickaxe first, so a stray P would really switch; the alias covers J3 in the browser.
+		await page.keyboard.type("I'm Mole Man");
+		await page.keyboard.press('Enter');
+		check(await mc(page, (m) => m.player.tools.equipped) === 4, `"I'm Mole Man" (alias): the Iron Pickaxe is equipped`);
 		await page.keyboard.type('Jump!');
 		await page.keyboard.press('Enter');
 		check(await isOpen(page), 'the I screen is still open after "Jump!"');
-		check(await mc(page, (m) => m.player.tools.equipped) === tier0, 'the P in "Jump!" did not swap the pickaxe');
+		check(await mc(page, (m) => m.player.tools.equipped) === 4, 'the P in "Jump!" did not swap the pickaxe (still Iron)');
 		check(await inv(page, 'slime_pad') === 50, 'slime_pad is 50');
 
 		// --- Test 7: click, Tab, Shift+Tab and the backdrop keep the box. ---
+		const blurs0 = await blurs(page);
 		await page.click('.inventory-tile[data-block="stone"]');
-		await boxFocused(page);
+		check(await blurs(page) === blurs0, `a tile click never blurs the box (blur events ${blurs0} → ${await blurs(page)})`);
+		check(await boxFocused(page), 'after a tile click, focus is in the box');
 		await page.keyboard.type('Tunnel this!');
 		await page.keyboard.press('Enter');
 		check(await isOpen(page) && await inv(page, 'tunnel_tnt') === 50, 'after a tile click, "Tunnel this!" grants and the screen stays open');
 		await page.keyboard.press('Tab');
-		await boxFocused(page);
+		check(await boxFocused(page), 'after Tab, focus returns to the box');
 		await page.keyboard.press('Shift+Tab');
-		await boxFocused(page);
+		check(await boxFocused(page), 'after Shift+Tab, focus returns to the box');
 		const spot = await page.evaluate(() => {
 			const card = document.querySelector('.inventory-card')!.getBoundingClientRect();
 			const x = Math.max(4, Math.floor(card.left / 2)), y = Math.floor(window.innerHeight / 2);
@@ -1145,7 +1180,7 @@ for (const sig of ['SIGINT', 'SIGTERM', 'SIGHUP'] as const) process.on(sig, () =
 		});
 		check(spot.root === 'inventory-root', `the backdrop point (${spot.x}, ${spot.y}) is #inventory-root (got ${spot.root})`);
 		await page.mouse.click(spot.x, spot.y);
-		await boxFocused(page);
+		check(await boxFocused(page), 'after a backdrop click, focus returns to the box');
 		await page.keyboard.type('Jump!');
 		await page.keyboard.press('Enter');
 		check(await isOpen(page) && await inv(page, 'slime_pad') === 100, 'after Tab, Shift+Tab and a backdrop click, "Jump!" grants (slime_pad 100)');
@@ -1198,33 +1233,41 @@ for (const sig of ['SIGINT', 'SIGTERM', 'SIGHUP'] as const) process.on(sig, () =
 		// Esc after grant: the box is empty, so one Esc closes. Reopen: empty and focused.
 		await page.keyboard.press('Escape');
 		check(!(await isOpen(page)), 'Esc after a grant closes the I screen in one press');
+		// J5 Esc only: I types, never closes; Esc clears, then Esc closes.
+		await page.keyboard.press('KeyI');
+		await page.keyboard.press('KeyI');
+		await page.keyboard.press('KeyI');
+		check(await isOpen(page) && await boxValue(page) === 'ii', `I, I: the screen stays open and the box holds "ii" (got ${JSON.stringify(await boxValue(page))})`);
+		await page.keyboard.press('Escape');
+		check(await isOpen(page) && await boxValue(page) === '', 'the first Esc clears the text and keeps the screen open');
+		await page.keyboard.press('Escape');
+		check(!(await isOpen(page)), 'the second Esc closes the screen');
 		await page.keyboard.press('KeyI');
 		check(await isOpen(page) && await boxValue(page) === '', 'reopen: the screen opens with an empty box');
-		await boxFocused(page);
+		check(await boxFocused(page), 'reopen: the box has focus');
 		await page.keyboard.type('Mole Power!');
 		await page.keyboard.press('Enter');
 		// Test 10 rides on the reopen leg.
 		check(await page.locator('#hud-pickaxe').getAttribute('data-tier') === '6', 'Mole Power!: the HUD shows the diamond pickaxe');
-		// Grid still scrolls with the wheel.
+		// Wheel scrolls the grid (Review Focus 1; the scrollbar drag was probed at gate 2).
 		const before = await page.locator('.inventory-grid').evaluate((e) => e.scrollTop);
 		await page.locator('.inventory-grid').hover();
 		await page.mouse.wheel(0, 600);
 		await page.waitForTimeout(300);
-		check(await page.locator('.inventory-grid').evaluate((e) => e.scrollTop) > before, 'the Blocks grid still scrolls with the wheel');
+		check(await page.locator('.inventory-grid').evaluate((e) => e.scrollTop) > before, 'the mouse wheel over the Blocks grid scrolls it');
 		// Strip click selects a slot and focus returns to the box.
 		const sel0 = await mc(page, (m) => m.player.selected);
 		const target = (sel0 + 3) % 9;
 		await page.locator('.inventory-strip > *').nth(target).click();
 		check(await mc(page, (m) => m.player.selected) === target, `a strip click selects slot ${target}`);
-		await boxFocused(page);
+		check(await boxFocused(page), 'after a strip click, focus is in the box');
 		// Craft round trip: I closes from Craft; back on Blocks the box has focus.
 		await page.click('.inventory-tab[data-tab="craft"]');
 		await page.keyboard.press('KeyI');
 		check(!(await isOpen(page)), 'I on the Craft tab closes the screen');
 		await page.keyboard.press('KeyI');
 		await page.click('.inventory-tab[data-tab="blocks"]');
-		await boxFocused(page);
-		check(true, 'back on Blocks, the box has focus');
+		check(await boxFocused(page), 'back on Blocks, the box has focus');
 		await page.keyboard.press('Escape');
 
 		// Persistence: wait past AutoSave's 5 s debounce, reload, and continue the same world.
@@ -1268,9 +1311,11 @@ Expected: `cheat-smoke: PASS`, exit 0.
 | Mutation (in Task 4/1 code) | Expected FAIL line |
 |---|---|
 | main.ts: delete `if (down) e.preventDefault();` in `case 'inventory'` | `the box holds exactly the code, no leading "i"` (got "iI am so rich!") |
-| inventory.ts `open()`: delete `this.keepSearchFocus();` | `the I screen is still open after typing…` (I closes it) |
-| inventory.ts: delete the search box's `blur` listener | `after Tab, Shift+Tab and a backdrop click…` (boxFocused times out) |
-| inventory.ts tile click: put back `tile.blur();` instead of `this.keepSearchFocus();`, and remove the card `mousedown` listener | `after a tile click, "Tunnel this!" grants…` |
+| inventory.ts `open()`: delete `this.keepSearchFocus();` | `the box holds exactly the code, no leading "i"` (the typed I closes the screen, so the box is empty) |
+| inventory.ts: delete the search box's `blur` listener | `after Tab, focus returns to the box` |
+| inventory.ts tile click: put back `tile.blur();` instead of `this.keepSearchFocus();`, and remove the card `mousedown` listener | `a tile click never blurs the box (blur events n → n+1)` |
+| inventory.ts keydown: delete the `if (e.repeat && e.key.length === 1) { … }` guard | `held I and W repeats are swallowed (I false, W false, …)` |
+| inventory.ts keydown: before `searchKey`, add `if (e.code === 'KeyI' && /^i*$/i.test(this.search.value)) { this.onClose?.(); return; }` (I closes when the box holds only "i"s) | `I, I: the screen stays open and the box holds "ii"` |
 | inventory.ts keydown: `if (this.onSearchEnter?.(…)) {…}` → clear the box unconditionally on submit | `no match: the box still says "diamond"` |
 | main.ts `onSearchEnter`: pass `() => {}` instead of `() => autosave.markDirty()` (the sabotage: the grant path makes no markDirty call) | `one Enter = exactly one markDirty (got 0)` |
 | main.ts `onSearchEnter`: add a second `autosave.markDirty();` | `… (got 2)` |
@@ -1370,13 +1415,16 @@ Insert right after the "A comes back" `if` block:
 				const logStart = await b.evaluate(() => (window as any).__mc.mp.log.length as number);
 				await sleep(Math.max(0, 6_000 - (Date.now() - lastGrantAt)));
 				await a.close();
-				await b.waitForFunction(([id, from]) => (window as any).__mc.mp.log.slice(from).some((m: any) => m.t === 'left' && m.id === id), [aId, logStart] as const, { timeout: 20_000 });
-				check(true, "B's log shows A left");
+				const aLeft = await b.waitForFunction(([id, from]) => (window as any).__mc.mp.log.slice(from).some((m: any) => m.t === 'left' && m.id === id), [aId, logStart] as const, { timeout: 20_000 }).then(() => true, () => false);
+				check(aLeft, "B's log shows A left");
+				if (!aLeft) return;
 				// 5. Rejoin in a FRESH context (empty sessionStorage: only the server can hold the grant).
+				const oldCtx = ctxA;
 				ctxA = await browser.newContext({ viewport: { width: 960, height: 600 } });
 				a = await newPage(ctxA, A_WHO, 'A');
 				A = a;
 				await joinWorld(a, BASE, WORLD, '10 min');
+				await oldCtx.close();
 				await sleep(1_500);
 				const back = await a.evaluate(() => {
 					const m = (window as any).__mc;
@@ -1395,8 +1443,15 @@ Insert right after the "A comes back" `if` block:
 				await place(a, [ground[0], ground[1] + 1, ground[2]], 0, -Math.PI / 2 + 0.01);
 				const cell = [Math.floor(ground[0]), Math.floor(ground[1]), Math.floor(ground[2])];
 				const bigId = await a.evaluate(() => (window as any).__blocks.BLOCK_BY_NAME.big_tnt.id as number);
-				await a.mouse.click(480, 300); // the canvas click requests pointer lock
-				await a.waitForFunction(() => document.pointerLockElement !== null, null, { timeout: 5_000 });
+				const was = await a.evaluate((c) => (window as any).__mc.world.getBlock(c[0], c[1], c[2]) as number, cell);
+				check(was === 0, `the target cell ${cell} is air before placing (got ${was})`);
+				if (was !== 0) return;
+				// The renderer's canvas is the first one in #app; the click requests pointer lock.
+				await a.locator('canvas').first().click();
+				const locked = await a.waitForFunction(() => document.pointerLockElement === document.querySelector('canvas'), null, { timeout: 5_000 }).then(() => true, () => false);
+				// STOP AND REPORT if this fails: never replace the real right-click with setBlock or a synthetic event.
+				check(locked, 'A has pointer lock on the game canvas');
+				if (!locked) return;
 				const aLog = await a.evaluate(() => (window as any).__mc.mp.log.length as number);
 				await a.mouse.down({ button: 'right' });
 				await a.mouse.up({ button: 'right' });
@@ -1418,7 +1473,7 @@ Insert right after the "A comes back" `if` block:
 
 Notes for the implementer:
 - `standAt` returns the **feet** position on the ground of a column. `place(page, p, yaw, pitch)` sets `flying` and puts the feet at `p`. So the feet end up one block above the ground surface, looking straight down. The ray hits the ground's top face, and the block lands in the ground-level air cell, below the feet, where it cannot intersect the player. If the first real placement attempt shows a different cell, read `tryPlace` (`src/game/place.ts`) and fix `cell` to the cell it writes. Do not switch to `setBlock`.
-- **If `document.pointerLockElement` never becomes non-null in headless Chromium, stop and report.** Do not replace the right-click with `setBlock` or a synthetic event; the spec requires the real path.
+- **If `locked` is false in headless Chromium, stop and report.** Do not replace the right-click with `setBlock` or a synthetic event; the spec requires the real path.
 
 - [ ] **Step 3: Run E13 green, then the neighbours**
 

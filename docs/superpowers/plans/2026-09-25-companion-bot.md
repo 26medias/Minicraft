@@ -317,16 +317,7 @@ At most 1 hop per second. With no valid cell, the bot watches.
 
 ---
 
-### Task 6: Brain adapter (Laya / Jev / CLM `/v1/systemone`) and the brains launcher
-
-**Also spec §12c (Jev):**
-- the hosted `jev` brain: bearer key from `TYPESAFE_API_KEY`, model `jev-latest`, 800 ms timeout;
-- confidence = max(p) computed from `probabilities` for every brain;
-- 429/529 back-off;
-- name scrubbing for hosted brains;
-- the tests listed in §12c.
-
-The brains launcher only covers local brains.
+### Task 6: Brain adapter (Laya `/v1/systemone`) and the brains launcher
 
 **Fixture:** the real exchange recorded at gate 2 against the real Laya on this machine: `/tmp/claude-1000/-home-julien-Projects-Minicraft/b79f7b62-dcf5-4bf5-9b80-08b74dcaef7e/scratchpad/gate2-bots-rigour/req.json` and `resp1.json`.
 - Copy them into `bots/test/fixtures/laya-exchange.json` as `{ request, response, note }`.

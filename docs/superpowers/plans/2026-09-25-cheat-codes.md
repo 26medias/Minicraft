@@ -25,6 +25,7 @@
   Claude-Session: https://claude.ai/code/session_01Wv64SyRKwvGQi2fmEPuX21
   ```
 - Work only in `/home/julien/Projects/Minicraft/.claude/worktrees/cheats` (branch `cheats`).
+- **Vite cache isolation (gate 2 re-gate Q1):** Vite's dep cache `node_modules/.vite` resolves through the symlink into the SHARED `node_modules`, and a Vite started from this worktree rebuilds it (different root → different configHash), breaking dev servers running from the main checkout. Task 1 Step 1 adds `cacheDir: process.env.VITE_CACHE_DIR || 'node_modules/.vite'` to `vite.config.ts`. Every command that starts Vite from this worktree (`crafting-smoke`, `cheat-smoke`, `mp-e2e`) is prefixed with `VITE_CACHE_DIR=/tmp/claude-1000/-home-julien-Projects-Minicraft/b79f7b62-dcf5-4bf5-9b80-08b74dcaef7e/scratchpad/cheats-vite-cache`. Task 8 checks `/home/julien/Projects/Minicraft/node_modules/.vite/deps/_metadata.json` still has `"configHash": "621b77fc"`.
 - Never run `npm ci` or `npm install` in a worktree; deps come through the symlink (`ln -s ../../../node_modules node_modules` if missing). The symlink is not matched by `.gitignore`'s `node_modules/`: never stage it.
 - **mp-e2e runs:**
   - Always as `MP_E2E_SCRATCH=/tmp/claude-1000/-home-julien-Projects-Minicraft/b79f7b62-dcf5-4bf5-9b80-08b74dcaef7e/scratchpad/cheats-e2e rtk proxy npx tsx scripts/mp-e2e.ts --only …`, after `mkdir -p` on that directory.
@@ -73,6 +74,9 @@ Never `npm ci` or `npm install` here: `node_modules` must be the symlink to the 
 ```bash
 cd /home/julien/Projects/Minicraft/.claude/worktrees/cheats
 [ -e node_modules ] || ln -s ../../../node_modules node_modules
+# Before any Vite run: add to vite.config.ts inside defineConfig({...}):
+#     cacheDir: process.env.VITE_CACHE_DIR || 'node_modules/.vite',
+# and export VITE_CACHE_DIR=/tmp/claude-1000/-home-julien-Projects-Minicraft/b79f7b62-dcf5-4bf5-9b80-08b74dcaef7e/scratchpad/cheats-vite-cache
 ls -la node_modules   # must print a symlink to ../../../node_modules
 npm test && npm run typecheck && npm run lint
 mkdir -p /tmp/claude-1000/-home-julien-Projects-Minicraft/b79f7b62-dcf5-4bf5-9b80-08b74dcaef7e/scratchpad/cheats-e2e

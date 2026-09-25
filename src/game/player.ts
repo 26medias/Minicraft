@@ -5,7 +5,7 @@ import type { BlockId } from '../data/blocks.data';
 import { isLiquid } from '../data/blocks.data';
 import type { Inventory, PlayerTools } from '../data/crafting.data';
 import { GRAVITY, JUMP_SPEED, MIN_BOUNCE_VY, padResponse, padUnderFeet } from './pads';
-import { EYE_HEIGHT, WALK_SPEED } from './player-constants';
+import { EYE_HEIGHT, FLY_SPEED, FLY_TIER_DEFAULT, WALK_SPEED } from './player-constants';
 import { findSafeSpawn, sanitizeSpawn, VOID_FLOOR_Y } from './safe-spawn';
 
 // Spawn safety lives in a three-free module (shared with the bot SDK); re-exported so every importer is unchanged.
@@ -15,7 +15,6 @@ const SIZE: [number, number, number] = [0.6, 1.8, 0.6];
 const MAX_STEP = 0.4; // max displacement per physics sub-step (blocks)
 const FLY_TIER_MIN = 1;
 const FLY_TIER_MAX = 5;
-const FLY_TIER_DEFAULT = 2;
 
 export type Keys = {
 	forward: boolean;
@@ -142,7 +141,8 @@ export class Player {
 		}
 
 		let speed: number;
-		if (this.flying) speed = WALK_SPEED * this.flySpeedTier;
+		// FLY_SPEED at the default tier, scaled by the tier (exactly WALK_SPEED × tier for the integer tiers).
+		if (this.flying) speed = (FLY_SPEED * this.flySpeedTier) / FLY_TIER_DEFAULT;
 		else if (this.swimming) speed = WALK_SPEED * 0.6;
 		else speed = WALK_SPEED;
 

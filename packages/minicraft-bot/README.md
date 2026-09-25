@@ -163,8 +163,8 @@ Run it with `npx tsx bot.ts`. Stop it with Ctrl-C: the server sees the bot leave
 - **`pitch`** is in radians. Positive looks up; it is clamped to ±π/2.
 - Coordinates are world blocks. Every `BotWorld` method floors x, y and z, so `getBlock(10.7, 64.2, 3.9)`
   reads cell (10, 64, 3). The world is 512 × 512 blocks and 256 high.
-- `WALK_SPEED` is 5 blocks/s, the same as a kid walking. `POS_EVERY_MS` is 100: the bot's pose is sent at
-  most 10 times a second.
+- `WALK_SPEED` is 5 blocks/s, the same as a kid walking. `FLY_SPEED` is 10 blocks/s, a kid flying at the
+  default speed. `POS_EVERY_MS` is 100: the bot's pose is sent at most 10 times a second.
 
 ## `BotClient`
 
@@ -190,10 +190,11 @@ new BotClient({ url, token, bid?, statePath?, editGapMs? })
 | `players()` | Everyone else (never the bot itself): `{ id, name, skin, bot, x, y, z, yaw, pitch, hasPos }`. `hasPos: false` means they haven't sent a pose yet. |
 | `move(pose)` | Sets the pose (a teleport). It is sent within 100 ms. A jump over 8 blocks snaps on the kids' screens. It cancels a walk. |
 | `walkTo({ x, z })` | Walks there in a straight line (see below). Resolves `'arrived'` or `'cancelled'`. |
+| `flyTo({ x, y, z })` | Flies there in a straight 3D line, rising over what is in the way (see below). Resolves `'arrived'` or `'cancelled'`. |
 | `lookAt(x, y, z)` | Turns the head toward a point. It only rotates. |
 | `place(x, y, z, name, color?)` | Places a block (`color` `#RRGGBB` for a `lamp`), **replacing whatever is in the cell**, as the game's replace does. The replaced block is journaled, so `revert` puts it back. Resolves `true` when sent. |
 | `break(x, y, z)` | Breaks a block instantly (to air). |
-| `mine(x, y, z, ms?)` | Mines like a kid with bare hands: faces the block, the kids see cracks, waits, then breaks it. Resolves `true` when broken. |
+| `mine(x, y, z, ms?)` | Mines like a kid with bare hands: faces the block, the kids see cracks, waits, then breaks it. Resolves `true` when broken; `false` if the cell holds another block by then (a kid changed it: it is left alone). |
 | `fx({ kind, x, y, z, … })` | Sends a raw effect, e.g. `{ kind: 'firework', x, y, z }`. |
 | `journal()` | The bot's own edits, oldest first: `{ x, y, z, oldId, newId, t, oldColor? }` (`oldColor`: the lamp colour that was replaced). |
 | `revert(sinceMs?)` | Undoes the bot's own edits (see below). |
@@ -206,7 +207,7 @@ new BotClient({ url, token, bid?, statePath?, editGapMs? })
 `place`, `break` and `mine` **resolve `false`** when refused. They never reject for a refusal, so a
 fire-and-forget call can't crash the bot with an unhandled rejection. Only programming errors throw:
 `NotConnectedError` (called before `connect()` resolved, or after `close()`), a malformed colour, and a
-NaN or infinite coordinate given to `move`, `walkTo` or `lookAt` (`RangeError`).
+NaN or infinite coordinate given to `move`, `walkTo`, `flyTo` or `lookAt` (`RangeError`).
 Still wrap the main loop in `try/catch` and log, as the example does.
 
 `place` refuses:
@@ -219,24 +220,44 @@ Still wrap the main loop in `try/catch` and log, as the example does.
 
 `break` refuses bedrock and air. `mine` refuses anything a kid couldn't mine: air, water, lava and
 bedrock. A new `mine`, a lost connection or `close()` cancels a mine in progress. The kids' cracks then
-stop (`mine-stop`), and the mine resolves `false`. `walkTo` and `lookAt` don't cancel a mine.
+stop (`mine-stop`), and the mine resolves `false`. Just before it breaks, `mine` checks that the cell still
+holds the block it started on; if a kid put something else there, it sends `mine-stop`, leaves the cell
+alone and resolves `false`. `walkTo`, `flyTo` and `lookAt` don't cancel a mine.
 
-While the bot is reconnecting, `place`, `break` and `mine` resolve `false`, and `walkTo` resolves
-`'cancelled'`.
+While the bot is reconnecting, `place`, `break` and `mine` resolve `false`, and `walkTo` and `flyTo`
+resolve `'cancelled'`.
 
 ### `walkTo` and its limits
 
 - It walks a straight line at `WALK_SPEED`, one pose every 100 ms. The feet follow `world.groundY` at
   each step, and the bot faces the way it goes.
-- It steps up at most 1 block. It drops at most 2 blocks per step; a deeper drop continues over the next
-  steps before it moves on.
+- It steps up at most 1 block, as a jump the kids can see: one pose rises 0.6 of the step in place, the
+  next lands on it. It drops at most 2 blocks per step; a deeper drop continues over the next steps
+  before it moves on.
+- Full-block stairs are fine, up and down, straight or at an angle, and a staircase built along a
+  diagonal. What stops it is a 2-block rise, e.g. walking into a stair's side: use `flyTo` there.
 - It **rejects with `BlockedError { at, reason }`**: `'wall'` when the ground ahead rises more than 1
   block, or when the body can't fit into the next column; `'noGround'` when there is nothing to stand on
   within 64 blocks below (or the world edge). `at` is where it stopped.
 - **It is not pathfinding.** It checks only the centre column, so it can clip wall corners. A wall
   higher than 1 block stops it. So does the shore of deep water, where `groundY` finds the bed far below.
-- A new `walkTo`, a `move`, a lost connection or `close()` resolves it `'cancelled'`. That is a
-  resolve, never a rejection. `lookAt` and `mine` don't cancel it.
+- A new `walkTo` or `flyTo`, a `move`, a lost connection or `close()` resolves it `'cancelled'`. That is
+  a resolve, never a rejection. `lookAt` and `mine` don't cancel it.
+
+### `flyTo` and its limits
+
+- It flies a straight 3D line to the feet position `{ x, y, z }` at `FLY_SPEED`, one pose every 100 ms,
+  so it never moves more than 1 block per pose (nothing snaps on the kids' screens). It faces the target
+  and ends exactly on it.
+- The body (x ± 0.3, z ± 0.3, feet to 1.8 above) never enters a solid block. When the next step would,
+  it moves across at the same height if it can, else climbs straight up, 1 block per pose, until it can
+  go on. It climbs at most 16 blocks above where the flight started, and never above the world top.
+- It **rejects with `BlockedError { at, reason }`**: `'wall'` when it can't go on (a ceiling over a
+  climb, an enclosure, a wall more than 16 high, a target sealed under a roof); `'noGround'` for a target
+  outside the world. It is not pathfinding either: it doesn't go around things, only over them.
+- `walkTo` and `flyTo` share one movement: starting either cancels the other. A `move`, a lost
+  connection or `close()` also resolves it `'cancelled'`. `lookAt` and `mine` don't cancel it.
+- Landing is up to you: fly to `groundY` of the spot, then walk.
 
 ### The safety net: journal and `revert`
 
@@ -304,7 +325,9 @@ once more. That is correct, since the cell really changed. `oldId` is `null` whe
 generated yet.
 
 `blockNames()` lists every block name. Other exports: `generateChunkBlocks(seed, gen, cx, cz)` (a
-chunk's generated ids), `CLIENT_VERSION`, `EYE_HEIGHT`, `WALK_SPEED` and `POS_EVERY_MS`.
+chunk's generated ids), `isSolidId(id)` and `isLiquidId(id)` (the catalog's rules as pure functions, the
+same ones `world.isSolid`/`isLiquid` use), `CLIENT_VERSION`, `EYE_HEIGHT`, `WALK_SPEED`, `FLY_SPEED` and
+`POS_EVERY_MS`.
 
 ## Costs
 

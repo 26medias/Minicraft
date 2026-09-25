@@ -6,6 +6,7 @@ import { join } from 'node:path';
 import {
 	BlockedError,
 	BotClient,
+	FLY_SPEED,
 	NotConnectedError,
 	OutdatedClientError,
 	ReplacedError,
@@ -13,6 +14,8 @@ import {
 	type BotClientOptions,
 	type ConnectResult,
 	type JournalEntry,
+	isLiquidId,
+	isSolidId,
 } from '../src/index';
 import { BLOCKS, BLOCK_BY_NAME, isSolid } from '../../../src/data/blocks.data';
 import { CLIENT_VERSION, POS_EVERY_MS, PROTO, type Op, type PlayerInfo, type Spawn } from '../../../src/net/protocol';
@@ -695,6 +698,54 @@ describe('mine', () => {
 		expect(bot.world.getBlock(12, 201, 10)).toBe(STONE);
 	});
 
+	it('re-checks the block just before breaking: a kid\'s block placed mid-mine is not destroyed (spec §7)', async () => {
+		const COBBLE = BLOCK_BY_NAME['cobblestone'].id;
+		const { bot, ws } = await connected({ cells: [[12, 201, 10, STONE, 0, 0], [14, 201, 10, STONE, 0, 0]] });
+		const reconnects = vi.fn();
+		bot.on('reconnect', reconnects);
+		let r: boolean | null = null;
+		void bot.mine(12, 201, 10, 400).then((v) => (r = v));
+		await vi.advanceTimersByTimeAsync(100);
+		ws.recv({ t: 'edit', seq: 1, by: 8, ops: [[12, 201, 10, COBBLE, 0, 0]] });
+		expect(bot.world.getBlock(12, 201, 10)).toBe(COBBLE);
+		// Only dur + 100 ms in all: well inside the 6 s silence limit, so no reconnect teardown can cancel the mine.
+		await vi.advanceTimersByTimeAsync(400);
+		await flush();
+		expect(r).toBe(false);
+		expect(ws.of('edit')).toEqual([]);
+		expect(bot.world.getBlock(12, 201, 10)).toBe(COBBLE);
+		expect(ws.of('fx').map((m) => [m.kind, m.x])).toEqual([['mine', 12], ['mine-stop', 12]]);
+		// Still connected: the same socket, never closed, no reconnect, and the next mine breaks.
+		expect(FakeWS.all).toHaveLength(1);
+		expect(ws.closedWith).toBeNull();
+		const next = bot.mine(14, 201, 10, 40);
+		await vi.advanceTimersByTimeAsync(40);
+		await flush();
+		expect(await next).toBe(true);
+		expect(ws.of('edit').map((m) => m.ops)).toEqual([[[14, 201, 10, AIR, 0, 0]]]);
+		expect(reconnects).not.toHaveBeenCalled();
+	});
+
+	it('the re-check runs inside the edit function: a change during the edit-gap wait is still caught', async () => {
+		const COBBLE = BLOCK_BY_NAME['cobblestone'].id;
+		const { bot, ws } = await connected({ over: { editGapMs: 300 }, cells: [[12, 201, 10, STONE, 0, 0]] });
+		expect(await bot.place(20, 201, 20, 'stone')).toBe(true);
+		let r: boolean | null = null;
+		void bot.mine(12, 201, 10, 40).then((v) => (r = v));
+		// The timer fires at 40 ms; the break then waits for the 300 ms edit gap. The kid's block lands in between.
+		await vi.advanceTimersByTimeAsync(100);
+		expect(r).toBeNull();
+		ws.recv({ t: 'edit', seq: 1, by: 8, ops: [[12, 201, 10, COBBLE, 0, 0]] });
+		await vi.advanceTimersByTimeAsync(300);
+		await flush();
+		expect(r).toBe(false);
+		expect(ws.of('edit')).toHaveLength(1); // the place only
+		expect(bot.world.getBlock(12, 201, 10)).toBe(COBBLE);
+		expect(ws.of('fx').map((m) => m.kind)).toEqual(['mine', 'mine-stop']);
+		expect(FakeWS.all).toHaveLength(1);
+		expect(ws.closedWith).toBeNull();
+	});
+
 	it('close cancels a mine: mine-stop, false', async () => {
 		const { bot, ws } = await connected({ cells: [[12, 201, 10, STONE, 0, 0]] });
 		const m = bot.mine(12, 201, 10);
@@ -910,5 +961,359 @@ describe('raw fx', () => {
 		const { bot, ws } = await connected();
 		bot.fx({ kind: 'firework', x: 1, y: 2, z: 3 });
 		expect(ws.of('fx')).toEqual([{ t: 'fx', kind: 'firework', x: 1, y: 2, z: 3 }]);
+	});
+});
+
+describe('isSolidId / isLiquidId (spec §12a)', () => {
+	it('are the rule BotWorld.isSolid / isLiquid use, over every catalog id and past its end', async () => {
+		const { bot } = await connected();
+		for (let id = 0; id < BLOCKS.length + 3; id++) {
+			expect(isSolidId(id)).toBe(bot.world.isSolid(id));
+			expect(isLiquidId(id)).toBe(bot.world.isLiquid(id));
+		}
+		expect(isSolidId(STONE)).toBe(true);
+		expect(isSolidId(AIR)).toBe(false);
+		expect(isLiquidId(BLOCK_BY_NAME['water'].id)).toBe(true);
+		expect(isLiquidId(STONE)).toBe(false);
+	});
+});
+
+describe('FLY_SPEED (spec §12b)', () => {
+	it('is 10 b/s, the game\'s default fly tier (WALK_SPEED × 2)', () => {
+		expect(FLY_SPEED).toBe(10);
+		expect(FLY_SPEED).toBe(WALK_SPEED * 2);
+	});
+});
+
+/** Advances time in ≤ 1 s slices, feeding a server ping before each, so the SDK never drops to reconnecting (6 s of silence). */
+async function advance(ws: FakeWS, ms: number): Promise<void> {
+	for (let left = ms; left > 0; left -= 1000) {
+		ws.recv({ t: 'ping' });
+		await vi.advanceTimersByTimeAsync(Math.min(1000, left));
+	}
+}
+
+/** The bot never dropped its connection (a reconnect would cancel walks and flights and make a test pass for the wrong reason). */
+function expectStillConnected(ws: FakeWS): void {
+	expect(FakeWS.all).toHaveLength(1);
+	expect(ws.closedWith).toBeNull();
+}
+
+/** A stone floor under feet y PLAT.y over dx x0..x1, dz z0..z1 from PLAT; throws when the oracle has terrain near it. */
+function floorAt(bot: BotClient, x0: number, x1: number, z0: number, z1: number): void {
+	for (let dx = x0; dx <= x1; dx++) for (let dz = z0; dz <= z1; dz++) {
+		for (let y = PLAT.y - 8; y <= PLAT.y + 24; y++) if (oracle.getBlock(PLAT.x + dx, y, PLAT.z + dz) !== AIR) throw new Error('floorAt: terrain in the way');
+		coreOf(bot.world).localSet(PLAT.x + dx, PLAT.y - 1, PLAT.z + dz, STONE);
+	}
+}
+
+/** Fills column (PLAT.x + dx, PLAT.z + dz) with stone from feet y up, `h` blocks high. */
+function column(bot: BotClient, dx: number, dz: number, h: number, from = PLAT.y): void {
+	for (let k = 0; k < h; k++) coreOf(bot.world).localSet(PLAT.x + dx, from + k, PLAT.z + dz, STONE);
+}
+
+/** An independent body-box test (x ± 0.3, z ± 0.3, feet to feet + 1.8, touching faces allowed): true when it overlaps a solid block. */
+function bodyHits(bot: BotClient, p: { x: number; y: number; z: number }): boolean {
+	const e = 1e-6;
+	for (let x = Math.floor(p.x - 0.3 + e); x <= Math.floor(p.x + 0.3 - e); x++)
+		for (let y = Math.floor(p.y + e); y <= Math.floor(p.y + 1.8 - e); y++)
+			for (let z = Math.floor(p.z - 0.3 + e); z <= Math.floor(p.z + 0.3 - e); z++) if (isSolid(bot.world.getBlock(x, y, z))) return true;
+	return false;
+}
+
+type SentPose = { x: number; y: number; z: number; yaw: number; pitch: number };
+function posesSince(ws: FakeWS, n0: number): SentPose[] {
+	return ws.of('pos').slice(n0) as unknown as SentPose[];
+}
+function maxDelta(from: SentPose, poses: SentPose[]): number {
+	let m = 0, prev = from;
+	for (const p of poses) {
+		m = Math.max(m, Math.hypot(p.x - prev.x, p.y - prev.y, p.z - prev.z));
+		prev = p;
+	}
+	return m;
+}
+
+describe('flyTo (spec §12b)', () => {
+	const FLY_STEP = (FLY_SPEED * POS_EVERY_MS) / 1000;
+
+	it('flies a straight 3D line at FLY_SPEED, one pose per POS_EVERY_MS, facing the target, and ends exactly on it', async () => {
+		const s = PLAT;
+		const { bot, ws } = await connected({ spawn: { x: s.x + 0.5, y: s.y, z: s.z + 0.5 } });
+		floorAt(bot, -3, 14, -3, 3);
+		const start = bot.pose();
+		const target = { x: s.x + 10.5, y: s.y + 6, z: s.z + 0.5 };
+		const d = Math.hypot(10, 6);
+		const n0 = ws.of('pos').length;
+		let r: string | null = null;
+		void bot.flyTo(target).then((v) => (r = v));
+		await vi.advanceTimersByTimeAsync(POS_EVERY_MS * (Math.ceil(d / FLY_STEP) - 1));
+		expect(r).toBeNull();
+		await vi.advanceTimersByTimeAsync(POS_EVERY_MS);
+		expect(r).toBe('arrived');
+		expect(bot.pose()).toMatchObject(target);
+		const poses = posesSince(ws, n0);
+		expect(poses).toHaveLength(Math.ceil(d / FLY_STEP));
+		for (let i = 0; i < poses.length - 1; i++) {
+			const prev = i === 0 ? start : poses[i - 1];
+			expect(Math.hypot(poses[i].x - prev.x, poses[i].y - prev.y, poses[i].z - prev.z)).toBeCloseTo(FLY_STEP, 9);
+		}
+		expect(maxDelta(start, poses)).toBeLessThanOrEqual(1.0 + 1e-9);
+		expect(poses[0].yaw).toBeCloseTo(Math.atan2(-10, 0), 6);
+		expect(poses[0].pitch).toBeCloseTo(Math.atan2(6, 10), 6);
+		expectStillConnected(ws);
+	});
+
+	it('a wall in the way: climbs straight up (+1 per pose) until the step is clear, then goes over and lands on the target', async () => {
+		const s = PLAT;
+		const { bot, ws } = await connected({ spawn: { x: s.x + 0.5, y: s.y, z: s.z + 0.5 } });
+		floorAt(bot, -3, 14, -3, 3);
+		for (let dz = -3; dz <= 3; dz++) column(bot, 4, dz, 4);
+		const start = bot.pose();
+		const target = { x: s.x + 9.5, y: s.y, z: s.z + 0.5 };
+		const n0 = ws.of('pos').length;
+		let r: string | null = null;
+		void bot.flyTo(target).then((v) => (r = v));
+		await advance(ws, POS_EVERY_MS * 30);
+		expect(r).toBe('arrived');
+		expect(bot.pose()).toMatchObject(target);
+		const poses = posesSince(ws, n0);
+		expect(maxDelta(start, poses)).toBeLessThanOrEqual(1.0 + 1e-9);
+		for (const p of poses) expect(bodyHits(bot, p)).toBe(false);
+		expect(Math.max(...poses.map((p) => p.y))).toBeGreaterThanOrEqual(s.y + 4);
+		// A climb: consecutive poses with the same x/z and y + 1.
+		expect(poses.some((p, i) => i > 0 && p.x === poses[i - 1].x && p.z === poses[i - 1].z && p.y === poses[i - 1].y + 1)).toBe(true);
+		expectStillConnected(ws);
+	});
+
+	it('a walk blocked at a wall with the body clipping it hands over to flyTo, which rises over (the companion\'s case)', async () => {
+		const s = PLAT;
+		const { bot, ws } = await connected({ spawn: { x: s.x + 0.8, y: s.y, z: s.z + 0.5 } });
+		floorAt(bot, -3, 14, -3, 3);
+		for (let dz = -3; dz <= 3; dz++) column(bot, 4, dz, 2);
+		const caught = bot.walkTo({ x: s.x + 9.5, z: s.z + 0.5 }).then(() => null, (e: unknown) => e);
+		await vi.advanceTimersByTimeAsync(POS_EVERY_MS * 12);
+		expect(await caught).toMatchObject({ reason: 'wall' });
+		expect(bodyHits(bot, bot.pose())).toBe(true); // walkTo checks only the centre column
+		const n0 = ws.of('pos').length;
+		const start = bot.pose();
+		let r: string | null = null;
+		void bot.flyTo({ x: s.x + 9.5, y: s.y, z: s.z + 0.5 }).then((v) => (r = v));
+		await advance(ws, POS_EVERY_MS * 30);
+		expect(r).toBe('arrived');
+		const poses = posesSince(ws, n0);
+		expect(maxDelta(start, poses)).toBeLessThanOrEqual(1.0 + 1e-9);
+		for (const p of poses) expect(bodyHits(bot, p)).toBe(false);
+		expectStillConnected(ws);
+	});
+
+	it('a ceiling: a climb step needs a clear body box too → BlockedError{wall}', { timeout: 10_000 }, async () => {
+		const s = PLAT;
+		const { bot, ws } = await connected({ spawn: { x: s.x + 0.5, y: s.y, z: s.z + 0.5 } });
+		floorAt(bot, -3, 14, -3, 3);
+		for (let dz = -3; dz <= 3; dz++) {
+			column(bot, 2, dz, 4);
+			for (let dx = -3; dx <= 1; dx++) column(bot, dx, dz, 1, s.y + 2); // a roof 2 above the floor
+		}
+		const start = bot.pose();
+		const n0 = ws.of('pos').length;
+		let e: unknown = null;
+		void bot.flyTo({ x: s.x + 9.5, y: s.y, z: s.z + 0.5 }).catch((x: unknown) => (e = x));
+		await vi.advanceTimersByTimeAsync(POS_EVERY_MS * 10);
+		expect(e).toBeInstanceOf(BlockedError);
+		expect(e).toMatchObject({ reason: 'wall' });
+		expect((e as BlockedError).at).toEqual(bot.pose());
+		const poses = posesSince(ws, n0);
+		expect(maxDelta(start, poses)).toBeLessThanOrEqual(1.0 + 1e-9);
+		for (const p of poses) expect(bodyHits(bot, p)).toBe(false);
+		expect(bot.pose().y).toBe(s.y);
+		expectStillConnected(ws);
+	});
+
+	it('enclosed (a sealed stone box) → BlockedError{wall}, settled within a few ticks (never loops)', { timeout: 10_000 }, async () => {
+		const s = PLAT;
+		const { bot, ws } = await connected({ spawn: { x: s.x + 0.5, y: s.y, z: s.z + 0.5 } });
+		floorAt(bot, -3, 14, -3, 3);
+		for (let dx = -1; dx <= 1; dx++) for (let dz = -1; dz <= 1; dz++) {
+			if (dx === 0 && dz === 0) column(bot, 0, 0, 1, s.y + 2);
+			else column(bot, dx, dz, 3);
+		}
+		let e: unknown = null;
+		void bot.flyTo({ x: s.x + 9.5, y: s.y + 3, z: s.z + 0.5 }).catch((x: unknown) => (e = x));
+		await vi.advanceTimersByTimeAsync(POS_EVERY_MS * 5);
+		expect(e).toMatchObject({ reason: 'wall' });
+		expect(bot.pose()).toMatchObject({ x: s.x + 0.5, y: s.y, z: s.z + 0.5 });
+		expectStillConnected(ws);
+	});
+
+	it('a target sealed under a roof → BlockedError{wall} once above it (never loops)', { timeout: 10_000 }, async () => {
+		const s = PLAT;
+		const { bot, ws } = await connected({ spawn: { x: s.x + 0.5, y: s.y + 4, z: s.z + 0.5 } });
+		floorAt(bot, -3, 14, -3, 3);
+		// A closed room around (dx 6, dz 0): walls and a roof.
+		for (let dx = 5; dx <= 7; dx++) for (let dz = -1; dz <= 1; dz++) {
+			if (dx === 6 && dz === 0) column(bot, dx, dz, 1, s.y + 2);
+			else column(bot, dx, dz, 3);
+		}
+		let e: unknown = null;
+		void bot.flyTo({ x: s.x + 6.5, y: s.y, z: s.z + 0.5 }).catch((x: unknown) => (e = x));
+		await advance(ws, POS_EVERY_MS * 40);
+		expect(e).toMatchObject({ reason: 'wall' });
+		expectStillConnected(ws);
+	});
+
+	it('climbs at most 16 blocks above its start y: a 20-high wall → BlockedError{wall}', { timeout: 10_000 }, async () => {
+		const s = PLAT;
+		const { bot, ws } = await connected({ spawn: { x: s.x + 0.5, y: s.y, z: s.z + 0.5 } });
+		floorAt(bot, -3, 14, -3, 3);
+		for (let dz = -3; dz <= 3; dz++) column(bot, 3, dz, 20);
+		const start = bot.pose();
+		const n0 = ws.of('pos').length;
+		let e: unknown = null;
+		void bot.flyTo({ x: s.x + 9.5, y: s.y, z: s.z + 0.5 }).catch((x: unknown) => (e = x));
+		await advance(ws, POS_EVERY_MS * 40);
+		expect(e).toMatchObject({ reason: 'wall' });
+		const poses = posesSince(ws, n0);
+		expect(Math.max(...poses.map((p) => p.y))).toBe(s.y + 16);
+		expect(maxDelta(start, poses)).toBeLessThanOrEqual(1.0 + 1e-9);
+		expectStillConnected(ws);
+	});
+
+	it('the 16-block cap counts from the flight\'s start y, not the ground: from 10 up, a 24-high wall is cleared', { timeout: 10_000 }, async () => {
+		const s = PLAT;
+		const { bot, ws } = await connected({ spawn: { x: s.x + 0.5, y: s.y + 10, z: s.z + 0.5 } });
+		floorAt(bot, -3, 14, -3, 3);
+		for (let dz = -3; dz <= 3; dz++) column(bot, 3, dz, 24);
+		let r: string | null = null;
+		void bot.flyTo({ x: s.x + 9.5, y: s.y + 10, z: s.z + 0.5 }).then((v) => (r = v), () => (r = 'blocked'));
+		await advance(ws, POS_EVERY_MS * 60);
+		expect(r).toBe('arrived');
+		expectStillConnected(ws);
+	});
+
+	it('an out-of-world target → BlockedError{noGround}', async () => {
+		const { bot, ws } = await connected({ spawn: { x: PLAT.x + 0.5, y: PLAT.y, z: PLAT.z + 0.5 } });
+		for (const t of [{ x: -5, y: PLAT.y, z: PLAT.z }, { x: PLAT.x, y: 400, z: PLAT.z }, { x: PLAT.x, y: -3, z: PLAT.z }]) {
+			const caught = bot.flyTo(t).then(() => null, (e: unknown) => e);
+			await vi.advanceTimersByTimeAsync(POS_EVERY_MS * 2);
+			expect(await caught).toMatchObject({ reason: 'noGround' });
+		}
+		expectStillConnected(ws);
+	});
+
+	it('shares walkTo\'s movement slot: walkTo, flyTo, move, a lost connection and close() resolve it cancelled, never a rejection', async () => {
+		const s = PLAT;
+		const unhandled = vi.fn();
+		process.on('unhandledRejection', unhandled);
+		try {
+			const { bot, ws } = await connected({ spawn: { x: s.x + 0.5, y: s.y, z: s.z + 0.5 } });
+			floorAt(bot, -3, 14, -3, 3);
+			const far = { x: s.x + 12.5, y: s.y + 5, z: s.z + 0.5 };
+			const f1 = bot.flyTo(far);
+			await vi.advanceTimersByTimeAsync(POS_EVERY_MS * 2);
+			const w1 = bot.walkTo({ x: s.x + 0.5, z: s.z + 2.5 });
+			expect(await f1).toBe('cancelled');
+			const f2 = bot.flyTo(far);
+			expect(await w1).toBe('cancelled');
+			await vi.advanceTimersByTimeAsync(POS_EVERY_MS);
+			const f3 = bot.flyTo(far);
+			expect(await f2).toBe('cancelled');
+			bot.move({ ...bot.pose() });
+			expect(await f3).toBe('cancelled');
+			// lookAt and mine don't cancel it.
+			coreOf(bot.world).localSet(s.x - 1, s.y, s.z, STONE);
+			let r: string | null = null;
+			void bot.flyTo({ x: s.x + 3.5, y: s.y + 2, z: s.z + 0.5 }).then((v) => (r = v));
+			await vi.advanceTimersByTimeAsync(POS_EVERY_MS);
+			bot.lookAt(s.x, s.y, s.z + 5);
+			void bot.mine(s.x - 1, s.y, s.z, 5000);
+			await vi.advanceTimersByTimeAsync(POS_EVERY_MS * 8);
+			expect(r).toBe('arrived');
+			// A lost connection.
+			const f4 = bot.flyTo(far);
+			await vi.advanceTimersByTimeAsync(POS_EVERY_MS);
+			ws.serverClose(1006);
+			expect(await f4).toBe('cancelled');
+			// close().
+			const b2 = (await connected({ spawn: { x: s.x + 0.5, y: s.y, z: s.z + 0.5 } })).bot;
+			const f5 = b2.flyTo(far);
+			await vi.advanceTimersByTimeAsync(POS_EVERY_MS);
+			b2.close();
+			expect(await f5).toBe('cancelled');
+			vi.useRealTimers();
+			await new Promise((res) => setTimeout(res, 20));
+			expect(unhandled).not.toHaveBeenCalled();
+		} finally {
+			process.off('unhandledRejection', unhandled);
+		}
+	});
+});
+
+describe('walkTo jump and stairs (spec §12b)', () => {
+	it('a one-block step up is an arc over 2 poses: +0.6, then +1.0', async () => {
+		const s = PLAT;
+		const { bot, ws } = await connected({ spawn: { x: s.x + 0.5, y: s.y, z: s.z + 0.5 } });
+		platform(bot);
+		for (let dz = -3; dz <= 3; dz++) for (let dx = 3; dx <= 8; dx++) coreOf(bot.world).localSet(s.x + dx, s.y, s.z + dz, STONE);
+		const n0 = ws.of('pos').length;
+		let r: string | null = null;
+		void bot.walkTo({ x: s.x + 6.5, z: s.z + 0.5 }).then((v) => (r = v));
+		await vi.advanceTimersByTimeAsync(POS_EVERY_MS * 30);
+		expect(r).toBe('arrived');
+		const ys = posesSince(ws, n0).map((p) => p.y);
+		const i = ys.indexOf(s.y + 0.6);
+		expect(i).toBeGreaterThanOrEqual(0);
+		expect(ys[i - 1] ?? s.y).toBe(s.y);
+		expect(ys[i + 1]).toBe(s.y + 1);
+		let prev = s.y;
+		for (const y of ys) {
+			expect(y - prev).toBeLessThanOrEqual(0.6 + 1e-9);
+			prev = y;
+		}
+		expectStillConnected(ws);
+	});
+
+	/** Full-block stairs rising along +x: step k (1..5) at dx 2 + k, then a landing 5 high to dx 12. Feet y at the top: PLAT.y + 5. */
+	function straightStairs(bot: BotClient): void {
+		floorAt(bot, -3, 14, -3, 14);
+		for (let dz = -3; dz <= 14; dz++) for (let dx = 3; dx <= 12; dx++) column(bot, dx, dz, Math.min(5, dx - 2));
+	}
+
+	async function walkExpect(bot: BotClient, ws: FakeWS, to: { x: number; z: number }, y: number): Promise<void> {
+		const n0 = ws.of('pos').length;
+		const start = bot.pose();
+		let r: string | null = null;
+		void bot.walkTo(to).then((v) => (r = v), (e: unknown) => (r = String(e)));
+		await advance(ws, POS_EVERY_MS * 60);
+		expect(r).toBe('arrived');
+		expect(bot.pose().y).toBe(y);
+		expect(Math.hypot(bot.pose().x - to.x, bot.pose().z - to.z)).toBeLessThanOrEqual(0.3);
+		expect(maxDelta(start, posesSince(ws, n0))).toBeLessThanOrEqual(2 + 1e-9);
+		expectStillConnected(ws);
+	}
+
+	for (const [label, from, to] of [
+		['straight', { x: 0.5, z: 0.5 }, { x: 11.5, z: 0.5 }],
+		['straight, 0.02 off a cell edge', { x: 0.5, z: 0.02 }, { x: 11.5, z: 0.02 }],
+		['at 45°', { x: 0.5, z: -2.5 }, { x: 11.5, z: 8.5 }],
+		['at 30°', { x: 0.5, z: -2.5 }, { x: 11.5, z: -2.5 + 11 * Math.tan(Math.PI / 6) }],
+	] as const) {
+		it(`walks up and back down full-block stairs, ${label}`, async () => {
+			const s = PLAT;
+			const { bot, ws } = await connected({ spawn: { x: s.x + from.x, y: s.y, z: s.z + from.z } });
+			straightStairs(bot);
+			await walkExpect(bot, ws, { x: s.x + to.x, z: s.z + to.z }, s.y + 5);
+			await walkExpect(bot, ws, { x: s.x + from.x, z: s.z + from.z }, s.y);
+		});
+	}
+
+	it('walks up and back down a diagonal staircase (each step a diagonal row)', async () => {
+		const s = PLAT;
+		const { bot, ws } = await connected({ spawn: { x: s.x + 0.5, y: s.y, z: s.z + 0.5 } });
+		floorAt(bot, -3, 14, -3, 14);
+		// Level floor((dx + dz − 2) / 2), capped at 5: the rise is along the diagonal.
+		for (let dx = 0; dx <= 14; dx++) for (let dz = 0; dz <= 14; dz++) column(bot, dx, dz, Math.max(0, Math.min(5, Math.floor((dx + dz - 2) / 2))));
+		await walkExpect(bot, ws, { x: s.x + 10.5, z: s.z + 10.5 }, s.y + 5);
+		await walkExpect(bot, ws, { x: s.x + 0.5, z: s.z + 0.5 }, s.y);
 	});
 });

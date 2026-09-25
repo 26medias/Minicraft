@@ -43,14 +43,16 @@ export class NotConnectedError extends Error {
 
 /**
  * `walkTo` stopped: `wall` (the ground ahead rises more than 1 block, or the body can't enter the next
- * column) or `noGround` (no standable cell within 64 blocks below). `at` is where the bot stopped.
+ * column) or `noGround` (no standable cell within 64 blocks below). `flyTo` stopped: `wall` (no way on
+ * within its climb) or `noGround` (a target outside the world). `at` is where the bot stopped.
  */
 export class BlockedError extends Error {
 	override readonly name = 'BlockedError';
 	constructor(
 		readonly at: Pose,
 		readonly reason: 'wall' | 'noGround',
+		action: 'walkTo' | 'flyTo' = 'walkTo',
 	) {
-		super(`walkTo blocked (${reason}) at ${at.x.toFixed(2)}, ${at.y.toFixed(2)}, ${at.z.toFixed(2)}`);
+		super(`${action} blocked (${reason}) at ${at.x.toFixed(2)}, ${at.y.toFixed(2)}, ${at.z.toFixed(2)}`);
 	}
 }

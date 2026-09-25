@@ -12,7 +12,9 @@ export type { BlockChangeListener, Pose, Vec3 } from './bot-world';
 export { BlockedError, NotConnectedError, OutdatedClientError, ReplacedError, ServerRefusedError } from './errors';
 export { CLIENT_VERSION, POS_EVERY_MS } from '../../../src/net/protocol';
 export type { EditOut, FxMsg, LeavingMsg, Spawn, WorldListing } from '../../../src/net/protocol';
-export { EYE_HEIGHT, WALK_SPEED } from '../../../src/game/player-constants';
+export { EYE_HEIGHT, FLY_SPEED, WALK_SPEED } from '../../../src/game/player-constants';
+/** The catalog's solidity rules, as pure functions of a block id (the same ones `BotWorld.isSolid` / `isLiquid` use). */
+export { isLiquid as isLiquidId, isSolid as isSolidId } from '../../../src/data/blocks.data';
 export type { VoxelHit } from '../../../src/engine/input/raycast';
 
 /**

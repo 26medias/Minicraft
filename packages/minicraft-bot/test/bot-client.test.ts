@@ -1034,6 +1034,17 @@ function maxDelta(from: SentPose, poses: SentPose[]): number {
 	return m;
 }
 
+/** How often a y sequence turns from rising to falling or back. */
+function reversals(ys: number[]): number {
+	let n = 0, dir = 0;
+	for (let i = 1; i < ys.length; i++) {
+		const d = Math.sign(ys[i] - ys[i - 1]);
+		if (d !== 0 && dir !== 0 && d !== dir) n++;
+		if (d !== 0) dir = d;
+	}
+	return n;
+}
+
 describe('flyTo (spec §12b)', () => {
 	const FLY_STEP = (FLY_SPEED * POS_EVERY_MS) / 1000;
 
@@ -1191,6 +1202,47 @@ describe('flyTo (spec §12b)', () => {
 		expectStillConnected(ws);
 	});
 
+	it('no bobbing: after a climb it doesn\'t dive back down before moving across (≤ 2 up/down reversals; 10 before the fix)', { timeout: 10_000 }, async () => {
+		// Found by a 300-flight fuzz: three boxes around a target it can reach only by going over.
+		const s = PLAT;
+		const { bot, ws } = await connected({ spawn: { x: 103.01967462804168, y: s.y + 3, z: 102.89043398713693 } });
+		floorAt(bot, -3, 14, -3, 3);
+		for (const [x0, z0, y0, w, d, h] of [[6, 0, 0, 3, 4, 7], [4, 2, 1, 2, 1, 1], [9, 0, 7, 1, 2, 5]]) {
+			for (let x = x0; x < x0 + w; x++) for (let z = z0; z < Math.min(z0 + d, 4); z++) column(bot, x, z, h, s.y + y0);
+		}
+		const start = bot.pose();
+		const target = { x: 110.68899149843492, y: s.y + 1, z: 100.53967071976513 };
+		const n0 = ws.of('pos').length;
+		let r: string | null = null;
+		void bot.flyTo(target).then((v) => (r = v), () => (r = 'blocked'));
+		await advance(ws, POS_EVERY_MS * 80);
+		expect(r).toBe('arrived');
+		const poses = posesSince(ws, n0);
+		expect(reversals(poses.map((p) => p.y))).toBeLessThanOrEqual(2);
+		expect(maxDelta(start, poses)).toBeLessThanOrEqual(1.0 + 1e-9);
+		for (const p of poses) expect(bodyHits(bot, p)).toBe(false);
+		expectStillConnected(ws);
+	});
+
+	it('under an overhang open at the side: it drops to the target\'s height and flies in (no climbing over it)', { timeout: 10_000 }, async () => {
+		const s = PLAT;
+		const { bot, ws } = await connected({ spawn: { x: s.x + 0.5, y: s.y + 4, z: s.z + 0.5 } });
+		floorAt(bot, -3, 14, -3, 3);
+		for (let dx = 6; dx <= 10; dx++) for (let dz = -3; dz <= 3; dz++) column(bot, dx, dz, 1, s.y + 2); // a slab 2 above the floor
+		const start = bot.pose();
+		const target = { x: s.x + 8.5, y: s.y, z: s.z + 0.5 };
+		const n0 = ws.of('pos').length;
+		let r: string | null = null;
+		void bot.flyTo(target).then((v) => (r = v), () => (r = 'blocked'));
+		await advance(ws, POS_EVERY_MS * 40);
+		expect(r).toBe('arrived');
+		const poses = posesSince(ws, n0);
+		expect(reversals(poses.map((p) => p.y))).toBe(0);
+		expect(maxDelta(start, poses)).toBeLessThanOrEqual(1.0 + 1e-9);
+		for (const p of poses) expect(bodyHits(bot, p)).toBe(false);
+		expectStillConnected(ws);
+	});
+
 	it('an out-of-world target → BlockedError{noGround}', async () => {
 		const { bot, ws } = await connected({ spawn: { x: PLAT.x + 0.5, y: PLAT.y, z: PLAT.z + 0.5 } });
 		for (const t of [{ x: -5, y: PLAT.y, z: PLAT.z }, { x: PLAT.x, y: 400, z: PLAT.z }, { x: PLAT.x, y: -3, z: PLAT.z }]) {
@@ -1270,6 +1322,47 @@ describe('walkTo jump and stairs (spec §12b)', () => {
 			expect(y - prev).toBeLessThanOrEqual(0.6 + 1e-9);
 			prev = y;
 		}
+		expectStillConnected(ws);
+	});
+
+	it('the arc is display-only: move(pose()) on the arc tick stays on the ground (a whole-number y)', async () => {
+		const s = PLAT;
+		const { bot, ws } = await connected({ spawn: { x: s.x + 0.5, y: s.y, z: s.z + 0.5 } });
+		platform(bot);
+		for (let dz = -3; dz <= 3; dz++) for (let dx = 3; dx <= 8; dx++) coreOf(bot.world).localSet(s.x + dx, s.y, s.z + dz, STONE);
+		void bot.walkTo({ x: s.x + 6.5, z: s.z + 0.5 });
+		let arced = false;
+		for (let i = 0; i < 20 && !arced; i++) {
+			await vi.advanceTimersByTimeAsync(POS_EVERY_MS);
+			arced = (ws.of('pos').at(-1) as { y: number }).y === s.y + 0.6;
+		}
+		expect(arced).toBe(true);
+		expect(bot.pose().y).toBe(s.y);
+		bot.move(bot.pose());
+		await vi.advanceTimersByTimeAsync(POS_EVERY_MS * 3);
+		expect(bot.pose().y).toBe(s.y);
+		const last = ws.of('pos').at(-1) as { y: number };
+		expect(Number.isInteger(last.y)).toBe(true);
+		expect(last.y).toBe(s.y);
+		expectStillConnected(ws);
+	});
+
+	it('a walkTo re-issued every tick still climbs a step within 3 ticks of the jump', async () => {
+		const s = PLAT;
+		const { bot, ws } = await connected({ spawn: { x: s.x + 0.5, y: s.y, z: s.z + 0.5 } });
+		platform(bot);
+		for (let dz = -3; dz <= 3; dz++) for (let dx = 3; dx <= 8; dx++) coreOf(bot.world).localSet(s.x + dx, s.y, s.z + dz, STONE);
+		let jumpTick = -1, upTick = -1;
+		for (let i = 0; i < 25 && upTick < 0; i++) {
+			void bot.walkTo({ x: s.x + 6.5, z: s.z + 0.5 }).catch(() => {});
+			await vi.advanceTimersByTimeAsync(POS_EVERY_MS);
+			const y = (ws.of('pos').at(-1) as { y: number }).y;
+			if (jumpTick < 0 && y > s.y) jumpTick = i;
+			if (bot.pose().y === s.y + 1) upTick = i;
+		}
+		expect(jumpTick).toBeGreaterThanOrEqual(0);
+		expect(upTick).toBeGreaterThanOrEqual(0);
+		expect(upTick - jumpTick).toBeLessThanOrEqual(3);
 		expectStillConnected(ws);
 	});
 

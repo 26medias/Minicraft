@@ -188,7 +188,7 @@ new BotClient({ url, token, bid?, statePath?, editGapMs? })
 | `listWorlds()` | `GET /worlds`. Bots are never listed in `online`. |
 | `pose()` | The bot's own pose. |
 | `players()` | Everyone else (never the bot itself): `{ id, name, skin, bot, x, y, z, yaw, pitch, hasPos }`. `hasPos: false` means they haven't sent a pose yet. |
-| `move(pose)` | Sets the pose (a teleport). It is sent within 100 ms. A jump over 8 blocks snaps on the kids' screens. It cancels a walk. |
+| `move(pose)` | Sets the pose (a teleport). It is sent within 100 ms. A jump over 8 blocks snaps on the kids' screens. It cancels a walk or a flight. |
 | `walkTo({ x, z })` | Walks there in a straight line (see below). Resolves `'arrived'` or `'cancelled'`. |
 | `flyTo({ x, y, z })` | Flies there in a straight 3D line, rising over what is in the way (see below). Resolves `'arrived'` or `'cancelled'`. |
 | `lookAt(x, y, z)` | Turns the head toward a point. It only rotates. |
@@ -232,7 +232,8 @@ resolve `'cancelled'`.
 - It walks a straight line at `WALK_SPEED`, one pose every 100 ms. The feet follow `world.groundY` at
   each step, and the bot faces the way it goes.
 - It steps up at most 1 block, as a jump the kids can see: one pose rises 0.6 of the step in place, the
-  next lands on it. It drops at most 2 blocks per step; a deeper drop continues over the next steps
+  next lands on it, so each step-up costs 1 extra tick (100 ms). The jump is only shown: `pose()` stays on
+  the ground, so a `move(pose())` or a new `walkTo` mid-jump starts from there. It drops at most 2 blocks per step; a deeper drop continues over the next steps
   before it moves on.
 - Full-block stairs are fine, up and down, straight or at an angle, and a staircase built along a
   diagonal. What stops it is a 2-block rise, e.g. walking into a stair's side: use `flyTo` there.
@@ -250,11 +251,14 @@ resolve `'cancelled'`.
   so it never moves more than 1 block per pose (nothing snaps on the kids' screens). It faces the target
   and ends exactly on it.
 - The body (x ± 0.3, z ± 0.3, feet to 1.8 above) never enters a solid block. When the next step would,
-  it moves across at the same height if it can, else climbs straight up, 1 block per pose, until it can
-  go on. It climbs at most 16 blocks above where the flight started, and never above the world top.
+  it moves across at the same height if it can, else drops toward the target's height if the way across
+  is open there (under an overhang), else climbs straight up, 1 block per pose, until it can go on. It
+  climbs at most 16 blocks above where the flight started, and never above the world top. After a climb
+  it doesn't dive back down before it has moved across, so it doesn't bob up and down.
 - It **rejects with `BlockedError { at, reason }`**: `'wall'` when it can't go on (a ceiling over a
-  climb, an enclosure, a wall more than 16 high, a target sealed under a roof); `'noGround'` for a target
-  outside the world. It is not pathfinding either: it doesn't go around things, only over them.
+  climb, an enclosure, a wall more than 16 high), and whenever it is straight above or below the target
+  and the way is blocked: a target under a roof or an overhang (even one open at the side), or inside
+  solid blocks. `'noGround'` for a target outside the world. It is not pathfinding either: it doesn't go around things, only over them.
 - `walkTo` and `flyTo` share one movement: starting either cancels the other. A `move`, a lost
   connection or `close()` also resolves it `'cancelled'`. `lookAt` and `mine` don't cancel it.
 - Landing is up to you: fly to `groundY` of the spot, then walk.

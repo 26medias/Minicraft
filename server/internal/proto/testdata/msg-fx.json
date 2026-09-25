@@ -1,9 +1,10 @@
 {
 	"t": "fx",
-	"kind": "boom",
+	"kind": "mine",
 	"x": 10,
 	"y": 64,
 	"z": 12,
 	"tier": 2,
+	"dur": 1500,
 	"by": 3
 }

@@ -20,6 +20,8 @@ import { isLegacyId, newWorldId, seedFromLegacyId } from './persistence/uuid';
 import { AutoSave } from './persistence/autosave';
 import { ParticleSystem } from './engine/render/particles';
 import { PrimedOverlay } from './engine/render/primed-overlay';
+import { CrackOverlay } from './engine/render/crack-overlay';
+import { crackStage, RemoteMining } from './game/crack';
 import { FaceHighlight } from './engine/render/face-highlight';
 import { BLOCKS, BLOCK_BY_NAME, type BlockId } from './data/blocks.data';
 import { loadOptions, saveOptions } from './persistence/options';
@@ -79,6 +81,8 @@ const REACH = 6;
 const JOIN_TIMEOUT_MS = 6_000;
 /** Spec §5: `pos` at most 10 times a second. */
 const POS_EVERY_MS = 100;
+/** Break chips from a block a friend is mining, one burst per this many ms. */
+const PUFF_EVERY_MS = 450;
 const LAMP_ID = BLOCK_BY_NAME['lamp'].id;
 const TNT_ID = BLOCK_BY_NAME['tnt'].id;
 
@@ -662,6 +666,8 @@ async function main() {
 		const particles = new ParticleSystem(renderer.scene, renderer.material, atlas);
 		const overlay = new PrimedOverlay(renderer.scene);
 		overlay.warm();
+		// Mining cracks on the block being mined: yours in solo and multiplayer, a friend's in multiplayer.
+		const cracks = new CrackOverlay(renderer.scene);
 		const highlight = new FaceHighlight(renderer.scene);
 		const loop = new GameLoop(
 			world,
@@ -684,8 +690,14 @@ async function main() {
 		);
 		/** Multiplayer per-frame work (flush, avatars, minimap, pos); null in solo. */
 		let mpFrame: ((now: number) => void) | null = null;
+		/** Multiplayer: told the local mining target every frame, to send `fx mine` / `mine-stop`. null in solo. */
+		let mpMine: ((mi: ReturnType<typeof loop.miningInfo>) => void) | null = null;
 		loop.onFrame = (_dt, tickMs, frameMs) => {
 			const now = performance.now();
+			const mi = loop.miningInfo();
+			if (mi) cracks.set('local', mi.x, mi.y, mi.z, crackStage(mi.elapsedMs, mi.durationMs));
+			else cracks.clear('local');
+			mpMine?.(mi);
 			mpFrame?.(now);
 			perfOverlay.tick(now, { t: now, frameMs, tickMs }, () => {
 				const mem = (performance as { memory?: { usedJSHeapSize: number } }).memory;
@@ -816,7 +828,30 @@ async function main() {
 				remotePrimes.delete(k);
 				overlay.remove(x, y, z);
 			};
+			// A friend's mining (fx mine / mine-stop): cracks until the break lands, a stop, or dur + grace.
+			const remoteMining = new RemoteMining();
+			const lastPuff = new Map<number, number>();
+			let mining: string | null = null;
+			mpMine = (mi) => {
+				const key = mi ? `${mi.x},${mi.y},${mi.z}` : null;
+				if (key === mining) return;
+				if (mi) client.send({ t: 'fx', kind: 'mine', x: mi.x, y: mi.y, z: mi.z, tier: mi.blockId, dur: Math.round(mi.durationMs) });
+				else if (mining) {
+					const [x, y, z] = mining.split(',').map(Number);
+					client.send({ t: 'fx', kind: 'mine-stop', x, y, z });
+				}
+				mining = key;
+			};
+			// Never generate a chunk to answer "is the block still there?": an unloaded cell ends the mine.
+			const loadedBlock = (x: number, y: number, z: number): number =>
+				world.getChunk(Math.floor(x / 16), Math.floor(z / 16)) ? world.getBlock(x, y, z) : -1;
 			const onFx = (m: FxMsg) => {
+				if (m.kind === 'mine' || m.kind === 'mine-stop') {
+					if (m.by === undefined) return;
+					if (m.kind === 'mine') remoteMining.start(m.by, m.x, m.y, m.z, m.dur ?? 0, m.tier ?? 0, performance.now());
+					else remoteMining.stop(m.by);
+					return;
+				}
 				if (m.kind === 'prime') {
 					clearRemotePrime(m.x, m.y, m.z);
 					const fuse = (m.tier !== undefined ? BLOCKS[m.tier]?.tnt?.fuse : undefined) ?? BLOCKS[TNT_ID].tnt!.fuse;
@@ -850,6 +885,7 @@ async function main() {
 						// Re-gate I1: a plain `left` shows no toast; "went home" comes only from `leaving 0`.
 						who.delete(m.id);
 						remote.remove(m.id);
+						remoteMining.forget(m.id);
 						break;
 					case 'fx':
 						onFx(m);
@@ -873,6 +909,18 @@ async function main() {
 				}
 				remote.update(now, renderer.camera);
 				minimap.update(now, world, player, cam.yaw, remote.positions());
+				const keep = new Set<string>(['local']);
+				for (const a of remoteMining.active(now, loadedBlock)) {
+					const key = `p:${a.by}`;
+					keep.add(key);
+					cracks.set(key, a.x, a.y, a.z, a.stage);
+					// A few chips fly off while a friend mines, like hits on the block.
+					if (now - (lastPuff.get(a.by) ?? -Infinity) >= PUFF_EVERY_MS) {
+						lastPuff.set(a.by, now);
+						particles.spawnBreak(a.x, a.y, a.z, a.blockId);
+					}
+				}
+				cracks.retain(keep);
 				if (now - lastPosAt < POS_EVERY_MS) return;
 				const [x, y, z] = player.position;
 				const key = `${x.toFixed(2)},${y.toFixed(2)},${z.toFixed(2)},${cam.yaw.toFixed(3)},${cam.pitch.toFixed(3)}`;
@@ -925,7 +973,7 @@ async function main() {
 			// `worldHash` and `refReplay` are the two-client suite's oracles (plan I2, scripts/mp-e2e.ts).
 			(window as unknown as { __mc: unknown }).__mc = {
 				world, player, loop, apiUrl, cam, highlight, mustMine, syncHotbar, keys,
-				playtime, mp: mpDebug,
+				playtime, mp: mpDebug, cracks,
 				worldHash: (chunks: Array<[number, number]>) => worldHash(world, chunks),
 				refReplay: (actions: RefAction[], o: Omit<RefReplayOpts, 'seed' | 'height' | 'gen'>) =>
 					refReplay(actions, { ...o, seed: world.seed, height: world.height, gen: world.genVersion }),

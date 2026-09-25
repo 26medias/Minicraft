@@ -927,3 +927,24 @@ func TestIdleCallback(t *testing.T) {
 		t.Fatal("not empty after the last leave")
 	}
 }
+
+// Mining cracks: a `mine` fx carries its duration; the relay must keep it (the server re-encodes the struct,
+// so a field it does not know is silently dropped).
+func TestFxMineRelaysDur(t *testing.T) {
+	w := newTestWorld(t, nil, nil)
+	a, b := newSender(), newSender()
+	aid := mustJoin(t, w, "A", "a", a)
+	mustJoin(t, w, "B", "b", b)
+	w.Submit(CmdFx{ID: aid, S: a, Fx: proto.Fx{T: proto.TFx, Kind: "mine", X: 4, Y: 5, Z: 6, Tier: 1, Dur: 1500}})
+	waitFor(t, "relay", func() bool { return b.count(proto.TFx) == 1 })
+	for _, m := range b.all() {
+		if typeOf(m.data) != proto.TFx {
+			continue
+		}
+		var f proto.Fx
+		_ = json.Unmarshal(m.data, &f)
+		if f.Kind != "mine" || f.Dur != 1500 || f.Tier != 1 || f.By != aid {
+			t.Fatalf("fx %+v", f)
+		}
+	}
+}

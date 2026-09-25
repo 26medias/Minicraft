@@ -45,7 +45,7 @@ export type Op = [x: number, y: number, z: number, id: number, fluid: number, co
 /** The per-player state the server stores opaquely: `{inventory, tools, hotbar, selected}`. */
 export type ExtrasData = Partial<Pick<PlayerSave, 'inventory' | 'tools' | 'hotbar' | 'selected'>>;
 
-export type FxKind = 'prime' | 'boom' | 'firework';
+export type FxKind = 'prime' | 'boom' | 'firework' | 'mine' | 'mine-stop';
 export type SpawnMode = 'first' | 'return' | 'near';
 
 // ── client → server ──
@@ -72,9 +72,10 @@ export type EditMsg = { t: 'edit'; cid: number; ops: Op[] };
 /**
  * Cosmetic. `by` is set by the server when it relays. `tier` is the block id of the explosive for
  * `prime` (the receiver reads its fuse) and `boom` (its break particles); the server relays it as
- * an opaque int. Absent or unknown falls back to plain TNT.
+ * an opaque int. Absent or unknown falls back to plain TNT. `mine` (a player started mining the block at
+ * x,y,z) carries the block's id in `tier` and the full mining time in ms in `dur`; `mine-stop` ends it early.
  */
-export type FxMsg = { t: 'fx'; kind: FxKind; x: number; y: number; z: number; tier?: number; by?: number };
+export type FxMsg = { t: 'fx'; kind: FxKind; x: number; y: number; z: number; tier?: number; dur?: number; by?: number };
 
 export type ExtrasMsg = { t: 'extras'; data: ExtrasData };
 

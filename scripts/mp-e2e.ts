@@ -406,7 +406,7 @@ const B_WHO: Who = { name: 'Bo', skin: 'blue' };
 	const ctxB = await browser.newContext({ viewport: { width: 960, height: 600 } });
 	let A: Page | null = null;
 	let B: Page | null = null;
-	const needMp = ['E1', 'E2', 'E3', 'E4', 'E5', 'E6', '4009'].some(want);
+	const needMp = ['E1', 'E2', 'E3', 'E4', 'E5', 'E6', 'E9', '4009'].some(want);
 	try {
 		// ------------------------------------------------------------------ E7 (part 1)
 		if (want('E7')) {
@@ -459,6 +459,60 @@ const B_WHO: Who = { name: 'Bo', skin: 'blue' };
 					return -1;
 				}, cell);
 				check(air >= 0, `A sees air after B mines it (${air.toFixed(0)} ms)`);
+			});
+		}
+
+		// ------------------------------------------------------------------ E9
+		if (want('E9') && A && B) {
+			const a = A, b = B;
+			await scenario('E9', "A mines a block: B sees it crack stage by stage, then air, and the cracks go away", async () => {
+				// Hang A in the air (flying) so the aimed cell has only air around it; aim straight ahead (yaw 0 → −z).
+				const cell = await a.evaluate(() => {
+					const mc = (window as any).__mc;
+					mc.player.flying = true;
+					const p = mc.player.position;
+					mc.player.position = [Math.floor(p[0]) + 0.5, Math.min(mc.world.height - 8, Math.floor(p[1]) + 20), Math.floor(p[2]) + 0.5];
+					mc.cam.yaw = 0; mc.cam.pitch = 0;
+					const e = mc.player.eyePosition();
+					return [Math.floor(e[0]), Math.floor(e[1]), Math.floor(e[2]) - 2];
+				});
+				await a.evaluate((c) => (window as any).__mc.world.setBlock(c[0], c[1], c[2], 1), cell);
+				// B must have the stone before A starts, or B's "block changed" rule ends the mine at once.
+				check(await b.evaluate(async (c) => {
+					const t = performance.now();
+					while (performance.now() - t < 3000) {
+						if ((window as any).__mc.world.getBlock(c[0], c[1], c[2]) === 1) return true;
+						await new Promise((r) => setTimeout(r, 10));
+					}
+					return false;
+				}, cell), `B has A's stone at (${cell})`);
+				await a.evaluate(() => (window as any).__mc.loop.setLeftMouseDown(true));
+				// Watch B: the friend's crack key appears, its stage climbs, then the cell turns to air and the key goes.
+				const seen = await b.evaluate(async (c) => {
+					const mc = (window as any).__mc;
+					const stages = new Set<number>();
+					let sawCrack = false, air = false, clearedAfterAir = false;
+					const t = performance.now();
+					while (performance.now() - t < 15000) {
+						const keys: string[] = mc.cracks.keys().filter((k: string) => k.startsWith('p:'));
+						if (keys.length > 0) {
+							sawCrack = true;
+							const mesh = (mc.cracks as any).meshes.get(keys[0]);
+							const i = (mc.cracks as any).materials.indexOf(mesh.material);
+							stages.add(i);
+						}
+						if (mc.world.getBlock(c[0], c[1], c[2]) === 0) air = true;
+						if (air && keys.length === 0) { clearedAfterAir = true; break; }
+						await new Promise((r) => setTimeout(r, 30));
+					}
+					return { sawCrack, stages: [...stages].sort((x, y) => x - y), air, clearedAfterAir };
+				}, cell);
+				await a.evaluate(() => (window as any).__mc.loop.setLeftMouseDown(false));
+				check(seen.sawCrack, "B draws a crack on the block A is mining");
+				check(seen.stages.length >= 3, `B's crack advances through stages (saw ${JSON.stringify(seen.stages)})`);
+				check(seen.air, 'B sees the block turn to air when A finishes');
+				check(seen.clearedAfterAir, "B's crack is gone once the block is air");
+				check(await a.evaluate(() => (window as any).__mc.cracks.keys().includes('local')) === false, "A's own crack is gone after the break");
 			});
 		}
 

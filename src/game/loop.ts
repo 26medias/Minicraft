@@ -347,6 +347,13 @@ export class GameLoop {
 		return this.mining ? Math.min(1, this.mining.elapsed / this.mining.duration) : 0;
 	}
 
+	/** The block being mined right now, for the crack overlay and the multiplayer `fx mine`; null when idle. */
+	miningInfo(): { x: number; y: number; z: number; blockId: BlockId; durationMs: number; elapsedMs: number } | null {
+		const m = this.mining;
+		if (!m) return null;
+		return { ...m.target, blockId: m.blockId, durationMs: m.duration * 1000, elapsedMs: m.elapsed * 1000 };
+	}
+
 	/**
 	 * Called from main.ts on 'ignite' keydown with the camera's yaw. Returns true if a TNT was newly primed.
 	 * A Tunnel TNT takes its direction from the yaw, snapped to ±x or ±z (toys spec §3.4).

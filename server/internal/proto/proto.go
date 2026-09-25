@@ -102,7 +102,8 @@ type Edit struct {
 	Ops []Op   `json:"ops"`
 }
 
-// Fx is cosmetic (kind: prime|boom|firework). By is set by the server on relay.
+// Fx is cosmetic (kind: prime|boom|firework|mine|mine-stop). By is set by the server on relay.
+// Dur is a `mine`'s full mining time in ms; receivers animate the cracks from it.
 type Fx struct {
 	T    string `json:"t"`
 	Kind string `json:"kind"`
@@ -110,6 +111,7 @@ type Fx struct {
 	Y    int    `json:"y"`
 	Z    int    `json:"z"`
 	Tier int    `json:"tier,omitempty"`
+	Dur  int    `json:"dur,omitempty"`
 	By   int    `json:"by,omitempty"`
 }
 

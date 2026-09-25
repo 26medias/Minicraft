@@ -220,6 +220,26 @@ for (const sig of ['SIGINT', 'SIGTERM', 'SIGHUP'] as const) process.on(sig, () =
 			check(await page.evaluate(() => sessionStorage.getItem('mp:error')) === null, 'the 4009 reason is shown once');
 			await page.click('#menu-back');
 			await page.waitForSelector('#home-single');
+
+			// 2c. A returning player with a pre-skins save: a remembered name but an old colour id
+			// ("red") that no longer maps to a character. Screen 1 must show once (final-fix brief),
+			// not skip straight to screen 2 with a made-up character.
+			await page.evaluate(() => localStorage.setItem('minicraft:v1:mp', JSON.stringify({ name: 'Noah', skin: 'red', worldId: null, bid: 'smoke-bid' })));
+			await page.goto(BASE);
+			await page.click('#home-multi');
+			await page.waitForSelector('#mp-name');
+			check(await page.locator('#mp-name').inputValue() === 'Noah', 'a saved name with no valid character still shows screen 1, name pre-filled');
+			check(await page.locator('#mp-skin-milo').evaluate((e) => e.classList.contains('selected')), 'screen 1 pre-selects Milo when the saved skin is invalid');
+			await page.click('#mp-skin-jj');
+			await page.click('#mp-next');
+			await page.waitForSelector('#mp-sleeping:not(.hidden)', { timeout: 10_000 });
+			check((await text(page, '#mp-playing')).includes('Playing as Noah (JJ)'), 'after picking a character once, screen 2 shows it');
+			await page.goto(BASE);
+			await page.click('#home-multi');
+			await page.waitForSelector('#mp-sleeping:not(.hidden)', { timeout: 10_000 });
+			check(true, 'a second visit goes straight to screen 2: the character is only picked once');
+			await page.click('#menu-back');
+			await page.waitForSelector('#home-single');
 		}
 
 		// 3. Single Player under No limit: the default duration is No limit.

@@ -475,7 +475,7 @@ export class MainMenu {
 		}
 		if (reason === 'name_taken') { this.renderMultiName(prefs, nameTakenText(prefs.name ?? 'you')); return; }
 		if (reason === 'bad_name') { this.renderMultiName(prefs, NAME_ERROR); return; }
-		if (prefs.name === null || validName(prefs.name) === null) { this.renderMultiName(prefs, null); return; }
+		if (prefs.name === null || validName(prefs.name) === null || prefs.skin === null) { this.renderMultiName(prefs, null); return; }
 		const notice = reason === 'unknown_world' ? 'That world is gone. Pick another one.'
 			: reason === 'bad_token' ? "The game couldn't get into the multiplayer server. Ask a parent."
 				: null;

@@ -276,9 +276,9 @@ Every test module runs in vitest's `node` environment; nothing needs a DOM (inje
   `.selected`), each showing the character's **full front** (head+hat, body+jacket, arms+sleeves,
   legs+pants, composed like `docs/skins/front-sheet.png`) drawn nearest-neighbour to a canvas about
   48×96 CSS px, with the name below. Slim arms drawn 3 px wide.
-- Screen 2's "Playing as ● Noah": the dot becomes a small full-body preview of the character
-  (the same front view as the picker, 20×40 CSS px) followed by "Playing as Noah (JJ)" — name,
-  then the character's name in brackets (§12a).
+- Screen 2 shows a small full-body preview of the character (the same front view as the picker,
+  20×40 CSS px) followed by the text "Playing as Noah (JJ)" — name, then the character's name in
+  brackets (§12a).
 - World list online dots stay colour dots (`skinColor`).
 - The composing helpers (`frontPixels`, `facePixels`) are pure over RGBA arrays, and
   `paintPreview` draws one to a canvas, in `src/ui/skin-preview.ts`, reusing the loader's decode +
@@ -305,8 +305,13 @@ Changed:
 
 ## 11. Sequencing
 
-Multiplayer is **not deployed yet**. Skins merge into `multiplayer` before its first deploy, so no
-live player ever has a saved colour; the "saved colour → Milo" path is only a safety net.
+Multiplayer went **live on 2026-09-24**, before skins shipped. A player who already has a saved
+`{ name, skin }` with an old colour id (`loadMpPrefs` turns any unknown id into `skin: null`) is
+sent to the character picker (screen 1, name pre-filled, Milo pre-selected) the next time they open
+Multiplayer, and only that once — picking a character and hitting Next saves it, so every visit
+after that goes straight to screen 2 (`renderMulti`, `src/ui/menu.ts`). A cached client that hasn't
+picked up the skins deploy yet keeps showing other players as coloured boxes until Cloudflare's
+cache is purged.
 
 ## 12a. Gate-2 disposition (plan review)
 

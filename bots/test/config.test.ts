@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import type { WorldListing } from 'minicraft-bot';
-import { checkLiveAck, checkName, ConfigError, loadConfig, pickSkin, resolveWorld } from '../src/config.js';
+import { assertNotPort8080, checkLiveAck, checkName, ConfigError, isLiveTarget, loadConfig, pickSkin, resolveWorld } from '../src/config.js';
 import type { BotsConfigData, Config } from '../src/config.js';
 import { SKIN_IDS } from '../src/skins.js';
 
@@ -56,6 +56,25 @@ describe('loadConfig: port 8080 refusal', () => {
 		const config = testConfig({ local: { url: 'http://localhost:18090', token: 'e2e' } });
 		const cfg = loadConfig({ argv: ['--target', 'local'], env: {}, readFile: noFile, homedir: () => '/home/fake', stateRoot: '.state', config });
 		expect(cfg.target.url).toBe('http://localhost:18090');
+	});
+});
+
+describe('assertNotPort8080: scheme requirement (closes the port-check bypass)', () => {
+	it('refuses a scheme-less url ("localhost:8080"), which WHATWG parses with an opaque scheme and no port', () => {
+		expect(() => assertNotPort8080('localhost:8080')).toThrow(ConfigError);
+	});
+
+	it('refuses a ws: url on 8080', () => {
+		expect(() => assertNotPort8080('ws://localhost:8080')).toThrow(ConfigError);
+	});
+
+	it('refuses an unparsable url (the catch branch)', () => {
+		expect(() => assertNotPort8080('not-a-url-at-all')).toThrow(ConfigError);
+	});
+
+	it('still accepts a plain http(s) url on a non-8080 port', () => {
+		expect(() => assertNotPort8080('http://localhost:18090')).not.toThrow();
+		expect(() => assertNotPort8080('https://mc.example.test')).not.toThrow();
 	});
 });
 
@@ -158,6 +177,46 @@ describe('checkLiveAck', () => {
 		const cfg = loadConfig({ argv: ['--target', 'local'], env: {}, readFile: noFile, homedir: () => '/home/fake', stateRoot: '.state', config });
 		const result = checkLiveAck({ cfg, worldUuid: 'uuid-1', readFile: noFile, writeFile: noWrite, now: () => 1_000 });
 		expect(result).toBeUndefined();
+	});
+
+	it('requires the ack for a target shaped like live but named something else (isLiveTarget, not the name)', () => {
+		// "staging" has no static token — it's shaped exactly like "live" (tokenEnv/tokenFile) — so
+		// isLiveTarget must say it's live, and checkLiveAck (via cfg.target.live) must agree, even
+		// though the key isn't literally "live".
+		const config = testConfig({ staging: { url: 'http://mc.example.test', tokenEnv: 'MC_LIVE_TOKEN', tokenFile: '~/minicraft-mp/token' } });
+		expect(isLiveTarget(config.targets.staging)).toBe(true);
+
+		const cfg = loadConfig({ argv: ['--target', 'staging'], env: { MC_LIVE_TOKEN: 'tok' }, readFile: noFile, homedir: () => '/home/fake', stateRoot: '.state', config });
+		expect(cfg.target.live).toBe(true);
+
+		const withoutAck = checkLiveAck({ cfg, worldUuid: 'uuid-1', readFile: noFile, writeFile: noWrite, now: () => 1_000 });
+		expect(withoutAck).toBeInstanceOf(ConfigError);
+
+		const cfgAcked = loadConfig({
+			argv: ['--target', 'staging', '--i-deployed-the-server'],
+			env: { MC_LIVE_TOKEN: 'tok' },
+			readFile: noFile,
+			homedir: () => '/home/fake',
+			stateRoot: '.state',
+			config,
+		});
+		let written: { path: string; content: string } | null = null;
+		const writeFile = (path: string, content: string) => {
+			written = { path, content };
+		};
+		const withAck = checkLiveAck({ cfg: cfgAcked, worldUuid: 'uuid-1', readFile: noFile, writeFile, now: () => 1_700_000_000_000 });
+		expect(withAck).toBeUndefined();
+		expect(written).not.toBeNull();
+	});
+});
+
+describe('isLiveTarget', () => {
+	it('is false for a target with a static token', () => {
+		expect(isLiveTarget({ url: 'http://localhost:18090', token: 'e2e' })).toBe(false);
+	});
+
+	it('is true for a target with no static token (tokenEnv/tokenFile instead)', () => {
+		expect(isLiveTarget({ url: 'http://mc.example.test', tokenEnv: 'MC_LIVE_TOKEN', tokenFile: '~/minicraft-mp/token' })).toBe(true);
 	});
 });
 

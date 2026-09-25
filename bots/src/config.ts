@@ -61,7 +61,7 @@ const DEFAULT_BOTS_CONFIG = defaultBotsConfig as BotsConfigData;
 export type BrainName = 'laya' | 'clm' | 'scripted';
 
 export interface Config {
-	target: { name: string; url: string; token: string };
+	target: { name: string; url: string; token: string; live: boolean };
 	worldArg?: string;
 	name: string;
 	skin?: string;
@@ -96,7 +96,12 @@ function expandHome(path: string, homedir: () => string): string {
 	return path;
 }
 
-/** Refuses any target on port 8080 — the live mcserver's port on this desktop (see spec §4). */
+const ALLOWED_PROTOCOLS = new Set(['http:', 'https:']);
+
+/** Refuses any target that isn't `http:`/`https:`, or that is on port 8080 — the live mcserver's
+ *  port on this desktop (see spec §4). Requiring an http(s) scheme also closes a bypass: a
+ *  scheme-less URL like `"localhost:8080"` parses under WHATWG rules with `localhost:` as an opaque
+ *  scheme and an empty `port`, which would otherwise slip the port check entirely. */
 export function assertNotPort8080(url: string): void {
 	let parsed: URL;
 	try {
@@ -104,9 +109,20 @@ export function assertNotPort8080(url: string): void {
 	} catch {
 		throw new ConfigError(`invalid target url: ${url}`);
 	}
+	if (!ALLOWED_PROTOCOLS.has(parsed.protocol)) {
+		throw new ConfigError(`target url "${url}" must be http: or https:, not "${parsed.protocol}"`);
+	}
 	if (parsed.port === '8080') {
 		throw new ConfigError(`target url "${url}" uses port 8080, which is reserved for the live multiplayer server on this desktop — refused`);
 	}
+}
+
+/** A target is "live" when its token isn't a static, committed value — it's read from the
+ *  environment or a file at runtime instead. This is the one predicate both `resolveToken` (which
+ *  file/env it reads) and `checkLiveAck` (whether the ack is required at all) use, so a target
+ *  shaped like live but named something else (e.g. a future `staging`) is still treated as live. */
+export function isLiveTarget(targetDef: TargetDef): boolean {
+	return !targetDef.token;
 }
 
 function parseEnvFileValue(content: string, key: string): string | undefined {
@@ -123,7 +139,7 @@ function parseEnvFileValue(content: string, key: string): string | undefined {
 /** Resolves a target's token. The live token file/env is read only for targets that need it
  *  (no static `token`) — never for local/test targets with a static one. */
 function resolveToken(targetDef: TargetDef, env: Record<string, string | undefined>, readFile: (path: string) => string | null, homedir: () => string): string | ConfigError {
-	if (targetDef.token) return targetDef.token;
+	if (!isLiveTarget(targetDef)) return targetDef.token!;
 
 	const envKey = targetDef.tokenEnv ?? DEFAULT_ENV_KEY;
 	const fromEnv = env[envKey];
@@ -174,7 +190,7 @@ export function loadConfig(input: LoadConfigInput): Config {
 	const name = args.name ?? 'Bot';
 
 	return {
-		target: { name: targetName, url: targetDef.url, token },
+		target: { name: targetName, url: targetDef.url, token, live: isLiveTarget(targetDef) },
 		worldArg: args.world,
 		name,
 		skin: args.skin,
@@ -199,12 +215,13 @@ export interface CheckLiveAckInput {
 	now(): number;
 }
 
-/** Called after the world is resolved, for the live target only. The first run per world needs
- *  `--i-deployed-the-server` (`cfg.ackLive`); once acknowledged, it's remembered per world uuid in
- *  `<stateRoot>/live-ack.json` and later runs don't need the flag again. */
+/** Called after the world is resolved, for a live-shaped target only (`cfg.target.live`, from the
+ *  same `isLiveTarget` predicate `resolveToken` uses — not the target's name). The first run per
+ *  world needs `--i-deployed-the-server` (`cfg.ackLive`); once acknowledged, it's remembered per
+ *  world uuid in `<stateRoot>/live-ack.json` and later runs don't need the flag again. */
 export function checkLiveAck(input: CheckLiveAckInput): void | ConfigError {
 	const { cfg, worldUuid, readFile, writeFile, now } = input;
-	if (cfg.target.name !== 'live') return undefined;
+	if (!cfg.target.live) return undefined;
 
 	const path = `${cfg.stateRoot}/live-ack.json`;
 	const raw = readFile(path);

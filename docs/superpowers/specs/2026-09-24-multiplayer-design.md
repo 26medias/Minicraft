@@ -19,7 +19,7 @@ What Julien decided (binding):
   time (SQLite).
 - **Other players** move in real time, with a floating name label. Avatars start as coloured boxes.
 - **Block changes are differential**, never whole maps.
-- **Minimap:** round, GTA-style, bottom-left. Other players are dots; off-map ones are pinned to the
+- **Minimap:** round, GTA-style, bottom-right (moved from bottom-left by Julien after play-testing). Other players are dots; off-map ones are pinned to the
   rim.
 - **Play timer:** it applies in multiplayer too. The others get a countdown for the last 2 minutes
   before a player leaves.
@@ -433,7 +433,7 @@ A proto version range is exchanged in `hello`. The server accepts `proto` in `[M
 
 ### 7.6 Minimap
 
-- **Placement:** a 160 px circular canvas, bottom-left, in multiplayer only.
+- **Placement:** a 160 px circular canvas, bottom-right, in multiplayer only.
 - **Coverage and rotation:** a radius of 48 blocks, **rotating with the player** (forward is up).
   No N marker.
 - **Colours:**

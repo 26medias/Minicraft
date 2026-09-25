@@ -219,7 +219,7 @@ timer is paused while disconnected, and a reconnect reload keeps the session (se
 
 ### Minimap
 
-A 160 px round map, bottom-left, in multiplayer only. It covers 48 blocks around the player and
+A 160 px round map, bottom-right, in multiplayer only. It covers 48 blocks around the player and
 rotates with the player (forward is up). Each column is coloured by its highest non-air block;
 liquids are drawn at 70 %, unloaded chunks dark grey. Heights are cached per chunk by `rev`,
 rebuilding at most 4 chunks per redraw, and it redraws at 10 Hz. Other players are skin-colour

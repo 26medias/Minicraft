@@ -6,7 +6,7 @@ import { BLOCKS } from '../../data/blocks.data';
 import { CHUNK_SIZE_X, CHUNK_SIZE_Z, indexOf } from './coords';
 
 // Sun from upper NW; shadows fall to the SE. Normalized on the fly.
-const SUN_DIR_RAW: [number, number, number] = [-0.5, 1.0, -0.3];
+export const SUN_DIR_RAW: [number, number, number] = [-0.5, 1.0, -0.3];
 const MAX_SHADOW_DIST = 32;
 
 /** Test-only counter of rays actually walked (reset by tests). */

@@ -4,6 +4,7 @@ import type { ChunkMesh, ChunkMeshResult } from '../world/mesher';
 import type { LoadedAtlas } from './atlas';
 import { MESH_RADIUS } from '../world/radii';
 import { installRadialFog } from './radial-fog';
+import { Sun } from './sun';
 
 // Before any material compiles: fog by distance, not by view depth (a mountain must not fade as you turn to it).
 installRadialFog();
@@ -30,6 +31,7 @@ export class Renderer {
 	private tickFn: ((dt: number) => void) | null = null;
 	private last = performance.now();
 	private gpuString: string | null = null;
+	private sun: Sun;
 
 	constructor(container: HTMLElement, atlas: LoadedAtlas) {
 		this.scene = new THREE.Scene();
@@ -38,6 +40,7 @@ export class Renderer {
 
 		this.camera = new THREE.PerspectiveCamera(75, 1, 0.1, 500);
 		this.camera.position.set(8, 70, 8);
+		this.sun = new Sun(this.scene);
 
 		this.gl = new THREE.WebGLRenderer({
 			antialias: false,
@@ -215,6 +218,7 @@ export class Renderer {
 		const dt = Math.min(0.1, (now - this.last) / 1000);
 		this.last = now;
 		this.tickFn?.(dt);
+		this.sun.update(this.camera);
 		this.gl.render(this.scene, this.camera);
 		requestAnimationFrame(this.frame);
 	};

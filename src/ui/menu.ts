@@ -20,6 +20,7 @@ import { loadMpPrefs, saveMpPrefs, type MpPrefs } from '../persistence/mp-prefs'
 import { SKINS, skinColor, skinOf, type SkinId } from '../data/skins.data';
 import { nameError, nameTakenText, preselect, sortRows, validName, NAME_ERROR } from './mp-menu-model';
 import { paintPreview } from './skin-preview';
+import logoUrl from '../assets/menu/logo.webp';
 
 export type { MenuAction } from './menu-model';
 
@@ -118,7 +119,7 @@ export class MainMenu {
 		this.stopRefresh();
 		this.renderGen++;
 		this.root.classList.remove('hidden');
-		const card = this.newCard('Minicraft');
+		const card = this.newCard("Noah's Worlds");
 		const line = document.createElement('div'); line.className = 'menu-loading'; line.textContent = text; card.appendChild(line);
 	}
 
@@ -133,6 +134,11 @@ export class MainMenu {
 	private newCard(title: string, screen = 'home'): HTMLDivElement {
 		this.stopRefresh();
 		this.root.innerHTML = '';
+		const logo = document.createElement('img');
+		logo.className = 'menu-logo';
+		logo.src = logoUrl;
+		logo.alt = "Noah's Worlds";
+		this.root.appendChild(logo);
 		const card = document.createElement('div');
 		card.className = 'menu-card';
 		card.dataset.screen = screen;
@@ -178,7 +184,7 @@ export class MainMenu {
 
 	private async renderHome() {
 		const gen = ++this.renderGen;
-		const card = this.newCard('Minicraft');
+		const card = this.newCard("Noah's Worlds");
 		const notice = this.notice;
 		// One-shot: the 30 s card refresh and any later render must not repeat it.
 		this.notice = null;

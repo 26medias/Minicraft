@@ -1436,7 +1436,7 @@ const B_WHO: Who = { name: 'Bo', skin: 'jj' };
 						check(navigated, `then it reloads itself with v= in the URL (${p.url()})`);
 						// The reloaded page rejoins by autojoin, is refused again, and falls back to the click screen.
 						const clickScreen = await p.waitForSelector('#mp-fatal[data-kind="updated"]', { timeout: 30_000 }).then(() => true, () => false);
-						check(clickScreen && (await p.locator('#mp-fatal').innerText().catch(() => '')).includes('Minicraft was updated — click to reload'), 'after the reload it shows "Minicraft was updated — click to reload"');
+						check(clickScreen && (await p.locator('#mp-fatal').innerText().catch(() => '')).includes("Noah's Worlds was updated — click to reload"), "after the reload it shows the updated notice");
 						await sleep(5_000);
 						const n = await loads();
 						check(n === 2, `watched 5 s more: ${n} page loads in the tab, exactly 2 (the first and one automatic reload)`);

@@ -140,7 +140,7 @@ An **op** (in `edit`/`edit-out`, and each row of the snapshot) is `[x, y, z, id,
 | 4001 | `replaced` | a newer connection from this browser/bid took over | "You opened the game somewhere else." with one Menu button; no reconnect |
 | 4002 | `slow` | the server's send queue for this client passed 1 MiB | reconnect |
 | 4003 | `resync` | the server rejected a batch (an invalid op) | reconnect; after 2 in a row, the client treats it as a synthetic 4004 |
-| 4004 | `proto` | either `hello.proto` is out of `[MinProto, MaxProto]`, **or** the client build is below `MC_MIN_CLIENT` (§6) | `proto` out of range, or two 4003s in a row: full-screen "Minicraft was updated" with a reload button. The **outdated-build** case (`error.message === "outdated"`, `error.min` set) instead gets one **automatic** reload after a 2 s "Updating Minicraft…" screen, guarded by a 5-minute `sessionStorage` marker so it can never loop |
+| 4004 | `proto` | either `hello.proto` is out of `[MinProto, MaxProto]`, **or** the client build is below `MC_MIN_CLIENT` (§6) | `proto` out of range, or two 4003s in a row: full-screen "Noah's Worlds was updated" with a reload button. The **outdated-build** case (`error.message === "outdated"`, `error.min` set) instead gets one **automatic** reload after a 2 s "Updating Minicraft…" screen, guarded by a 5-minute `sessionStorage` marker so it can never loop |
 | 4005 | `genUnsupported` | `hello.gen` isn't a generator version this server hosts (`supportedGen`) | same full screen as the non-outdated 4004 |
 | 4006 | `unknownWorld` | the world doesn't exist (also used to kick a bot when its world is deleted, §8) | back to the world list |
 | 4007 | `badToken` | wrong token | back to the world list |

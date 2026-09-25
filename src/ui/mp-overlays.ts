@@ -81,7 +81,7 @@ export class MpOverlays {
 			title.textContent = 'You opened the game somewhere else.';
 			b.textContent = 'Menu';
 		} else {
-			title.textContent = 'Minicraft was updated — click to reload';
+			title.textContent = "Noah's Worlds was updated — click to reload";
 			b.textContent = 'Reload';
 			el.onclick = onClick;
 		}

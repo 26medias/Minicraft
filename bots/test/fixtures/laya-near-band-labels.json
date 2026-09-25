@@ -1,0 +1,2133 @@
+{
+	"note": "Fix round 1, Part 2 (2026-09-25): 20 labeled near-band cases (5 each: moving away → follow, building a line with help_build offered → help_build, standing and looking around → watch, a stop period with help_build still offered → watch or idle, never help_build), run against a real laya-serve on 127.0.0.1:8000 before and after the question-text change in bots/src/bots/companion.ts (INSTRUCTIONS + describe()). Never a test that needs Laya — kept as this fixture plus the doc note in ~/Projects/AI/BRAINS.md and .superpowers/sdd/2026-09-25-companion-bot/task-6-report.md.",
+	"instructionsBefore": "You are a friendly robot friend in a block-building game, keeping a young child company. Choose what to do next.",
+	"instructionsAfter": "You are a companion robot in a block game with a child. If the child is moving away from you, choose follow. If the child just placed blocks in a row and is aiming at the next spot in that line, choose help_build. Otherwise choose watch.",
+	"accuracyBefore": {
+		"overall": 0.55,
+		"A-follow": 0.2,
+		"B-help_build": 0,
+		"C-watch": 1,
+		"D-stop": 1
+	},
+	"accuracyAfter": {
+		"overall": 0.75,
+		"A-follow": 1,
+		"B-help_build": 0,
+		"C-watch": 1,
+		"D-stop": 1
+	},
+	"cases": [
+		{
+			"label": "moving east 3.5 away, no look",
+			"category": "A-follow",
+			"expected": [
+				"follow"
+			],
+			"candidates": [
+				"follow",
+				"watch",
+				"idle"
+			],
+			"helpBuildBlock": null,
+			"snapshot": {
+				"nowMs": 1000000,
+				"followDist": 2,
+				"bot": {
+					"pose": {
+						"x": 0,
+						"y": 64,
+						"z": 0,
+						"yaw": 0,
+						"pitch": 0
+					},
+					"lastActions": []
+				},
+				"target": {
+					"name": "Noah",
+					"id": 1,
+					"pose": {
+						"x": 3.5,
+						"y": 64,
+						"z": 0,
+						"yaw": 0,
+						"pitch": 0
+					},
+					"velocity": {
+						"x": 0,
+						"y": 0,
+						"z": 0
+					},
+					"speedLast0_3s": 3,
+					"speedLast1s": 3,
+					"flying": false,
+					"inLiquid": false,
+					"lookTarget": null,
+					"lookBlock": null,
+					"lookDistance": null,
+					"lookHeldMs": 0,
+					"miningCell": null,
+					"placements": [],
+					"idleSinceMs": null
+				},
+				"others": [],
+				"stopActiveForTarget": false,
+				"switchedFrom": null
+			},
+			"state": "Noah is 3.5 blocks east, walking. Noah is not looking at any block. You have not done anything yet.",
+			"criteriaAfter": {
+				"follow": "Noah is walking away — follow.",
+				"watch": "Watch Noah.",
+				"idle": "Wait."
+			},
+			"resultBefore": {
+				"category": "A-follow",
+				"label": "moving east 3.5 away, no look",
+				"expected": [
+					"follow"
+				],
+				"choice": "watch",
+				"maxP": 0.605,
+				"correct": false
+			},
+			"resultAfter": {
+				"category": "A-follow",
+				"label": "moving east 3.5 away, no look",
+				"expected": [
+					"follow"
+				],
+				"choice": "follow",
+				"maxP": 0.5039,
+				"correct": true
+			}
+		},
+		{
+			"label": "moving south 4 away, glancing at a block while running",
+			"category": "A-follow",
+			"expected": [
+				"follow"
+			],
+			"candidates": [
+				"follow",
+				"watch",
+				"idle"
+			],
+			"helpBuildBlock": null,
+			"snapshot": {
+				"nowMs": 1000000,
+				"followDist": 2,
+				"bot": {
+					"pose": {
+						"x": 0,
+						"y": 64,
+						"z": 0,
+						"yaw": 0,
+						"pitch": 0
+					},
+					"lastActions": []
+				},
+				"target": {
+					"name": "Noah",
+					"id": 1,
+					"pose": {
+						"x": 0,
+						"y": 64,
+						"z": 4,
+						"yaw": 0,
+						"pitch": 0
+					},
+					"velocity": {
+						"x": 0,
+						"y": 0,
+						"z": 0
+					},
+					"speedLast0_3s": 4,
+					"speedLast1s": 4,
+					"flying": false,
+					"inLiquid": false,
+					"lookTarget": {
+						"x": 0,
+						"y": 63,
+						"z": 6
+					},
+					"lookBlock": "dirt",
+					"lookDistance": 2,
+					"lookHeldMs": 0,
+					"miningCell": null,
+					"placements": [],
+					"idleSinceMs": null
+				},
+				"others": [],
+				"stopActiveForTarget": false,
+				"switchedFrom": null
+			},
+			"state": "Noah is 4.0 blocks south, walking. Noah is looking at dirt 2.0 blocks ahead. You have not done anything yet.",
+			"criteriaAfter": {
+				"follow": "Noah is walking away — follow.",
+				"watch": "Watch Noah.",
+				"idle": "Wait."
+			},
+			"resultBefore": {
+				"category": "A-follow",
+				"label": "moving south 4 away, glancing at a block while running",
+				"expected": [
+					"follow"
+				],
+				"choice": "watch",
+				"maxP": 0.4636,
+				"correct": false
+			},
+			"resultAfter": {
+				"category": "A-follow",
+				"label": "moving south 4 away, glancing at a block while running",
+				"expected": [
+					"follow"
+				],
+				"choice": "follow",
+				"maxP": 0.4609,
+				"correct": true
+			}
+		},
+		{
+			"label": "moving west 3 away, slow jog",
+			"category": "A-follow",
+			"expected": [
+				"follow"
+			],
+			"candidates": [
+				"follow",
+				"watch",
+				"idle"
+			],
+			"helpBuildBlock": null,
+			"snapshot": {
+				"nowMs": 1000000,
+				"followDist": 2,
+				"bot": {
+					"pose": {
+						"x": 0,
+						"y": 64,
+						"z": 0,
+						"yaw": 0,
+						"pitch": 0
+					},
+					"lastActions": []
+				},
+				"target": {
+					"name": "Noah",
+					"id": 1,
+					"pose": {
+						"x": -3,
+						"y": 64,
+						"z": 0,
+						"yaw": 0,
+						"pitch": 0
+					},
+					"velocity": {
+						"x": 0,
+						"y": 0,
+						"z": 0
+					},
+					"speedLast0_3s": 2.5,
+					"speedLast1s": 2.5,
+					"flying": false,
+					"inLiquid": false,
+					"lookTarget": null,
+					"lookBlock": null,
+					"lookDistance": null,
+					"lookHeldMs": 0,
+					"miningCell": null,
+					"placements": [],
+					"idleSinceMs": null
+				},
+				"others": [],
+				"stopActiveForTarget": false,
+				"switchedFrom": null
+			},
+			"state": "Noah is 3.0 blocks west, walking. Noah is not looking at any block. You have not done anything yet.",
+			"criteriaAfter": {
+				"follow": "Noah is walking away — follow.",
+				"watch": "Watch Noah.",
+				"idle": "Wait."
+			},
+			"resultBefore": {
+				"category": "A-follow",
+				"label": "moving west 3 away, slow jog",
+				"expected": [
+					"follow"
+				],
+				"choice": "watch",
+				"maxP": 0.5976,
+				"correct": false
+			},
+			"resultAfter": {
+				"category": "A-follow",
+				"label": "moving west 3 away, slow jog",
+				"expected": [
+					"follow"
+				],
+				"choice": "follow",
+				"maxP": 0.4636,
+				"correct": true
+			}
+		},
+		{
+			"label": "moving diagonally 4.24 away, another kid far off",
+			"category": "A-follow",
+			"expected": [
+				"follow"
+			],
+			"candidates": [
+				"follow",
+				"watch",
+				"idle"
+			],
+			"helpBuildBlock": null,
+			"snapshot": {
+				"nowMs": 1000000,
+				"followDist": 2,
+				"bot": {
+					"pose": {
+						"x": 0,
+						"y": 64,
+						"z": 0,
+						"yaw": 0,
+						"pitch": 0
+					},
+					"lastActions": []
+				},
+				"target": {
+					"name": "Noah",
+					"id": 1,
+					"pose": {
+						"x": 3,
+						"y": 64,
+						"z": 3,
+						"yaw": 0,
+						"pitch": 0
+					},
+					"velocity": {
+						"x": 0,
+						"y": 0,
+						"z": 0
+					},
+					"speedLast0_3s": 5,
+					"speedLast1s": 5,
+					"flying": false,
+					"inLiquid": false,
+					"lookTarget": null,
+					"lookBlock": null,
+					"lookDistance": null,
+					"lookHeldMs": 0,
+					"miningCell": null,
+					"placements": [],
+					"idleSinceMs": null
+				},
+				"others": [
+					{
+						"name": "Mia",
+						"id": 3,
+						"pose": {
+							"x": 40,
+							"y": 64,
+							"z": 40,
+							"yaw": 0,
+							"pitch": 0
+						},
+						"velocity": {
+							"x": 0,
+							"y": 0,
+							"z": 0
+						},
+						"speedLast0_3s": 0,
+						"speedLast1s": 0,
+						"flying": false,
+						"inLiquid": false,
+						"lookTarget": null,
+						"lookBlock": null,
+						"lookDistance": null,
+						"lookHeldMs": 0,
+						"miningCell": null,
+						"placements": [],
+						"idleSinceMs": null
+					}
+				],
+				"stopActiveForTarget": false,
+				"switchedFrom": null
+			},
+			"state": "Noah is 4.2 blocks south-east, walking. Noah is not looking at any block. Also here: Mia, 56.6 blocks south-east. You have not done anything yet.",
+			"criteriaAfter": {
+				"follow": "Noah is walking away — follow.",
+				"watch": "Watch Noah.",
+				"idle": "Wait."
+			},
+			"resultBefore": {
+				"category": "A-follow",
+				"label": "moving diagonally 4.24 away, another kid far off",
+				"expected": [
+					"follow"
+				],
+				"choice": "watch",
+				"maxP": 0.5312,
+				"correct": false
+			},
+			"resultAfter": {
+				"category": "A-follow",
+				"label": "moving diagonally 4.24 away, another kid far off",
+				"expected": [
+					"follow"
+				],
+				"choice": "follow",
+				"maxP": 0.5201,
+				"correct": true
+			}
+		},
+		{
+			"label": "moving away 3.8, just switched target",
+			"category": "A-follow",
+			"expected": [
+				"follow"
+			],
+			"candidates": [
+				"follow",
+				"watch",
+				"idle"
+			],
+			"helpBuildBlock": null,
+			"snapshot": {
+				"nowMs": 1000000,
+				"followDist": 2,
+				"bot": {
+					"pose": {
+						"x": 0,
+						"y": 64,
+						"z": 0,
+						"yaw": 0,
+						"pitch": 0
+					},
+					"lastActions": []
+				},
+				"target": {
+					"name": "Noah",
+					"id": 1,
+					"pose": {
+						"x": 0,
+						"y": 64,
+						"z": -3.8,
+						"yaw": 0,
+						"pitch": 0
+					},
+					"velocity": {
+						"x": 0,
+						"y": 0,
+						"z": 0
+					},
+					"speedLast0_3s": 3.5,
+					"speedLast1s": 3.5,
+					"flying": false,
+					"inLiquid": false,
+					"lookTarget": null,
+					"lookBlock": null,
+					"lookDistance": null,
+					"lookHeldMs": 0,
+					"miningCell": null,
+					"placements": [],
+					"idleSinceMs": null
+				},
+				"others": [],
+				"stopActiveForTarget": false,
+				"switchedFrom": {
+					"name": "Julien",
+					"idleMs": 31000
+				}
+			},
+			"state": "Noah is 3.8 blocks north, walking. Noah is not looking at any block. You came to Noah because Julien stood still for 31 seconds. You have not done anything yet.",
+			"criteriaAfter": {
+				"follow": "Noah is walking away — follow.",
+				"watch": "Watch Noah.",
+				"idle": "Wait."
+			},
+			"resultBefore": {
+				"category": "A-follow",
+				"label": "moving away 3.8, just switched target",
+				"expected": [
+					"follow"
+				],
+				"choice": "follow",
+				"maxP": 0.6623,
+				"correct": true
+			},
+			"resultAfter": {
+				"category": "A-follow",
+				"label": "moving away 3.8, just switched target",
+				"expected": [
+					"follow"
+				],
+				"choice": "follow",
+				"maxP": 0.6851,
+				"correct": true
+			}
+		},
+		{
+			"label": "oak_planks line east, 2.5 away",
+			"category": "B-help_build",
+			"expected": [
+				"help_build"
+			],
+			"candidates": [
+				"watch",
+				"help_build",
+				"idle"
+			],
+			"helpBuildBlock": "oak_planks",
+			"snapshot": {
+				"nowMs": 1000000,
+				"followDist": 2,
+				"bot": {
+					"pose": {
+						"x": 0,
+						"y": 64,
+						"z": 0,
+						"yaw": 0,
+						"pitch": 0
+					},
+					"lastActions": []
+				},
+				"target": {
+					"name": "Noah",
+					"id": 1,
+					"pose": {
+						"x": 2.5,
+						"y": 64,
+						"z": 0,
+						"yaw": 0,
+						"pitch": 0
+					},
+					"velocity": {
+						"x": 0,
+						"y": 0,
+						"z": 0
+					},
+					"speedLast0_3s": 0,
+					"speedLast1s": 0,
+					"flying": false,
+					"inLiquid": false,
+					"lookTarget": {
+						"x": 5,
+						"y": 64,
+						"z": 0
+					},
+					"lookBlock": "stone",
+					"lookDistance": 2,
+					"lookHeldMs": 0,
+					"miningCell": null,
+					"placements": [
+						{
+							"cell": {
+								"x": 3,
+								"y": 64,
+								"z": 0
+							},
+							"block": "oak_planks",
+							"ageMs": 3500
+						},
+						{
+							"cell": {
+								"x": 4,
+								"y": 64,
+								"z": 0
+							},
+							"block": "oak_planks",
+							"ageMs": 2200
+						},
+						{
+							"cell": {
+								"x": 5,
+								"y": 64,
+								"z": 0
+							},
+							"block": "oak_planks",
+							"ageMs": 900
+						}
+					],
+					"idleSinceMs": null
+				},
+				"others": [],
+				"stopActiveForTarget": false,
+				"switchedFrom": null
+			},
+			"state": "Noah is 2.5 blocks east, standing still. Noah is looking at stone 2.0 blocks ahead. Noah placed oak_planks 3 times in the last 20 seconds, in a line going east. You have not done anything yet.",
+			"criteriaAfter": {
+				"watch": "Watch Noah.",
+				"help_build": "Noah placed blocks in a line — add the next oak_planks.",
+				"idle": "Wait."
+			},
+			"resultBefore": {
+				"category": "B-help_build",
+				"label": "oak_planks line east, 2.5 away",
+				"expected": [
+					"help_build"
+				],
+				"choice": "watch",
+				"maxP": 0.5297,
+				"correct": false
+			},
+			"resultAfter": {
+				"category": "B-help_build",
+				"label": "oak_planks line east, 2.5 away",
+				"expected": [
+					"help_build"
+				],
+				"choice": "watch",
+				"maxP": 0.6155,
+				"correct": false
+			}
+		},
+		{
+			"label": "stone line north, 2.5 away",
+			"category": "B-help_build",
+			"expected": [
+				"help_build"
+			],
+			"candidates": [
+				"watch",
+				"help_build",
+				"idle"
+			],
+			"helpBuildBlock": "stone",
+			"snapshot": {
+				"nowMs": 1000000,
+				"followDist": 2,
+				"bot": {
+					"pose": {
+						"x": 0,
+						"y": 64,
+						"z": 0,
+						"yaw": 0,
+						"pitch": 0
+					},
+					"lastActions": []
+				},
+				"target": {
+					"name": "Noah",
+					"id": 1,
+					"pose": {
+						"x": 0,
+						"y": 64,
+						"z": -2.5,
+						"yaw": 0,
+						"pitch": 0
+					},
+					"velocity": {
+						"x": 0,
+						"y": 0,
+						"z": 0
+					},
+					"speedLast0_3s": 0,
+					"speedLast1s": 0,
+					"flying": false,
+					"inLiquid": false,
+					"lookTarget": {
+						"x": 0,
+						"y": 64,
+						"z": -5
+					},
+					"lookBlock": "dirt",
+					"lookDistance": 2,
+					"lookHeldMs": 0,
+					"miningCell": null,
+					"placements": [
+						{
+							"cell": {
+								"x": 0,
+								"y": 64,
+								"z": -3
+							},
+							"block": "stone",
+							"ageMs": 3500
+						},
+						{
+							"cell": {
+								"x": 0,
+								"y": 64,
+								"z": -4
+							},
+							"block": "stone",
+							"ageMs": 2200
+						},
+						{
+							"cell": {
+								"x": 0,
+								"y": 64,
+								"z": -5
+							},
+							"block": "stone",
+							"ageMs": 900
+						}
+					],
+					"idleSinceMs": null
+				},
+				"others": [],
+				"stopActiveForTarget": false,
+				"switchedFrom": null
+			},
+			"state": "Noah is 2.5 blocks north, standing still. Noah is looking at dirt 2.0 blocks ahead. Noah placed stone 3 times in the last 20 seconds, in a line going north. You have not done anything yet.",
+			"criteriaAfter": {
+				"watch": "Watch Noah.",
+				"help_build": "Noah placed blocks in a line — add the next stone.",
+				"idle": "Wait."
+			},
+			"resultBefore": {
+				"category": "B-help_build",
+				"label": "stone line north, 2.5 away",
+				"expected": [
+					"help_build"
+				],
+				"choice": "watch",
+				"maxP": 0.5265,
+				"correct": false
+			},
+			"resultAfter": {
+				"category": "B-help_build",
+				"label": "stone line north, 2.5 away",
+				"expected": [
+					"help_build"
+				],
+				"choice": "watch",
+				"maxP": 0.6839,
+				"correct": false
+			}
+		},
+		{
+			"label": "glass line west, 2.2 away, another kid far off",
+			"category": "B-help_build",
+			"expected": [
+				"help_build"
+			],
+			"candidates": [
+				"watch",
+				"help_build",
+				"idle"
+			],
+			"helpBuildBlock": "glass",
+			"snapshot": {
+				"nowMs": 1000000,
+				"followDist": 2,
+				"bot": {
+					"pose": {
+						"x": 0,
+						"y": 64,
+						"z": 0,
+						"yaw": 0,
+						"pitch": 0
+					},
+					"lastActions": []
+				},
+				"target": {
+					"name": "Noah",
+					"id": 1,
+					"pose": {
+						"x": -2.2,
+						"y": 64,
+						"z": 0,
+						"yaw": 0,
+						"pitch": 0
+					},
+					"velocity": {
+						"x": 0,
+						"y": 0,
+						"z": 0
+					},
+					"speedLast0_3s": 0,
+					"speedLast1s": 0,
+					"flying": false,
+					"inLiquid": false,
+					"lookTarget": {
+						"x": -5,
+						"y": 64,
+						"z": 0
+					},
+					"lookBlock": "stone",
+					"lookDistance": 2,
+					"lookHeldMs": 0,
+					"miningCell": null,
+					"placements": [
+						{
+							"cell": {
+								"x": -3,
+								"y": 64,
+								"z": 0
+							},
+							"block": "glass",
+							"ageMs": 3500
+						},
+						{
+							"cell": {
+								"x": -4,
+								"y": 64,
+								"z": 0
+							},
+							"block": "glass",
+							"ageMs": 2200
+						},
+						{
+							"cell": {
+								"x": -5,
+								"y": 64,
+								"z": 0
+							},
+							"block": "glass",
+							"ageMs": 900
+						}
+					],
+					"idleSinceMs": null
+				},
+				"others": [
+					{
+						"name": "Mia",
+						"id": 3,
+						"pose": {
+							"x": 40,
+							"y": 64,
+							"z": 40,
+							"yaw": 0,
+							"pitch": 0
+						},
+						"velocity": {
+							"x": 0,
+							"y": 0,
+							"z": 0
+						},
+						"speedLast0_3s": 0,
+						"speedLast1s": 0,
+						"flying": false,
+						"inLiquid": false,
+						"lookTarget": null,
+						"lookBlock": null,
+						"lookDistance": null,
+						"lookHeldMs": 0,
+						"miningCell": null,
+						"placements": [],
+						"idleSinceMs": null
+					}
+				],
+				"stopActiveForTarget": false,
+				"switchedFrom": null
+			},
+			"state": "Noah is 2.2 blocks west, standing still. Noah is looking at stone 2.0 blocks ahead. Noah placed glass 3 times in the last 20 seconds, in a line going west. Also here: Mia, 56.6 blocks south-east. You have not done anything yet.",
+			"criteriaAfter": {
+				"watch": "Watch Noah.",
+				"help_build": "Noah placed blocks in a line — add the next glass.",
+				"idle": "Wait."
+			},
+			"resultBefore": {
+				"category": "B-help_build",
+				"label": "glass line west, 2.2 away, another kid far off",
+				"expected": [
+					"help_build"
+				],
+				"choice": "watch",
+				"maxP": 0.6474,
+				"correct": false
+			},
+			"resultAfter": {
+				"category": "B-help_build",
+				"label": "glass line west, 2.2 away, another kid far off",
+				"expected": [
+					"help_build"
+				],
+				"choice": "watch",
+				"maxP": 0.7334,
+				"correct": false
+			}
+		},
+		{
+			"label": "dirt line south, 2.8 away, just switched target",
+			"category": "B-help_build",
+			"expected": [
+				"help_build"
+			],
+			"candidates": [
+				"watch",
+				"help_build",
+				"idle"
+			],
+			"helpBuildBlock": "dirt",
+			"snapshot": {
+				"nowMs": 1000000,
+				"followDist": 2,
+				"bot": {
+					"pose": {
+						"x": 0,
+						"y": 64,
+						"z": 0,
+						"yaw": 0,
+						"pitch": 0
+					},
+					"lastActions": []
+				},
+				"target": {
+					"name": "Noah",
+					"id": 1,
+					"pose": {
+						"x": 0,
+						"y": 64,
+						"z": 2.8,
+						"yaw": 0,
+						"pitch": 0
+					},
+					"velocity": {
+						"x": 0,
+						"y": 0,
+						"z": 0
+					},
+					"speedLast0_3s": 0,
+					"speedLast1s": 0,
+					"flying": false,
+					"inLiquid": false,
+					"lookTarget": {
+						"x": 0,
+						"y": 64,
+						"z": 5
+					},
+					"lookBlock": "stone",
+					"lookDistance": 2,
+					"lookHeldMs": 0,
+					"miningCell": null,
+					"placements": [
+						{
+							"cell": {
+								"x": 0,
+								"y": 64,
+								"z": 3
+							},
+							"block": "dirt",
+							"ageMs": 3500
+						},
+						{
+							"cell": {
+								"x": 0,
+								"y": 64,
+								"z": 4
+							},
+							"block": "dirt",
+							"ageMs": 2200
+						},
+						{
+							"cell": {
+								"x": 0,
+								"y": 64,
+								"z": 5
+							},
+							"block": "dirt",
+							"ageMs": 900
+						}
+					],
+					"idleSinceMs": null
+				},
+				"others": [],
+				"stopActiveForTarget": false,
+				"switchedFrom": {
+					"name": "Julien",
+					"idleMs": 31000
+				}
+			},
+			"state": "Noah is 2.8 blocks south, standing still. Noah is looking at stone 2.0 blocks ahead. Noah placed dirt 3 times in the last 20 seconds, in a line going south. You came to Noah because Julien stood still for 31 seconds. You have not done anything yet.",
+			"criteriaAfter": {
+				"watch": "Watch Noah.",
+				"help_build": "Noah placed blocks in a line — add the next dirt.",
+				"idle": "Wait."
+			},
+			"resultBefore": {
+				"category": "B-help_build",
+				"label": "dirt line south, 2.8 away, just switched target",
+				"expected": [
+					"help_build"
+				],
+				"choice": "watch",
+				"maxP": 0.5462,
+				"correct": false
+			},
+			"resultAfter": {
+				"category": "B-help_build",
+				"label": "dirt line south, 2.8 away, just switched target",
+				"expected": [
+					"help_build"
+				],
+				"choice": "watch",
+				"maxP": 0.7775,
+				"correct": false
+			}
+		},
+		{
+			"label": "cobblestone line east, 2.24 away",
+			"category": "B-help_build",
+			"expected": [
+				"help_build"
+			],
+			"candidates": [
+				"watch",
+				"help_build",
+				"idle"
+			],
+			"helpBuildBlock": "cobblestone",
+			"snapshot": {
+				"nowMs": 1000000,
+				"followDist": 2,
+				"bot": {
+					"pose": {
+						"x": 0,
+						"y": 64,
+						"z": 0,
+						"yaw": 0,
+						"pitch": 0
+					},
+					"lastActions": []
+				},
+				"target": {
+					"name": "Noah",
+					"id": 1,
+					"pose": {
+						"x": 2,
+						"y": 64,
+						"z": 1,
+						"yaw": 0,
+						"pitch": 0
+					},
+					"velocity": {
+						"x": 0,
+						"y": 0,
+						"z": 0
+					},
+					"speedLast0_3s": 0,
+					"speedLast1s": 0,
+					"flying": false,
+					"inLiquid": false,
+					"lookTarget": {
+						"x": 5,
+						"y": 64,
+						"z": 1
+					},
+					"lookBlock": "stone",
+					"lookDistance": 2,
+					"lookHeldMs": 0,
+					"miningCell": null,
+					"placements": [
+						{
+							"cell": {
+								"x": 3,
+								"y": 64,
+								"z": 1
+							},
+							"block": "cobblestone",
+							"ageMs": 3500
+						},
+						{
+							"cell": {
+								"x": 4,
+								"y": 64,
+								"z": 1
+							},
+							"block": "cobblestone",
+							"ageMs": 2200
+						},
+						{
+							"cell": {
+								"x": 5,
+								"y": 64,
+								"z": 1
+							},
+							"block": "cobblestone",
+							"ageMs": 900
+						}
+					],
+					"idleSinceMs": null
+				},
+				"others": [],
+				"stopActiveForTarget": false,
+				"switchedFrom": null
+			},
+			"state": "Noah is 2.2 blocks south-east, standing still. Noah is looking at stone 2.0 blocks ahead. Noah placed cobblestone 3 times in the last 20 seconds, in a line going east. You have not done anything yet.",
+			"criteriaAfter": {
+				"watch": "Watch Noah.",
+				"help_build": "Noah placed blocks in a line — add the next cobblestone.",
+				"idle": "Wait."
+			},
+			"resultBefore": {
+				"category": "B-help_build",
+				"label": "cobblestone line east, 2.24 away",
+				"expected": [
+					"help_build"
+				],
+				"choice": "watch",
+				"maxP": 0.5443,
+				"correct": false
+			},
+			"resultAfter": {
+				"category": "B-help_build",
+				"label": "cobblestone line east, 2.24 away",
+				"expected": [
+					"help_build"
+				],
+				"choice": "watch",
+				"maxP": 0.593,
+				"correct": false
+			}
+		},
+		{
+			"label": "close, looking at stone 2 ahead, no placements",
+			"category": "C-watch",
+			"expected": [
+				"watch"
+			],
+			"candidates": [
+				"watch",
+				"idle"
+			],
+			"helpBuildBlock": null,
+			"snapshot": {
+				"nowMs": 1000000,
+				"followDist": 2,
+				"bot": {
+					"pose": {
+						"x": 0,
+						"y": 64,
+						"z": 0,
+						"yaw": 0,
+						"pitch": 0
+					},
+					"lastActions": []
+				},
+				"target": {
+					"name": "Noah",
+					"id": 1,
+					"pose": {
+						"x": 2,
+						"y": 64,
+						"z": 0,
+						"yaw": 0,
+						"pitch": 0
+					},
+					"velocity": {
+						"x": 0,
+						"y": 0,
+						"z": 0
+					},
+					"speedLast0_3s": 0,
+					"speedLast1s": 0,
+					"flying": false,
+					"inLiquid": false,
+					"lookTarget": {
+						"x": 4,
+						"y": 64,
+						"z": 0
+					},
+					"lookBlock": "stone",
+					"lookDistance": 2,
+					"lookHeldMs": 0,
+					"miningCell": null,
+					"placements": [],
+					"idleSinceMs": null
+				},
+				"others": [],
+				"stopActiveForTarget": false,
+				"switchedFrom": null
+			},
+			"state": "Noah is 2.0 blocks east, standing still. Noah is looking at stone 2.0 blocks ahead. You have not done anything yet.",
+			"criteriaAfter": {
+				"watch": "Watch Noah.",
+				"idle": "Wait."
+			},
+			"resultBefore": {
+				"category": "C-watch",
+				"label": "close, looking at stone 2 ahead, no placements",
+				"expected": [
+					"watch"
+				],
+				"choice": "watch",
+				"maxP": 0.7104,
+				"correct": true
+			},
+			"resultAfter": {
+				"category": "C-watch",
+				"label": "close, looking at stone 2 ahead, no placements",
+				"expected": [
+					"watch"
+				],
+				"choice": "watch",
+				"maxP": 0.8868,
+				"correct": true
+			}
+		},
+		{
+			"label": "close, not looking at anything",
+			"category": "C-watch",
+			"expected": [
+				"watch"
+			],
+			"candidates": [
+				"watch",
+				"idle"
+			],
+			"helpBuildBlock": null,
+			"snapshot": {
+				"nowMs": 1000000,
+				"followDist": 2,
+				"bot": {
+					"pose": {
+						"x": 0,
+						"y": 64,
+						"z": 0,
+						"yaw": 0,
+						"pitch": 0
+					},
+					"lastActions": []
+				},
+				"target": {
+					"name": "Noah",
+					"id": 1,
+					"pose": {
+						"x": 0,
+						"y": 64,
+						"z": -2.2,
+						"yaw": 0,
+						"pitch": 0
+					},
+					"velocity": {
+						"x": 0,
+						"y": 0,
+						"z": 0
+					},
+					"speedLast0_3s": 0,
+					"speedLast1s": 0,
+					"flying": false,
+					"inLiquid": false,
+					"lookTarget": null,
+					"lookBlock": null,
+					"lookDistance": null,
+					"lookHeldMs": 0,
+					"miningCell": null,
+					"placements": [],
+					"idleSinceMs": null
+				},
+				"others": [],
+				"stopActiveForTarget": false,
+				"switchedFrom": null
+			},
+			"state": "Noah is 2.2 blocks north, standing still. Noah is not looking at any block. You have not done anything yet.",
+			"criteriaAfter": {
+				"watch": "Watch Noah.",
+				"idle": "Wait."
+			},
+			"resultBefore": {
+				"category": "C-watch",
+				"label": "close, not looking at anything",
+				"expected": [
+					"watch"
+				],
+				"choice": "watch",
+				"maxP": 0.765,
+				"correct": true
+			},
+			"resultAfter": {
+				"category": "C-watch",
+				"label": "close, not looking at anything",
+				"expected": [
+					"watch"
+				],
+				"choice": "watch",
+				"maxP": 0.8661,
+				"correct": true
+			}
+		},
+		{
+			"label": "close, one old placement only (not a line)",
+			"category": "C-watch",
+			"expected": [
+				"watch"
+			],
+			"candidates": [
+				"watch",
+				"idle"
+			],
+			"helpBuildBlock": null,
+			"snapshot": {
+				"nowMs": 1000000,
+				"followDist": 2,
+				"bot": {
+					"pose": {
+						"x": 0,
+						"y": 64,
+						"z": 0,
+						"yaw": 0,
+						"pitch": 0
+					},
+					"lastActions": []
+				},
+				"target": {
+					"name": "Noah",
+					"id": 1,
+					"pose": {
+						"x": 1.5,
+						"y": 64,
+						"z": 1.5,
+						"yaw": 0,
+						"pitch": 0
+					},
+					"velocity": {
+						"x": 0,
+						"y": 0,
+						"z": 0
+					},
+					"speedLast0_3s": 0,
+					"speedLast1s": 0,
+					"flying": false,
+					"inLiquid": false,
+					"lookTarget": {
+						"x": 2,
+						"y": 64,
+						"z": 2
+					},
+					"lookBlock": "dirt",
+					"lookDistance": 1,
+					"lookHeldMs": 0,
+					"miningCell": null,
+					"placements": [
+						{
+							"cell": {
+								"x": 1,
+								"y": 64,
+								"z": 1
+							},
+							"block": "stone",
+							"ageMs": 25000
+						}
+					],
+					"idleSinceMs": null
+				},
+				"others": [],
+				"stopActiveForTarget": false,
+				"switchedFrom": null
+			},
+			"state": "Noah is 2.1 blocks south-east, standing still. Noah is looking at dirt 1.0 blocks ahead. You have not done anything yet.",
+			"criteriaAfter": {
+				"watch": "Watch Noah.",
+				"idle": "Wait."
+			},
+			"resultBefore": {
+				"category": "C-watch",
+				"label": "close, one old placement only (not a line)",
+				"expected": [
+					"watch"
+				],
+				"choice": "watch",
+				"maxP": 0.7011,
+				"correct": true
+			},
+			"resultAfter": {
+				"category": "C-watch",
+				"label": "close, one old placement only (not a line)",
+				"expected": [
+					"watch"
+				],
+				"choice": "watch",
+				"maxP": 0.899,
+				"correct": true
+			}
+		},
+		{
+			"label": "close, mining, watching the ore",
+			"category": "C-watch",
+			"expected": [
+				"watch"
+			],
+			"candidates": [
+				"watch",
+				"idle"
+			],
+			"helpBuildBlock": null,
+			"snapshot": {
+				"nowMs": 1000000,
+				"followDist": 2,
+				"bot": {
+					"pose": {
+						"x": 0,
+						"y": 64,
+						"z": 0,
+						"yaw": 0,
+						"pitch": 0
+					},
+					"lastActions": []
+				},
+				"target": {
+					"name": "Noah",
+					"id": 1,
+					"pose": {
+						"x": -2,
+						"y": 64,
+						"z": 0.5,
+						"yaw": 0,
+						"pitch": 0
+					},
+					"velocity": {
+						"x": 0,
+						"y": 0,
+						"z": 0
+					},
+					"speedLast0_3s": 0,
+					"speedLast1s": 0,
+					"flying": false,
+					"inLiquid": false,
+					"lookTarget": {
+						"x": -4,
+						"y": 63,
+						"z": 1
+					},
+					"lookBlock": "iron_ore",
+					"lookDistance": 2,
+					"lookHeldMs": 0,
+					"miningCell": {
+						"x": -4,
+						"y": 63,
+						"z": 1
+					},
+					"placements": [],
+					"idleSinceMs": null
+				},
+				"others": [],
+				"stopActiveForTarget": false,
+				"switchedFrom": null
+			},
+			"state": "Noah is 2.1 blocks west, standing still. Noah is looking at iron_ore 2.0 blocks ahead. You have not done anything yet.",
+			"criteriaAfter": {
+				"watch": "Watch Noah.",
+				"idle": "Wait."
+			},
+			"resultBefore": {
+				"category": "C-watch",
+				"label": "close, mining, watching the ore",
+				"expected": [
+					"watch"
+				],
+				"choice": "watch",
+				"maxP": 0.6711,
+				"correct": true
+			},
+			"resultAfter": {
+				"category": "C-watch",
+				"label": "close, mining, watching the ore",
+				"expected": [
+					"watch"
+				],
+				"choice": "watch",
+				"maxP": 0.893,
+				"correct": true
+			}
+		},
+		{
+			"label": "close, looking far off at grass",
+			"category": "C-watch",
+			"expected": [
+				"watch"
+			],
+			"candidates": [
+				"watch",
+				"idle"
+			],
+			"helpBuildBlock": null,
+			"snapshot": {
+				"nowMs": 1000000,
+				"followDist": 2,
+				"bot": {
+					"pose": {
+						"x": 0,
+						"y": 64,
+						"z": 0,
+						"yaw": 0,
+						"pitch": 0
+					},
+					"lastActions": []
+				},
+				"target": {
+					"name": "Noah",
+					"id": 1,
+					"pose": {
+						"x": 0.5,
+						"y": 64,
+						"z": 2,
+						"yaw": 0,
+						"pitch": 0
+					},
+					"velocity": {
+						"x": 0,
+						"y": 0,
+						"z": 0
+					},
+					"speedLast0_3s": 0,
+					"speedLast1s": 0,
+					"flying": false,
+					"inLiquid": false,
+					"lookTarget": {
+						"x": 0,
+						"y": 64,
+						"z": 7
+					},
+					"lookBlock": "grass",
+					"lookDistance": 5,
+					"lookHeldMs": 0,
+					"miningCell": null,
+					"placements": [],
+					"idleSinceMs": null
+				},
+				"others": [],
+				"stopActiveForTarget": false,
+				"switchedFrom": null
+			},
+			"state": "Noah is 2.1 blocks south, standing still. Noah is looking at grass 5.0 blocks ahead. You have not done anything yet.",
+			"criteriaAfter": {
+				"watch": "Watch Noah.",
+				"idle": "Wait."
+			},
+			"resultBefore": {
+				"category": "C-watch",
+				"label": "close, looking far off at grass",
+				"expected": [
+					"watch"
+				],
+				"choice": "watch",
+				"maxP": 0.6186,
+				"correct": true
+			},
+			"resultAfter": {
+				"category": "C-watch",
+				"label": "close, looking far off at grass",
+				"expected": [
+					"watch"
+				],
+				"choice": "watch",
+				"maxP": 0.8794,
+				"correct": true
+			}
+		},
+		{
+			"label": "stop active, oak_planks line otherwise valid",
+			"category": "D-stop",
+			"expected": [
+				"watch",
+				"idle"
+			],
+			"candidates": [
+				"watch",
+				"help_build",
+				"idle"
+			],
+			"helpBuildBlock": "oak_planks",
+			"snapshot": {
+				"nowMs": 1000000,
+				"followDist": 2,
+				"bot": {
+					"pose": {
+						"x": 0,
+						"y": 64,
+						"z": 0,
+						"yaw": 0,
+						"pitch": 0
+					},
+					"lastActions": []
+				},
+				"target": {
+					"name": "Noah",
+					"id": 1,
+					"pose": {
+						"x": 2.2,
+						"y": 64,
+						"z": 0,
+						"yaw": 0,
+						"pitch": 0
+					},
+					"velocity": {
+						"x": 0,
+						"y": 0,
+						"z": 0
+					},
+					"speedLast0_3s": 0,
+					"speedLast1s": 0,
+					"flying": false,
+					"inLiquid": false,
+					"lookTarget": {
+						"x": 5,
+						"y": 64,
+						"z": 0
+					},
+					"lookBlock": "stone",
+					"lookDistance": 2,
+					"lookHeldMs": 0,
+					"miningCell": null,
+					"placements": [
+						{
+							"cell": {
+								"x": 3,
+								"y": 64,
+								"z": 0
+							},
+							"block": "oak_planks",
+							"ageMs": 3500
+						},
+						{
+							"cell": {
+								"x": 4,
+								"y": 64,
+								"z": 0
+							},
+							"block": "oak_planks",
+							"ageMs": 2200
+						},
+						{
+							"cell": {
+								"x": 5,
+								"y": 64,
+								"z": 0
+							},
+							"block": "oak_planks",
+							"ageMs": 900
+						}
+					],
+					"idleSinceMs": null
+				},
+				"others": [],
+				"stopActiveForTarget": true,
+				"switchedFrom": null
+			},
+			"state": "Noah is 2.2 blocks east, standing still. Noah is looking at stone 2.0 blocks ahead. Noah placed oak_planks 3 times in the last 20 seconds, in a line going east. Noah broke one of your blocks: do not build for Noah now. You have not done anything yet.",
+			"criteriaAfter": {
+				"watch": "Watch Noah.",
+				"help_build": "Noah placed blocks in a line — add the next oak_planks.",
+				"idle": "Wait."
+			},
+			"resultBefore": {
+				"category": "D-stop",
+				"label": "stop active, oak_planks line otherwise valid",
+				"expected": [
+					"watch",
+					"idle"
+				],
+				"choice": "watch",
+				"maxP": 0.6079,
+				"correct": true
+			},
+			"resultAfter": {
+				"category": "D-stop",
+				"label": "stop active, oak_planks line otherwise valid",
+				"expected": [
+					"watch",
+					"idle"
+				],
+				"choice": "watch",
+				"maxP": 0.6742,
+				"correct": true
+			}
+		},
+		{
+			"label": "stop active, stone line otherwise valid",
+			"category": "D-stop",
+			"expected": [
+				"watch",
+				"idle"
+			],
+			"candidates": [
+				"watch",
+				"help_build",
+				"idle"
+			],
+			"helpBuildBlock": "stone",
+			"snapshot": {
+				"nowMs": 1000000,
+				"followDist": 2,
+				"bot": {
+					"pose": {
+						"x": 0,
+						"y": 64,
+						"z": 0,
+						"yaw": 0,
+						"pitch": 0
+					},
+					"lastActions": []
+				},
+				"target": {
+					"name": "Noah",
+					"id": 1,
+					"pose": {
+						"x": 0,
+						"y": 64,
+						"z": 2.4,
+						"yaw": 0,
+						"pitch": 0
+					},
+					"velocity": {
+						"x": 0,
+						"y": 0,
+						"z": 0
+					},
+					"speedLast0_3s": 0,
+					"speedLast1s": 0,
+					"flying": false,
+					"inLiquid": false,
+					"lookTarget": {
+						"x": 0,
+						"y": 64,
+						"z": 5
+					},
+					"lookBlock": "dirt",
+					"lookDistance": 2,
+					"lookHeldMs": 0,
+					"miningCell": null,
+					"placements": [
+						{
+							"cell": {
+								"x": 0,
+								"y": 64,
+								"z": 3
+							},
+							"block": "stone",
+							"ageMs": 3500
+						},
+						{
+							"cell": {
+								"x": 0,
+								"y": 64,
+								"z": 4
+							},
+							"block": "stone",
+							"ageMs": 2200
+						},
+						{
+							"cell": {
+								"x": 0,
+								"y": 64,
+								"z": 5
+							},
+							"block": "stone",
+							"ageMs": 900
+						}
+					],
+					"idleSinceMs": null
+				},
+				"others": [],
+				"stopActiveForTarget": true,
+				"switchedFrom": null
+			},
+			"state": "Noah is 2.4 blocks south, standing still. Noah is looking at dirt 2.0 blocks ahead. Noah placed stone 3 times in the last 20 seconds, in a line going south. Noah broke one of your blocks: do not build for Noah now. You have not done anything yet.",
+			"criteriaAfter": {
+				"watch": "Watch Noah.",
+				"help_build": "Noah placed blocks in a line — add the next stone.",
+				"idle": "Wait."
+			},
+			"resultBefore": {
+				"category": "D-stop",
+				"label": "stop active, stone line otherwise valid",
+				"expected": [
+					"watch",
+					"idle"
+				],
+				"choice": "watch",
+				"maxP": 0.5001,
+				"correct": true
+			},
+			"resultAfter": {
+				"category": "D-stop",
+				"label": "stop active, stone line otherwise valid",
+				"expected": [
+					"watch",
+					"idle"
+				],
+				"choice": "watch",
+				"maxP": 0.6278,
+				"correct": true
+			}
+		},
+		{
+			"label": "stop active, dirt line otherwise valid, another kid present",
+			"category": "D-stop",
+			"expected": [
+				"watch",
+				"idle"
+			],
+			"candidates": [
+				"watch",
+				"help_build",
+				"idle"
+			],
+			"helpBuildBlock": "dirt",
+			"snapshot": {
+				"nowMs": 1000000,
+				"followDist": 2,
+				"bot": {
+					"pose": {
+						"x": 0,
+						"y": 64,
+						"z": 0,
+						"yaw": 0,
+						"pitch": 0
+					},
+					"lastActions": []
+				},
+				"target": {
+					"name": "Noah",
+					"id": 1,
+					"pose": {
+						"x": -2,
+						"y": 64,
+						"z": 0.6,
+						"yaw": 0,
+						"pitch": 0
+					},
+					"velocity": {
+						"x": 0,
+						"y": 0,
+						"z": 0
+					},
+					"speedLast0_3s": 0,
+					"speedLast1s": 0,
+					"flying": false,
+					"inLiquid": false,
+					"lookTarget": {
+						"x": -5,
+						"y": 64,
+						"z": 1
+					},
+					"lookBlock": "stone",
+					"lookDistance": 2,
+					"lookHeldMs": 0,
+					"miningCell": null,
+					"placements": [
+						{
+							"cell": {
+								"x": -3,
+								"y": 64,
+								"z": 1
+							},
+							"block": "dirt",
+							"ageMs": 3500
+						},
+						{
+							"cell": {
+								"x": -4,
+								"y": 64,
+								"z": 1
+							},
+							"block": "dirt",
+							"ageMs": 2200
+						},
+						{
+							"cell": {
+								"x": -5,
+								"y": 64,
+								"z": 1
+							},
+							"block": "dirt",
+							"ageMs": 900
+						}
+					],
+					"idleSinceMs": null
+				},
+				"others": [
+					{
+						"name": "Mia",
+						"id": 3,
+						"pose": {
+							"x": 40,
+							"y": 64,
+							"z": 40,
+							"yaw": 0,
+							"pitch": 0
+						},
+						"velocity": {
+							"x": 0,
+							"y": 0,
+							"z": 0
+						},
+						"speedLast0_3s": 0,
+						"speedLast1s": 0,
+						"flying": false,
+						"inLiquid": false,
+						"lookTarget": null,
+						"lookBlock": null,
+						"lookDistance": null,
+						"lookHeldMs": 0,
+						"miningCell": null,
+						"placements": [],
+						"idleSinceMs": null
+					}
+				],
+				"stopActiveForTarget": true,
+				"switchedFrom": null
+			},
+			"state": "Noah is 2.1 blocks west, standing still. Noah is looking at stone 2.0 blocks ahead. Noah placed dirt 3 times in the last 20 seconds, in a line going west. Also here: Mia, 56.6 blocks south-east. Noah broke one of your blocks: do not build for Noah now. You have not done anything yet.",
+			"criteriaAfter": {
+				"watch": "Watch Noah.",
+				"help_build": "Noah placed blocks in a line — add the next dirt.",
+				"idle": "Wait."
+			},
+			"resultBefore": {
+				"category": "D-stop",
+				"label": "stop active, dirt line otherwise valid, another kid present",
+				"expected": [
+					"watch",
+					"idle"
+				],
+				"choice": "watch",
+				"maxP": 0.5602,
+				"correct": true
+			},
+			"resultAfter": {
+				"category": "D-stop",
+				"label": "stop active, dirt line otherwise valid, another kid present",
+				"expected": [
+					"watch",
+					"idle"
+				],
+				"choice": "watch",
+				"maxP": 0.687,
+				"correct": true
+			}
+		},
+		{
+			"label": "stop active, glass line otherwise valid, just switched target",
+			"category": "D-stop",
+			"expected": [
+				"watch",
+				"idle"
+			],
+			"candidates": [
+				"watch",
+				"help_build",
+				"idle"
+			],
+			"helpBuildBlock": "glass",
+			"snapshot": {
+				"nowMs": 1000000,
+				"followDist": 2,
+				"bot": {
+					"pose": {
+						"x": 0,
+						"y": 64,
+						"z": 0,
+						"yaw": 0,
+						"pitch": 0
+					},
+					"lastActions": []
+				},
+				"target": {
+					"name": "Noah",
+					"id": 1,
+					"pose": {
+						"x": 1.8,
+						"y": 64,
+						"z": -1.2,
+						"yaw": 0,
+						"pitch": 0
+					},
+					"velocity": {
+						"x": 0,
+						"y": 0,
+						"z": 0
+					},
+					"speedLast0_3s": 0,
+					"speedLast1s": 0,
+					"flying": false,
+					"inLiquid": false,
+					"lookTarget": {
+						"x": 4,
+						"y": 64,
+						"z": -3
+					},
+					"lookBlock": "stone",
+					"lookDistance": 2,
+					"lookHeldMs": 0,
+					"miningCell": null,
+					"placements": [
+						{
+							"cell": {
+								"x": 2,
+								"y": 64,
+								"z": -1
+							},
+							"block": "glass",
+							"ageMs": 3500
+						},
+						{
+							"cell": {
+								"x": 3,
+								"y": 64,
+								"z": -2
+							},
+							"block": "glass",
+							"ageMs": 2200
+						},
+						{
+							"cell": {
+								"x": 4,
+								"y": 64,
+								"z": -3
+							},
+							"block": "glass",
+							"ageMs": 900
+						}
+					],
+					"idleSinceMs": null
+				},
+				"others": [],
+				"stopActiveForTarget": true,
+				"switchedFrom": {
+					"name": "Julien",
+					"idleMs": 31000
+				}
+			},
+			"state": "Noah is 2.2 blocks north-east, standing still. Noah is looking at stone 2.0 blocks ahead. Noah placed glass 3 times in the last 20 seconds. You came to Noah because Julien stood still for 31 seconds. Noah broke one of your blocks: do not build for Noah now. You have not done anything yet.",
+			"criteriaAfter": {
+				"watch": "Watch Noah.",
+				"help_build": "Noah placed blocks in a line — add the next glass.",
+				"idle": "Wait."
+			},
+			"resultBefore": {
+				"category": "D-stop",
+				"label": "stop active, glass line otherwise valid, just switched target",
+				"expected": [
+					"watch",
+					"idle"
+				],
+				"choice": "watch",
+				"maxP": 0.5479,
+				"correct": true
+			},
+			"resultAfter": {
+				"category": "D-stop",
+				"label": "stop active, glass line otherwise valid, just switched target",
+				"expected": [
+					"watch",
+					"idle"
+				],
+				"choice": "watch",
+				"maxP": 0.6819,
+				"correct": true
+			}
+		},
+		{
+			"label": "stop active, cobblestone line otherwise valid",
+			"category": "D-stop",
+			"expected": [
+				"watch",
+				"idle"
+			],
+			"candidates": [
+				"watch",
+				"help_build",
+				"idle"
+			],
+			"helpBuildBlock": "cobblestone",
+			"snapshot": {
+				"nowMs": 1000000,
+				"followDist": 2,
+				"bot": {
+					"pose": {
+						"x": 0,
+						"y": 64,
+						"z": 0,
+						"yaw": 0,
+						"pitch": 0
+					},
+					"lastActions": []
+				},
+				"target": {
+					"name": "Noah",
+					"id": 1,
+					"pose": {
+						"x": 0.4,
+						"y": 64,
+						"z": 2.2,
+						"yaw": 0,
+						"pitch": 0
+					},
+					"velocity": {
+						"x": 0,
+						"y": 0,
+						"z": 0
+					},
+					"speedLast0_3s": 0,
+					"speedLast1s": 0,
+					"flying": false,
+					"inLiquid": false,
+					"lookTarget": {
+						"x": 0,
+						"y": 64,
+						"z": 5
+					},
+					"lookBlock": "stone",
+					"lookDistance": 2,
+					"lookHeldMs": 0,
+					"miningCell": null,
+					"placements": [
+						{
+							"cell": {
+								"x": 0,
+								"y": 64,
+								"z": 3
+							},
+							"block": "cobblestone",
+							"ageMs": 3500
+						},
+						{
+							"cell": {
+								"x": 0,
+								"y": 64,
+								"z": 4
+							},
+							"block": "cobblestone",
+							"ageMs": 2200
+						},
+						{
+							"cell": {
+								"x": 0,
+								"y": 64,
+								"z": 5
+							},
+							"block": "cobblestone",
+							"ageMs": 900
+						}
+					],
+					"idleSinceMs": null
+				},
+				"others": [],
+				"stopActiveForTarget": true,
+				"switchedFrom": null
+			},
+			"state": "Noah is 2.2 blocks south, standing still. Noah is looking at stone 2.0 blocks ahead. Noah placed cobblestone 3 times in the last 20 seconds, in a line going south. Noah broke one of your blocks: do not build for Noah now. You have not done anything yet.",
+			"criteriaAfter": {
+				"watch": "Watch Noah.",
+				"help_build": "Noah placed blocks in a line — add the next cobblestone.",
+				"idle": "Wait."
+			},
+			"resultBefore": {
+				"category": "D-stop",
+				"label": "stop active, cobblestone line otherwise valid",
+				"expected": [
+					"watch",
+					"idle"
+				],
+				"choice": "watch",
+				"maxP": 0.5719,
+				"correct": true
+			},
+			"resultAfter": {
+				"category": "D-stop",
+				"label": "stop active, cobblestone line otherwise valid",
+				"expected": [
+					"watch",
+					"idle"
+				],
+				"choice": "watch",
+				"maxP": 0.6302,
+				"correct": true
+			}
+		}
+	]
+}

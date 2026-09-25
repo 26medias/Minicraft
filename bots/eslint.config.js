@@ -1,9 +1,11 @@
 import tseslint from '@typescript-eslint/eslint-plugin';
 import prettierConfig from 'eslint-config-prettier';
 
+// No import-boundary rule here: eslint's `no-restricted-imports` patterns can't express "stay inside
+// bots/" (see test/boundary.test.ts, which enforces it by resolving paths instead).
 export default [
 	{
-		ignores: ['dist/**', 'packages/*/dist/**', 'node_modules/**', 'public/atlas.*', 'api/build/**', 'api/node_modules/**', 'docs/superpowers/reference/**', 'bots/**'],
+		ignores: ['node_modules/**', '.state/**'],
 	},
 	...tseslint.configs['flat/recommended'],
 	{

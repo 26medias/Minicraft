@@ -1,0 +1,17 @@
+{
+	"name": "minicraft-bots",
+	"version": "0.1.0",
+	"private": true,
+	"type": "module",
+	"scripts": {
+		"test": "vitest run",
+		"typecheck": "tsc -p tsconfig.json --noEmit",
+		"lint": "eslint .",
+		"bot": "tsx src/cli.ts",
+		"brains": "tsx src/brains-cli.ts",
+		"e2e": "tsx test/e2e.ts"
+	},
+	"dependencies": {
+		"minicraft-bot": "file:../packages/minicraft-bot"
+	}
+}

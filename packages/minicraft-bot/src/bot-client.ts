@@ -12,7 +12,7 @@ import { MpClient, type MpHandlers, type MpState } from '../../../src/net/mp-cli
 import { MpApi } from '../../../src/net/mp-api';
 import { GIVE_UP_MS, Reconnector } from '../../../src/game/mp-reconnect';
 import { isRemovableId, miningDuration } from '../../../src/game/tools';
-import { EYE_HEIGHT, WALK_SPEED } from '../../../src/game/player-constants';
+import { EYE_HEIGHT, FLY_SPEED, WALK_SPEED } from '../../../src/game/player-constants';
 import { NEWEST_GEN_VERSION } from '../../../src/engine/world/generation';
 import { AIR, BLOCKS, BLOCK_BY_NAME, isLiquid, isSolid } from '../../../src/data/blocks.data';
 import {
@@ -87,7 +87,7 @@ export type BotPlayer = {
 /** `spawn`: the server's spawn mode, with x … pitch where the bot was actually placed (its first pose). */
 export type ConnectResult = { you: number; spawn: Spawn; players: BotPlayer[]; world: BotWorld };
 
-/** How a `walkTo` ended without being blocked. */
+/** How a `walkTo` or `flyTo` ended without being blocked. */
 export type WalkResult = 'arrived' | 'cancelled';
 
 /** One of the bot's own edits: the cell, what was there, what the bot put, and when (`Date.now()`). */
@@ -117,7 +117,16 @@ export type BotEvents = {
 };
 
 type State = 'idle' | 'connecting' | 'connected' | 'reconnecting' | 'closed';
-type Walk = { tx: number; tz: number; falling: boolean; resolve: (r: WalkResult) => void; reject: (e: BlockedError) => void };
+type Settle = { resolve: (r: WalkResult) => void; reject: (e: BlockedError) => void };
+type Walk = Settle & { kind: 'walk'; tx: number; tz: number; falling: boolean };
+/**
+ * `ticks` / `maxTicks`: a backstop that rejects `wall` if a flight never settles. No geometry found (unit
+ * tests, a 400-flight fuzz) reaches it; it only guarantees a flight can't run forever.
+ * `climbed`: the last move was a climb, and no clear horizontal step has happened since.
+ */
+type Flight = Settle & { kind: 'fly'; tx: number; ty: number; tz: number; startY: number; ticks: number; maxTicks: number; climbed: boolean };
+/** walkTo and flyTo share one movement slot: starting either cancels the other. */
+type Motion = Walk | Flight;
 type Mining = { x: number; y: number; z: number; timer: ReturnType<typeof setTimeout>; resolve: (ok: boolean) => void };
 type SavedState = { bid?: string; world?: string; journal?: JournalEntry[] };
 
@@ -130,6 +139,15 @@ const STEP = (WALK_SPEED * POS_EVERY_MS) / 1000;
 const ARRIVE = 0.3;
 /** The largest drop per pose step while walking. */
 const MAX_DROP = 2;
+/** A step-up's jump: the first pose rises this share of the step, the next one lands (spec §12b). */
+const JUMP_ARC = 0.6;
+/** Blocks per pose step while flying (1.0). */
+const FLY_STEP = (FLY_SPEED * POS_EVERY_MS) / 1000;
+/** flyTo climbs at most this far above the flight's start y. */
+const FLY_CLIMB_MAX = 16;
+/** The player's body box: x ± 0.3, z ± 0.3, feet to feet + 1.8 (the game's player SIZE). */
+const BODY_HALF = 0.3;
+const BODY_HEIGHT = 1.8;
 /** The oldest journal entries are dropped beyond this. */
 const JOURNAL_MAX = 10_000;
 const BEDROCK_ID = BLOCK_BY_NAME['bedrock'].id;
@@ -225,7 +243,13 @@ export class BotClient {
 	private others = new Map<number, BotPlayer>();
 	private lastKey = '';
 	private posTimer: ReturnType<typeof setInterval> | null = null;
-	private walk: Walk | null = null;
+	/** Pose ticks so far. */
+	private tickNo = 0;
+	/** Added to the SENT y for the current tick only: a step-up's jump is display-only, `cur` stays on the ground. */
+	private lift = 0;
+	/** The tick and position of the last jump pose: a walk step from there on the next tick lands instead of jumping again. */
+	private arc: { tick: number; x: number; y: number; z: number } | null = null;
+	private motion: Motion | null = null;
 	private mining: Mining | null = null;
 	/** Edits (and revert) run one after another through this chain. */
 	private chain: Promise<unknown> = Promise.resolve();
@@ -302,30 +326,74 @@ export class BotClient {
 
 	/**
 	 * Sets the bot's pose. Sent at most once per POS_EVERY_MS (the latest pose wins); an unchanged pose is
-	 * not re-sent. A jump over 8 blocks snaps on the kids' screens. Cancels a walk (it resolves 'cancelled').
+	 * not re-sent. A jump over 8 blocks snaps on the kids' screens. Cancels a walk or a flight (it resolves
+	 * 'cancelled').
 	 */
 	move(pose: PoseInput): void {
 		this.assertConnected('move');
 		finite('move', pose.x, pose.y, pose.z, pose.yaw ?? 0, pose.pitch ?? 0);
-		this.cancelWalk();
+		this.cancelMotion();
 		this.cur = { x: pose.x, y: pose.y, z: pose.z, yaw: pose.yaw ?? this.cur.yaw, pitch: clampPitch(pose.pitch ?? this.cur.pitch) };
 	}
 
 	/**
 	 * Walks in a straight line to (x, z) at WALK_SPEED, one pose per POS_EVERY_MS, feet on `groundY` at each
-	 * step, facing the way it goes. Steps up at most 1 block and drops at most 2 per step (a deeper drop
-	 * continues on the next steps before moving on). Not pathfinding: it checks only the centre column
-	 * (it can clip wall corners), and a wall or a cliff it can't climb rejects with `BlockedError`.
-	 * Resolves 'arrived' within 0.3 blocks, or 'cancelled' when a new `walkTo`, a `move`, a lost
-	 * connection or `close()` ends it. `lookAt` and `mine` don't cancel it.
+	 * step, facing the way it goes. Steps up at most 1 block, shown as a jump over 2 poses (+0.6 of the step
+	 * in place, then it lands on it; so each step-up costs 1 extra tick). The jump is display-only: `pose()`
+	 * stays on the ground. It drops at most 2 per step (a deeper drop continues on the next steps
+	 * before moving on). Not pathfinding: it checks only the centre column (it can clip wall corners), and a
+	 * wall or a cliff it can't climb rejects with `BlockedError`. Resolves 'arrived' within 0.3 blocks, or
+	 * 'cancelled' when a new `walkTo` or `flyTo`, a `move`, a lost connection or `close()` ends it. `lookAt`
+	 * and `mine` don't cancel it.
 	 */
 	walkTo(target: { x: number; z: number }): Promise<WalkResult> {
 		this.assertConnected('walkTo');
 		finite('walkTo', target.x, target.z);
-		this.cancelWalk();
+		this.cancelMotion();
 		if (this.state !== 'connected') return Promise.resolve('cancelled');
 		return new Promise<WalkResult>((resolve, reject) => {
-			this.walk = { tx: target.x, tz: target.z, falling: false, resolve, reject };
+			this.motion = { kind: 'walk', tx: target.x, tz: target.z, falling: false, resolve, reject };
+		});
+	}
+
+	/**
+	 * Flies in a straight 3D line to (x, y, z) (the feet) at FLY_SPEED, one pose per POS_EVERY_MS (never more
+	 * than 1 block per pose, so it never snaps on the kids' screens), facing the target. The body box
+	 * (x ± 0.3, z ± 0.3, feet to feet + 1.8) never enters a solid block: when the next step would, it moves
+	 * horizontally if that is clear, else drops toward the target's height if the way across is open there,
+	 * else climbs straight up (+1 per pose, each climb pose clear too) until it can go on, at most 16 blocks
+	 * above the flight's start y and below the world top. After a climb it doesn't dive back down before it
+	 * has moved across (no bobbing). Ends exactly on the target. Rejects `BlockedError{wall}` when it can't go
+	 * on (a ceiling, an enclosure, a wall over 16 high) and whenever it is straight above or below the target
+	 * and blocked (a target under a roof or an overhang, even one open at the side, or inside solid blocks),
+	 * and `BlockedError{noGround}` for a target outside the world. Shares
+	 * `walkTo`'s slot: a new `walkTo` or `flyTo`, a `move`, a lost connection or `close()` resolves it
+	 * 'cancelled' (never a rejection). `lookAt` and `mine` don't cancel it.
+	 */
+	flyTo(target: { x: number; y: number; z: number }): Promise<WalkResult> {
+		this.assertConnected('flyTo');
+		finite('flyTo', target.x, target.y, target.z);
+		this.cancelMotion();
+		if (this.state !== 'connected') return Promise.resolve('cancelled');
+		const w = this.core!;
+		if (!w.inBounds(target.x, target.y, target.z) || target.y + BODY_HEIGHT > w.height) {
+			return Promise.reject(new BlockedError({ ...this.cur }, 'noGround', 'flyTo'));
+		}
+		const c = this.cur;
+		const d0 = Math.hypot(target.x - c.x, target.y - c.y, target.z - c.z);
+		return new Promise<WalkResult>((resolve, reject) => {
+			this.motion = {
+				kind: 'fly',
+				tx: target.x,
+				ty: target.y,
+				tz: target.z,
+				startY: c.y,
+				ticks: 0,
+				maxTicks: Math.ceil((4 * (d0 + 2 * FLY_CLIMB_MAX)) / FLY_STEP) + 20,
+				climbed: false,
+				resolve,
+				reject,
+			};
 		});
 	}
 
@@ -369,7 +437,8 @@ export class BotClient {
 	 * Mines a block the way a kid does with the hand: faces it, sends `fx mine` (the kids see cracks), waits
 	 * `ms` (default: the hand's mining time for that block), then breaks it. Resolves false (no fx) for a
 	 * block that can't be mined (air, liquid, bedrock), and false with `fx mine-stop` when cancelled by a
-	 * new `mine`, a lost connection or `close()`. Doesn't cancel a walk.
+	 * new `mine`, a lost connection or `close()`, or when the cell no longer holds the block it started on
+	 * just before the break (a kid changed it). Doesn't cancel a walk or a flight.
 	 */
 	mine(x: number, y: number, z: number, ms?: number): Promise<boolean> {
 		this.assertConnected('mine');
@@ -390,7 +459,18 @@ export class BotClient {
 				timer: setTimeout(() => {
 					if (this.mining !== m) return;
 					this.mining = null;
-					resolve(this.state === 'connected' ? this.break(fx, fy, fz) : false);
+					if (this.state !== 'connected') return resolve(false);
+					// Re-checked inside the edit function (spec §7): the break runs after the edit gap, and a kid may
+					// have put another block in the cell by then. Never destroy it.
+					resolve(
+						this.edit(() => {
+							if (this.core!.getBlock(fx, fy, fz) !== id) {
+								this.send({ t: 'fx', kind: 'mine-stop', x: fx, y: fy, z: fz });
+								return false;
+							}
+							return this.write(fx, fy, fz, AIR);
+						}),
+					);
 				}, dur),
 			};
 			this.mining = m;
@@ -460,7 +540,7 @@ export class BotClient {
 		};
 	}
 
-	/** Leaves the world: cancels a walk and a mine (with `mine-stop`), closes the socket, emits `close(1000)`. */
+	/** Leaves the world: cancels a walk or flight and a mine (with `mine-stop`), closes the socket, emits `close(1000)`. */
 	close(): void {
 		if (this.state === 'closed') return;
 		if (this.state === 'idle') {
@@ -630,7 +710,7 @@ export class BotClient {
 		this.state = 'reconnecting';
 		this.mp = null;
 		this.stopPosTimer();
-		this.cancelWalk();
+		this.cancelMotion();
 		this.cancelMine();
 		this.reconnector = new Reconnector({
 			probe: () => this.api.listWorlds(),
@@ -663,7 +743,7 @@ export class BotClient {
 		this.stopPosTimer();
 		this.reconnector?.stop();
 		this.reconnector = null;
-		this.cancelWalk();
+		this.cancelMotion();
 		if (stopMine) this.cancelMine();
 		this.mp?.close(1000);
 		this.mp = null;
@@ -692,13 +772,22 @@ export class BotClient {
 
 	private tick(): void {
 		if (this.state !== 'connected') return;
-		if (this.walk) this.stepWalk(this.walk);
-		if (poseKey(this.cur) !== this.lastKey) this.sendPose();
+		this.tickNo++;
+		this.lift = 0;
+		const m = this.motion;
+		if (m?.kind === 'walk') this.stepWalk(m);
+		else if (m?.kind === 'fly') this.stepFly(m);
+		if (poseKey(this.shown()) !== this.lastKey) this.sendPose();
+	}
+
+	/** The pose the kids see: `cur`, plus this tick's jump lift. */
+	private shown(): Pose {
+		return { ...this.cur, y: this.cur.y + this.lift };
 	}
 
 	private sendPose(): void {
-		const { x, y, z, yaw, pitch } = this.cur;
-		if (this.send({ t: 'pos', x, y, z, yaw, pitch })) this.lastKey = poseKey(this.cur);
+		const p = this.shown();
+		if (this.send({ t: 'pos', x: p.x, y: p.y, z: p.z, yaw: p.yaw, pitch: p.pitch })) this.lastKey = poseKey(p);
 	}
 
 	private stepWalk(w: Walk): void {
@@ -720,6 +809,20 @@ export class BotClient {
 		const ny = world.groundY(nx, nz, cur.y);
 		if (ny === null) return this.blocked(w, 'noGround');
 		if (ny > cur.y + 1) return this.blocked(w, 'wall');
+		if (ny > cur.y) {
+			// A step up (spec §12b): one tick shows the jump (+0.6 of the step, in place), the next lands on it.
+			// Display-only: `cur` stays on the ground, so pose(), a cancel or a new walkTo start from there, and
+			// a walk re-issued every tick still lands on the tick after the jump.
+			const a = this.arc;
+			this.arc = null;
+			const landing = a !== null && a.tick === this.tickNo - 1 && a.x === cur.x && a.y === cur.y && a.z === cur.z;
+			if (!landing) {
+				cur.yaw = Math.atan2(-dx, -dz);
+				this.lift = JUMP_ARC * (ny - cur.y);
+				this.arc = { tick: this.tickNo, x: cur.x, y: cur.y, z: cur.z };
+				return;
+			}
+		}
 		// A drop: the body must fit into the next column at its current height, or it would walk through a
 		// wall standing over a cave (groundY scans down past solid blocks).
 		const fy = Math.floor(cur.y);
@@ -732,21 +835,77 @@ export class BotClient {
 		if (!w.falling && Math.hypot(w.tx - nx, w.tz - nz) <= ARRIVE) this.arrive(w);
 	}
 
-	private arrive(w: Walk): void {
-		if (this.walk === w) this.walk = null;
-		w.resolve('arrived');
+	private stepFly(f: Flight): void {
+		const cur = this.cur;
+		if (++f.ticks > f.maxTicks) return this.blocked(f, 'wall');
+		const dx = f.tx - cur.x, dy = f.ty - cur.y, dz = f.tz - cur.z;
+		const d = Math.hypot(dx, dy, dz), h = Math.hypot(dx, dz);
+		if (d <= 1e-9) return this.arrive(f);
+		this.face(f.tx, f.ty + EYE_HEIGHT, f.tz);
+		const hs = Math.min(h, FLY_STEP);
+		const hx = h > 1e-9 ? cur.x + (dx / h) * hs : cur.x, hz = h > 1e-9 ? cur.z + (dz / h) * hs : cur.z;
+		const hClear = h > 1e-9 && this.bodyClear(hx, cur.y, hz);
+		// No bobbing: after a climb, it doesn't dive back down before it has moved across at the climbed height.
+		const hold = f.climbed && dy < 0 && h > 1e-9;
+		// 1. Straight toward the target.
+		const s = Math.min(d, FLY_STEP);
+		if (!hold && s === d && this.bodyClear(f.tx, f.ty, f.tz)) {
+			Object.assign(cur, { x: f.tx, y: f.ty, z: f.tz });
+			return this.arrive(f);
+		}
+		const nx = cur.x + (dx / d) * s, ny = cur.y + (dy / d) * s, nz = cur.z + (dz / d) * s;
+		if (!hold && s < d && this.bodyClear(nx, ny, nz)) return void Object.assign(cur, { x: nx, y: ny, z: nz });
+		// 2. Horizontally, at the same height.
+		if (hClear) {
+			f.climbed = false;
+			return void Object.assign(cur, { x: hx, z: hz });
+		}
+		// 3. Straight down toward the target's height when the way across is open at that height (under an
+		// overhang open at the side), unless it just climbed.
+		if (dy < 0 && h > 1e-9 && !f.climbed) {
+			const vy = cur.y - Math.min(-dy, FLY_STEP);
+			if (this.bodyClear(cur.x, vy, cur.z) && this.bodyClear(hx, f.ty, hz)) return void (cur.y = vy);
+		}
+		// Straight above or below the target and blocked: climbing can't help. That is any blocked target
+		// straight up or down: sealed under a roof, under an overhang open at the side, or inside solid blocks.
+		if (h <= 1e-9) return this.blocked(f, 'wall');
+		// 4. The body already clips a block (walkTo checks only the centre column): to the column's centre first.
+		const cx = Math.floor(cur.x) + 0.5, cz = Math.floor(cur.z) + 0.5;
+		if (!this.bodyClear(cur.x, cur.y, cur.z) && (cx !== cur.x || cz !== cur.z) && this.bodyClear(cx, cur.y, cz)) {
+			return void Object.assign(cur, { x: cx, z: cz });
+		}
+		// 5. Straight up, within the climb cap and the world, and only into a clear body box.
+		const uy = cur.y + FLY_STEP;
+		if (uy > f.startY + FLY_CLIMB_MAX + 1e-9 || uy + BODY_HEIGHT > this.core!.height || !this.bodyClear(cur.x, uy, cur.z)) return this.blocked(f, 'wall');
+		cur.y = uy;
+		f.climbed = true;
 	}
 
-	private blocked(w: Walk, reason: 'wall' | 'noGround'): void {
-		if (this.walk === w) this.walk = null;
-		w.reject(new BlockedError({ ...this.cur }, reason));
+	/** True when the body box at feet (x, y, z) overlaps no solid block (touching a face is allowed). */
+	private bodyClear(x: number, y: number, z: number): boolean {
+		const w = this.core!;
+		const e = 1e-6;
+		for (let bx = Math.floor(x - BODY_HALF + e); bx <= Math.floor(x + BODY_HALF - e); bx++)
+			for (let by = Math.floor(y + e); by <= Math.floor(y + BODY_HEIGHT - e); by++)
+				for (let bz = Math.floor(z - BODY_HALF + e); bz <= Math.floor(z + BODY_HALF - e); bz++) if (isSolid(w.getBlock(bx, by, bz))) return false;
+		return true;
 	}
 
-	private cancelWalk(): void {
-		const w = this.walk;
-		if (!w) return;
-		this.walk = null;
-		w.resolve('cancelled');
+	private arrive(m: Motion): void {
+		if (this.motion === m) this.motion = null;
+		m.resolve('arrived');
+	}
+
+	private blocked(m: Motion, reason: 'wall' | 'noGround'): void {
+		if (this.motion === m) this.motion = null;
+		m.reject(new BlockedError({ ...this.cur }, reason, m.kind === 'fly' ? 'flyTo' : 'walkTo'));
+	}
+
+	private cancelMotion(): void {
+		const m = this.motion;
+		if (!m) return;
+		this.motion = null;
+		m.resolve('cancelled');
 	}
 
 	private face(x: number, y: number, z: number): void {

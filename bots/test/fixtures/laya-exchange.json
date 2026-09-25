@@ -1,0 +1,48 @@
+{
+	"request": {
+		"state": "Noah is 6.2 blocks north-east, walking. Noah is looking at stone 2.0 blocks ahead. Noah placed oak_planks 3 times in the last 20 seconds, in a line going east. You last followed Noah.",
+		"questions": {
+			"next": {
+				"type": "choice",
+				"instructions": "You are a friendly companion in a block game. Pick your next action.",
+				"criteria": {
+					"follow": "walk closer to Noah",
+					"watch": "look at what Noah is looking at",
+					"help_build": "place oak_planks at the end of Noah's line",
+					"idle": "do nothing"
+				}
+			}
+		}
+	},
+	"response": {
+		"model": "laya-rl-agent",
+		"answers": {
+			"next": {
+				"type": "choice",
+				"choice": "help_build",
+				"probabilities": { "follow": 0.2367, "watch": 0.2469, "help_build": 0.4168, "idle": 0.0996 },
+				"confidence": 0.076,
+				"answer_confidence": 0.4168,
+				"action": { "act_probability": 1.0 }
+			}
+		},
+		"usage": { "input_tokens": 110, "output_tokens": 0 },
+		"routing": {
+			"model": "english",
+			"repo": "convaiinnovations/laya",
+			"reason": "English Latin text",
+			"detection": {
+				"script": "latin",
+				"script_profile": { "latin": 1.0 },
+				"language": "en",
+				"is_english": true,
+				"language_undecided": false,
+				"diacritic_rate": 0.0,
+				"non_latin_fraction": 0.0,
+				"mixed_segment": null
+			},
+			"workflow": null
+		}
+	},
+	"note": "Recorded live against the real Laya server (laya-serve, english checkpoint) on 127.0.0.1, gate 2 rigour review, 2026-09-25. Never laya/tests/test_serve.py's fake router. best = 'help_build' (the recorded choice); confidence must be computed as max(p) over the offered options (0.4168, equal here to answer_confidence, NOT the calibrated entropy-based confidence field 0.076)."
+}

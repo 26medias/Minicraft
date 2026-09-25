@@ -1144,6 +1144,7 @@ const B_WHO: Who = { name: 'Bo', skin: 'jj' };
 				const logStart = await b.evaluate(() => (window as any).__mc.mp.log.length as number);
 				await sleep(Math.max(0, 6_000 - (Date.now() - lastGrantAt)));
 				await a.close();
+				A = null; // a failure below leaves no closed page for later scenarios
 				const aLeft = await b.waitForFunction(([id, from]) => (window as any).__mc.mp.log.slice(from).some((m: any) => m.t === 'left' && m.id === id), [aId, logStart] as const, { timeout: 20_000 }).then(() => true, () => false);
 				check(aLeft, "B's log shows A left");
 				if (!aLeft) return;
@@ -1159,6 +1160,7 @@ const B_WHO: Who = { name: 'Bo', skin: 'jj' };
 					const m = (window as any).__mc;
 					return { stash: sessionStorage.getItem('mp:extras'), big: m.player.inventory.big_tnt ?? 0, emerald: m.player.inventory.deepslate_emerald_ore ?? 0, owned: [...m.player.tools.owned] as number[], playtime: m.playtime !== null };
 				});
+				check(back.stash === null, `the fresh context's stash is empty, so only the server supplies the state (${back.stash})`);
 				check(back.big === want0.big, `after the rejoin big_tnt is ${want0.big} (got ${back.big})`);
 				check(back.emerald === want0.emerald, `after the rejoin deepslate_emerald_ore is ${want0.emerald} (got ${back.emerald})`);
 				check(back.owned.includes(4), `after the rejoin tier 4 is owned (${JSON.stringify(back.owned)})`);
@@ -1175,9 +1177,11 @@ const B_WHO: Who = { name: 'Bo', skin: 'jj' };
 				const was = await a.evaluate((c) => (window as any).__mc.world.getBlock(c[0], c[1], c[2]) as number, cell);
 				check(was === 0, `the target cell ${cell} is air before placing (got ${was})`);
 				if (was !== 0) return;
-				// The renderer's canvas is the first one in #app; the click requests pointer lock.
-				await a.locator('canvas').first().click();
-				const locked = await a.waitForFunction(() => document.pointerLockElement === document.querySelector('canvas'), null, { timeout: 5_000 }).then(() => true, () => false);
+				// The renderer's canvas: #app's child that three.js tags data-engine (the minimap is a canvas there too). The click requests pointer lock.
+				const canvases = await a.locator('#app > canvas[data-engine]').count();
+				check(canvases === 1, `#app > canvas[data-engine] is exactly one element (${canvases})`);
+				await a.locator('#app > canvas[data-engine]').click();
+				const locked = await a.waitForFunction(() => document.pointerLockElement === document.querySelector('#app > canvas[data-engine]'), null, { timeout: 5_000 }).then(() => true, () => false);
 				// STOP AND REPORT if this fails: never replace the real right-click with setBlock or a synthetic event.
 				check(locked, 'A has pointer lock on the game canvas');
 				if (!locked) return;
@@ -1560,7 +1564,7 @@ const B_WHO: Who = { name: 'Bo', skin: 'jj' };
 						await p.click(`#mp-worlds .world-row[data-id="${WORLD}"]`);
 						await p.click('#mp-play');
 						const updating = await p.waitForSelector('#mp-updating', { timeout: 20_000 }).then(() => true, () => false);
-						check(updating && (await p.locator('#mp-updating').innerText().catch(() => '')).includes('Updating Minicraft…'), 'the page shows "Updating Minicraft…"');
+						check(updating && (await p.locator('#mp-updating').innerText().catch(() => '')).includes("Updating Noah's Worlds…"), 'the page shows "Updating Noah\'s Worlds…"');
 						const navigated = await p.waitForURL(/[?&]v=\d+/, { timeout: 10_000 }).then(() => true, () => false);
 						check(navigated, `then it reloads itself with v= in the URL (${p.url()})`);
 						// The reloaded page rejoins by autojoin, is refused again, and falls back to the click screen.

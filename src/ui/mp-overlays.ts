@@ -55,7 +55,7 @@ export class MpOverlays {
 
 	/**
 	 * Spec §5 fatal screens. 4001: "You opened the game somewhere else." with one big Menu button.
-	 * 4004/4005: "Minicraft was updated — click to reload". `onClick` reloads either way.
+	 * 4004/4005: "Noah's Worlds was updated — click to reload". `onClick` reloads either way.
 	 */
 	showFatal(kind: FatalScreen, onClick: () => void): void {
 		this.hideReconnecting();
@@ -84,7 +84,7 @@ export class MpOverlays {
 	}
 
 	/**
-	 * Spec §5 outdated auto-reload: "Updating Minicraft…" for UPDATING_SCREEN_MS, no button — the
+	 * Spec §5 outdated auto-reload: "Updating Noah's Worlds…" for UPDATING_SCREEN_MS, no button — the
 	 * caller schedules the reload itself.
 	 */
 	showUpdating(): void {
@@ -95,7 +95,7 @@ export class MpOverlays {
 		el.className = 'mp-screen';
 		const title = document.createElement('div');
 		title.className = 'mp-screen-title';
-		title.textContent = 'Updating Minicraft…';
+		title.textContent = "Updating Noah's Worlds…";
 		el.appendChild(title);
 		this.app.appendChild(el);
 		this.fatalEl = el;

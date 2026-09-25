@@ -88,8 +88,8 @@ In fly or swim mode: pitch the camera up to ascend, down to descend — W moves 
 - **Shift + Right click** — replace the block you're aiming at with the selected one (instead of building next to it).
 - The face you're aiming at is highlighted when it's close enough to reach.
 - **1..9** — select a hotbar slot directly.
-- **Tab** / **Shift+Tab** — cycle through hotbar slots.
-- **I** — open / close the block inventory.
+- **Tab** / **Shift+Tab** — cycle through hotbar slots (not while the inventory's Blocks tab is open).
+- **I** — open the inventory. On its Blocks tab the search box has the keyboard, so I types there and **Esc** clears it, then closes; see `docs/inventory.md`.
 - **E** — ignite TNT in the crosshair. A pulsing red overlay appears during the fuse (~2.5s); other TNT caught in the blast chain-primes with a short delay for satisfying cascades. Mining a primed TNT before it blows cancels the fuse.
 - **C** — open the light-color picker (20-tile pastel palette). If you're aimed at a lamp block when you press C, selecting a color recolors *that* lamp and sets the default for future placements. If you're not aimed at a lamp, the color becomes the default.
 

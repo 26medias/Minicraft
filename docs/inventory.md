@@ -7,8 +7,9 @@ install has textures for, grouped (BASICS, WOOD, STONE, …). Click a tile to pu
 it in the selected hotbar slot. On the Craft tab, digits and Tab change the
 slot and Esc or I closes the screen. On the Blocks tab the search box has the
 keyboard as soon as the screen opens: letters (I included), digits, Space and
-Tab stay in the box, and Esc clears the text, then closes. The 9-slot hotbar is saved with each world. Saves
-from before the inventory come up with the default bar once.
+Tab stay in the box, and Esc clears the text, then closes. The 9-slot hotbar is
+saved with each world. Saves from before the inventory come up with the default
+bar once.
 
 Only whole cubes are listed. No stairs, slabs, fences, doors, torches,
 flowers, glass panes, chests, beds, signs, candles or shulker boxes: the engine

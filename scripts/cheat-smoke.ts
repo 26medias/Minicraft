@@ -21,9 +21,11 @@ if (!Number.isInteger(PORT) || PORT === 5173 || PORT === 8080) {
 const DEAD_API = 'http://127.0.0.1:9099';
 let stopDev: (() => void) | null = null;
 const failures: string[] = [];
+let passes = 0;
 function check(ok: boolean, what: string) {
 	console.log(`${ok ? 'ok  ' : 'FAIL'} ${what}`);
-	if (!ok) failures.push(what);
+	if (ok) passes++;
+	else failures.push(what);
 }
 
 async function startDev(): Promise<() => void> {
@@ -93,6 +95,8 @@ for (const sig of ['SIGINT', 'SIGTERM', 'SIGHUP'] as const) process.on(sig, () =
 	const browser = await chromium.launch({ headless: true });
 	try {
 		const page = await browser.newPage({ viewport: { width: 1280, height: 720 } });
+		// A missing element fails in 10 s, not Playwright's default 30 s per action.
+		page.setDefaultTimeout(10_000);
 		await guard(page);
 		await page.addInitScript('window.__name = (f) => f;');
 		await page.goto(`http://localhost:${PORT}/`);
@@ -270,6 +274,9 @@ for (const sig of ['SIGINT', 'SIGTERM', 'SIGHUP'] as const) process.on(sig, () =
 	process.exit(failures.length === 0 ? 0 : 1);
 })().catch((e) => {
 	console.error(e);
+	check(false, `threw: ${(e as Error).message ?? e}`);
 	stopDev?.();
+	console.log(`cheat-smoke: ${passes} ok, ${failures.length} FAIL`);
+	console.log(`cheat-smoke: ${failures.length} FAIL`);
 	process.exit(1);
 });

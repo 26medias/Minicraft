@@ -9,7 +9,7 @@ import type { StorageLike } from '../net/mp-sync';
 export const AUTO_RELOAD_KEY = 'minicraft:v1:autoReloadAt';
 /** The loop guard: a marker inside this window blocks a second automatic reload. */
 export const AUTO_RELOAD_WINDOW_MS = 300_000;
-/** How long the "Updating Minicraft…" screen stays up before the reload. */
+/** How long the "Updating Noah's Worlds…" screen stays up before the reload. */
 export const UPDATING_SCREEN_MS = 2_000;
 
 /**

@@ -12,7 +12,7 @@ export type FatalDeps = {
 	reload: () => void;
 	/** A full-screen message whose one button reloads (4001: Menu; 4004/4005: reload). */
 	showScreen: (kind: FatalScreen) => void;
-	/** Outdated auto-reload (spec §5): the "Updating Minicraft…" screen, no button. */
+	/** Outdated auto-reload (spec §5): the "Updating Noah's Worlds…" screen, no button. */
 	showUpdating: () => void;
 	/** `location.replace`, injected so a test never actually navigates. */
 	replace: (url: string) => void;
@@ -34,7 +34,7 @@ const REASON: Partial<Record<number, string>> = {
  * A close that must not reconnect (spec §5). Gate-2 K2: `mp:autojoin` is cleared FIRST, before any
  * screen or reload, so no fatal close can loop.
  * - 4001: "You opened the game somewhere else." with a Menu button.
- * - 4004/4005 (and two 4003s in a row, reported by MpClient as 4004): "Minicraft was updated".
+ * - 4004/4005 (and two 4003s in a row, reported by MpClient as 4004): "Noah's Worlds was updated".
  * - 4006–4009: a one-shot reason, then a reload into the Multiplayer screens.
  *
  * One deliberate exception to K2 (spec §5, gate-2 §12a): a 4004 whose last `error` message was the

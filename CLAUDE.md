@@ -31,7 +31,8 @@ liquids, TNT), `src/ui/`, `src/persistence/`, `src/data/` (`*.data.ts` are pure
 data), `src/net/` (multiplayer client: protocol, snapshot codec, socket, sync).
 `api/` holds the Cloud Function for cloud saves and deploys separately. `server/`
 holds `mcserver`, the Go + SQLite multiplayer relay (runbook: `server/README.md`;
-Go is at `~/.local/go/bin`).
+Go is at `~/.local/go/bin`). `bots/` holds local TypeScript bots (a companion
+that joins a world as a player; runbook: `bots/README.md`).
 
 Per-subsystem docs live in `docs/`: `lighting.md`, `liquids.md`, `movement.md`, `worldgen.md`, `worldgen-from-seed.md` (rebuild reference), `performance.md`,
 `persistence.md`, `inventory.md`, `crafting.md`, `playtime.md`, `multiplayer.md`, `protocol.md`. `docs/specs.md` is the source of truth for the tech stack.
@@ -47,6 +48,10 @@ server runs on Julien's desktop (systemd user units `minicraft-server` and
 `server/README.md`. Multiplayer tests start their own local `mcserver` on a temp
 database. Never write the live multiplayer URL or token to `.env.local`: they are
 passed to the production build only. Never stop the live server with SIGKILL.
+
+⚠ `bots/` holds local bots (never deployed); the live token for bots is
+`bots/.env.live` or `~/minicraft-mp/token` (read by the bot at runtime for
+`--target live` only; tests and agents never read it), never `.env.local`.
 
 ## Assets
 

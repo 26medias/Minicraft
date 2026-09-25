@@ -3,6 +3,10 @@ import type { Chunk } from '../world/chunk';
 import type { ChunkMesh, ChunkMeshResult } from '../world/mesher';
 import type { LoadedAtlas } from './atlas';
 import { MESH_RADIUS } from '../world/radii';
+import { installRadialFog } from './radial-fog';
+
+// Before any material compiles: fog by distance, not by view depth (a mountain must not fade as you turn to it).
+installRadialFog();
 
 /**
  * Fog from the mesh ring (spec §3.E): far sits inside the mesh frontier (≥ MESH_RADIUS × 16 blocks) so the

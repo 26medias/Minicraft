@@ -103,7 +103,10 @@ type Edit struct {
 }
 
 // Fx is cosmetic (kind: prime|boom|firework|mine|mine-stop). By is set by the server on relay.
-// Dur is a `mine`'s full mining time in ms; receivers animate the cracks from it.
+// Dur is a `mine`'s full mining time in ms; receivers animate the cracks from it. Tool (the miner's
+// pickaxe tier) and Face (the aimed face, one of ValidFxFace's six) are only sent with a multi-block
+// Tool, so a friend can crack the whole area; the relay strips a Face ValidFxFace rejects (and its
+// Tool with it — see world.go CmdFx), so no arbitrary string reaches other clients.
 type Fx struct {
 	T    string `json:"t"`
 	Kind string `json:"kind"`
@@ -113,6 +116,8 @@ type Fx struct {
 	Tier int    `json:"tier,omitempty"`
 	Dur  int    `json:"dur,omitempty"`
 	By   int    `json:"by,omitempty"`
+	Tool int    `json:"tool,omitempty"`
+	Face string `json:"face,omitempty"`
 }
 
 // Extras carries {inventory, tools, hotbar, selected}, opaque to the server.

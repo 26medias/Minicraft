@@ -48,7 +48,7 @@ import { playCraft, playNope } from './ui/sfx';
 import { resolveHotbar } from './game/hotbar';
 import { playerSave, resolvePlayerExtras } from './game/player-extras';
 import { shouldHandleKey, buildKeyToAction, sneakKeyChange } from './game/input-gate';
-import { nextOwnedTier } from './game/tools';
+import { isMultiBlock, nextOwnedTier } from './game/tools';
 import type { MenuAction } from './ui/menu';
 import { clampDuration } from './game/session-policy';
 import { beginSolo, boot, clearAutojoin, failRejoin, setAutojoin, type AutojoinArgs } from './game/boot';
@@ -832,13 +832,22 @@ async function main() {
 			const remoteMining = new RemoteMining();
 			const lastPuff = new Map<number, number>();
 			let mining: string | null = null;
+			let miningTarget: { x: number; y: number; z: number } | null = null;
 			mpMine = (mi) => {
-				const key = mi ? `${mi.x},${mi.y},${mi.z}` : null;
+				// A multi-block tool's face is part of the key too, so a face change mid-mine (same target
+				// cell, a different area) sends a fresh `mine` instead of being swallowed as "unchanged".
+				const multi = mi ? isMultiBlock(mi.tier) : false;
+				const key = mi ? `${mi.x},${mi.y},${mi.z},${multi ? mi.face : ''}` : null;
 				if (key === mining) return;
-				if (mi) client.send({ t: 'fx', kind: 'mine', x: mi.x, y: mi.y, z: mi.z, tier: mi.blockId, dur: Math.round(mi.durationMs) });
-				else if (mining) {
-					const [x, y, z] = mining.split(',').map(Number);
-					client.send({ t: 'fx', kind: 'mine-stop', x, y, z });
+				if (mi) {
+					client.send({
+						t: 'fx', kind: 'mine', x: mi.x, y: mi.y, z: mi.z, tier: mi.blockId, dur: Math.round(mi.durationMs),
+						...(multi ? { tool: mi.tier, face: mi.face } : {}),
+					});
+					miningTarget = { x: mi.x, y: mi.y, z: mi.z };
+				} else if (miningTarget) {
+					client.send({ t: 'fx', kind: 'mine-stop', x: miningTarget.x, y: miningTarget.y, z: miningTarget.z });
+					miningTarget = null;
 				}
 				mining = key;
 			};
@@ -848,7 +857,7 @@ async function main() {
 			const onFx = (m: FxMsg) => {
 				if (m.kind === 'mine' || m.kind === 'mine-stop') {
 					if (m.by === undefined) return;
-					if (m.kind === 'mine') remoteMining.start(m.by, m.x, m.y, m.z, m.dur ?? 0, m.tier ?? 0, performance.now());
+					if (m.kind === 'mine') remoteMining.start(m.by, m.x, m.y, m.z, m.dur ?? 0, m.tier ?? 0, performance.now(), m.tool, m.face);
 					else remoteMining.stop(m.by);
 					return;
 				}
@@ -913,7 +922,7 @@ async function main() {
 				for (const a of remoteMining.active(now, loadedBlock)) {
 					const key = `p:${a.by}`;
 					keep.add(key);
-					cracks.set(key, a.x, a.y, a.z, a.stage);
+					cracks.setGroup(key, a.cells, a.stage);
 					// A few chips fly off while a friend mines, like hits on the block.
 					if (now - (lastPuff.get(a.by) ?? -Infinity) >= PUFF_EVERY_MS) {
 						lastPuff.set(a.by, now);

@@ -55,6 +55,16 @@ func NameKey(name string) (string, error) {
 // client with the token from storing megabytes in players.skin and every join/welcome/listing.
 const MaxSkinBytes = 32
 
+// ValidFxFace is true for exactly the six face strings a `fx mine` may carry. The relay strips
+// anything else (world.go CmdFx), so no arbitrary string reaches other clients.
+func ValidFxFace(s string) bool {
+	switch s {
+	case "px", "nx", "py", "ny", "pz", "nz":
+		return true
+	}
+	return false
+}
+
 // SkinOf returns the skin to store and relay for hello.skin: "" (the client's default skin) when
 // it is over MaxSkinBytes, not UTF-8, or holds a control character. Unknown ids pass through, so a
 // newer client's skin still reaches newer clients.

@@ -948,3 +948,45 @@ func TestFxMineRelaysDur(t *testing.T) {
 		}
 	}
 }
+
+// Area cracks (bugfix part 2): a `mine` fx with a multi-block Tool and a valid Face relays both, so a
+// friend can compute the whole area instead of just the aimed block.
+func TestFxMineToolFaceRelayed(t *testing.T) {
+	w := newTestWorld(t, nil, nil)
+	a, b := newSender(), newSender()
+	aid := mustJoin(t, w, "A", "a", a)
+	mustJoin(t, w, "B", "b", b)
+	w.Submit(CmdFx{ID: aid, S: a, Fx: proto.Fx{T: proto.TFx, Kind: "mine", X: 4, Y: 5, Z: 6, Tier: 1, Dur: 1500, Tool: 7, Face: "pz"}})
+	waitFor(t, "relay", func() bool { return b.count(proto.TFx) == 1 })
+	for _, m := range b.all() {
+		if typeOf(m.data) != proto.TFx {
+			continue
+		}
+		var f proto.Fx
+		_ = json.Unmarshal(m.data, &f)
+		if f.Tool != 7 || f.Face != "pz" || f.By != aid {
+			t.Fatalf("fx %+v", f)
+		}
+	}
+}
+
+// A Face the relay does not recognise is stripped, and its Tool with it, so no arbitrary string
+// reaches other clients and a receiver never sees a Tool it cannot compute an area from.
+func TestFxMineBadFaceStripped(t *testing.T) {
+	w := newTestWorld(t, nil, nil)
+	a, b := newSender(), newSender()
+	aid := mustJoin(t, w, "A", "a", a)
+	mustJoin(t, w, "B", "b", b)
+	w.Submit(CmdFx{ID: aid, S: a, Fx: proto.Fx{T: proto.TFx, Kind: "mine", X: 4, Y: 5, Z: 6, Tier: 1, Dur: 1500, Tool: 7, Face: "sideways"}})
+	waitFor(t, "relay", func() bool { return b.count(proto.TFx) == 1 })
+	for _, m := range b.all() {
+		if typeOf(m.data) != proto.TFx {
+			continue
+		}
+		var f proto.Fx
+		_ = json.Unmarshal(m.data, &f)
+		if f.Face != "" || f.Tool != 0 || f.By != aid {
+			t.Fatalf("fx %+v (bad face must strip both face and tool)", f)
+		}
+	}
+}

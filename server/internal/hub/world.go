@@ -414,6 +414,11 @@ func (w *World) handle(cmd any) {
 	case CmdFx:
 		if p := w.current(c.ID, c.S); p != nil {
 			f := c.Fx
+			// A Face that isn't one of the six values never reaches other clients; its Tool goes with it,
+			// so a receiver never sees a Tool without a Face it can compute an area from.
+			if !proto.ValidFxFace(f.Face) {
+				f.Face, f.Tool = "", 0
+			}
 			f.T, f.By = proto.TFx, p.ID
 			w.broadcast(enc(f), p.ID)
 		}

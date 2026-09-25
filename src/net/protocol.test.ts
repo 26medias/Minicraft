@@ -55,7 +55,7 @@ describe('T1: Go golden messages parse with the TS types, field for field', () =
 		'msg-pos.json': fields<Pos>()('t', 'x', 'y', 'z', 'yaw', 'pitch'),
 		'msg-ping.json': fields<Ping>()('t'),
 		'msg-edit.json': fields<EditMsg>()('t', 'cid', 'ops'),
-		'msg-fx.json': fields<FxMsg>()('t', 'kind', 'x', 'y', 'z', 'tier', 'dur', 'by'),
+		'msg-fx.json': fields<FxMsg>()('t', 'kind', 'x', 'y', 'z', 'tier', 'dur', 'by', 'tool', 'face'),
 		'msg-extras.json': fields<ExtrasMsg>()('t', 'data'),
 		'msg-leaving.json': fields<LeavingMsg>()('t', 'secondsLeft', 'by'),
 		'msg-welcome.json': fields<Welcome>()('t', 'you', 'world', 'spawn', 'extras', 'players', 'seq', 'catalogMax'),

@@ -78,7 +78,7 @@ the tables together.
 | `pos` | `x, y, z, yaw, pitch` | at most 10 Hz, only while moving or turning |
 | `ping` | — | every 2 s when nothing else was sent; driven by `setInterval`, so a hidden tab stays alive |
 | `edit` | `cid, ops` | ≤ 2,000 ops; `cid` increases per connection; a batch may touch one cell more than once and is applied in order |
-| `fx` | `kind, x, y, z, tier?, dur?` | cosmetic: `prime`, `boom` or `firework` (`tier` is the explosive's block id); `mine` (a player started mining x,y,z: `tier` is the block id, `dur` the full mining time in ms; the others draw the cracks from it until the block changes, a `mine-stop`, or `dur` + 1 s) and `mine-stop` |
+| `fx` | `kind, x, y, z, tier?, dur?, tool?, face?` | cosmetic: `prime`, `boom` or `firework` (`tier` is the explosive's block id); `mine` (a player started mining x,y,z: `tier` is the block id, `dur` the full mining time in ms; the others draw the cracks from it until the block changes, a `mine-stop`, or `dur` + 1 s) and `mine-stop`. `tool` (the miner's pickaxe tier) and `face` (the aimed face) are only sent with a multi-block `tool`, so a friend cracks the whole area instead of just the aimed block; the server drops a `face` it doesn't recognise (and `tool` with it) |
 | `extras` | `data: {inventory, tools, hotbar, selected}` | debounced 5 s, and on leave; opaque to the server |
 | `leaving` | `secondsLeft` | the play-time countdown (see [Play time](#play-time)) |
 
@@ -91,7 +91,7 @@ the tables together.
 | `tick` | `poses: [[id, x, y, z, yaw, pitch], …]` | every 100 ms while 2 or more players are online; excludes the recipient's own pose |
 | `join` | `id, name, skin` | a new player (a same-browser takeover sends none) |
 | `left` | `id` | the avatar disappears; no toast |
-| `fx` | `by, kind, x, y, z, tier?` | relayed to the others, not echoed |
+| `fx` | `by, kind, x, y, z, tier?, dur?, tool?, face?` | relayed to the others, not echoed |
 | `leaving` | `by, secondsLeft` | relayed to the others, not echoed |
 | `ping` | — | every 2 s while fewer than 2 players are online |
 | `error` | `code, message` | followed by a close with the same code |

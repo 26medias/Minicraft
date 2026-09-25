@@ -48,6 +48,8 @@ export class Inventory {
 	/** Returns true when the craft happened (main.ts re-checks canCraft). */
 	onCraft: ((recipeId: string) => boolean) | null = null;
 	onEquip: ((tier: number) => void) | null = null;
+	/** Enter over a code-shaped query (cheat codes spec §5). True: a code was granted, and the box is emptied. */
+	onSearchEnter: ((text: string) => boolean) | null = null;
 
 	constructor(container: HTMLElement, private atlas: LoadedAtlas, blocks: BlockDef[], private recipes: readonly Recipe[]) {
 		this.root = document.createElement('div');
@@ -56,6 +58,10 @@ export class Inventory {
 
 		const card = document.createElement('div');
 		card.className = 'inventory-card';
+		// A click on the card never takes focus out of the search box (spec §5); the box itself still takes clicks.
+		card.addEventListener('mousedown', (e) => {
+			if (e.target !== this.search) e.preventDefault();
+		});
 
 		const tabs = document.createElement('div');
 		tabs.className = 'inventory-tabs';
@@ -92,16 +98,35 @@ export class Inventory {
 		this.search.addEventListener('keyup', (e) => e.stopPropagation());
 		this.search.addEventListener('keydown', (e) => {
 			e.stopPropagation();
-			const action = searchKey(e.code, this.search.value);
+			// A held letter must not type "iiww" (spec §5); held Enter/Esc/Backspace keep their own rules.
+			if (e.repeat && e.key.length === 1) {
+				e.preventDefault();
+				return;
+			}
+			const action = searchKey(e.code, this.search.value, e.isComposing, e.key);
 			if (action === 'type') return;
 			e.preventDefault();
-			if (action === 'clear') {
+			if (action === 'submit') {
+				if (!this.isOpen) return;
+				// No match: nothing at all, exactly as before (a reaction would reveal that codes exist).
+				if (this.onSearchEnter?.(this.search.value)) {
+					this.search.value = '';
+					this.applySearch();
+				}
+			} else if (action === 'clear') {
 				this.search.value = '';
 				this.applySearch();
 			} else {
 				this.search.blur();
 				this.onClose?.();
 			}
+		});
+		// Tab, Shift+Tab or a backdrop click must not leave the box: the next I would close the
+		// screen and Space would jump (spec §5). One frame later, so Esc/close and the Craft tab win.
+		this.search.addEventListener('blur', () => {
+			requestAnimationFrame(() => {
+				if (this.isOpen && this.tab === 'blocks') this.search.focus();
+			});
 		});
 		this.blocksPanel.appendChild(this.search);
 
@@ -129,7 +154,7 @@ export class Inventory {
 				tile.addEventListener('mouseenter', () => { this.nameEl.textContent = b.label; });
 				tile.addEventListener('click', (e) => {
 					e.stopPropagation();
-					tile.blur();
+					this.keepSearchFocus();
 					this.onPick?.(b.id);
 				});
 				this.grid.appendChild(tile);
@@ -210,6 +235,11 @@ export class Inventory {
 		else this.paintRect(el, this.atlas.tileRectByName(p.name), px);
 	}
 
+	/** Blocks tab open: focus goes back to the search box (spec §5, J1). */
+	private keepSearchFocus(): void {
+		if (this.isOpen && this.tab === 'blocks') this.search.focus();
+	}
+
 	get isOpen(): boolean {
 		return !this.root.classList.contains('hidden');
 	}
@@ -227,10 +257,12 @@ export class Inventory {
 		this.root.classList.remove('hidden');
 		this.refreshDots();
 		this.render();
+		this.keepSearchFocus(); // after .hidden is gone: a hidden input cannot take focus
 	}
 
 	close(): void {
 		this.root.classList.add('hidden');
+		this.search.blur();
 	}
 
 	setTab(tab: InventoryTab): void {
@@ -240,6 +272,9 @@ export class Inventory {
 		this.craftPanel.classList.toggle('hidden', tab !== 'craft');
 		this.refreshDots();
 		this.render();
+		// Also runs from the constructor while the screen is hidden: keepSearchFocus checks isOpen.
+		if (tab === 'blocks') this.keepSearchFocus();
+		else this.search.blur();
 	}
 
 	setCraftTab(tab: CraftTab): void {
@@ -288,7 +323,7 @@ export class Inventory {
 			this.paintRect(b, this.atlas.tileRectByName(p.icon), 40);
 			b.addEventListener('click', (e) => {
 				e.stopPropagation();
-				b.blur();
+				this.keepSearchFocus();
 				this.onEquip?.(p.tier);
 			});
 			this.pickRow.appendChild(b);

@@ -4,6 +4,7 @@ import type { CraftTab, Recipe } from '../data/recipes.data';
 import { pickaxeIconName } from '../data/atlas-derive';
 import { countOf, isCraftedOnly, needsCount, needsCountName } from '../game/inventory';
 import { canCraft, haveOf } from '../game/crafting';
+import { normalizeCode } from '../game/cheats';
 
 export type InventoryTab = 'blocks' | 'craft';
 
@@ -15,10 +16,14 @@ export function matchesSearch(label: string, query: string): boolean {
 
 /**
  * What a key does while the Blocks-tab search box has focus: Esc clears the text, or closes the I screen when the
- * box is already empty; every other key only types, so digits, I, Tab and Shift never reach the game.
+ * box is already empty; Enter over a code-shaped query submits it (cheat codes spec §5: `code` Enter/NumpadEnter,
+ * or `key` Enter from a virtual keyboard whose code is ''); an IME composition always types; every other key only
+ * types, so digits, I, P, Tab and Shift never reach the game.
  */
-export function searchKey(code: string, query: string): 'clear' | 'close' | 'type' {
+export function searchKey(code: string, query: string, isComposing = false, key = ''): 'clear' | 'close' | 'submit' | 'type' {
+	if (isComposing) return 'type';
 	if (code === 'Escape') return query === '' ? 'close' : 'clear';
+	if (code === 'Enter' || code === 'NumpadEnter' || key === 'Enter') return normalizeCode(query) === '' ? 'type' : 'submit';
 	return 'type';
 }
 

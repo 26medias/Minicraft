@@ -71,7 +71,8 @@ import { RemotePlayers } from './engine/render/remote-players';
 import { colorTableFromAtlas } from './engine/render/block-colors';
 import { Minimap } from './ui/minimap';
 import { MpOverlays } from './ui/mp-overlays';
-import { Toasts } from './ui/toasts';
+import { CHEAT_TOAST_COLOR, Toasts } from './ui/toasts';
+import { applyCheat, matchCheat } from './game/cheats';
 import { loadMpPrefs } from './persistence/mp-prefs';
 import { skinColor } from './data/skins.data';
 import type { PlayerSave } from './persistence/adapter';
@@ -500,6 +501,17 @@ async function main() {
 			syncHotbar(out.kind === 'block' ? out.slot : undefined);
 			return true;
 		};
+		// Cheat codes (spec §5, §7): applyCheat makes the grant path's only markDirty call.
+		inventory.onSearchEnter = (text) => {
+			const cheat = matchCheat(text);
+			if (!cheat) return false;
+			const out = applyCheat(player, cheat, () => autosave.markDirty());
+			if (out.pickaxeChanged) loop.onPickaxeChanged();
+			playCraft();
+			syncHotbar();
+			toasts.show(cheat.message, CHEAT_TOAST_COLOR, 'cheat');
+			return true;
+		};
 		hud.onPickaxeClick = () => openInventory();
 		inventory.onSelectSlot = (slot) => {
 			player.selected = slot;
@@ -583,6 +595,8 @@ async function main() {
 					}
 					break;
 				case 'inventory':
+					// The key that opens the I screen must not type into the search box open() focuses (spec §5).
+					if (down) e.preventDefault();
 					if (down && !e.repeat) {
 						if (inventoryOpen) closeInventory();
 						else openInventory();

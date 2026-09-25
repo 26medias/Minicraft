@@ -28,4 +28,21 @@ describe('searchKey: what a key does while the search box has focus', () => {
 	it('every other key stays in the box, including digits, I, Tab and Shift (catches typing "1" changing the hotbar slot, or "i" closing the screen)', () => {
 		for (const code of ['Digit1', 'KeyI', 'KeyE', 'Tab', 'ShiftLeft', 'Space', 'KeyW']) expect(searchKey(code, 'x'), code).toBe('type');
 	});
+
+	it('Enter over a code-shaped query submits, from Enter, NumpadEnter or a virtual keyboard (catches Enter not distinguished, or code === "" ignored)', () => {
+		expect(searchKey('Enter', 'big boom')).toBe('submit');
+		expect(searchKey('NumpadEnter', 'x')).toBe('submit');
+		expect(searchKey('', 'x', false, 'Enter')).toBe('submit');
+	});
+
+	it('Enter over an empty or punctuation-only box, or during IME composition, only types (catches an empty-box submit or a lost IME guard)', () => {
+		expect(searchKey('Enter', '')).toBe('type');
+		expect(searchKey('Enter', '  !! ')).toBe('type');
+		expect(searchKey('Enter', 'x', true)).toBe('type');
+	});
+
+	it('I and P type into the box (J1: the game never sees them while he types)', () => {
+		expect(searchKey('KeyI', 'x')).toBe('type');
+		expect(searchKey('KeyP', 'x')).toBe('type');
+	});
 });

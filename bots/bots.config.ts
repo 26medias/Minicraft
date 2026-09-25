@@ -21,5 +21,7 @@ export default {
 		stopMs: 600_000,
 		wanderTether: 12,
 		statusEveryMs: 30_000,
+		idleSwitchMs: 30_000,
+		minTargetMs: 20_000,
 	},
 };

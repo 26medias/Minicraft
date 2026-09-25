@@ -1,5 +1,6 @@
 {
 	"t": "error",
 	"code": 4009,
-	"message": "name_taken"
+	"message": "name_taken",
+	"min": 2
 }

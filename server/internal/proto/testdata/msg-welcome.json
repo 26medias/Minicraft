@@ -29,7 +29,8 @@
 			"z": 21,
 			"yaw": 3.14,
 			"pitch": 0.1,
-			"hasPos": true
+			"hasPos": true,
+			"bot": true
 		}
 	],
 	"seq": 4242,

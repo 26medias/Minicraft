@@ -1,7 +1,7 @@
 // Multiplayer plan task C4: MpClient — liveness (spec §3.1), close codes (§5) and the 4003 counter (§7.5).
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 import { MpClient, type MpState, type Clock } from './mp-client';
-import { PROTO, type Hello, type Welcome } from './protocol';
+import { CLIENT_VERSION, PROTO, type Hello, type Welcome } from './protocol';
 
 class FakeWS {
 	static instances: FakeWS[] = [];
@@ -60,7 +60,7 @@ class MemStorage {
 	removeItem(k: string): void { this.m.delete(k); }
 }
 
-const hello: Hello = { t: 'hello', world: 'w1', name: 'Noah', skin: 'milo', bid: 'b1', proto: PROTO, gen: 3, resume: false };
+const hello: Hello = { t: 'hello', world: 'w1', name: 'Noah', skin: 'milo', bid: 'b1', proto: PROTO, gen: 3, resume: false, ver: CLIENT_VERSION };
 const welcome = { t: 'welcome', you: 1, world: { uuid: 'w1', name: 'W', seed: 1, gen: 3, height: 128, mustMine: false }, spawn: { mode: 'first', x: 0, y: 0, z: 0, yaw: 0, pitch: 0 }, extras: {}, players: [], seq: 0, catalogMax: 100 } as Welcome;
 
 function make(storage = new MemStorage()) {

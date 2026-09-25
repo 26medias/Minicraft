@@ -6,5 +6,7 @@
 	"bid": "b-123",
 	"proto": 1,
 	"gen": 3,
-	"resume": true
+	"resume": true,
+	"ver": 1,
+	"bot": true
 }

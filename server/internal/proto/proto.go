@@ -79,6 +79,10 @@ type Hello struct {
 	Proto  int    `json:"proto"`
 	Gen    int    `json:"gen"`
 	Resume bool   `json:"resume"`
+	// Ver is the client build version (src/net/protocol.ts CLIENT_VERSION). Missing counts as 0.
+	Ver int `json:"ver"`
+	// Bot marks a bot connection (spec §4). Only true is sent.
+	Bot bool `json:"bot,omitempty"`
 }
 
 type Pos struct {
@@ -178,6 +182,8 @@ type PlayerInfo struct {
 	// HasPos is false for a player who joined but has not sent `pos` yet: x..pitch are then
 	// meaningless and the client does not place the avatar until the first tick.
 	HasPos bool `json:"hasPos"`
+	// Bot marks a bot player (spec §4). Only true is sent.
+	Bot bool `json:"bot,omitempty"`
 }
 
 // EditOut is the server-ordered edit sent to everyone, author included.
@@ -200,6 +206,8 @@ type Join struct {
 	ID   int    `json:"id"`
 	Name string `json:"name"`
 	Skin string `json:"skin"`
+	// Bot marks a bot player (spec §4). Only true is sent.
+	Bot bool `json:"bot,omitempty"`
 }
 
 type Left struct {
@@ -211,6 +219,8 @@ type ErrorMsg struct {
 	T       string `json:"t"`
 	Code    int    `json:"code"`
 	Message string `json:"message"`
+	// Min is the server's minimum client version (spec §4), sent only with the "outdated" refusal.
+	Min int `json:"min,omitempty"`
 }
 
 // ── HTTP ──

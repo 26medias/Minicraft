@@ -1,0 +1,129 @@
+{
+	"edit": [
+		"cid",
+		"ops",
+		"t"
+	],
+	"edit-out": [
+		"by",
+		"cid?",
+		"ops",
+		"seq",
+		"t"
+	],
+	"error": [
+		"code",
+		"message",
+		"min?",
+		"t"
+	],
+	"extras": [
+		"data",
+		"t"
+	],
+	"fx": [
+		"by?",
+		"dur?",
+		"face?",
+		"kind",
+		"t",
+		"tier?",
+		"tool?",
+		"x",
+		"y",
+		"z"
+	],
+	"hello": [
+		"bid",
+		"bot?",
+		"gen",
+		"name",
+		"proto",
+		"resume",
+		"skin",
+		"t",
+		"ver",
+		"world"
+	],
+	"join": [
+		"bot?",
+		"id",
+		"name",
+		"skin",
+		"t"
+	],
+	"leaving": [
+		"by?",
+		"secondsLeft",
+		"t"
+	],
+	"left": [
+		"id",
+		"t"
+	],
+	"ping": [
+		"t"
+	],
+	"pos": [
+		"pitch",
+		"t",
+		"x",
+		"y",
+		"yaw",
+		"z"
+	],
+	"tick": [
+		"poses",
+		"t"
+	],
+	"welcome": [
+		"catalogMax",
+		"extras",
+		"players",
+		"seq",
+		"spawn",
+		"t",
+		"world",
+		"you"
+	],
+	"welcome.players": [
+		"bot?",
+		"hasPos",
+		"id",
+		"name",
+		"pitch",
+		"skin",
+		"x",
+		"y",
+		"yaw",
+		"z"
+	],
+	"welcome.spawn": [
+		"mode",
+		"pitch",
+		"target?",
+		"x",
+		"y",
+		"yaw",
+		"z"
+	],
+	"welcome.world": [
+		"gen",
+		"height",
+		"mustMine",
+		"name",
+		"seed",
+		"uuid"
+	],
+	"worlds-row": [
+		"createdAt",
+		"mustMine",
+		"name",
+		"online",
+		"uuid"
+	],
+	"worlds-row.online": [
+		"name",
+		"skin"
+	]
+}

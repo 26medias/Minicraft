@@ -9,8 +9,18 @@ import type { Face } from '../data/blocks.data';
 /** Protocol version sent in `hello`. The server accepts [1, 1]. */
 export const PROTO = 1;
 
+/**
+ * The client build version, sent as `hello.ver`. Missing counts as 0 on the server; negative is
+ * clamped to 0. Bump this and the server's `MC_MIN_CLIENT` together to force stale clients to
+ * update (spec §4, §8).
+ */
+export const CLIENT_VERSION = 1;
+
 /** Ops per `edit` message. */
 export const MAX_OPS_PER_EDIT = 2000;
+
+/** Spec §5: `pos` at most 10 times a second. The pose interval; the game and the bot SDK share it. */
+export const POS_EVERY_MS = 100;
 
 /** WebSocket close and `error` codes (spec §5). */
 export const CLOSE = {
@@ -60,6 +70,10 @@ export type Hello = {
 	proto: number;
 	gen: number;
 	resume: boolean;
+	/** The client build version ({@link CLIENT_VERSION}). */
+	ver: number;
+	/** Only `true` marks a bot; the game never sends this field. */
+	bot?: boolean;
 };
 
 export type Pos = { t: 'pos'; x: number; y: number; z: number; yaw: number; pitch: number };
@@ -119,6 +133,8 @@ export type PlayerInfo = {
 	pitch: number;
 	/** False for a player who joined but has not sent `pos` yet: x..pitch are then meaningless. */
 	hasPos: boolean;
+	/** Only `true` marks a bot. */
+	bot?: boolean;
 };
 
 /** A welcome player's pose, or null when they have none yet (their first tick places them). */
@@ -147,11 +163,11 @@ export type Pose = [id: number, x: number, y: number, z: number, yaw: number, pi
 /** Every 100 ms; excludes the recipient's own pose. */
 export type Tick = { t: 'tick'; poses: Pose[] };
 
-export type Join = { t: 'join'; id: number; name: string; skin: string };
+export type Join = { t: 'join'; id: number; name: string; skin: string; bot?: boolean };
 export type Left = { t: 'left'; id: number };
 
-/** Followed by a close with the same code. */
-export type ErrorMsg = { t: 'error'; code: number; message: string };
+/** Followed by a close with the same code. `min` (the server's minimum client version) is only sent with the "outdated" refusal. */
+export type ErrorMsg = { t: 'error'; code: number; message: string; min?: number };
 
 export type ClientMsg = Hello | Pos | Ping | EditMsg | FxMsg | ExtrasMsg | LeavingMsg;
 export type ServerMsg = Welcome | EditOut | Tick | Join | Left | FxMsg | LeavingMsg | Ping | ErrorMsg;

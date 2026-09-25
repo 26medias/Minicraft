@@ -2,5 +2,6 @@
 	"t": "join",
 	"id": 3,
 	"name": "Léa",
-	"skin": "leaf"
+	"skin": "leaf",
+	"bot": true
 }

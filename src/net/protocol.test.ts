@@ -1,7 +1,9 @@
 import { describe, it, expect } from 'vitest';
 import { readFileSync, readdirSync } from 'node:fs';
 import {
+	CLIENT_VERSION,
 	CLOSE,
+	POS_EVERY_MS,
 	PROTO,
 	colorToInt,
 	intToColor,
@@ -51,7 +53,7 @@ function keysOf(v: unknown): string[] {
 describe('T1: Go golden messages parse with the TS types, field for field', () => {
 	// Every msg-*.json the Go side emits, with the TS type's full field list.
 	const cases: Record<string, readonly string[]> = {
-		'msg-hello.json': fields<Hello>()('t', 'world', 'name', 'skin', 'bid', 'proto', 'gen', 'resume'),
+		'msg-hello.json': fields<Hello>()('t', 'world', 'name', 'skin', 'bid', 'proto', 'gen', 'resume', 'ver', 'bot'),
 		'msg-pos.json': fields<Pos>()('t', 'x', 'y', 'z', 'yaw', 'pitch'),
 		'msg-ping.json': fields<Ping>()('t'),
 		'msg-edit.json': fields<EditMsg>()('t', 'cid', 'ops'),
@@ -61,9 +63,9 @@ describe('T1: Go golden messages parse with the TS types, field for field', () =
 		'msg-welcome.json': fields<Welcome>()('t', 'you', 'world', 'spawn', 'extras', 'players', 'seq', 'catalogMax'),
 		'msg-edit-out.json': fields<EditOut>()('t', 'seq', 'by', 'cid', 'ops'),
 		'msg-tick.json': fields<Tick>()('t', 'poses'),
-		'msg-join.json': fields<Join>()('t', 'id', 'name', 'skin'),
+		'msg-join.json': fields<Join>()('t', 'id', 'name', 'skin', 'bot'),
 		'msg-left.json': fields<Left>()('t', 'id'),
-		'msg-error.json': fields<ErrorMsg>()('t', 'code', 'message'),
+		'msg-error.json': fields<ErrorMsg>()('t', 'code', 'message', 'min'),
 		'msg-worlds-row.json': fields<WorldListing>()('uuid', 'name', 'mustMine', 'createdAt', 'online'),
 	};
 
@@ -89,7 +91,7 @@ describe('T1: Go golden messages parse with the TS types, field for field', () =
 		);
 		expect(w.players.length).toBeGreaterThan(0);
 		expect(keysOf(w.players[0])).toEqual(
-			[...fields<PlayerInfo>()('id', 'name', 'skin', 'x', 'y', 'z', 'yaw', 'pitch', 'hasPos')].sort(),
+			[...fields<PlayerInfo>()('id', 'name', 'skin', 'x', 'y', 'z', 'yaw', 'pitch', 'hasPos', 'bot')].sort(),
 		);
 		const row = golden<WorldListing>('msg-worlds-row.json');
 		expect(keysOf(row.online[0])).toEqual([...fields<OnlinePlayer>()('name', 'skin')].sort());
@@ -110,10 +112,17 @@ describe('T1: Go golden messages parse with the TS types, field for field', () =
 		const hello = golden<Hello>('msg-hello.json');
 		expect(hello.proto).toBe(PROTO);
 		expect(typeof hello.resume).toBe('boolean');
+		expect(typeof hello.ver).toBe('number');
+		expect(typeof hello.bot).toBe('boolean');
 	});
 });
 
 describe('protocol constants (spec §5)', () => {
+	it('CLIENT_VERSION is 1 and POS_EVERY_MS is 100', () => {
+		expect(CLIENT_VERSION).toBe(1);
+		expect(POS_EVERY_MS).toBe(100);
+	});
+
 	it('PROTO is 1 and the close codes are verbatim', () => {
 		expect(PROTO).toBe(1);
 		expect(CLOSE).toEqual({

@@ -11,7 +11,7 @@ import (
 func sampleMessages() map[string]any {
 	return map[string]any{
 		"hello": Hello{T: THello, World: "7f3c2a1e-0000-4000-8000-000000000001", Name: "Noah",
-			Skin: "sky", Bid: "b-123", Proto: Proto, Gen: 3, Resume: true},
+			Skin: "sky", Bid: "b-123", Proto: Proto, Gen: 3, Resume: true, Ver: 1, Bot: true},
 		"pos":  Pos{T: TPos, X: 1.25, Y: 70, Z: -3.5, Yaw: 1.571, Pitch: -0.25},
 		"ping": Ping{T: TPing},
 		"edit": Edit{T: TEdit, Cid: 17, Ops: []Op{{1, 2, 3, 13, 0x80, 0}, {4, 5, 6, 1000, 0, 0x1FFF5E0}}},
@@ -24,14 +24,14 @@ func sampleMessages() map[string]any {
 				Seed: 123456789, Gen: 3, Height: 256, MustMine: true},
 			Spawn:   Spawn{Mode: SpawnNear, X: 10.5, Y: 70, Z: 20.5, Yaw: 0.5, Pitch: 0, Target: 1},
 			Extras:  json.RawMessage(`{}`),
-			Players: []PlayerInfo{{ID: 1, Name: "Emma", Skin: "rose", X: 11, Y: 70, Z: 21, Yaw: 3.14, Pitch: 0.1, HasPos: true}},
+			Players: []PlayerInfo{{ID: 1, Name: "Emma", Skin: "rose", X: 11, Y: 70, Z: 21, Yaw: 3.14, Pitch: 0.1, HasPos: true, Bot: true}},
 			Seq:     4242, CatalogMax: CatalogMax},
 		"edit-out": EditOut{T: TEdit, Seq: 4243, By: 2, Cid: 17,
 			Ops: []Op{{1, 2, 3, 13, 0x8F, 0}, {4, 5, 6, 1000, 0, 0x1000000}}},
 		"tick":  Tick{T: TTick, Poses: [][6]float64{{1, 11.25, 70, 21.5, 3.142, -0.1}}},
-		"join":  Join{T: TJoin, ID: 3, Name: "Léa", Skin: "leaf"},
+		"join":  Join{T: TJoin, ID: 3, Name: "Léa", Skin: "leaf", Bot: true},
 		"left":  Left{T: TLeft, ID: 3},
-		"error": ErrorMsg{T: TError, Code: CloseNameTaken, Message: "name_taken"},
+		"error": ErrorMsg{T: TError, Code: CloseNameTaken, Message: "name_taken", Min: 2},
 		"worlds-row": WorldListing{UUID: "7f3c2a1e-0000-4000-8000-000000000001", Name: "Castle",
 			MustMine: false, CreatedAt: 1790000000000,
 			Online: []OnlinePlayer{{Name: "Emma", Skin: "rose"}}},
@@ -66,7 +66,7 @@ func normalizeRaw(v any) string {
 // Field names are lowercase and exact: a Go field without a tag would marshal as "X", "Yaw", ….
 func TestMessageFieldNames(t *testing.T) {
 	want := map[string][]string{
-		"hello":      {"t", "world", "name", "skin", "bid", "proto", "gen", "resume"},
+		"hello":      {"t", "world", "name", "skin", "bid", "proto", "gen", "resume", "ver", "bot"},
 		"pos":        {"t", "x", "y", "z", "yaw", "pitch"},
 		"ping":       {"t"},
 		"edit":       {"t", "cid", "ops"},
@@ -76,15 +76,15 @@ func TestMessageFieldNames(t *testing.T) {
 		"welcome":    {"t", "you", "world", "spawn", "extras", "players", "seq", "catalogMax"},
 		"edit-out":   {"t", "seq", "by", "cid", "ops"},
 		"tick":       {"t", "poses"},
-		"join":       {"t", "id", "name", "skin"},
+		"join":       {"t", "id", "name", "skin", "bot"},
 		"left":       {"t", "id"},
-		"error":      {"t", "code", "message"},
+		"error":      {"t", "code", "message", "min"},
 		"worlds-row": {"uuid", "name", "mustMine", "createdAt", "online"},
 	}
 	nested := map[string][]string{
 		"world":  {"uuid", "name", "seed", "gen", "height", "mustMine"},
 		"spawn":  {"mode", "x", "y", "z", "yaw", "pitch", "target"},
-		"player": {"id", "name", "skin", "x", "y", "z", "yaw", "pitch", "hasPos"},
+		"player": {"id", "name", "skin", "x", "y", "z", "yaw", "pitch", "hasPos", "bot"},
 		"online": {"name", "skin"},
 	}
 	msgs := sampleMessages()

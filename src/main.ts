@@ -62,7 +62,7 @@ import { MpClient } from './net/mp-client';
 import { MpSync } from './net/mp-sync';
 import { mpApiFromEnv } from './net/mp-api';
 import { decodeSnapshot } from './net/snapshot';
-import { intToColor, PROTO, welcomePose, type ExtrasData, type FxKind, type FxMsg, type Hello, type Welcome } from './net/protocol';
+import { CLIENT_VERSION, intToColor, POS_EVERY_MS, PROTO, welcomePose, type ExtrasData, type FxKind, type FxMsg, type Hello, type Welcome } from './net/protocol';
 import { catalogBlocks, catalogHotbar, catalogRecipes } from './net/catalog-filter';
 import { ChunkOverlay } from './engine/world/overlay';
 import { WORLD_CHUNKS_X, WORLD_CHUNKS_Z, type WorldHeight } from './engine/world/coords';
@@ -80,8 +80,6 @@ import type { ServerMsg } from './net/protocol';
 const REACH = 6;
 /** Gate-2 K1: no `welcome` (plus its snapshot) within this long → the Multiplayer screen, sleeping. */
 const JOIN_TIMEOUT_MS = 6_000;
-/** Spec §5: `pos` at most 10 times a second. */
-const POS_EVERY_MS = 100;
 /** Break chips from a block a friend is mining, one burst per this many ms. */
 const PUFF_EVERY_MS = 450;
 const LAMP_ID = BLOCK_BY_NAME['lamp'].id;
@@ -189,6 +187,7 @@ async function main() {
 			proto: PROTO,
 			gen: NEWEST_GEN_VERSION,
 			resume,
+			ver: CLIENT_VERSION,
 		};
 		const link = new MpLink();
 		const fatalDeps: FatalDeps = {

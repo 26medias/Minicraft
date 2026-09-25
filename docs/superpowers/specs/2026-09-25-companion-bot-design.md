@@ -592,3 +592,35 @@ Tests:
 - **Test hygiene:** with no server messages, the SDK drops to `reconnecting` after about 5 s, which
   cancels walks and flights. Flight, walk and mine tests feed `ping`s or keep advances short, and
   assert the bot is still connected.
+
+## 12c. Amendment (Julien, 2026-09-25): Jev as a brain
+
+Julien: "you have a JEV skill… super fast (ms response time), accurate and dirt cheap". Jev is
+TypeSafe's hosted System One model. Its API is the same `/v1/systemone` shape Laya implements:
+`POST https://api.typesafe.ai/v1/systemone`, `Authorization: Bearer <key>`,
+`{ state, model: 'jev-latest', questions }`. Questions use `criteria`; answers are
+`{type:'choice', choice, probabilities, confidence}`.
+
+- **Config:** a third brain, `jev: { url: 'https://api.typesafe.ai', model: 'jev-latest',
+  apiKeyEnv: 'TYPESAFE_API_KEY', timeoutMs: 800 }`.
+  - The key comes from the environment or `bots/.env.live`; it is never committed or logged.
+  - `--brain jev` is refused without a key.
+  - Health = one tiny request at startup; there is no health endpoint.
+- **Adapter:**
+  - The same `systemone.ts`, with an optional `model` field and bearer auth.
+  - **Confidence = max(p) computed from `probabilities`**, never a response field. Jev has no
+    `answer_confidence`, and its `confidence` is concentration-calibrated like Laya's.
+  - 429/529 → that tick falls back to scripted, and back-off doubles up to 5 s before the next
+    Jev call.
+- **Ruling (privacy):** for hosted brains (`jev`), the text state replaces player names with role
+  labels ("the kid", "another kid"), so no child's name leaves the machine. Local brains (Laya,
+  CLM) keep names. *Cost if wrong:* the brain has slightly less context. Names don't change which
+  action is right.
+- **Tests:**
+  - a Jev request/response fixture (the documented example, adapted to a `next` choice);
+  - bearer header present;
+  - no key → refused;
+  - 429 → fallback plus back-off;
+  - names scrubbed in the state sent to `jev`, and not scrubbed for `laya`.
+- **E2E:** an optional Jev leg, like the Laya leg, run only when `TYPESAFE_API_KEY` is set. It
+  asserts `reason: brain` on ≥ 1/3 of the ticks.

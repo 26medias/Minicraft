@@ -1,6 +1,7 @@
 import { describe, it, expect } from 'vitest';
 import * as THREE from 'three';
 import { RemotePlayers, LABEL_MIN_PX } from './remote-players';
+import { skinColor } from '../../data/skins.data';
 
 const pose = (x: number, y: number, z: number, yaw = 0) => ({ x, y, z, yaw, pitch: 0 });
 
@@ -57,21 +58,21 @@ describe('RemotePlayers', () => {
 				return canvas;
 			},
 		});
-		rp.upsert(1, 'Noah', 'blue');
+		rp.upsert(1, 'Noah', 'jj');
 		const oldMat = findSprite(scene.children[0]).material as THREE.SpriteMaterial;
 		let oldDisposed = false;
 		oldMat.addEventListener('dispose', () => { oldDisposed = true; });
-		rp.upsert(1, 'Noah', 'red');
-		expect(strokes).toEqual(['#1E88E5', '#E53935']);
+		rp.upsert(1, 'Noah', 'milo');
+		expect(strokes).toEqual([skinColor('jj'), skinColor('milo')]);
 		expect(oldDisposed).toBe(true);
-		rp.upsert(1, 'Noah', 'red'); // unchanged: no redraw
+		rp.upsert(1, 'Noah', 'milo'); // unchanged: no redraw
 		expect(strokes).toHaveLength(2);
 	});
 
 	it('the box is 0.6 × 1.8 × 0.6 in the skin colour, with a darker front face', () => {
 		const scene = new THREE.Scene();
 		const rp = new RemotePlayers(scene);
-		rp.upsert(1, 'Noah', 'blue');
+		rp.upsert(1, 'Noah', 'jj');
 		const box = findBox(scene.children[0]);
 		const geo = box.geometry as THREE.BoxGeometry;
 		expect(geo.parameters).toMatchObject({ width: 0.6, height: 1.8, depth: 0.6 });
@@ -79,12 +80,12 @@ describe('RemotePlayers', () => {
 		expect(mats).toHaveLength(6);
 		// Face order is +x, −x, +y, −y, +z, −z; the front is −z (the camera's forward at yaw 0).
 		const side = mats[0].color.getHexString().toUpperCase();
-		expect(`#${side}`).toBe('#1E88E5');
+		expect(`#${side}`).toBe(skinColor('jj').toUpperCase());
 		const front = mats[5].color;
 		expect(front.r + front.g + front.b).toBeLessThan(mats[0].color.r + mats[0].color.g + mats[0].color.b);
 		// The re-skin recolours it.
-		rp.upsert(1, 'Noah', 'red');
-		expect(`#${(findBox(scene.children[0]).material as THREE.MeshBasicMaterial[])[0].color.getHexString().toUpperCase()}`).toBe('#E53935');
+		rp.upsert(1, 'Noah', 'milo');
+		expect(`#${(findBox(scene.children[0]).material as THREE.MeshBasicMaterial[])[0].color.getHexString().toUpperCase()}`).toBe(skinColor('milo').toUpperCase());
 	});
 
 	it('remove takes the group out of the scene and disposes of its geometry, materials and texture', () => {
@@ -127,9 +128,9 @@ describe('RemotePlayers', () => {
 		const ctx = (canvas as unknown as { getContext(): { strokeRect: () => void; strokeStyle: string } }).getContext();
 		ctx.strokeRect = () => strokes.push(ctx.strokeStyle);
 		const rp = new RemotePlayers(scene, { createCanvas: () => canvas });
-		rp.upsert(1, 'Noah', 'green');
+		rp.upsert(1, 'Noah', 'mikey');
 		expect(calls).toContain('fillRect');
-		expect(strokes).toEqual(['#43A047']);
+		expect(strokes).toEqual([skinColor('mikey')]);
 		const text = calls.find((c) => c.startsWith('fillText:'))!;
 		expect(text).toMatch(/^fillText:Noah:bold 32px /);
 		const s = findSprite(scene.children[0]);

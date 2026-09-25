@@ -5,7 +5,7 @@ import { MpApi, type MpWorldRow } from '../net/mp-api';
 
 const row = (uuid: string, online: string[] = [], createdAt = 0): MpWorldRow => ({
 	uuid, name: `World ${uuid}`, mustMine: false, createdAt,
-	online: online.map((name) => ({ name, skin: 'red' })),
+	online: online.map((name) => ({ name, skin: 'milo' })),
 });
 
 /** An in-memory localStorage; `throwOnSet` simulates a full or private-mode store. */
@@ -112,8 +112,8 @@ describe('mp-prefs', () => {
 
 	it('restores name, skin and world; a bad skin falls back to null', () => {
 		const { bid } = loadMpPrefs();
-		saveMpPrefs({ name: 'Noah', skin: 'blue', worldId: 'w9', bid });
-		expect(loadMpPrefs()).toEqual({ name: 'Noah', skin: 'blue', worldId: 'w9', bid });
+		saveMpPrefs({ name: 'Noah', skin: 'jj', worldId: 'w9', bid });
+		expect(loadMpPrefs()).toEqual({ name: 'Noah', skin: 'jj', worldId: 'w9', bid });
 		localStorage.setItem(MP_KEY, JSON.stringify({ name: 'Noah', skin: 'plaid', worldId: 3, bid }));
 		expect(loadMpPrefs()).toEqual({ name: 'Noah', skin: null, worldId: null, bid });
 	});
@@ -128,7 +128,7 @@ describe('mp-prefs', () => {
 
 	it('a throwing store does not throw', () => {
 		vi.stubGlobal('localStorage', memStorage(true));
-		expect(() => saveMpPrefs({ name: 'Noah', skin: 'red', worldId: null, bid: 'x' })).not.toThrow();
+		expect(() => saveMpPrefs({ name: 'Noah', skin: 'milo', worldId: null, bid: 'x' })).not.toThrow();
 		expect(loadMpPrefs().bid).toMatch(/^[0-9a-f-]{36}$/);
 	});
 });

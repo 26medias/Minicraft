@@ -17,11 +17,12 @@ import { tntKey, TNT_CHAIN_FUSE } from './tnt';
 import { cellInBox, detonate, playerBox, yawDir } from './blast-shapes';
 import { updateLightsForBlockChange } from '../engine/world/lighting';
 import { LiquidScheduler } from './liquid-scheduler';
-import { chunkIndex, chunkIndexOrNeg, indexOf, WORLD_CHUNKS_Z } from '../engine/world/coords';
+import { chunkIndex, chunkIndexOrNeg, WORLD_CHUNKS_Z } from '../engine/world/coords';
 import { planFrame, chebyshev, budgetFor, MESH_RADIUS, UNMOUNT_RADIUS, DATA_RADIUS } from './chunk-scheduler';
 import { areaBounds, areaCells, inHeldZone, isMultiBlock, isRemovableId, miningDuration, removableCellsBy, type AreaBounds } from './tools';
 import type { PickaxeTier } from '../data/crafting.data';
 import type { ChunkOverlay } from '../engine/world/overlay';
+import { applyRemoteOp } from '../engine/world/apply-remote';
 import { intToColor, type Op } from '../net/protocol';
 
 const LAMP_ID = BLOCK_BY_NAME['lamp'].id;
@@ -580,18 +581,13 @@ export class GameLoop {
 		let anchor: { x: number; y: number; z: number } | null = null;
 		for (let k = 0; k < n; k++) {
 			const { op, recolor } = this.remoteQueue[k];
-			const [x, y, z, id, fluid] = op;
-			if (!this.world.inBounds(x, y, z)) continue;
-			const cx = Math.floor(x / 16), cz = Math.floor(z / 16);
-			const c = this.world.getChunk(cx, cz);
-			if (!c) continue;
-			const i = indexOf(x - cx * 16, y, z - cz * 16);
-			const oldId = c.blocks[i] as BlockId;
-			if (oldId === id && (c.fluidMeta.get(i) ?? 0) === fluid && !recolor) continue;
+			const [x, y, z, id] = op;
+			const r = applyRemoteOp(this.world, op);
+			if (r.oldId === null) continue; // out of bounds or chunk not loaded
+			if (!r.applied && !recolor) continue; // a colour-only op must still relight and cancel mining
 			const m = this.mining;
 			if (m && m.target.x === x && m.target.y === y && m.target.z === z) this.mining = null;
-			if (oldId !== id && this.primedTnt.delete(tntKey(x, y, z))) this.overlay?.remove(x, y, z);
-			this.world.writeRemote(x, y, z, id, fluid);
+			if (r.oldId !== id && this.primedTnt.delete(tntKey(x, y, z))) this.overlay?.remove(x, y, z);
 			this.batchCell(batch, x, y, z);
 			anchor ??= { x, y, z };
 		}

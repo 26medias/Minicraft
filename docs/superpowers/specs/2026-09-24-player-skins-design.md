@@ -259,7 +259,7 @@ Every test module runs in vitest's `node` environment; nothing needs a DOM (inje
 10. **Existing suites**: `npm test`, `npx tsc -p tsconfig.json --noEmit`, `npm run lint`,
     `scripts/menu-smoke.ts`, `scripts/mp-e2e.ts` — updated to character ids (see §10).
     Setup first: `npm i`, `npm run build-atlas` (baseline has env-only failures otherwise).
-11. **Rendered check, an instrument** (new `--only skins` scenario in `scripts/mp-e2e.ts`, which
+11. **Rendered check, an instrument** (new scenario `E10`, `--only E10`, in `scripts/mp-e2e.ts`, which
     already runs headless Chromium, its own Vite on :5174 and a local `mcserver` on a temp DB, and
     blocks non-localhost requests; set `MP_E2E_SCRATCH` to this session's scratchpad):
     client A = Milo (slim), client B = JJ (classic). Put B facing A at 3 blocks. On A's canvas,
@@ -276,10 +276,13 @@ Every test module runs in vitest's `node` environment; nothing needs a DOM (inje
   `.selected`), each showing the character's **full front** (head+hat, body+jacket, arms+sleeves,
   legs+pants, composed like `docs/skins/front-sheet.png`) drawn nearest-neighbour to a canvas about
   48×96 CSS px, with the name below. Slim arms drawn 3 px wide.
-- Screen 2's "Playing as ● Noah": the dot becomes the character's 8×8 face (+hat) at ~24 px.
+- Screen 2's "Playing as ● Noah": the dot becomes a small full-body preview of the character
+  (the same front view as the picker, 20×40 CSS px) followed by "Playing as Noah (JJ)" — name,
+  then the character's name in brackets (§12a).
 - World list online dots stay colour dots (`skinColor`).
-- The drawing helpers (`drawFront`, `drawFace`) are pure over RGBA arrays + a canvas, in
-  `src/ui/skin-preview.ts`, reusing the loader's decode + `upgradeLegacySkin`.
+- The composing helpers (`frontPixels`, `facePixels`) are pure over RGBA arrays, and
+  `paintPreview` draws one to a canvas, in `src/ui/skin-preview.ts`, reusing the loader's decode +
+  `upgradeLegacySkin`.
 
 ## 10. Files touched
 

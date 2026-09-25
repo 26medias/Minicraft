@@ -3,9 +3,11 @@
 Goal: replace the coloured-box avatars (`src/engine/render/remote-players.ts`, colours from
 `src/data/skins.data.ts`) with real Minecraft-style skins on a Minecraft player rig.
 Characters wanted: Milo, Chip, JJ, Mikey, Crazy Fan Girl, plus an Enderman.
-**Research only.** Nothing has been implemented yet.
+**Research record.** This was written before anything was built. The feature is now implemented
+to the design in `docs/superpowers/specs/2026-09-24-player-skins-design.md`; the game's copies of
+the chosen PNGs live in `src/assets/skins/` (the catalog is `src/data/skins.data.ts`).
 
-The chosen PNGs are in `docs/skins/`. `docs/skins/front-sheet.png` is a flat front-view render of
+The chosen PNGs were collected in `docs/skins/`. `docs/skins/front-sheet.png` is a flat front-view render of
 all six, in this order: Milo, Chip, Crazy Fan Girl, JJ, Mikey, Enderman.
 
 ## Finding 1 — the characters come from two channels

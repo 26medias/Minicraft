@@ -51,7 +51,7 @@ func NameKey(name string) (string, error) {
 	return norm.NFC.String(strings.ToLower(n)), nil
 }
 
-// MaxSkinBytes bounds hello.skin. Skins are preset ids ("red", "blue"...); the bound only keeps a
+// MaxSkinBytes bounds hello.skin. Skins are character ids ("milo", "jj"...); the bound only keeps a
 // client with the token from storing megabytes in players.skin and every join/welcome/listing.
 const MaxSkinBytes = 32
 

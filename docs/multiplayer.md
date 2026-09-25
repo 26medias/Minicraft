@@ -74,7 +74,7 @@ the tables together.
 
 | t | fields | notes |
 |---|---|---|
-| `hello` | `world, name, skin, bid, proto, gen, resume` | first message; a `skin` over 32 bytes, not UTF-8 or with a control character is stored as `""` (the default colour); `gen` is the client's generator version; `resume: true` on a reconnect reload |
+| `hello` | `world, name, skin, bid, proto, gen, resume` | first message; `skin` is a character id (`milo`, `jj`, …; unknown ids fall back to Milo on the client); a `skin` over 32 bytes, not UTF-8 or with a control character is stored as `""` (Milo); `gen` is the client's generator version; `resume: true` on a reconnect reload |
 | `pos` | `x, y, z, yaw, pitch` | at most 10 Hz, only while moving or turning |
 | `ping` | — | every 2 s when nothing else was sent; driven by `setInterval`, so a hidden tab stays alive |
 | `edit` | `cid, ops` | ≤ 2,000 ops; `cid` increases per connection; a batch may touch one cell more than once and is applied in order |
@@ -217,14 +217,22 @@ warnings and a big 10 … 1. Everyone else gets a small toast with the leaver's 
 timer is paused while disconnected, and a reconnect reload keeps the session (see
 `docs/playtime.md`).
 
+### Other players
+
+Other players are Minecraft-style skinned rigs (six characters, `src/data/skins.data.ts`; the
+PNGs are in `src/assets/skins/`): the body turns with yaw, the head tilts with pitch, the legs
+walk, the right arm swings while mining or after a place/break. Old colour ids render as Milo.
+Each has a name label with the character's colour as its border. The design is
+`docs/superpowers/specs/2026-09-24-player-skins-design.md`.
+
 ### Minimap
 
 A 160 px round map, bottom-right, in multiplayer only. It covers 48 blocks around the player and
 rotates with the player (forward is up). Each column is coloured by its highest non-air block;
 liquids are drawn at 70 %, unloaded chunks dark grey. Heights are cached per chunk by `rev`,
-rebuilding at most 4 chunks per redraw, and it redraws at 10 Hz. Other players are skin-colour
-dots with a white outline, a ▲/▼ when more than 8 blocks above or below, clamped to the rim
-beyond the radius. Its cost is in `docs/performance.md`.
+rebuilding at most 4 chunks per redraw, and it redraws at 10 Hz. Other players are dots in their
+character's colour with a white outline, a ▲/▼ when more than 8 blocks above or below, clamped to
+the rim beyond the radius. Its cost is in `docs/performance.md`.
 
 ## Server internals, in one paragraph each
 

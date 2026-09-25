@@ -1,0 +1,15 @@
+{
+	// Spec §9.3: a bot repo's view of the SDK. nodenext + strict, NO skipLibCheck, types from the built
+	// dist/index.d.ts only (no `file:` install). `npm run test:bot` runs `tsc -p` on this after the build.
+	"compilerOptions": {
+		"target": "ES2022",
+		"lib": ["ES2022"],
+		"module": "nodenext",
+		"moduleResolution": "nodenext",
+		"strict": true,
+		"noEmit": true,
+		"types": ["node"],
+		"paths": { "minicraft-bot": ["../../dist/index.d.ts"] }
+	},
+	"files": ["consumer.ts"]
+}

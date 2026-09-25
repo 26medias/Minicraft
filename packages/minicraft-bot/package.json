@@ -1,0 +1,18 @@
+{
+	"name": "minicraft-bot",
+	"version": "0.1.0",
+	"private": true,
+	"description": "Write bots that join a Minicraft multiplayer world (Node >= 22). Built from the game's own world, net and worldgen code.",
+	"type": "module",
+	"exports": {
+		".": {
+			"types": "./dist/index.d.ts",
+			"import": "./dist/index.js"
+		}
+	},
+	"types": "./dist/index.d.ts",
+	"files": ["dist"],
+	"engines": {
+		"node": ">=22"
+	}
+}

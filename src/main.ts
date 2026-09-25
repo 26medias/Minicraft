@@ -71,6 +71,7 @@ import { RemotePlayers } from './engine/render/remote-players';
 import { colorTableFromAtlas } from './engine/render/block-colors';
 import { Minimap } from './ui/minimap';
 import { MpOverlays } from './ui/mp-overlays';
+import { Toasts } from './ui/toasts';
 import { loadMpPrefs } from './persistence/mp-prefs';
 import { skinColor } from './data/skins.data';
 import type { PlayerSave } from './persistence/adapter';
@@ -119,6 +120,9 @@ async function main() {
 	saveStatus.className = 'saved';
 	saveStatus.textContent = cloudAdapter ? 'Saved' : 'Saved on this device';
 	app.appendChild(saveStatus);
+
+	// One toast stack per page (cheat codes spec §8): multiplayer's toasts and the solo cheat toasts.
+	const toasts = new Toasts(app);
 
 	const menu = new MainMenu(app, adapter, mpApi);
 	const options = new OptionsMenu(app);
@@ -176,7 +180,7 @@ async function main() {
 	function startMultiplayer(args: AutojoinArgs, resume: boolean): void {
 		menu.showBuilding('Joining…');
 		// One set of overlays per page, even when a failed join is retried from the menu.
-		const ui = (mpUi ??= new MpOverlays(app));
+		const ui = (mpUi ??= new MpOverlays(app, toasts));
 		const hello: Hello = {
 			t: 'hello',
 			world: args.world,
@@ -269,6 +273,8 @@ async function main() {
 	) {
 		// Multiplayer keeps "Joining…" up until the spawn is found.
 		if (!mp) menu.hide();
+		// Solo: the toast stack sits below the #save-status pill (spec §8).
+		toasts.setSolo(!mp);
 		// Starting any solo game clears the multiplayer autojoin flag (re-gate I1).
 		if (!mp) beginSolo(sessionStorage);
 		// Clear any lights from a prior session of startGame (returning from main menu to a new world).

@@ -1,7 +1,5 @@
 import type { FatalScreen } from '../game/mp-exit';
-
-/** How long a toast stays up. */
-const TOAST_MS = 6_000;
+import type { Toasts } from './toasts';
 
 /**
  * The multiplayer UI pieces (plan I1, spec §5, §7.4, §7.5):
@@ -14,15 +12,10 @@ const TOAST_MS = 6_000;
 export class MpOverlays {
 	private reconnectEl: HTMLDivElement | null = null;
 	private fatalEl: HTMLDivElement | null = null;
-	private toasts: HTMLDivElement;
 	/** Created on the first visible number, so another player's screen never has one. */
 	private countdownEl: HTMLDivElement | null = null;
 
-	constructor(private app: HTMLElement) {
-		this.toasts = document.createElement('div');
-		this.toasts.id = 'mp-toasts';
-		app.appendChild(this.toasts);
-	}
+	constructor(private app: HTMLElement, private toasts: Toasts) {}
 
 	/** Spec §7.5: the screen dims under a big "Reconnecting…". */
 	showReconnecting(): void {
@@ -115,17 +108,7 @@ export class MpOverlays {
 
 	/** A small toast with a colour dot ("Noah has to go in 2 minutes", "Noah went home"). */
 	toast(text: string, color: string): void {
-		const t = document.createElement('div');
-		t.className = 'mp-toast';
-		const dot = document.createElement('span');
-		dot.className = 'mp-dot';
-		dot.style.background = color;
-		const span = document.createElement('span');
-		span.className = 'mp-toast-text';
-		span.textContent = text;
-		t.append(dot, span);
-		this.toasts.appendChild(t);
-		setTimeout(() => t.remove(), TOAST_MS);
+		this.toasts.show(text, color, 'mp');
 	}
 
 	/** Spec §7.4: the leaver's big 10 … 1. `secondsLeft` outside 1..10 hides it. */

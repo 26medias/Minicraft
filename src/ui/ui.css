@@ -1024,6 +1024,10 @@
 	font: bold 18px system-ui, sans-serif;
 	border-radius: 10px;
 }
+/* Solo (cheat codes spec §8): below the #save-status pill (top 10px, ~24px tall). */
+#mp-toasts.solo {
+	top: 44px;
+}
 #mp-countdown {
 	position: fixed;
 	top: 50%;

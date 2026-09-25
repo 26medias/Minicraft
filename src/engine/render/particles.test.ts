@@ -59,3 +59,17 @@ describe('spawnFirework (toys spec §3.3)', () => {
 		expect(scene.children).toHaveLength(FIREWORK_SPARKS_SMALL);
 	});
 });
+
+describe('spawnBreak chips are lit, not black', () => {
+	it('every chip carries a white vertex colour: the shared chunk material has vertexColors on, and a missing colour attribute renders black', () => {
+		const { scene, ps } = system();
+		ps.spawnBreak(0, 0, 0, 1);
+		expect(scene.children.length).toBeGreaterThan(0);
+		for (const m of scene.children) {
+			const color = (m as THREE.Mesh).geometry.getAttribute('color');
+			expect(color, 'chip has a color attribute').toBeDefined();
+			expect(color.count).toBe((m as THREE.Mesh).geometry.getAttribute('position').count);
+			for (let i = 0; i < color.count; i++) expect([color.getX(i), color.getY(i), color.getZ(i)]).toEqual([1, 1, 1]);
+		}
+	});
+});

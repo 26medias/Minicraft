@@ -75,6 +75,8 @@ export class ParticleSystem {
 				uv.setXY(j, u0 + uv.getX(j) * (u1 - u0), v0 + uv.getY(j) * (v1 - v0));
 			}
 			uv.needsUpdate = true;
+			// The shared chunk material multiplies by the vertex colour (baked light); a cube without one renders black.
+			geo.setAttribute('color', new THREE.Float32BufferAttribute(new Float32Array(uv.count * 3).fill(1), 3));
 
 			const mesh = new THREE.Mesh(geo, this.material);
 			mesh.position.set(

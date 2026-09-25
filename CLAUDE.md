@@ -33,7 +33,7 @@ data), `src/net/` (multiplayer client: protocol, snapshot codec, socket, sync).
 holds `mcserver`, the Go + SQLite multiplayer relay (runbook: `server/README.md`;
 Go is at `~/.local/go/bin`).
 
-Per-subsystem docs live in `docs/`: `lighting.md`, `liquids.md`, `movement.md`, `worldgen.md`, `performance.md`,
+Per-subsystem docs live in `docs/`: `lighting.md`, `liquids.md`, `movement.md`, `worldgen.md`, `worldgen-from-seed.md` (rebuild reference), `performance.md`,
 `persistence.md`, `inventory.md`, `crafting.md`, `playtime.md`, `multiplayer.md`, `protocol.md`. `docs/specs.md` is the source of truth for the tech stack.
 
 ⚠ **The kid's real worlds live in the localStorage of

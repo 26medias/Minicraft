@@ -1,6 +1,6 @@
 # Worldgen
 
-How terrain is generated in Minicraft. This doc covers the generator versions, the v3 pipeline, its determinism rules, the instruments that guard it, and what it costs downstream. The design, every numeric bound, and the evidence behind them live in `docs/superpowers/specs/2026-09-21-worldgen-v3-design.md` (the source of truth — section numbers below refer to it). This doc does not restate its numbers.
+How terrain is generated in Minicraft. This doc covers the generator versions, the v3 pipeline, its determinism rules, the instruments that guard it, and what it costs downstream. The design, every numeric bound, and the evidence behind them live in `docs/superpowers/specs/2026-09-21-worldgen-v3-design.md` (the source of truth — section numbers below refer to it). This doc does not restate its numbers. For the rebuild-level reference (every formula, draw order and numeric rule, plus test vectors), see `docs/worldgen-from-seed.md`.
 
 ## Generator versions
 

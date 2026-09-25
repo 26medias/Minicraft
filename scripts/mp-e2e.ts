@@ -3,7 +3,9 @@
 // skins: JJ, slim Milo, a back view, the upgraded Enderman, walk and swing; skins spec §8.11)), E11 (a
 // minicraft-bot SDK bot beside A: badge, visibility, not online, walk, place, edits both ways, cracks)
 // and E12 (the version gate: MC_MIN_CLIENT above the build; the SDK's OutdatedClientError and the
-// browser's one automatic reload; protocol-bots spec §9 rows 7–8, §12a).
+// browser's one automatic reload; protocol-bots spec §9 rows 7–8, §12a). E13 (cheat codes: a code grants,
+// the stash has it at once, the server keeps it across a rejoin in a fresh context, and a granted Big TNT
+// places for real).
 //
 //   MP_E2E_SCRATCH=<your scratch dir> npx tsx scripts/mp-e2e.ts [--only E2,E6]
 //
@@ -571,11 +573,11 @@ const B_WHO: Who = { name: 'Bo', skin: 'jj' };
 
 	// Headless only: a headed window steals the user's focus (standing rule).
 	const browser: Browser = await chromium.launch({ headless: true });
-	const ctxA = await browser.newContext({ viewport: { width: 960, height: 600 } });
+	let ctxA = await browser.newContext({ viewport: { width: 960, height: 600 } });
 	const ctxB = await browser.newContext({ viewport: { width: 960, height: 600 } });
 	let A: Page | null = null;
 	let B: Page | null = null;
-	const needMp = ['E1', 'E2', 'E3', 'E4', 'E5', 'E6', 'E9', 'E10', 'E11', '4009'].some(want);
+	const needMp = ['E1', 'E2', 'E3', 'E4', 'E5', 'E6', 'E9', 'E10', 'E11', 'E13', '4009'].some(want);
 	try {
 		// ------------------------------------------------------------------ E7 (part 1)
 		if (want('E7')) {
@@ -1089,10 +1091,112 @@ const B_WHO: Who = { name: 'Bo', skin: 'jj' };
 		}
 
 		// A comes back for everything after E2 (it left in E2).
-		if (needMp && A === null && ['E3', 'E5', 'E6', '4009'].some(want)) {
+		if (needMp && A === null && ['E3', 'E5', 'E6', 'E13', '4009'].some(want)) {
 			A = await newPage(ctxA, A_WHO, 'A');
 			await joinWorld(A, BASE, WORLD, '10 min');
 			await sleep(1_500);
+		}
+
+		// ------------------------------------------------------------------ E13
+		// Cheat codes (spec §11 test 11). Before E3/E5/E6; A is replaced by a fresh-context rejoin.
+		if (want('E13') && A && B) {
+			const b = B;
+			await scenario('E13', 'a cheat code grants, persists on the server across a fresh-context rejoin, and places for real', async () => {
+				let a = A!;
+				// 0. Idle > 5 s: no earlier extras send is still pending.
+				await sleep(6_000);
+				// 1. I, then type (the box has focus: J1).
+				await a.keyboard.press('KeyI');
+				await a.keyboard.type('Big Boom');
+				// 2. The real instrument: Enter and the stash read in ONE evaluate.
+				const s = await a.evaluate(() => {
+					const m = (window as any).__mc;
+					const stashBig = () => {
+						const raw = sessionStorage.getItem('mp:extras');
+						return raw === null ? null : (JSON.parse(raw).data?.inventory?.big_tnt ?? 0);
+					};
+					const before = m.player.inventory.big_tnt ?? 0;
+					const box = document.querySelector('.inventory-search') as HTMLInputElement;
+					box.dispatchEvent(new KeyboardEvent('keydown', { code: 'Enter', key: 'Enter', bubbles: true }));
+					return { before, stash: stashBig(), live: m.player.inventory.big_tnt ?? 0, box: box.value, toasts: [...document.querySelectorAll('#mp-toasts .mp-toast-text')].map((e) => e.textContent) };
+				});
+				check(s.stash === s.before + 50, `the stash holds big_tnt ${s.before} + 50 right after Enter (stash ${s.stash})`);
+				check(s.live === s.before + 50 && s.box === '', `live big_tnt ${s.live}, box emptied`);
+				check(s.toasts.some((t) => (t ?? '').includes('Big Boom!')), `A sees the Big Boom toast (${JSON.stringify(s.toasts)})`);
+				// 3. Two more codes, real keys.
+				const emeraldBefore = await a.evaluate(() => (window as any).__mc.player.inventory.deepslate_emerald_ore ?? 0);
+				await a.keyboard.type('I am Mole Man');
+				await a.keyboard.press('Enter');
+				await a.keyboard.type('I am so rich!');
+				await a.keyboard.press('Enter');
+				const lastGrantAt = Date.now();
+				const want0 = await a.evaluate(() => {
+					const m = (window as any).__mc;
+					return { big: m.player.inventory.big_tnt as number, emerald: m.player.inventory.deepslate_emerald_ore as number, owned: [...m.player.tools.owned] as number[] };
+				});
+				check(want0.owned.includes(4), `I am Mole Man: tier 4 owned (${JSON.stringify(want0.owned)})`);
+				check(want0.emerald === emeraldBefore + 500, `I am so rich!: deepslate_emerald_ore ${emeraldBefore} + 500 = ${want0.emerald}`);
+				check(want0.big === s.before + 50, `big_tnt is before + 50 before leaving (${want0.big})`);
+				await a.keyboard.press('Escape');
+				// 4. Before any pick or place: > 5 s after the LAST grant, then close the PAGE, and wait for B to see A leave.
+				const aId = await b.evaluate((name) => ((window as any).__mc.mp.remote.positions() as Array<{ id: number; name: string }>).find((p) => p.name === name)?.id ?? null, A_WHO.name);
+				check(aId !== null, `B knows A's id (${aId})`);
+				const logStart = await b.evaluate(() => (window as any).__mc.mp.log.length as number);
+				await sleep(Math.max(0, 6_000 - (Date.now() - lastGrantAt)));
+				await a.close();
+				const aLeft = await b.waitForFunction(([id, from]) => (window as any).__mc.mp.log.slice(from).some((m: any) => m.t === 'left' && m.id === id), [aId, logStart] as const, { timeout: 20_000 }).then(() => true, () => false);
+				check(aLeft, "B's log shows A left");
+				if (!aLeft) return;
+				// 5. Rejoin in a FRESH context (empty sessionStorage: only the server can hold the grant).
+				const oldCtx = ctxA;
+				ctxA = await browser.newContext({ viewport: { width: 960, height: 600 } });
+				a = await newPage(ctxA, A_WHO, 'A');
+				A = a;
+				await joinWorld(a, BASE, WORLD, '10 min');
+				await oldCtx.close();
+				await sleep(1_500);
+				const back = await a.evaluate(() => {
+					const m = (window as any).__mc;
+					return { stash: sessionStorage.getItem('mp:extras'), big: m.player.inventory.big_tnt ?? 0, emerald: m.player.inventory.deepslate_emerald_ore ?? 0, owned: [...m.player.tools.owned] as number[], playtime: m.playtime !== null };
+				});
+				check(back.big === want0.big, `after the rejoin big_tnt is ${want0.big} (got ${back.big})`);
+				check(back.emerald === want0.emerald, `after the rejoin deepslate_emerald_ore is ${want0.emerald} (got ${back.emerald})`);
+				check(back.owned.includes(4), `after the rejoin tier 4 is owned (${JSON.stringify(back.owned)})`);
+				check(back.playtime, 'the rejoined A has a play timer (E5 needs it)');
+				// 6. Pick the Big TNT tile (J2: not on the hotbar), then a REAL right-click with pointer lock.
+				await a.keyboard.press('KeyI');
+				await a.click('.inventory-tile[data-block="big_tnt"]');
+				await a.keyboard.press('Escape');
+				const feet = await pos(a);
+				const ground = await standAt(a, Math.floor(feet[0]) + 3, Math.floor(feet[2]) + 3);
+				await place(a, [ground[0], ground[1] + 1, ground[2]], 0, -Math.PI / 2 + 0.01);
+				const cell = [Math.floor(ground[0]), Math.floor(ground[1]), Math.floor(ground[2])];
+				const bigId = await a.evaluate(() => (window as any).__blocks.BLOCK_BY_NAME.big_tnt.id as number);
+				const was = await a.evaluate((c) => (window as any).__mc.world.getBlock(c[0], c[1], c[2]) as number, cell);
+				check(was === 0, `the target cell ${cell} is air before placing (got ${was})`);
+				if (was !== 0) return;
+				// The renderer's canvas is the first one in #app; the click requests pointer lock.
+				await a.locator('canvas').first().click();
+				const locked = await a.waitForFunction(() => document.pointerLockElement === document.querySelector('canvas'), null, { timeout: 5_000 }).then(() => true, () => false);
+				// STOP AND REPORT if this fails: never replace the real right-click with setBlock or a synthetic event.
+				check(locked, 'A has pointer lock on the game canvas');
+				if (!locked) return;
+				const aLog = await a.evaluate(() => (window as any).__mc.mp.log.length as number);
+				await a.mouse.down({ button: 'right' });
+				await a.mouse.up({ button: 'right' });
+				const seen = await b.waitForFunction(([x, y, z, id]) => (window as any).__mc.world.getBlock(x, y, z) === id, [cell[0], cell[1], cell[2], bigId] as const, { timeout: 5_000 }).then(() => true, () => false);
+				check(seen, `B sees A's Big TNT (id ${bigId}) at ${cell}`);
+				const after = await a.evaluate((from) => {
+					const m = (window as any).__mc;
+					return { big: m.player.inventory.big_tnt ?? 0, errors: m.mp.log.slice(from).filter((x: any) => x.t === 'error').map((x: any) => x.code) };
+				}, aLog);
+				check(after.big === want0.big - 1, `A's big_tnt dropped by 1 (${want0.big} → ${after.big})`);
+				check(after.errors.length === 0, `no server error, no 4003 (${JSON.stringify(after.errors)})`);
+				// Clean up for the scenarios after this one (E3 compares hashes).
+				await a.evaluate(() => document.exitPointerLock());
+				await a.evaluate((c) => (window as any).__mc.world.setBlock(c[0], c[1], c[2], 0), cell);
+				await b.waitForFunction((c) => (window as any).__mc.world.getBlock(c[0], c[1], c[2]) === 0, cell, { timeout: 5_000 });
+			});
 		}
 
 		// ------------------------------------------------------------------ E3

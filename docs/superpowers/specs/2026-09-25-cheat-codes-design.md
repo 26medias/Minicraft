@@ -1,6 +1,7 @@
 # Cheat codes: design
 
-Date: 2026-09-25. Branch `cheats` (from main f3eacb6). Status: draft, for gate 1.
+Date: 2026-09-25. Branch `cheats` (from main f3eacb6). Status: revised after gate 1. Julien's
+answers (J1–J4) and the controller's rulings are folded in and binding.
 
 ## 1. Purpose
 
@@ -19,6 +20,14 @@ count and tool rules that crafting already uses.
 - **Matching is forgiving.** Case, punctuation and extra spaces are ignored, so "mole power" matches
   "Mole Power!".
 - **Codes can be repeated any time.** Each Enter grants the reward again.
+- **J1: the search box takes focus.** Opening the I screen on the Blocks tab, or switching to that
+  tab, focuses the search box. Typing, including the letter I, goes into the box. I no longer
+  closes the screen while the box has focus; Esc does (it clears first, then closes).
+- **J2: grid only.** Granted items never go on the hotbar.
+- **J3: "I'm" forms.** "I'm Mole Man" and "I'm so rich!" also work, through a per-row alias list
+  kept as data.
+- **J4:** `docs/cheats.md` lists the codes for the parent. A test keeps it in step with the data in
+  both directions, reward text included.
 - Codes and rewards:
 
 | Code | Reward |
@@ -43,80 +52,95 @@ All 16 ore names, `tnt`, `big_tnt` (1000), `mega_tnt` (1001), `slime_pad` (1002)
   `'close'` for Escape and `'type'` for every other key. The keydown handler in
   `src/ui/inventory.ts` (≈ line 95) calls `stopPropagation()` on every key and returns early on
   `'type'`. **Enter therefore does nothing today.** It is swallowed before the game sees it, the box
-  keeps its text and the filter stays as it was. There is no `<form>`, so nothing is submitted.
+  keeps its text and the filter stays as it was. There is no `<form>`.
+- **The box is not focused on open.** A kid in a real browser pressed I and typed "I am so rich!"
+  straight away. His keys went to the game: the second I closed the screen, Space jumped, and P
+  swapped the pickaxe. J1 fixes this.
 - **Counts** (`src/game/inventory.ts`). The inventory is `Record<blockName, number>`, and an absent
-  key counts as `STARTING_COUNT` (0). Counts have **no upper cap** anywhere: not in the client
-  model, not in `resolvePlayerExtras`, and not in the API schema, which only requires an integer
-  ≥ 0 and at most 2000 keys. The badge shows `999+` above 999. *Crafted-only* blocks (`big_tnt`,
-  `mega_tnt`, `tunnel_tnt`, `slime_pad`, `launch_pad`, …) need a count to place in every world, and
-  their tiles are hidden at 0. Other counted blocks (ores, plain `tnt`) need a count only in
-  `mustMine` worlds. In unlimited worlds their counts still show as badges and still feed recipes.
+  key counts as `STARTING_COUNT` (0). Counts have **no upper cap** anywhere: not in the client model,
+  not in `resolvePlayerExtras`, and not in the API schema (an integer ≥ 0, at most 2000 keys).
+  Badges show `999+`, and Craft cards show the raw sums. *Crafted-only* blocks need a count to place
+  in every world, and their tiles are hidden at 0. Other counted blocks (ores, plain `tnt`) need a
+  count only in `mustMine` worlds. In unlimited worlds their counts still show and still feed
+  recipes.
 - **Tools.** The shape is `PlayerTools = { owned: number[]; equipped: number }`, and 0 (the hand) is
-  always owned. Crafting adds the tier to `owned` (sorted) and equips it. `canCraft` refuses a
-  pickaxe the player already owns. `owned` need not be contiguous: `nextOwnedTier` (the P key) and
-  `pickaxeRow` both work on any set. On load, tiers outside 0..7 are dropped.
-- **Notifications.** `MpOverlays.toast(text, color)` (`src/ui/mp-overlays.ts`) is a top-right
-  stack. Each toast lasts 6 s, `#mp-toasts` has z-index 20 (above `#inventory-root` at 15), and it
-  ignores pointer events. **It exists only in multiplayer:** main.ts builds `MpOverlays` in
-  `startMultiplayer`, and its doc says "Nothing here exists in solo". Solo has no toast host.
+  always owned. Crafting adds the tier to `owned` (sorted) and equips it, and `canCraft` refuses a
+  pickaxe already owned. `owned` need not be contiguous: `nextOwnedTier` (P) and `pickaxeRow` work on
+  any set. Tiers outside 0..7 are dropped on load.
+- **Notifications.** `MpOverlays.toast(text, color)` (`src/ui/mp-overlays.ts`) is a top-right stack
+  (`#mp-toasts`, `.mp-toast`, `.mp-toast-text`, `.mp-dot`). Each toast lasts 6 s, the stack has
+  z-index 20 (above `#inventory-root` at 15), and it has `pointer-events: none`. **It exists only in
+  multiplayer:** main.ts builds `MpOverlays` in `startMultiplayer`. In solo, `#save-status` sits at
+  top 10 px, right 12 px, z-index 40. `.mp-dot` is also used by `src/ui/menu.ts`.
 - **Persistence.** Solo: `AutoSave.markDirty()` → `playerSave()` copies `inventory` and `tools` into
-  the local save and the cloud PUT (`api/src/schema.ts`: `inventorySchema` and `toolsSchema`,
-  optional fields, bounds loose on purpose). Multiplayer: main.ts replaces `autosave` with `MpSync`,
-  which has the same shape. `MpSync.markDirty()` writes the sessionStorage stash at once and sends
-  `extras {inventory, tools, hotbar, selected}` 5 s later (and on leave).
+  the local save and the cloud PUT (`api/src/schema.ts`). AutoSave also writes locally on
+  `pagehide`. Multiplayer: `autosave` is `MpSync`. Its `markDirty()` writes the sessionStorage stash
+  (`mp:extras`) at once and sends `extras` 5 s later. **Multiplayer has no `pagehide` flush.** If the
+  tab closes within 5 s of a change, the server never gets it; the stash only helps a reload in the
+  same tab. Both savers read the **live** player state when their timer fires. Any other dirtying
+  action will therefore carry a grant that never called `markDirty` itself, so tests must check
+  `markDirty` directly (§11).
 - **Server.** `extras` are "opaque to the server, capped at `MaxExtrasBytes` (256 KiB)"
   (`docs/protocol.md` §3; `hub/world.go` checks only `len ≤ MaxExtrasBytes && json.Valid`). The
   server stores them in SQLite and returns them in `welcome.extras`. Placed blocks are checked
-  against `CatalogMax = 1008` (`server/internal/proto/catalog_gen.go`), which covers every block
-  granted here.
+  against `CatalogMax = 1008`, which covers every granted block.
 
 **Conclusion: no protocol, server or API change is needed.** A grant is an ordinary inventory or
-tools change followed by `markDirty()`. The crafting path (`applyCraft`) already works this way.
+tools change followed by `markDirty()`, as `applyCraft` does.
 
 ## 4. Matching rule
 
 ```ts
-/** Lower-case, then keep only a–z and 0–9. */
+/** Unicode-fold, lower-case, then keep only a–z and 0–9. */
 export function normalizeCode(s: string): string {
-    return s.toLowerCase().replace(/[^a-z0-9]/g, '');
+    return s.normalize('NFKD').replace(/\p{M}/gu, '').toLowerCase().replace(/[^a-z0-9]/g, '');
 }
-/** The cheat whose normalised code equals the normalised text, or null. Blank text → null. */
+/** The cheat whose normalised code or alias equals the normalised text, or null. Blank → null. */
 export function matchCheat(text: string, cheats = CHEATS): Cheat | null
 ```
 
-- The comparison is on the **whole string**, not a substring: "big boom please" does not match.
-- The rule ignores all whitespace, not only extra spaces. So "molepower", "Mole-Power!!",
-  " MOLE   POWER " and "mole power" all match "Mole Power!". This is slightly wider than "extra
-  spaces", and deliberately so: a 7-year-old drops spaces and adds punctuation. **Ruling asked,
-  §10 Q1.** If Julien wants only runs of spaces collapsed, the alternative is to map every non a–z0–9
-  character to a space, collapse the runs and trim. Under that rule "Mole-Power" still matches, but
-  "molepower" does not.
-- An apostrophe is deleted, so "I'm so rich" normalises to "imsorich" and does **not** match "I am
-  so rich!". Accented letters are dropped. The codes are plain ASCII, so neither case matters for
-  them.
-- The normalised codes today are `bigboom`, `tunnelthis`, `iammoleman`, `molepower`, `jump` and
-  `iamsorich`. They are distinct, and a data test keeps them distinct and non-empty.
+- **Every** space is dropped (controller, Q1). So "molepower", "Mole-Power!!", " MOLE   POWER " and
+  "mole power" all match "Mole Power!".
+- NFKD with combining marks stripped folds accents and fullwidth forms: "rích" matches "rich", and
+  "ＪＵＭＰ" matches "jump".
+- The comparison is on the whole string, not a substring: "big boom please" does not match.
+- Aliases go through the same function. An apostrophe is deleted, so "I'm so rich!" normalises to
+  "imsorich" and needs the alias (J3).
+- The normalised keys are `bigboom`, `tunnelthis`, `iammoleman`/`immoleman`, `molepower`, `jump` and
+  `iamsorich`/`imsorich`. Data tests keep all of them distinct, non-empty, and different from every
+  normalised block name and label.
 
-## 5. Enter handling
+## 5. Focus and Enter handling
 
-`searchKey` gains a third result: `searchKey(code, query): 'clear' | 'close' | 'submit' | 'type'`.
-It returns `'submit'` for `Enter` or `NumpadEnter` when `normalizeCode(query) !== ''`, and `'type'`
-otherwise, as today. Escape is unchanged. The Inventory gets one callback,
-`onSearchEnter: ((text: string) => boolean) | null`, which main.ts wires. It returns true when a
-code was granted.
+**Focus (J1).** `Inventory.open()` on the Blocks tab, and `setTab('blocks')`, call
+`this.search.focus()`. With focus in the box, every key, including I, P, Space and the digits, is
+typed into the box. The existing `stopPropagation()` keeps those keys from the game. Esc keeps its
+behaviour: it clears the text, or closes the screen when the box is empty. The I key closes the
+screen only when the box does not have focus (for example on the Craft tab). `close()` blurs the
+box.
+
+**Keys.** The signature becomes
+`searchKey(code, query, isComposing = false, key = ''): 'clear' | 'close' | 'submit' | 'type'`.
+
+- It returns `'submit'` when `(code === 'Enter' || code === 'NumpadEnter' || key === 'Enter')`,
+  `!isComposing` and `normalizeCode(query) !== ''`. Virtual keyboards send `code === ''`, which is
+  why `key` is checked too.
+- Otherwise it returns `'type'`, or Escape's existing result.
+- A composing IME always gives `'type'`.
+
+The Inventory gets one callback, `onSearchEnter: ((text: string) => boolean) | null`, which returns
+true when a code was granted. Its handler starts with `if (!this.isOpen) return`.
 
 | Case | What happens |
 |---|---|
 | Empty or blank box, or only punctuation | Nothing, exactly as today. No grant, no toast, no sound. |
-| Text matches no code | **Nothing, exactly as today.** The text and the filter stay, with no toast and no "nope" sound. Any reaction would reveal that codes exist. |
-| Text matches a code | `onSearchEnter` grants (§7), then: `markDirty()`, `syncHotbar()` (badges, pickaxe row, craft dots), a toast (§8), `playCraft()`. The Inventory then empties the box and calls `applySearch()`, so the whole grid is back with the new badges. Focus stays in the box, ready for another code. `preventDefault()`. |
-| Enter held down (key repeat) | The first keydown grants and empties the box. The repeats see an empty box, so they do nothing. One grant per press. |
-| IME composition (`e.isComposing`) | Treated as `'type'`. |
+| Text matches no code | **Nothing, exactly as today.** The text and filter stay. There is no toast and no "nope" sound, since either would reveal that codes exist. |
+| Text matches a code or alias | main.ts grants (§7), then calls `markDirty()` and `syncHotbar()` (badges, pickaxe row, craft dots), shows a toast (§8) and plays `playCraft()`. The Inventory then empties the box and calls `applySearch()`; focus stays in the box. `preventDefault()`. |
+| Enter held down | The first keydown grants and empties the box; the repeats see an empty box and do nothing. |
+| IME composition | `'type'`. |
 
-Enter keeps `stopPropagation()` in every case, so it never reaches the game. Codes are only
-reachable from the Blocks tab, because the Craft tab has no search box. A play-time freeze or a
-network freeze closes the inventory first (main.ts `closeInventory()`). The callback is also a no-op
-unless the inventory is open.
+Enter keeps `stopPropagation()` in every case. A play-time freeze or a network freeze closes the
+inventory first (`closeInventory()`).
 
 ## 6. Data shape: `src/data/cheats.data.ts`
 
@@ -126,58 +150,69 @@ import type { PickaxeTier } from './crafting.data';
 export type CheatGrant =
     | { kind: 'block'; name: string; count: number }
     | { kind: 'pickaxe'; tier: PickaxeTier };
-/** `code` is what Julien tells Noah, as written; matching uses normalizeCode(code). */
-export type Cheat = { id: string; code: string; grants: CheatGrant[]; message: string };
+/** `code` is what Julien tells Noah; `also` lists other accepted spellings. All match through normalizeCode. */
+export type Cheat = { id: string; code: string; also: string[]; grants: CheatGrant[]; message: string };
 
 const ORES = ['coal', 'copper', 'iron', 'gold', 'diamond', 'emerald', 'lapis', 'redstone'];
 const block = (name: string, count: number): CheatGrant => ({ kind: 'block', name, count });
 
 export const CHEATS: readonly Cheat[] = Object.freeze([
-    { id: 'big_boom', code: 'Big Boom', grants: [block('tnt', 50), block('big_tnt', 50), block('mega_tnt', 50)], message: '…' },
-    { id: 'tunnel_this', code: 'Tunnel this!', grants: [block('tunnel_tnt', 50)], message: '…' },
-    { id: 'mole_man', code: 'I am Mole Man', grants: [{ kind: 'pickaxe', tier: 4 }], message: '…' },
-    { id: 'mole_power', code: 'Mole Power!', grants: [{ kind: 'pickaxe', tier: 6 }], message: '…' },
-    { id: 'jump', code: 'Jump!', grants: [block('slime_pad', 50), block('launch_pad', 50)], message: '…' },
-    { id: 'so_rich', code: 'I am so rich!', grants: ORES.flatMap((o) => [block(`${o}_ore`, 500), block(`deepslate_${o}_ore`, 500)]), message: '…' },
+    { id: 'big_boom', code: 'Big Boom', also: [], grants: [block('tnt', 50), block('big_tnt', 50), block('mega_tnt', 50)], message: 'Big Boom! +50 TNT, Big TNT and Mega TNT' },
+    { id: 'tunnel_this', code: 'Tunnel this!', also: [], grants: [block('tunnel_tnt', 50)], message: 'Tunnel time! +50 Tunnel TNT' },
+    { id: 'mole_man', code: 'I am Mole Man', also: ["I'm Mole Man"], grants: [{ kind: 'pickaxe', tier: 4 }], message: 'Hello, Mole Man! An Iron Pickaxe for you' },
+    { id: 'mole_power', code: 'Mole Power!', also: [], grants: [{ kind: 'pickaxe', tier: 6 }], message: 'Mole Power! A Diamond Pickaxe for you' },
+    { id: 'jump', code: 'Jump!', also: [], grants: [block('slime_pad', 50), block('launch_pad', 50)], message: 'Boing! +50 Slime Pads and Launch Pads' },
+    { id: 'so_rich', code: 'I am so rich!', also: ["I'm so rich!"], grants: ORES.flatMap((o) => [block(`${o}_ore`, 500), block(`deepslate_${o}_ore`, 500)]), message: 'So rich! +500 of every ore' },
 ]);
 ```
 
-The messages are in §8. The logic lives in a new pure module, `src/game/cheats.ts`: `normalizeCode`,
-`matchCheat` and `applyCheat`. It mirrors `craft-apply.ts`.
+The logic lives in a new pure module, `src/game/cheats.ts` (`normalizeCode`, `matchCheat`,
+`applyCheat`), which mirrors `craft-apply.ts`.
 
 ## 7. Grant semantics: `applyCheat(player, cheat, markDirty)`
 
-The function mutates `player.inventory` and `player.tools` with new objects, never in place. It
-calls `markDirty` exactly once and returns `{ pickaxeChanged: boolean }`. It does **not** touch the
-hotbar. It is independent of `mustMine`: the same grant lands in every world.
+The function replaces `player.inventory` and `player.tools` with new objects and never mutates them
+in place. It calls `markDirty` exactly once and returns `{ pickaxeChanged }`, which is true exactly
+when the **equipped** tier changed. It never touches the hotbar (J2). It is independent of
+`mustMine`: the same grant lands in every world.
 
 | Item kind | Rule |
 |---|---|
-| Counted block (ores, plain `tnt`) | `inv[name] = countOf(inv, name) + count`. It adds, never sets, so a repeat stacks (50 → 100). There is no cap. In an unlimited world the count shows as a badge and feeds recipes, and placing the block stays free. In a `mustMine` world placing spends the count, as with mined blocks. |
+| Counted block (ores, plain `tnt`) | `inv[name] = countOf(inv, name) + count`. It adds, never sets, so a repeat stacks (50 → 100). No cap. In an unlimited world the count shows as a badge and feeds recipes, and placing the block stays free. In a `mustMine` world placing spends it. |
 | Crafted-only block (`big_tnt`, `mega_tnt`, `tunnel_tnt`, `slime_pad`, `launch_pad`) | The same addition. The count is what makes it placeable in every world, and its tile becomes visible. |
-| Pickaxe, not owned | Added to `owned` (sorted, no duplicate). **Equipped only if its tier is above the equipped tier.** Iron over the hand or a Stone Pickaxe is equipped at once, which gives the reward feel crafting gives. |
-| Pickaxe already owned | `owned` is unchanged (no duplicate tier). Equipped only if above the equipped tier; that can happen when he owns it but holds a lower one. Otherwise nothing changes. The toast is shown anyway. |
-| Pickaxe below his best | Added to `owned` if missing. **Never equipped**, so "I am Mole Man" typed while holding a Diamond Pickaxe does not downgrade his hand. He can switch to it with P or the pickaxe row. The toast is shown anyway. |
+| Pickaxe | Add the tier to `owned` if it is missing (sorted, no duplicate). **Equip it if and only if its tier is above the equipped tier** (controller, Q2). |
 
-When `pickaxeChanged` is true, main.ts calls `loop.onPickaxeChanged()`, as the craft path does, to
-re-arm the mining floor. A granted count does **not** trigger the must-mine auto-hotbar (`rose`).
-Crafting does not trigger it either (crafting spec §3), and "I am so rich!" would otherwise fill his
-bar with 16 ores.
+What the pickaxe rule means in practice:
 
-**Ruling asked, §10 Q2:** this "equip only if higher" rule differs from crafting, which always
-equips. Crafting can only make a pickaxe he does not own, so the two never conflict there.
+- Mole Man with the hand or a Stone Pickaxe equipped: Iron is equipped.
+- Mole Man with a Diamond Pickaxe equipped: Iron is added and Diamond stays equipped.
+- Mole Man when he owns Diamond but holds the hand: Iron is equipped, because 4 > 0.
+- A pickaxe he already owns and holds: nothing changes.
+
+The toast shows in every case. When `pickaxeChanged` is true, main.ts calls `loop.onPickaxeChanged()`
+as the craft path does. A granted count does not trigger the must-mine auto-hotbar (`rose`); crafting
+does not trigger it either.
 
 ## 8. Notification
 
 The toast shows only on the activating player's screen, and nothing is sent over the network.
-Solo has no toast host, so the toast stack moves out of `MpOverlays` into a small `src/ui/toasts.ts`
-(`Toasts.show(text, color?)`: the same markup, CSS, 6 s life and top-right position; the colour dot
-is optional). `MpOverlays.toast` delegates to it, and main.ts creates one instance per page for both
-modes. At z-index 20 it shows above the open I screen. At most 3 toasts are visible at once; a
-fourth pushes out the oldest, so mashing Enter on repeated codes cannot fill the screen. The cheat
-toast has a gold dot (`#f5c542`).
 
-| Code | Toast (`message` in the row) |
+**Extraction: its own first commit.** A new `src/ui/toasts.ts` holds `Toasts.show(text, color?,
+kind: 'mp' | 'cheat' = 'mp')`. It keeps the `#mp-toasts`, `.mp-toast`, `.mp-toast-text` and
+`.mp-dot` names, the CSS and the 6 s life. main.ts creates one `Toasts` at page load, before
+`startMultiplayer`. `MpOverlays` receives that instance in its constructor and no longer builds a
+host; `MpOverlays.toast` delegates to it. Run E5 before and after this commit.
+
+**Cap: at most 2 toasts visible.** When a new toast goes over the cap, the oldest *cheat* toast is
+evicted first. Only if there is none does the oldest multiplayer toast go. A "Noah has to go"
+warning is therefore never pushed out by code mashing.
+
+**Placement.** In multiplayer the stack stays where it is (top 12 px, right 12 px, z-index 20), above
+the open I screen (z-index 15). In solo the stack sits below the `#save-status` pill (top 10 px,
+right 12 px, z-index 40), for example with `top: 44px` under a `.solo` modifier, so the pill never
+covers it. The cheat toast's dot is gold (`#f5c542`).
+
+| Code | Toast (`message` in the row; pinned by the data test) |
 |---|---|
 | Big Boom | `Big Boom! +50 TNT, Big TNT and Mega TNT` |
 | Tunnel this! | `Tunnel time! +50 Tunnel TNT` |
@@ -190,29 +225,28 @@ No player-visible string names the game, so the "Noah's Worlds" naming rule does
 
 ## 9. Persistence and multiplayer
 
-- **Solo.** `markDirty()` saves the new counts and tools locally and to the cloud through the
-  existing `player.inventory` and `player.tools` fields. The API schema already accepts the result:
-  integers ≥ 0 with no maximum, well under 2000 keys, tiers ≤ 15. `resolvePlayerExtras` reloads it:
-  live names are kept, and tiers 4 and 6 are within 0..7. **No API change and no redeploy.**
-- **Multiplayer.** `markDirty()` goes to `MpSync`. The stash updates at once, and the `extras`
-  message follows 5 s later or on leave. The server stores the opaque JSON; the "I am so rich!"
-  inventory is a few KB against the 256 KiB cap. On rejoin it comes back in `welcome.extras`.
-  Extras are per player and are never relayed, so a friend sees nothing until blocks are placed,
-  and placed blocks are ordinary `edit` ops the server already accepts (ids ≤ 1008). **No new
-  message, no `PROTO` bump, no `mcserver` rebuild or restart.** Because a grant never touches the
-  hotbar, a count for a block hidden by a lower `catalogMax` (an older server) does nothing, just as
-  a count carried in from elsewhere does nothing.
+- **Solo.** `markDirty()` saves the new counts and tools locally (including the `pagehide` local
+  write) and to the cloud, through the existing `player.inventory` and `player.tools` fields. The
+  API schema already accepts the result: integers ≥ 0 with no maximum, well under 2000 keys, tiers
+  ≤ 15. `resolvePlayerExtras` reloads it. **No API change.**
+- **Multiplayer.** `markDirty()` goes to `MpSync`. The stash updates at once, and `extras` are sent
+  5 s later. The server stores the opaque JSON; the "I am so rich!" inventory is a few KB against the
+  256 KiB cap. It comes back in `welcome.extras` on rejoin. **There is no `pagehide` flush:** closing
+  the tab within 5 s of a code loses that grant on the server. The spec adds no flush for this,
+  because codes are repeatable. Extras are per player and never relayed, so a friend sees only
+  placed blocks, which are ordinary `edit` ops (ids ≤ 1008). **No new message, no `PROTO` bump, no
+  `mcserver` change.** A grant never touches the hotbar, so a count for a block that a lower
+  `catalogMax` hides does nothing.
 - Each family can use the codes in the other's world. They are private worlds, so this is accepted.
 
 ## 10. Non-goals
 
 - The UI has no list of codes, no hint, no placeholder change, and no reaction to a wrong code.
-- No achievements, "cheater" flag, per-code counters or cooldowns.
-- No server, protocol or API change.
+- No achievements, "cheater" flag, per-code counters, cooldowns or count cap (controller, Q4).
+- No server, protocol or API change, and no new multiplayer flush.
+- No hotbar placement of granted items (J2).
 - No new items, no removal codes, no codes that change the world, mode, time or flight.
-- The feature does not check or advance crafting progression; bypassing it is the point.
-- Julien (the parent) gets a list in a repo doc, `docs/cheats.md`, kept in step with the data by a
-  test in the style of `crafting-docs.test.ts`. The repo is not UI.
+- `docs/cheats.md` is for the parent only (J4). The repo is not UI.
 
 ## 11. Test plan
 
@@ -221,82 +255,122 @@ Each test must be able to fail. "Red on" names the broken build that turns it re
 **Unit (vitest, node environment)**
 
 1. `src/data/cheats.data.test.ts`
-   - *pins the six rows*: each code's exact grants. Red on: Big Boom including `tunnel_tnt`,
-     `flatten_tnt` or `lake_tnt`; "I am so rich!" missing a `deepslate_` ore, including
-     `nether_gold_ore` or `nether_quartz_ore`, or not using 500; the wrong tiers (4 and 6, checked
-     through `PICKAXES[t].label`).
-   - *every granted block name is in `BLOCK_BY_NAME` and `isCounted`*. Red on a typo such as
-     `lapis_lazuli_ore`, which would be a silent no-op grant.
-   - *normalised codes are non-empty and unique*. Red on a new row that shadows an old one.
+   - *pins the six rows*: each row's exact grants, `also` and `message`. Red on: Big Boom including
+     `tunnel_tnt`, `flatten_tnt` or `lake_tnt`; "I am so rich!" missing a `deepslate_` ore,
+     including `nether_gold_ore` or `nether_quartz_ore`, or not using 500; the wrong tiers (4 and 6,
+     checked through `PICKAXES[t].label`); a toast text changed without review.
+   - *every granted block name is in `BLOCK_BY_NAME` and `isCounted`*. Red on a typo, which would be
+     a silent no-op grant.
+   - *the normalised codes and aliases are non-empty and unique across rows*.
+   - *no collision with the catalog*: no block's `normalizeCode(name)` or `normalizeCode(label)`
+     equals any normalised code or alias. Red when a future catalog row turns a block search into a
+     code.
    - *counts are positive integers*.
-2. `src/game/cheats.test.ts`
-   - *normalizeCode / matchCheat table*: "mole power", "MOLE POWER!!", "  Mole   Power ",
-     "mole-power" and "molepower" each match `mole_power`. "mole powers", "mole", "", "   " and
-     "!!!" match nothing, and nor does a block search such as "diamond" or "tnt". Red on a
-     case-sensitive rule, a substring rule, or punctuation that is kept.
-   - *adds, never sets*: `{}` + Big Boom → `tnt/big_tnt/mega_tnt = 50`, and again → 100; `{big_tnt: 7}`
-     → 57; `{big_tnt: 0}` → 50. Red on an idempotent grant or an assignment.
-   - *pure and dirty once*: the input objects are unchanged and `markDirty` is called exactly once
-     per grant. Red on in-place mutation, which breaks the in-flight save copy, or on a missing
-     `markDirty`.
+2. `src/data/cheats-docs.test.ts` (J4, both directions)
+   - Every row's `code`, each alias and its `message` appear in `docs/cheats.md`.
+   - Every code line in the doc (a fixed marker format, e.g. a `| "…" |` table row) is a code or
+     alias in `CHEATS`.
+   - Red on a data row without documentation, and on documentation for a code that is gone or
+     renamed.
+3. `src/game/cheats.test.ts`
+   - *normalizeCode / matchCheat*:
+     - These match `mole_power`: "mole power", "MOLE POWER!!", "  Mole   Power ", "mole-power",
+       "molepower".
+     - These match `so_rich`: "I'm so rich!", "i m so rich", "I am so rích".
+     - "ＪＵＭＰ" matches `jump`.
+     - These match nothing: "mole powers", "mole", "", "   ", "!!!", "diamond", "tnt".
+     - Red on a case-sensitive rule, a substring rule, punctuation kept, no NFKD fold, or aliases
+       ignored.
+   - *adds, never sets*:
+     - `{}` + Big Boom gives 50 each; a second grant gives 100.
+     - `{big_tnt: 7}` → 57, and `{big_tnt: 0}` → 50.
+     - Red on an idempotent grant or an assignment.
+   - *pure, and dirty exactly once*: the input objects are unchanged, and a `markDirty` spy is
+     called once per grant.
    - *hotbar untouched*, in both `mustMine` values.
-   - *pickaxe rules*: `{[0],0}` + Mole Man → `{[0,4],4}`, changed. `{[0,6],6}` + Mole Man →
-     `{[0,4,6],6}`, not re-equipped. `{[0,4],4}` + Mole Man → owned `[0,4]` with no duplicate,
-     unchanged. `{[0,4,6],4}` + Mole Power → equipped 6. Red on "always equip" or a duplicate tier.
+   - *pickaxe rules* (`pickaxeChanged` in brackets):
+     - `{[0],0}` + Mole Man → `{[0,4],4}` (true).
+     - `{[0,6],6}` + Mole Man → `{[0,4,6],6}` (false).
+     - `{[0,6],0}` + Mole Man → `{[0,4,6],4}` (true).
+     - `{[0,4],4}` + Mole Man → `{[0,4],4}` (false, no duplicate).
+     - `{[0,4,6],4}` + Mole Power → equipped 6 (true).
+     - Red on "always equip", "never equip", comparing against the best owned tier instead of the
+       equipped one, or a duplicate tier.
    - *placeable after the grant*: `canPlace(big_tnt)` is true in an unlimited world, and
-     `canPlace(diamond_ore)` is true in a `mustMine` world. Red on a grant to a wrong key.
-3. `src/ui/inventory-search.test.ts` (extended)
-   - `searchKey('Enter','big boom')` and `searchKey('NumpadEnter','x')` → `'submit'`. `searchKey('Enter','')`
-     and `searchKey('Enter','  !! ')` → `'type'`. The existing Escape and "other keys" cases are kept
-     unchanged. Red on Enter not being distinguished, or on Enter over an empty box calling the
-     handler.
-4. `src/data/cheats-docs.test.ts`: `docs/cheats.md` contains every `code`.
+     `canPlace(diamond_ore)` is true in a `mustMine` world.
+4. `src/ui/inventory-search.test.ts` (extended)
+   - These return `'submit'`: `searchKey('Enter','big boom')`, `searchKey('NumpadEnter','x')` and
+     `searchKey('', 'x', false, 'Enter')` (a virtual keyboard).
+   - These return `'type'`: `searchKey('Enter','')`, `searchKey('Enter','  !! ')` and
+     `searchKey('Enter','x', true)` (IME).
+   - The existing Escape and "other keys" cases are kept, and `KeyI` and `KeyP` return `'type'`.
+   - Red on an Enter that is not distinguished, an empty-box submit, or a lost IME guard.
 
-**Browser (headless Chromium, own Vite on a free port, API blocked; never 5173 in use, never prod)**
+**Browser, solo** (headless Chromium, its own Vite on a **free port, never 5173**, API blocked,
+never prod). Either `scripts/crafting-smoke.ts`, made headless, or a new `cheat-smoke`:
 
-5. Solo leg, added to `scripts/crafting-smoke.ts` (made headless) or a new `cheat-smoke`:
-   - Type "diamond" + Enter → the box still says "diamond" and the grid is still filtered. Red on a
-     build that clears on every Enter.
-   - Type "  big BOOM!! " + Enter → the box is empty, a toast with "Big Boom!" is visible above the
-     open I screen, the Big TNT tile shows `50`, and the HUD pickaxe is unchanged. Red on a toast host
-     that exists only in multiplayer.
-   - Enter again with the same code → `100`. Reload the page (API blocked, local save) → `100` still.
-     Red on a missing `markDirty` in solo.
-   - "Mole Power!" → the HUD shows the diamond icon.
+5. *I then type at once (J1)*
+   - Press I, then with no click type "I am so rich!" + Enter.
+   - The screen is still open, the player has not jumped, the equipped pickaxe is unchanged, and
+     `deepslate_emerald_ore` is 500.
+   - Red on a build that does not focus the box, or that lets I close the screen while the box is
+     focused.
+6. *No match keeps the box*: "diamond" + Enter → the box still says "diamond", and the grid is still
+   filtered.
+7. *Grant, toast and markDirty*
+   - `__mc` exposes the autosave dirty state (or a `markDirty` counter). Assert it is clean first.
+   - "  big BOOM!! " + Enter → in the **same** `evaluate`, the state is dirty, the box is empty and
+     the Big TNT tile shows `50`.
+   - A toast containing "Big Boom!" exists, and its computed z-index is above `#inventory-root`'s.
+     Compare z-index rather than `elementFromPoint`, since toasts have `pointer-events: none`.
+   - Its top is below the bottom of `#save-status`.
+   - Enter the code again → 100. Reload → still 100.
+   - Red on a missing solo toast host, a toast under the pill, or a grant without `markDirty`. That
+     last one is caught even though other actions would have saved the state anyway.
+8. "Mole Power!" → the HUD shows the diamond icon.
 
-**Multiplayer (`scripts/mp-e2e.ts`, new scenario `E13`)**
+**Multiplayer: `scripts/mp-e2e.ts`, new scenario `E13`**
 
-This needs `MP_E2E_SCRATCH`. The suite's own `mcserver` runs on 127.0.0.1:18080 against a temp DB,
-with Vite on :5174. Never 8080, never `minicraft-server.leap-forward.ca`.
+`MP_E2E_SCRATCH` is required. The suite's own `mcserver` runs on 127.0.0.1:18080 with a temp DB,
+and Vite on :5174. Never 8080, never `minicraft-server.leap-forward.ca`.
 
-6. `E13` "a cheat code grants, persists on the server and places for real":
-   - A opens I, types "Big Boom" + Enter: the box is empty, a toast shows, and `__mc.player.inventory.big_tnt` has risen by 50.
-   - A places one Big TNT; B's `mp.log` shows the `edit` with id 1000. A's count drops by 1 and there is no 4003.
-   - "I am Mole Man" → `tools.owned` includes 4.
-   - Wait more than 5 s (the debounce), close A's **browser context**, and rejoin under the same
-     name in a **fresh context**, so sessionStorage is empty and the stash cannot carry the grant.
-     A's counts and tools equal the values before it left.
-   - Red on: extras not marked dirty in multiplayer, a grant that only reached the stash, or a
-     client that stops sending `extras` for large inventories.
-7. The existing `E5` (the leaving toasts) must stay green after the toast extraction. It is the red
-   test for breaking `MpOverlays.toast`. `E6`'s "same inventory counts" check is unaffected.
+E13 runs before E5 and E6. It joins the `needMp` list and the "A comes back" list (`mp-e2e.ts`
+≈ line 1087), and it reassigns `A` after its rejoin.
 
-## 12. Risks and open questions
+9. `E13` "a cheat code grants, persists on the server, and places for real". Steps in order:
+   1. A presses I and types "Big Boom" + Enter.
+   2. In the **same** `evaluate`, `sessionStorage['mp:extras']` already holds `big_tnt` raised by 50.
+      The box is empty and a toast is shown.
+   3. "I am Mole Man" → `tools.owned` includes 4. "I am so rich!" → `deepslate_emerald_ore` is 500.
+   4. **Before any pick or place**, wait more than 5 s (the debounce), then close A's **page**, not
+      its context. Wait until B's `mp.log` shows A `left`, which avoids the 4009 `nameTaken` race.
+   5. Rejoin in a **fresh context** with the same name. Its empty sessionStorage means only the
+      server can supply the state. Check that `big_tnt`, `deepslate_emerald_ore` 500 and tier 4 are
+      all back.
+   6. Place one Big TNT through the real right-click path, with pointer lock (not `setBlock`). B's
+      log shows the `edit` with id 1000, there is no 4003, and A's count drops by 1.
+   - **Red on** a build whose grant passes `() => {}` as `markDirty`: step 2 fails, because the stash
+     is not written. Nothing else in E13 dirties the extras before the rejoin, so step 5 fails too.
+     This must be verified once by running E13 against that sabotaged build.
+10. `E5` (the leaving toasts) runs before and after the toast-extraction commit, and stays green.
+    `E6`'s "same inventory counts" check is unaffected.
 
-- **Q1 (ruling):** should the rule ignore all spaces ("molepower" matches) or only extra ones? §4
-  recommends all.
-- **Q2 (ruling):** should a granted pickaxe be equipped only when higher than the one in hand (§7,
-  recommended), or always, as crafting does?
-- **Q3:** should block grants also put the item on the hotbar, as a craft does (`craftedBlockSlot`)?
-  The recommendation is no: 16 ores cannot fit, and he is in the I screen with the tiles in front of
-  him. It could be a per-row opt-in later.
-- **Q4:** counts have no cap, and each "I am so rich!" adds 8,000 ores. JSON and the save are fine far beyond
-  anything a child can type. A cap (for example 99,999 per key) would be one line; not
-  recommended unless Julien wants one.
-- **Codes collide with searches.** A block search that happens to equal a code, followed by Enter,
-  grants the reward. The only word-like code is "jump", and no block label is "jump", so the harm is
-  low.
-- **Progression.** The codes bypass must-mine and crafting on purpose. The Craft tab will light
-  green dots after "I am so rich!", as intended.
-- **Toast refactor.** Moving the stack out of `MpOverlays` touches multiplayer UI that works today.
-  E5 guards it.
+## 12. Decisions and remaining risks
+
+- **Decided.**
+  - Q1: every space is dropped, plus the NFKD fold (§4).
+  - Q2: equip only if above the equipped tier (§7).
+  - Q3 / J2: no hotbar placement.
+  - Q4: no cap.
+  - J1: auto-focus. J3: aliases. J4: the two-way doc test.
+- **Grant lost in multiplayer on a quick close.** Closing the tab within 5 s of a code loses the
+  grant on the server. This is accepted, because codes are repeatable.
+- **Code/search collisions.** The data test blocks collisions with block names. A free-text search
+  equal to a code (say "jump") followed by Enter still grants, which is harmless.
+- **Progression.** The codes bypass must-mine and crafting on purpose. After "I am so rich!" the
+  Craft tab will show green dots.
+- **Auto-focus changes the I screen for everyone.** Digits and P no longer act while the Blocks tab
+  is open, because they are typed into the box. The hotbar strip and pickaxe row stay clickable.
+  Test 5 covers the new behaviour.
+- **Toast refactor.** It touches multiplayer UI that works today. It goes in its own commit, guarded
+  by E5.

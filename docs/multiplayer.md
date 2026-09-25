@@ -118,7 +118,8 @@ against `src/net/protocol.ts` and `server/internal/proto/proto.go` by
   own.
 - **Spawn:** the server picks only the mode. `first` uses the world's spawn, `return` the stored
   position, `near` a spot 3–6 blocks in front of an online player. The client computes the spot
-  from the seed and its terrain.
+  from the seed and its terrain. Bots are never `near` targets: a bot has no physics and may be
+  mid-air or inside stone.
 - **The server is sleeping** (`GET /worlds` fails or takes over 4 s): "The multiplayer server is
   sleeping. Ask a parent to wake it up." The screen retries every 5 s.
 
@@ -138,7 +139,9 @@ Other players are Minecraft-style skinned rigs (six characters, `src/data/skins.
 PNGs are in `src/assets/skins/`): the body turns with yaw, the head tilts with pitch, the legs
 walk, the right arm swings while mining or after a place/break. Old colour ids render as Milo.
 Each has a name label with the character's colour as its border. The design is
-`docs/superpowers/specs/2026-09-24-player-skins-design.md`.
+`docs/superpowers/specs/2026-09-24-player-skins-design.md`. A bot's label carries a 🤖 badge
+(`🤖 name`); see `docs/protocol.md` for the rest of what sets a bot apart (never listed in
+`GET /worlds`' `online`, never a `near` spawn target, and so on).
 
 ### Minimap
 

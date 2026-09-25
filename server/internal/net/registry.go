@@ -204,9 +204,10 @@ func (r *Registry) Online() map[string][]proto.PlayerInfo {
 // Delete removes a world and its rows. A loaded world with a human player online is refused; a
 // loaded world with only bots online has its bots kicked with 4006 first (spec §4: bots don't
 // block deletion). Either way, once it's clear to proceed the world is unloaded (stopped
-// unconditionally: the bot kick lands first via inbox FIFO order, but the count it changes only
-// settles asynchronously, so this does not re-check Empty()), so its final flush lands before the
-// rows go.
+// unconditionally, not re-checking Empty()): the bot kick lands first via inbox FIFO order, and
+// Stop's cmdStop goes through that same FIFO inbox and blocks on <-w.done, so the count it changes
+// has already settled — not asynchronously — by the time Stop returns, and its final flush lands
+// before the rows go.
 func (r *Registry) Delete(uuid string) error {
 	r.mu.Lock()
 	defer r.mu.Unlock()

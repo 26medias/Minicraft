@@ -51,7 +51,11 @@ export type BotClientOptions = {
 	 * journal is kept for one world: connecting to another world starts a new one (with a warning).
 	 */
 	statePath?: string;
-	/** The minimum time between two edits, in ms (default 150; 0 allowed). */
+	/**
+	 * The minimum time between two edits, in ms (default 150). Floored at MIN_EDIT_GAP_MS (20): the
+	 * kids' send queues cap at 1 MiB, and a flood of edits gets them kicked with 4002. `0` clamps to
+	 * the floor rather than turning the gap off.
+	 */
 	editGapMs?: number;
 	/** Tests only: a WebSocket constructor (default: `globalThis.WebSocket`). */
 	WebSocket?: WebSocketCtor;
@@ -118,6 +122,8 @@ type Mining = { x: number; y: number; z: number; timer: ReturnType<typeof setTim
 type SavedState = { bid?: string; world?: string; journal?: JournalEntry[] };
 
 const DEFAULT_EDIT_GAP_MS = 150;
+/** The edit gap floor (README): below this, the kids' send queues (capped at 1 MiB) can flood and get them kicked with 4002. */
+const MIN_EDIT_GAP_MS = 20;
 /** Blocks per pose step (0.5). */
 const STEP = (WALK_SPEED * POS_EVERY_MS) / 1000;
 /** walkTo is done within this horizontal distance. */
@@ -233,7 +239,7 @@ export class BotClient {
 
 	constructor(private readonly opts: BotClientOptions) {
 		this.api = new MpApi(opts.url, opts.token);
-		this.gap = Math.max(0, opts.editGapMs ?? DEFAULT_EDIT_GAP_MS);
+		this.gap = Math.max(MIN_EDIT_GAP_MS, opts.editGapMs ?? DEFAULT_EDIT_GAP_MS);
 		const saved = opts.statePath ? readState(opts.statePath) : {};
 		this.bidValue = opts.bid ?? saved.bid ?? null;
 		this.entries = saved.journal ?? [];
@@ -406,7 +412,9 @@ export class BotClient {
 	 * Undoes the bot's own edits, newest first, made at or after `sinceMs` (a `Date.now()` timestamp;
 	 * default: all). A cell is restored only while it still holds what the bot put there, so a kid's later
 	 * change is never overwritten; a solid block is not restored into a kid's body (kept for a later revert).
-	 * Revert's own writes are not journaled and skip the edit gap. Resolves the number of cells restored.
+	 * Every restored cell is written first, then the whole batch is sent in messages of at most
+	 * MAX_OPS_PER_EDIT ops — never one `edit` per cell. Revert's own writes are not journaled and skip the
+	 * edit gap. Resolves the number of cells restored.
 	 */
 	revert(sinceMs = -Infinity): Promise<number> {
 		this.assertConnected('revert');
@@ -429,9 +437,10 @@ export class BotClient {
 					kept.push(e);
 					continue;
 				}
-				w.localSet(e.x, e.y, e.z, e.oldId, e.oldColor);
+				w.localSet(e.x, e.y, e.z, e.oldId, e.oldColor, false);
 				n++;
 			}
+			if (n > 0) w.flushWrites();
 			this.entries = kept.reverse();
 			this.persist();
 			return n;

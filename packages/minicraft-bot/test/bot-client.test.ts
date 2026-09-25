@@ -12,6 +12,7 @@ import {
 	ServerRefusedError,
 	type BotClientOptions,
 	type ConnectResult,
+	type JournalEntry,
 } from '../src/index';
 import { BLOCKS, BLOCK_BY_NAME, isSolid } from '../../../src/data/blocks.data';
 import { CLIENT_VERSION, POS_EVERY_MS, PROTO, type Op, type PlayerInfo, type Spawn } from '../../../src/net/protocol';
@@ -562,10 +563,14 @@ describe('place and break', () => {
 		for (const [x, y, z] of [[10, 100, 20], [11, 100, 19], [11, 102, 20], [10, 101, 19]]) {
 			await expect(bot.place(x, y, z, 'stone'), `${x},${y},${z}`).resolves.toBe(false);
 		}
+		// editGapMs floors at 20 ms (MIN_EDIT_GAP_MS): each successful edit needs the fake clock advanced
+		// before the next one, or the chain would wait on a timer that never fires.
 		for (const [x, y, z] of [[12, 100, 20], [10, 99, 20], [10, 103, 20], [10, 100, 21], [9, 100, 20]]) {
 			await expect(bot.place(x, y, z, 'stone'), `${x},${y},${z}`).resolves.toBe(true);
+			await vi.advanceTimersByTimeAsync(20);
 		}
 		await expect(bot.place(30, 100, 30, 'stone')).resolves.toBe(true);
+		await vi.advanceTimersByTimeAsync(20);
 		await expect(bot.place(40, 100, 40, 'stone')).resolves.toBe(true);
 		expect(ws.of('edit').length).toBe(7);
 	});
@@ -586,10 +591,20 @@ describe('place and break', () => {
 		expect(times[2] - times[1]).toBeGreaterThanOrEqual(150);
 	});
 
-	it('editGapMs 0 is allowed', async () => {
+	it('editGapMs: 0 clamps to the 20 ms floor (MIN_EDIT_GAP_MS) instead of turning the gap off', async () => {
 		const { bot, ws } = await connected({ over: { editGapMs: 0 } });
-		await Promise.all([bot.place(10, 200, 10, 'stone'), bot.place(11, 200, 10, 'stone')]);
+		const times: number[] = [];
+		const orig = ws.send.bind(ws);
+		ws.send = (d: string) => {
+			if (JSON.parse(d).t === 'edit') times.push(Date.now());
+			orig(d);
+		};
+		const all = Promise.all([bot.place(10, 200, 10, 'stone'), bot.place(11, 200, 10, 'stone')]);
+		await vi.advanceTimersByTimeAsync(100);
+		expect(await all).toEqual([true, true]);
 		expect(ws.of('edit')).toHaveLength(2);
+		expect(times).toHaveLength(2);
+		expect(times[1] - times[0]).toBeGreaterThanOrEqual(20);
 	});
 
 	it('break resolves true when sent, false for bedrock or air already', async () => {
@@ -699,6 +714,7 @@ describe('revert', () => {
 		const { bot, ws } = await connected({ over: { editGapMs: 0 } });
 		const a0 = bot.world.getBlock(10, 200, 10), b0 = bot.world.getBlock(11, 200, 10);
 		await bot.place(10, 200, 10, 'stone');
+		await vi.advanceTimersByTimeAsync(20); // editGapMs floors at 20 ms (MIN_EDIT_GAP_MS)
 		await bot.place(11, 200, 10, 'stone');
 		ws.recv({ t: 'edit', seq: 5, by: 9, ops: [[11, 200, 10, DIRT, 0, 0]] });
 		expect(await bot.revert()).toBe(1);
@@ -713,6 +729,7 @@ describe('revert', () => {
 		const { bot } = await connected({ over: { editGapMs: 0 } });
 		const a = bot.world.getBlock(10, 200, 10);
 		await bot.place(10, 200, 10, 'stone');
+		await vi.advanceTimersByTimeAsync(20); // editGapMs floors at 20 ms (MIN_EDIT_GAP_MS)
 		await bot.place(10, 200, 10, 'dirt');
 		expect(await bot.revert()).toBe(2);
 		expect(bot.world.getBlock(10, 200, 10)).toBe(a);
@@ -750,6 +767,30 @@ describe('revert', () => {
 		expect(bot.world.getBlock(11, 200, 10)).toBe(a);
 		expect(bot.world.getBlock(10, 200, 10)).toBe(STONE);
 		expect(bot.journal()).toHaveLength(1);
+	});
+
+	it('a revert of 3,000 entries flushes through MpSync in at most 2 edit messages, not one per cell', async () => {
+		const dir = mkdtempSync(join(tmpdir(), 'minicraft-bot-state-'));
+		tmpDirs.push(dir);
+		const statePath = join(dir, 'state.json');
+		const N = 3000;
+		// All 3,000 cells sit in chunk (0, 0) (x, z 0..15; y 10..21), so the snapshot and the journal
+		// agree on exactly what the bot placed, without generating more than one chunk.
+		const cells: Op[] = [];
+		const journal: JournalEntry[] = [];
+		for (let i = 0; i < N; i++) {
+			const x = i % 16, z = Math.floor(i / 16) % 16, y = 10 + Math.floor(i / 256);
+			cells.push([x, y, z, STONE, 0, 0]);
+			journal.push({ x, y, z, oldId: DIRT, newId: STONE, t: 1000 });
+		}
+		writeFileSync(statePath, JSON.stringify({ bid: 'robo', world: 'world-1', journal }));
+		const { bot, ws } = await connected({ over: { statePath, editGapMs: 0 }, cells });
+		const before = ws.of('edit').length;
+		const n = await bot.revert();
+		expect(n).toBe(N);
+		expect(bot.world.getBlock(0, 10, 0)).toBe(DIRT);
+		expect(ws.of('edit').length - before).toBeLessThanOrEqual(2);
+		expect(ws.of('edit').slice(before).reduce((sum, m) => sum + (m.ops as unknown[]).length, 0)).toBe(N);
 	});
 });
 

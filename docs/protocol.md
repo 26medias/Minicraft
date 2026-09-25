@@ -55,7 +55,7 @@ skins, the minimap, server internals, the running setup) see
 
 | `t` | fields | notes |
 |---|---|---|
-| `hello` | `world, name, skin, bid, proto, gen, resume, ver, bot?` | first message; `skin` is a character id (`milo`, `jj`, …; unknown ids fall back to Milo on the client); a `skin` over 32 bytes, not UTF-8 or with a control character is stored as `""` (Milo); `gen` is the client's generator version; `resume: true` on a reconnect; `ver` is the client build ({@link CLIENT_VERSION}), missing counts as 0; `bot: true` marks a bot connection (the game never sends this field) |
+| `hello` | `world, name, skin, bid, proto, gen, resume, ver, bot?` | first message; `skin` is a character id (`milo`, `jj`, …; unknown ids fall back to Milo on the client); a `skin` over 32 bytes, not UTF-8 or with a control character is stored as `""` (Milo); `gen` is the client's generator version; `resume: true` on a reconnect; `ver` is the client build (`CLIENT_VERSION`), missing counts as 0; `bot: true` marks a bot connection (the game never sends this field) |
 | `pos` | `x, y, z, yaw, pitch` | at most 10 Hz, only while moving or turning |
 | `ping` |  | every 2 s when nothing else was sent; driven by `setInterval`, so a hidden tab stays alive |
 | `edit` | `cid, ops` | ≤ 2,000 ops (`MAX_OPS_PER_EDIT`); `cid` increases per connection; a batch may touch one cell more than once and is applied in order |
@@ -202,11 +202,11 @@ compare. CORS follows the same allowed-origins list as the WebSocket (§1).
 ## 9. Costs, limits and the bot SDK
 
 - **Chunk generation** (used by the bot SDK's `getBlock`, `region`, `findNearest`, and by every
-  client): about 29 ms and ~0.35 MB per chunk; the whole 1,024-chunk world is about 6.5 s and
-  350 MB. Generation is synchronous, so scanning more than ~150 new chunks in one call can block
-  past the 6 s silence limit above and get a bot dropped (it then reconnects). `region` and
-  `findNearest` are bounded well below that: `findNearest`'s radius is capped at 32 blocks (≤ 25
-  chunks, ≈ 230 ms measured).
+  client): about 30 ms for the first chunk, then roughly 2–9 ms per chunk; `findNearest` (≤ 25
+  chunks, its radius capped at 32 blocks) is about 0.2 s. The whole 1,024-chunk world is about
+  6.5 s and ~350 MB, which is about the server's 6 s silence limit above, so a bot must never scan
+  the whole world in one synchronous call — it would block past the limit and get dropped (it then
+  reconnects). `region` and `findNearest` are bounded well below that.
 - **Wire limits**: `MaxOpsPerEdit` 2,000, `MaxExtrasBytes` 256 KiB, `MaxSkinBytes` 32, read limit
   4 MiB, send-queue cap 1 MiB (past it: 4002).
 - **`pos`**: at most 10 Hz (`POS_EVERY_MS` = 100), shared by the game and the SDK.
@@ -215,4 +215,6 @@ compare. CORS follows the same allowed-origins list as the WebSocket (§1).
 codec, echo rule) so a bot's view of the world matches the kids' exactly. Start with
 [`packages/minicraft-bot/README.md`](../packages/minicraft-bot/README.md) — it covers `BotClient`,
 `BotWorld`, the edit-gap pacing and the journal/`revert` safety net that this document doesn't
-duplicate.
+duplicate. Only point a bot at a server built from this branch or later. An older server ignores
+`bot`: the bot shows without 🤖, is listed online, can be a spawn target for kids (possibly mid-air
+or inside stone), and blocks world deletion. Deploy the server first.

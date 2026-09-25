@@ -50,6 +50,9 @@ all three are false:
   `sessionStorage['mp:autojoin']`, and a wifi blip must not hand out a fresh timer. The flag
   never outlives its purpose: it is cleared when the site has no multiplayer server, when the
   rejoin fails, on any close that does not reconnect, and when a solo game starts.
+- **An outdated-client auto-reload keeps it too.** The guarded automatic reload behind "Updating
+  Minicraft…" (`docs/protocol.md` §5/§6) deliberately leaves `mp:autojoin` set before it reloads,
+  so the boot after it reads exactly like the reconnect case above, not a fresh start.
 
 After that, the 12-hour stale rule still applies.
 

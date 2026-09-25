@@ -1,7 +1,9 @@
 /**
  * BotWorld (spec §6, §12a): the bot's live world model, the same `World` + `ChunkOverlay` pair the game
  * uses, fed by the same code paths (snapshot, `MpSync`'s echo rule, `applyRemoteOps`).
- * - Chunks are generated on first read (≈ 29 ms and ≈ 0.35 MB each; synchronous).
+ * - Chunks are generated on first read: about 30 ms for the first chunk, then roughly 2–9 ms per
+ *   chunk (synchronous). The whole 1,024-chunk world is about 6.5 s and ~350 MB — about the
+ *   server's 6 s silence limit, so never scan the whole world in one synchronous call.
  * - The bot runs no liquid scheduler and no TNT: the kids' clients simulate liquids.
  * - Every public coordinate API floors x, y, z.
  */
@@ -233,11 +235,14 @@ export class WorldCore {
 	}
 
 	/**
-	 * The low-level write: sets the cell, sends one `edit` now, and fires onBlockChange with `by = you`.
-	 * No refusals, no edit gap, no journal: bots should use `BotClient.place` / `break`. `color` (`#RRGGBB`)
-	 * is used, and validated (throws), only for a lamp.
+	 * The low-level write: sets the cell and fires onBlockChange with `by = you`. When `flush` is true
+	 * (the default), sends the edit now via MpSync's `flushFrame` (one op). Pass `flush: false` for a
+	 * batched write (`BotClient.revert`), and call {@link flushWrites} once after the whole batch:
+	 * MpSync then sends it in messages of at most MAX_OPS_PER_EDIT ops, not one `edit` per cell.
+	 * No refusals, no edit gap, no journal: bots should use `BotClient.place` / `break`. `color`
+	 * (`#RRGGBB`) is used, and validated (throws), only for a lamp.
 	 */
-	localSet(x: number, y: number, z: number, id: number, color?: string): void {
+	localSet(x: number, y: number, z: number, id: number, color?: string, flush = true): void {
 		const fx = Math.floor(x), fy = Math.floor(y), fz = Math.floor(z);
 		const key = `${fx},${fy},${fz}`;
 		if (id === LAMP_ID && color !== undefined) colorToInt(color);
@@ -246,8 +251,16 @@ export class WorldCore {
 		else this.colors.delete(key);
 		const oldId = this.world.getBlock(fx, fy, fz);
 		this.world.setBlock(fx, fy, fz, id);
-		this.sync.flushFrame();
+		if (flush) this.sync.flushFrame();
 		this.emit(fx, fy, fz, oldId, id, this.you);
+	}
+
+	/**
+	 * Flushes writes made with `localSet(…, flush: false)`: MpSync sends them in messages of at most
+	 * MAX_OPS_PER_EDIT ops. A no-op when there is nothing pending.
+	 */
+	flushWrites(): void {
+		this.sync.flushFrame();
 	}
 
 	/** Routes a server `edit` through the echo rule (spec §6), then applies what it keeps. Called by `BotClient`. */

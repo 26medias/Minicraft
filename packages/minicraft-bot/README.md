@@ -17,9 +17,17 @@ socket client. A bot's world matches what the kids see, block for block. The bun
 
 ### 2. Build the SDK
 
-In the Minicraft repo:
+In **the Minicraft checkout that contains this package** (branch `protocol` or later) — a merged
+checkout, e.g. `~/Projects/Minicraft`:
 
 ```bash
+npm run build:bot
+```
+
+Until this branch is merged, that checkout is the worktree instead:
+
+```bash
+cd /home/julien/Projects/Minicraft/.claude/worktrees/protocol
 npm run build:bot
 ```
 
@@ -34,7 +42,8 @@ npm init -y
 npm install --save-dev tsx @types/node
 ```
 
-In `package.json`, add the dependency and `"type": "module"`:
+In `package.json`, add the dependency and `"type": "module"`. `file:` must point at the Minicraft
+checkout that contains this package (branch `protocol` or later) — a merged checkout:
 
 ```json
 {
@@ -43,20 +52,43 @@ In `package.json`, add the dependency and `"type": "module"`:
 }
 ```
 
+or, until this branch is merged, the worktree directly:
+
+```json
+{
+	"type": "module",
+	"dependencies": { "minicraft-bot": "file:/home/julien/Projects/Minicraft/.claude/worktrees/protocol/packages/minicraft-bot" }
+}
+```
+
 Then run `npm install`. Keep `"type": "module"`: the example uses top-level `await`. Without it, tsx
 fails with "Top-level await is currently not supported with the cjs output format".
 
 ### 4. The server and its token
 
+⚠ **Only point a bot at a server built from this branch or later.** An older server ignores `bot`:
+the bot shows without 🤖, is listed online, can be a spawn target for kids (possibly mid-air or
+inside stone), and blocks world deletion. Deploy the server first.
+
 - **The real server:** use the same static token the site uses. It is in `~/minicraft-mp/token` on
   the machine that runs the server.
 - **A local test server** (recommended while writing a bot). This runs on port 18080 with a temp
   database, so the kids' worlds are never touched. See [`server/README.md`](../../server/README.md).
+  Run it from the same checkout that contains this package (branch `protocol` or later) — a merged
+  checkout:
 
   ```bash
   cd ~/Projects/Minicraft/server
   DB=$(mktemp -d)
-  ~/.local/go/bin/go run ./cmd/mcserver -db "$DB/mc.sqlite" -addr 127.0.0.1:18080 -token e2e -gcs-bucket ''
+  env -u MC_GCS_BUCKET -u MC_MIN_CLIENT ~/.local/go/bin/go run ./cmd/mcserver -db "$DB/mc.sqlite" -addr 127.0.0.1:18080 -token e2e -gcs-bucket ''
+  ```
+
+  or, until this branch is merged, the worktree directly:
+
+  ```bash
+  cd /home/julien/Projects/Minicraft/.claude/worktrees/protocol/server
+  DB=$(mktemp -d)
+  env -u MC_GCS_BUCKET -u MC_MIN_CLIENT ~/.local/go/bin/go run ./cmd/mcserver -db "$DB/mc.sqlite" -addr 127.0.0.1:18080 -token e2e -gcs-bucket ''
   ```
 
   Create a world on it (in another terminal):
@@ -80,6 +112,11 @@ const uuid = worlds.find((w) => w.name === 'Bot test')!.uuid;
 ```
 
 ### 6. A companion bot (`bot.ts`)
+
+⚠ **Never give a bot a kid's name.** Player records are keyed by name: a bot that joins as "Noah"
+while the real Noah is offline takes over his saved position and extras (inventory, tools,
+hotbar) as its own, and while the bot is online, Noah gets 4009 `nameTaken` if he tries to join.
+Give bots their own names — a `Robo` prefix (`Robo`, as below, `RoboFriend`, …) is a good habit.
 
 ```ts
 import { BotClient, BlockedError, EYE_HEIGHT } from 'minicraft-bot';
@@ -142,7 +179,8 @@ new BotClient({ url, token, bid?, statePath?, editGapMs? })
   restart. The journal belongs to one world; connecting to another world starts a new journal (with a
   warning), so one world's edits are never reverted in another.
 - `editGapMs` (default **150**) is the minimum time between two edits, so a bot can't build faster than
-  a kid can watch. `0` turns it off.
+  a kid can watch. It floors at **20 ms**: the kids' send queues cap at 1 MiB, and a flood of edits
+  gets them kicked with 4002. `0` clamps to that floor rather than turning the gap off.
 
 | Call | What it does |
 |---|---|
@@ -225,6 +263,12 @@ It gives up **30 s after the first loss**, counted until the bot is back in the 
 `close` and stops. That includes a server that answers `GET /worlds` but keeps dropping the socket.
 Fatal codes (see `connect`) stop at once.
 
+If the server is restarted with a higher `MC_MIN_CLIENT` while the bot is connected, it's the
+**reconnect** attempt that gets refused, not the original `connect()`: the bot's `close` event
+fires with code **4004**, not an `OutdatedClientError` (that type is only thrown by `connect()`
+itself, before the first welcome). Detect it with `bot.on('close', (code) => { if (code === 4004)
+… })` and rebuild (`npm run build:bot`) before restarting the bot.
+
 ### `connect` errors
 
 - `OutdatedClientError { ver, min }`: the server needs a newer client. Run `npm run build:bot`.
@@ -264,11 +308,12 @@ chunk's generated ids), `CLIENT_VERSION`, `EYE_HEIGHT`, `WALK_SPEED` and `POS_EV
 
 ## Costs
 
-- A chunk (16 × 16 × 256) takes about **29 ms and 0.35 MB** to generate. The whole world (1,024
-  chunks) is about 6.5 s and 350 MB. A bot only generates what it reads.
-- Generation is synchronous. A scan over more than about 150 new chunks at once blocks longer than the
-  server's 6 s silence limit, and the bot gets dropped (it then reconnects). `region` and `findNearest`
-  are bounded well below that: `findNearest` generates at most 25 chunks (measured: about 0.2 s the first time).
+- A chunk (16 × 16 × 256) takes about **30 ms for the first chunk, then roughly 2–9 ms per chunk**
+  to generate. `findNearest` (≤ 25 chunks) is about **0.2 s**. The whole world (1,024 chunks) is
+  about **6.5 s and ~350 MB** — about the server's 6 s silence limit, so **never scan the whole
+  world in one synchronous call**. A bot only generates what it reads.
+- Generation is synchronous, so a big enough scan can still block past the 6 s silence limit and
+  get the bot dropped (it then reconnects). `region` and `findNearest` are bounded well below that.
 - The bot runs no liquid or TNT simulation. The kids' games do that, and the bot sees the results as
   edits.
 

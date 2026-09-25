@@ -105,6 +105,9 @@ separate from `proto`, which only moves for an actual wire-shape change.
    ```bash
    curl -s https://noah.leap-forward.ca/minicraft/ | grep -o 'index-[A-Za-z0-9_]*\.js'
    ```
+   If it still serves the old bundle, purge `/minicraft/` in Cloudflare and re-check before
+   raising `MC_MIN_CLIENT` — a cached `index.html` would otherwise point kids (and bots) at a
+   build the new minimum is about to refuse.
 4. **Rebuild the bots** — anyone running `minicraft-bot` needs `npm run build:bot` again
    (see [`packages/minicraft-bot/README.md`](../packages/minicraft-bot/README.md)); an old build
    now gets `OutdatedClientError`.

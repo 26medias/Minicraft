@@ -216,10 +216,10 @@ It's a `World` plus a `ChunkOverlay`, the same pair the game uses.
       `by === you`.
     - Echoes of the bot's own writes are filtered and don't fire twice.
     - `oldId` is `null` when the chunk wasn't generated yet.
-- **Costs** (documented): about 29 ms and ~0.35 MB per generated chunk; the whole world is 6.5 s and
-  350 MB. Generation is synchronous, so a scan over more than ~150 chunks can block longer than the
-  server's 6 s silence limit and get the bot dropped. `region` and `findNearest` are bounded well
-  below that.
+- **Costs** (documented): about 30 ms for the first generated chunk, then roughly 2–9 ms per chunk;
+  `findNearest` (≤ 25 chunks) about 0.2 s. The whole 1,024-chunk world is about 6.5 s and ~350 MB,
+  which is about the server's 6 s silence limit, so a bot must never scan the whole world in one
+  synchronous call. `region` and `findNearest` are bounded well below that.
 
 ### `BotClient`
 - `new BotClient({ url, token, bid?, statePath?, editGapMs? })`.

@@ -81,6 +81,13 @@ export interface KidInfo {
 	inLiquid: boolean;
 	/** A raycast hit from the kid's eye, max 6 blocks (§6). `null` when nothing is hit within range. */
 	lookTarget: Vec3 | null;
+	/** The name of the block at `lookTarget` (for the text state), or `null` with no look target. */
+	lookBlock: string | null;
+	/** The ray distance from the kid's eye to `lookTarget`, or `null` with no look target. */
+	lookDistance: number | null;
+	/** How long (ms) `lookTarget` has been the same cell (`null` counts as a cell too). §12a's
+	 *  `help_build` needs it held ≥ 1 s while he placed nothing. */
+	lookHeldMs: number;
 	/** This kid's own last placements, most recent last (§6 keeps 5; §12a's `help_build` rule only
 	 *  ever needs the last 3). */
 	placements: Placement[];
@@ -112,4 +119,35 @@ export interface Snapshot {
 	/** Whether a stop signal (spec §6 "Stop signal") is currently active for the target kid. There's
 	 *  no radius (§12a): it's per kid, by name, wherever he goes. */
 	stopActiveForTarget: boolean;
+	/** Set while the current target was chosen by an idle switch (§12b): the kid switched away from
+	 *  and how long he had been idle then. For the log and the status line ("switched: Julien idle
+	 *  30s"). `null` when the target was picked as the nearest kid. */
+	switchedFrom: { name: string; idleMs: number } | null;
+}
+
+/** One cell of a server-ordered edit, as the port reports it. */
+export interface EditCell {
+	x: number;
+	y: number;
+	z: number;
+	/** The id the cell held just before this edit, when the edit changed a known cell; `null` when
+	 *  it didn't change it or the chunk wasn't generated yet. */
+	oldId: number | null;
+	newId: number;
+}
+
+/**
+ * A server-ordered edit (anyone's), as `Body.onEdit` reports it (port.ts). `opCount` is the number of
+ * ops in the edit message — §6's placement filter keeps only single-op edits (TNT, area pickaxes and
+ * liquid flow come as other shapes). `byName`/`byBot` are resolved from the player list when the
+ * edit arrives, so the stop signal and perception key kids by NAME (a reconnect changes the id).
+ */
+export interface EditEvent {
+	by: number;
+	/** The author's name, or `null` when unknown (or the bot itself). */
+	byName: string | null;
+	/** True for the bot's own edits and any other bot's. */
+	byBot: boolean;
+	opCount: number;
+	cells: EditCell[];
 }

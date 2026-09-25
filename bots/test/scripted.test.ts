@@ -31,6 +31,9 @@ function makeKid(overrides: Partial<KidInfo> = {}): KidInfo {
 		flying: false,
 		inLiquid: false,
 		lookTarget: null,
+		lookBlock: null,
+		lookDistance: null,
+		lookHeldMs: 0,
 		placements: [],
 		idleSinceMs: null,
 		...overrides,
@@ -45,6 +48,7 @@ function makeSnapshot(overrides: Partial<Snapshot> = {}): Snapshot {
 		target: makeKid(),
 		others: [],
 		stopActiveForTarget: false,
+		switchedFrom: null,
 		...overrides,
 	};
 }

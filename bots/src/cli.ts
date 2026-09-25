@@ -7,7 +7,9 @@
  *   bot's edits are reverted first. Decisions go to `bots/.state/logs/…jsonl`.
  * - `revert`: connects with the same `statePath`, runs `revert()`, prints the count and exits.
  *
- * Only `--brain scripted` is available until Task 6 adds the Laya and CLM brains.
+ * `--brain laya|clm` (Task 6) builds a `SystemOneBrain` from `bots.config.ts`'s `brains` entry and
+ * health-checks it before connecting: a down brain refuses to start (spec §4) with a message naming
+ * how to start it, unless `--brain scripted` (which has no external process, and always passes).
  */
 import { appendFileSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
 import { homedir } from 'node:os';
@@ -15,10 +17,12 @@ import { dirname, resolve } from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 import { BotClient } from 'minicraft-bot';
 import type { BotClientOptions, WorldListing } from 'minicraft-bot';
+import type { Brain } from './brain/brain.js';
+import { SystemOneBrain } from './brain/systemone.js';
 import { jsonlLogger } from './body/log.js';
 import { runCompanion, seededRng } from './bots/companion.js';
 import { ConfigError, checkLiveAck, checkName, loadConfig, pickSkin, resolveWorld } from './config.js';
-import type { Config } from './config.js';
+import type { BrainDef, BrainName, Config } from './config.js';
 import { realPort } from './port.js';
 import { SKIN_IDS } from './skins.js';
 
@@ -35,9 +39,19 @@ export function parseCommand(argv: readonly string[]): { command: Command; flags
 	throw new ConfigError(`unknown bot "${first}"; expected companion or revert`);
 }
 
-/** The brains this build can run. Task 6 adds laya and clm. */
-export function brainRefusal(brain: string): string | null {
-	return brain === 'scripted' ? null : 'only --brain scripted is available in this build';
+/** Builds the real brain for `--brain laya|clm` (Task 6), or `null` for `--brain scripted` (the loop
+ *  then decides every tick by script). Pure given `brains` and `fetchImpl`: no health check here. */
+export function buildBrain(brain: BrainName, brains: Record<string, BrainDef>, fetchImpl: typeof fetch): Brain | null {
+	if (brain === 'scripted') return null;
+	const def = brains[brain];
+	if (!def) throw new ConfigError(`no brain config for "${brain}"`);
+	return new SystemOneBrain({ name: brain, url: def.url, healthPath: def.health, fetchImpl });
+}
+
+/** The refusal message when a real brain's `health()` fails: names how to start it. */
+export function brainHealthMessage(brain: 'laya' | 'clm'): string {
+	if (brain === 'clm') return 'clm is not running — its encoder does not fit this GPU; see ~/Projects/AI/BRAINS.md';
+	return `${brain} is not running or not healthy; start it with \`npm run brains -- ${brain}\` (see ~/Projects/AI/BRAINS.md)`;
 }
 
 function readFileOrNull(path: string): string | null {
@@ -65,6 +79,9 @@ export interface CliDeps {
 	env: Record<string, string | undefined>;
 	readFile(path: string): string | null;
 	print(line: string): void;
+	/** Injectable for tests (a `node:http` fake); defaults to the global `fetch`. Used only by
+	 *  `--brain laya|clm` (health check and `ask`). */
+	fetchImpl?: typeof fetch;
 }
 
 const DEFAULT_DEPS: CliDeps = {
@@ -142,8 +159,10 @@ async function revertCommand(cfg: Config, deps: CliDeps): Promise<void> {
 }
 
 async function companionCommand(cfg: Config, deps: CliDeps): Promise<void> {
-	const refusal = brainRefusal(cfg.brain);
-	if (refusal) throw new ConfigError(refusal);
+	const brain = buildBrain(cfg.brain, cfg.brains, deps.fetchImpl ?? fetch);
+	if (brain && !(await brain.health())) {
+		throw new ConfigError(brainHealthMessage(cfg.brain as 'laya' | 'clm'));
+	}
 	const prepared = await prepare(cfg, deps);
 	if (!prepared) return;
 	const client = await connect(cfg, prepared.listing, prepared.skin, deps);
@@ -159,7 +178,7 @@ async function companionCommand(cfg: Config, deps: CliDeps): Promise<void> {
 	const handle = runCompanion({
 		body: port.body,
 		world: port.world,
-		brain: null,
+		brain,
 		config: { companion: cfg.companion, noEdits: cfg.noEdits, brainTimeoutMs: cfg.brains[cfg.brain]?.timeoutMs ?? 400, name: cfg.name },
 		log,
 		clock: () => Date.now(),

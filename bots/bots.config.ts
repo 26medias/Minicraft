@@ -9,8 +9,27 @@ export default {
 		live: { url: 'https://minicraft-server.leap-forward.ca', tokenEnv: 'MC_LIVE_TOKEN', tokenFile: '~/minicraft-mp/token' },
 	},
 	brains: {
-		laya: { url: 'http://127.0.0.1:8000', health: 'TODO_FROM_BRAINS_MD', home: '~/Projects/AI/laya', start: ['TODO_FROM_BRAINS_MD'], timeoutMs: 400 },
-		clm: { url: 'http://127.0.0.1:8700', health: 'TODO_FROM_BRAINS_MD', home: '~/Projects/AI/clm', start: ['TODO_FROM_BRAINS_MD'], timeoutMs: 400 },
+		// Verified working end-to-end (~/Projects/AI/BRAINS.md, 2026-09-25). `env NAME=value ... laya-serve`
+		// is the exact start command from BRAINS.md, spawned with no shell (brains-cli.ts): `env` sets the
+		// vars and execs the real binary, so BrainDef needs no separate `env` field.
+		laya: {
+			url: 'http://127.0.0.1:8000',
+			health: '/health',
+			home: '~/Projects/AI/laya',
+			start: ['env', 'LAYA_HOST=127.0.0.1', 'LAYA_PORT=8000', 'LAYA_DEVICE=cuda', 'LAYA_PRELOAD=1', '.venv/bin/laya-serve'],
+			timeoutMs: 400,
+		},
+		// experimental: true — clm-serve itself runs fine, but its required Qwen3-8B vLLM pooling
+		// encoder does not fit this machine's 10 GiB RTX 3080 (a genuine CUDA OOM, not a config
+		// mistake); the decision endpoint 502s without it. See ~/Projects/AI/BRAINS.md.
+		clm: {
+			url: 'http://127.0.0.1:8701',
+			health: '/health',
+			home: '~/Projects/AI/clm',
+			start: ['env', 'CLM_PORT=8701', 'CLM_EMB_URL=http://127.0.0.1:8091/v1/embeddings', 'CLM_DEVICE=cuda', '.venv/bin/clm-serve', '--no-ui'],
+			timeoutMs: 400,
+			experimental: true,
+		},
 	},
 	companion: {
 		tickMs: 500,

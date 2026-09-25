@@ -12,7 +12,7 @@ import { mkdtempSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import type { BotClient, BotClientOptions } from 'minicraft-bot';
-import { brainRefusal, main, parseCommand, shutdown } from '../src/cli.js';
+import { brainHealthMessage, buildBrain, main, parseCommand, shutdown } from '../src/cli.js';
 import type { CompanionTuning } from '../src/config.js';
 import type { KidInfo, Vec3 } from '../src/types.js';
 import { AIR, FakeBody, FakeWorld, id, player } from './fake-port.js';
@@ -1082,10 +1082,106 @@ describe('the log and the status line', () => {
 });
 
 describe('cli helpers', () => {
-	it('refuses --brain laya|clm until Task 6, with the exact message', () => {
-		expect(brainRefusal('laya')).toBe('only --brain scripted is available in this build');
-		expect(brainRefusal('clm')).toBe('only --brain scripted is available in this build');
-		expect(brainRefusal('scripted')).toBeNull();
+	const BRAINS = {
+		laya: { url: 'http://127.0.0.1:8000', health: '/health', home: '~/Projects/AI/laya', start: ['env', 'LAYA_PORT=8000', 'laya-serve'], timeoutMs: 400 },
+		clm: { url: 'http://127.0.0.1:8701', health: '/health', home: '~/Projects/AI/clm', start: ['env', 'CLM_PORT=8701', 'clm-serve'], timeoutMs: 400, experimental: true },
+	};
+
+	it('buildBrain: scripted needs no brain; laya/clm build a SystemOneBrain named after the brain', () => {
+		expect(buildBrain('scripted', BRAINS, fetch)).toBeNull();
+		const laya = buildBrain('laya', BRAINS, fetch);
+		expect(laya).not.toBeNull();
+		expect(laya!.name).toBe('laya');
+		const clm = buildBrain('clm', BRAINS, fetch);
+		expect(clm!.name).toBe('clm');
+	});
+
+	it('brainHealthMessage: laya points at the launcher and BRAINS.md; clm names the GPU reason', () => {
+		expect(brainHealthMessage('laya')).toContain('npm run brains -- laya');
+		expect(brainHealthMessage('laya')).toContain('~/Projects/AI/BRAINS.md');
+		expect(brainHealthMessage('clm')).toBe('clm is not running — its encoder does not fit this GPU; see ~/Projects/AI/BRAINS.md');
+	});
+
+	function fakeFetch(healthOk: boolean, urls: string[]): typeof fetch {
+		return (async (url: string | URL) => {
+			urls.push(url.toString());
+			return new Response(JSON.stringify({ status: healthOk ? 'ok' : 'down' }), { status: healthOk ? 200 : 500 });
+		}) as typeof fetch;
+	}
+
+	it('--brain laya builds a SystemOneBrain against bots.config.ts\'s configured URL, and health-checks it before ever touching the game server', async () => {
+		const urls: string[] = [];
+		let clientMade = 0;
+		const makeClient = (_opts: BotClientOptions): BotClient => {
+			clientMade++;
+			return { listWorlds: async () => [] } as unknown as BotClient;
+		};
+		const printed: string[] = [];
+		await main(['companion', '--target', 'local', '--brain', 'laya'], {
+			makeClient,
+			stateRoot: '/tmp/task6-unused-state-root',
+			env: {},
+			readFile: () => null,
+			print: (l) => printed.push(l),
+			fetchImpl: fakeFetch(true, urls),
+		});
+		// bots.config.ts's laya.url is http://127.0.0.1:8000 and health is /health.
+		expect(urls).toContain('http://127.0.0.1:8000/health');
+		expect(clientMade).toBe(1); // health passed, so it proceeded to list worlds
+		expect(printed).toContain('no worlds on this target');
+	});
+
+	it('a down brain refuses to start, before ever calling makeClient, with a message naming how to start it', async () => {
+		let clientMade = 0;
+		const makeClient = (): BotClient => {
+			clientMade++;
+			throw new Error('must not connect when the brain is unhealthy');
+		};
+		await expect(
+			main(['companion', '--target', 'local', '--brain', 'laya'], {
+				makeClient,
+				stateRoot: '/tmp/task6-unused-state-root',
+				env: {},
+				readFile: () => null,
+				print: () => undefined,
+				fetchImpl: fakeFetch(false, []),
+			}),
+		).rejects.toThrow(/npm run brains -- laya/);
+		expect(clientMade).toBe(0);
+	});
+
+	it('clm: the health-failure message names the GPU reason, not the generic one', async () => {
+		await expect(
+			main(['companion', '--target', 'local', '--brain', 'clm'], {
+				makeClient: (): BotClient => {
+					throw new Error('must not connect');
+				},
+				stateRoot: '/tmp/task6-unused-state-root',
+				env: {},
+				readFile: () => null,
+				print: () => undefined,
+				fetchImpl: fakeFetch(false, []),
+			}),
+		).rejects.toThrow('clm is not running — its encoder does not fit this GPU; see ~/Projects/AI/BRAINS.md');
+	});
+
+	it('--brain scripted never touches fetch (no health check for the deterministic fallback)', async () => {
+		let fetchCalled = false;
+		const makeClient = (): BotClient => ({ listWorlds: async () => [] }) as unknown as BotClient;
+		const printed: string[] = [];
+		await main(['companion', '--target', 'local', '--brain', 'scripted'], {
+			makeClient,
+			stateRoot: '/tmp/task6-unused-state-root',
+			env: {},
+			readFile: () => null,
+			print: (l) => printed.push(l),
+			fetchImpl: (async () => {
+				fetchCalled = true;
+				return new Response('{}', { status: 200 });
+			}) as typeof fetch,
+		});
+		expect(fetchCalled).toBe(false);
+		expect(printed).toContain('no worlds on this target');
 	});
 
 	it('parses the command: companion (default) or revert', () => {

@@ -179,7 +179,7 @@ describe('the loop', () => {
 		platform(world);
 		const body = new FakeBody();
 		body.current = { x: 100.5, y: FLOOR, z: 100.5, yaw: 0, pitch: 0 };
-		body.list = [kidAt(110.5, FLOOR, 100.5)];
+		body.list = [kidAt(104.5, FLOOR, 100.5)];
 		let active = 0, maxActive = 0;
 		const brain = fakeBrain(async () => {
 			active++;
@@ -205,8 +205,9 @@ describe('the loop', () => {
 		const body = new FakeBody();
 		body.current = { x: 100.5, y: FLOOR, z: 100.5, yaw: 0, pitch: 0 };
 		body.walkImpl = () => new Promise(() => undefined);
-		// Far: follow offered. The answer says watch with max(p) 0.35 and a bogus confidence field of 0.99.
-		body.list = [kidAt(110.5, FLOOR, 100.5)];
+		// 4 away, in the near band (follow offered, not out of reach): the brain is asked. The answer
+		// says watch with max(p) 0.35 and a bogus confidence field of 0.99.
+		body.list = [kidAt(104.5, FLOOR, 100.5)];
 		const brain = fakeBrain(() => answer('watch', { watch: 0.35, follow: 0.3, idle: 0.35 }, 0.99));
 		const run = start(body, world, { brain });
 		await advance(0);
@@ -227,7 +228,7 @@ describe('the loop', () => {
 		platform(world);
 		const body = new FakeBody();
 		body.current = { x: 100.5, y: FLOOR, z: 100.5, yaw: 0, pitch: 0 };
-		body.list = [kidAt(110.5, FLOOR, 100.5)];
+		body.list = [kidAt(104.5, FLOOR, 100.5)];
 		const brain = fakeBrain(() => answer('watch', { watch: 0.6, follow: 0.4 }, 0.1));
 		const run = start(body, world, { brain });
 		await advance(0);
@@ -241,7 +242,7 @@ describe('the loop', () => {
 		const body = new FakeBody();
 		body.current = { x: 100.5, y: FLOOR, z: 100.5, yaw: 0, pitch: 0 };
 		body.walkImpl = () => new Promise(() => undefined);
-		body.list = [kidAt(110.5, FLOOR, 100.5)];
+		body.list = [kidAt(104.5, FLOOR, 100.5)];
 		const brain = fakeBrain(() => new Promise<Answer>(() => undefined));
 		const run = start(body, world, { brain, brainTimeoutMs: 400 });
 		await advance(400);
@@ -268,7 +269,7 @@ describe('the loop', () => {
 		const body = new FakeBody();
 		body.current = { x: 100.5, y: FLOOR, z: 100.5, yaw: 0, pitch: 0 };
 		body.walkImpl = () => new Promise(() => undefined);
-		body.list = [kidAt(110.5, FLOOR, 100.5)];
+		body.list = [kidAt(104.5, FLOOR, 100.5)];
 		let n = 0;
 		const brain = fakeBrain(() => (++n === 5 ? answer('watch', { watch: 1 }) : new Promise<Answer>(() => undefined)));
 		const run = start(body, world, { brain, brainTimeoutMs: 400 });
@@ -290,7 +291,7 @@ describe('the loop', () => {
 			const body = new FakeBody();
 			body.current = { x: 100.5, y: FLOOR, z: 100.5, yaw: 0, pitch: 0 };
 			body.walkImpl = () => new Promise(() => undefined);
-			body.list = [kidAt(110.5, FLOOR, 100.5)];
+			body.list = [kidAt(104.5, FLOOR, 100.5)];
 			const brain = fakeBrain(() => answer('watch', { watch: p, follow: 0.3 }, 1));
 			const run = start(body, world, { brain });
 			await advance(0);
@@ -298,6 +299,46 @@ describe('the loop', () => {
 			await run.handle.stop();
 		});
 	}
+
+	it('the follow floor (Fix round 1): a brain that always says watch (0.9) still follows when the kid is out of reach', async () => {
+		const world = new FakeWorld();
+		platform(world);
+		const body = new FakeBody();
+		body.current = { x: 100.5, y: FLOOR, z: 100.5, yaw: 0, pitch: 0 };
+		body.walkImpl = () => new Promise(() => undefined);
+		const brain = fakeBrain(() => answer('watch', { watch: 0.9 }));
+		// 6 away horizontally: beyond followDist (2) + FOLLOW_FLOOR_MARGIN (3) = 5.
+		body.list = [kidAt(106.5, FLOOR, 100.5)];
+		const run = start(body, world, { brain });
+		await advance(0);
+		expect(run.log.decisions[0]).toMatchObject({ action: 'follow', reason: 'rule:follow-floor' });
+		expect(brain.asks).toHaveLength(0);
+
+		// Close horizontally (1 away) but 2 above: beyond VERTICAL_FOLLOW (1.5).
+		body.list = [kidAt(101.5, FLOOR + 2, 100.5)];
+		await advance(500);
+		const last = run.log.decisions[run.log.decisions.length - 1];
+		expect(last).toMatchObject({ action: 'follow', reason: 'rule:follow-floor' });
+		expect(brain.asks).toHaveLength(0);
+		expect(run.handle.stats.fallbacks).toBe(0);
+		await run.handle.stop();
+	});
+
+	it('the follow floor (Fix round 1): at 4 away and still (the near band), the brain\'s watch is used', async () => {
+		const world = new FakeWorld();
+		platform(world);
+		const body = new FakeBody();
+		body.current = { x: 100.5, y: FLOOR, z: 100.5, yaw: 0, pitch: 0 };
+		body.walkImpl = () => new Promise(() => undefined);
+		// 4 away: follow is offered (> followDist + 1 = 3) but not out of reach (≤ followDist + 3 = 5).
+		body.list = [kidAt(104.5, FLOOR, 100.5)];
+		const brain = fakeBrain(() => answer('watch', { watch: 0.9 }));
+		const run = start(body, world, { brain });
+		await advance(0);
+		expect(run.log.decisions[0]).toMatchObject({ action: 'watch', reason: 'brain' });
+		expect(brain.asks).toHaveLength(1);
+		await run.handle.stop();
+	});
 
 	it('an answer outside the candidates is a fallback, not an action', async () => {
 		const world = new FakeWorld();
@@ -467,11 +508,12 @@ describe('follow: vertical and settled (ruling R-a)', () => {
 		const body = new FakeBody();
 		body.current = { x: 100.5, y: FLOOR, z: 100.5, yaw: 0, pitch: 0 };
 		body.walkImpl = () => new Promise(() => undefined);
-		const kid = kidAt(110.5, FLOOR, 100.5);
+		const kid = kidAt(104.5, FLOOR, 100.5);
 		body.list = [kid];
-		// Its walk carried it to 2 from him during the ask.
+		// 4 away: near band (follow offered, not out of reach), so the brain is actually asked. Its
+		// walk carried it to 2 from him during the ask.
 		const brain = fakeBrain(() => {
-			body.current = { ...body.current, x: 108.5 };
+			body.current = { ...body.current, x: 102.5 };
 			return answer('follow', { follow: 1 });
 		});
 		const run = start(body, world, { brain });
@@ -860,7 +902,9 @@ describe('help_build', () => {
 		const world = new FakeWorld();
 		platform(world);
 		const body = new FakeBody();
-		body.current = { x: 108.5, y: FLOOR, z: 103.5, yaw: 0, pitch: 0 };
+		// 4.24 from the kid (builder(), at 105.5, 97.5): in the near band (Fix round 1's follow floor
+		// is > followDist + 3 = 5 away), so the brain is actually asked, still within reach (6) of N.
+		body.current = { x: 108.5, y: FLOOR, z: 100.5, yaw: 0, pitch: 0 };
 		body.walkImpl = () => new Promise(() => undefined);
 		const kid = builder();
 		body.list = [kid];
@@ -1026,7 +1070,7 @@ describe('the log and the status line', () => {
 		platform(world);
 		const body = new FakeBody();
 		body.current = { x: 100.5, y: FLOOR, z: 100.5, yaw: 0, pitch: 0 };
-		body.list = [kidAt(110.5, FLOOR, 100.5)];
+		body.list = [kidAt(104.5, FLOOR, 100.5)];
 		const lines: string[] = [];
 		const handle = runCompanion({
 			body,

@@ -19,7 +19,7 @@ import type { Body, WorldView } from '../port.js';
 import type { Candidate, Snapshot } from '../types.js';
 import { createFollowState, followTick, landTick, observeKid, stopMoving, watchPoint } from '../body/act.js';
 import type { FollowState } from '../body/act.js';
-import { markLineUsed, planCandidates } from '../body/candidates.js';
+import { markLineUsed, planCandidates, VERTICAL_FOLLOW } from '../body/candidates.js';
 import type { CandidatePlan, EditGuard } from '../body/candidates.js';
 import { forbiddenByKids } from '../body/guard.js';
 import type { Logger } from '../body/log.js';
@@ -32,6 +32,11 @@ import { StopSignal } from '../body/stop-signal.js';
 export const MAX_CONSECUTIVE_FAILURES = 5;
 /** `wander` walks are capped at this. */
 export const WANDER_CAP_MS = 4000;
+/** Fix round 1: beyond `followDist + FOLLOW_FLOOR_MARGIN` horizontally (or `VERTICAL_FOLLOW`
+ *  vertically — same threshold `candidates.ts` uses to offer `follow` at all), the bot must close
+ *  the gap: the brain is not asked, so it can never leave a kid behind by picking `watch`/`idle` out
+ *  there. The brain still decides everything inside that band. */
+export const FOLLOW_FLOOR_MARGIN = 3;
 const AIR = 0;
 
 export interface CompanionConfig {
@@ -89,28 +94,51 @@ class InvalidAnswerError extends Error {
 	override readonly name = 'InvalidAnswerError';
 }
 
+/** Fix round 1, Part 2: each description names the observable cue that action is FOR, not just what
+ *  the bot would do — measured to raise near-band accuracy on real Laya (see
+ *  `test/fixtures/laya-near-band-labels.json` and `~/Projects/AI/BRAINS.md`). */
 function describe(c: Candidate, s: Snapshot, plan: CandidatePlan): string {
 	const kid = s.target?.name ?? 'the kid';
 	switch (c) {
 		case 'follow':
-			return `Go to ${kid} and stay close.`;
+			return `${kid} is walking away — follow.`;
 		case 'watch':
-			return `Stay here and watch what ${kid} is doing.`;
+			return `Watch ${kid}.`;
 		case 'help_build':
-			return `Help ${kid} build: place one ${plan.helpBuild?.block ?? 'block'} to continue the line.`;
+			return `${kid} placed blocks in a line — add the next ${plan.helpBuild?.block ?? 'block'}.`;
 		case 'wander':
-			return 'Walk around a little nearby.';
+			return 'Walk around nearby.';
 		case 'idle':
 			return 'Wait.';
 	}
 }
 
-const INSTRUCTIONS = 'You are a friendly robot friend in a block-building game, keeping a young child company. Choose what to do next.';
+const INSTRUCTIONS =
+	'You are a companion robot in a block game with a child. If the child is moving away from you, choose follow. If the child just placed blocks in a row and is aiming at the next spot in that line, choose help_build. Otherwise choose watch.';
 
-function question(s: Snapshot, plan: CandidatePlan): Choice {
+/** Exported for the Task 6 fix-round-1 measurement fixture (`test/fixtures/laya-near-band-labels.json`):
+ *  builds the exact `Choice` the loop sends to a real brain, from a `Snapshot`/`CandidatePlan`, so a
+ *  wording change here is measured with the production text, never a hand-copied approximation. */
+export function question(s: Snapshot, plan: CandidatePlan): Choice {
 	const options: Record<string, string> = {};
 	for (const c of plan.candidates) options[c] = describe(c, s, plan);
 	return { type: 'choice', instructions: INSTRUCTIONS, options };
+}
+
+/**
+ * Fix round 1: true when the target kid is far enough (or steep enough) that `follow` must win
+ * outright, without asking the brain — the loop's own safety floor under whatever the real brain
+ * says. Requires `follow` to actually be offered (spec §6/§12b's own condition for that is a
+ * strict subset of this one, so in practice it always is whenever this is true, but the check stays
+ * explicit and defensive). Pure: reads only `s` and `offered`.
+ */
+export function followFloorTriggers(s: Snapshot, offered: readonly Candidate[]): boolean {
+	const kid = s.target;
+	if (!kid || !offered.includes('follow')) return false;
+	const bot = s.bot.pose;
+	const horizontal = Math.hypot(kid.pose.x - bot.x, kid.pose.z - bot.z);
+	const vertical = Math.abs(kid.pose.y - bot.y);
+	return horizontal > s.followDist + FOLLOW_FLOOR_MARGIN || vertical > VERTICAL_FOLLOW;
 }
 
 /** max(p) over the offered options (a missing option counts as 0). Never the brain's own field. */
@@ -322,6 +350,12 @@ export function runCompanion(deps: CompanionDeps): CompanionHandle {
 			// Ruling R-c: the count stops here; the status line shows SCRIPTED-FALLBACK instead.
 			reason = 'fallback:session';
 			decidedBy = 'scripted';
+		} else if (followFloorTriggers(snapshot, offered)) {
+			// Fix round 1: out of reach — follow wins outright, and the brain is never asked this
+			// tick. Not a fallback: no failure counter moves, and the brain is still trusted for
+			// every following tick inside the band.
+			action = 'follow';
+			reason = 'rule:follow-floor';
 		} else {
 			const t0 = clock();
 			try {

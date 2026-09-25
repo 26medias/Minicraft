@@ -17,8 +17,9 @@ import {
 import { resolveWorld, sessionInForce } from '../game/schedule';
 import { mpApiFromEnv, type MpApi, type MpWorldRow } from '../net/mp-api';
 import { loadMpPrefs, saveMpPrefs, type MpPrefs } from '../persistence/mp-prefs';
-import { SKINS, skinColor, type SkinId } from '../data/skins.data';
+import { SKINS, skinColor, skinOf, type SkinId } from '../data/skins.data';
 import { nameError, nameTakenText, preselect, sortRows, validName, NAME_ERROR } from './mp-menu-model';
+import { paintPreview } from './skin-preview';
 
 export type { MenuAction } from './menu-model';
 
@@ -481,7 +482,7 @@ export class MainMenu {
 		this.renderMultiWorlds(force, notice);
 	}
 
-	/** Screen 1: the name field and the 8 skin swatches, then Next. */
+	/** Screen 1: the name field and the 6 character buttons, then Next. */
 	private renderMultiName(prefs: MpPrefs, message: string | null): void {
 		this.renderGen++;
 		const card = this.newCard('Multiplayer', 'multi-name');
@@ -506,7 +507,7 @@ export class MainMenu {
 
 		const sh = document.createElement('div');
 		sh.className = 'menu-section';
-		sh.textContent = 'Your colour';
+		sh.textContent = 'Pick your character';
 		card.appendChild(sh);
 		const swatches = document.createElement('div');
 		swatches.className = 'skin-swatches';
@@ -519,8 +520,14 @@ export class MainMenu {
 			b.className = 'skin-swatch';
 			b.id = `mp-skin-${s.id}`;
 			b.dataset.skin = s.id;
-			b.style.background = s.color;
-			b.setAttribute('aria-label', s.id);
+			b.setAttribute('aria-label', s.name);
+			const c = document.createElement('canvas');
+			c.className = 'skin-front';
+			paintPreview(c, s.id, 'front');
+			const n = document.createElement('span');
+			n.className = 'skin-name';
+			n.textContent = s.name;
+			b.append(c, n);
 			b.onclick = () => { skin = s.id; paint(); };
 			swatches.appendChild(b);
 		}
@@ -543,7 +550,7 @@ export class MainMenu {
 	}
 
 	/**
-	 * Screen 2: "Playing as ● Noah [change]", the world list (refreshed every
+	 * Screen 2: "Playing as [preview] Noah (Character) [change]", the world list (refreshed every
 	 * 5 s, busiest first), New World, the duration and Play. When the list
 	 * can't be fetched the server is sleeping: the text, a Retry button, and a
 	 * retry every 5 s on its own. `force` is a world to select (just created,
@@ -560,11 +567,11 @@ export class MainMenu {
 		const who = document.createElement('div');
 		who.className = 'mp-playing-as';
 		who.id = 'mp-playing';
-		const dot = document.createElement('span');
-		dot.className = 'mp-dot';
-		dot.style.background = skinColor(skin);
+		const dot = document.createElement('canvas');
+		dot.className = 'mp-mini';
+		paintPreview(dot, skin, 'front');
 		const whoText = document.createElement('span');
-		whoText.textContent = `Playing as ${name}`;
+		whoText.textContent = `Playing as ${name} (${skinOf(skin).name})`;
 		const change = document.createElement('button');
 		change.id = 'mp-change';
 		change.className = 'mp-change';

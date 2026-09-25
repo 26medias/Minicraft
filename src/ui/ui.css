@@ -872,23 +872,48 @@
 }
 .skin-swatches {
 	display: grid;
-	grid-template-columns: repeat(4, 1fr);
+	grid-template-columns: repeat(3, 1fr);
 	gap: 10px;
 	margin: 8px 0 16px;
 }
 .menu-card .skin-swatch {
-	height: 48px;
+	display: flex;
+	flex-direction: column;
+	align-items: center;
+	gap: 4px;
+	width: auto;
+	height: auto;
 	margin: 0;
-	padding: 0;
+	padding: 8px 4px;
+	background: #3a3a3a;
 	border: 3px solid transparent;
-	border-radius: 50%;
+	border-radius: 8px;
 }
 .menu-card .skin-swatch:hover {
+	background: #4a4a4a;
 	border-color: rgba(255, 255, 255, 0.5);
 }
 .menu-card .skin-swatch.selected {
+	background: #555;
 	border-color: #fff;
 	box-shadow: 0 0 0 2px #6fbf6f;
+}
+.skin-front {
+	width: 48px;
+	height: 96px;
+	image-rendering: pixelated;
+}
+.skin-name {
+	font-size: 13px;
+	line-height: 1.2;
+	text-align: center;
+	overflow-wrap: anywhere;
+}
+.mp-mini {
+	flex: none;
+	width: 20px;
+	height: 40px;
+	image-rendering: pixelated;
 }
 .mp-playing-as {
 	display: flex;

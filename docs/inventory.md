@@ -4,8 +4,10 @@ Press **I** (rebindable) to open the inventory. It has two tabs, **Blocks** and
 **Craft** (see `docs/crafting.md`); the last tab used is kept until the page
 reloads. Blocks lists every solid-cube block the family's Minecraft 1.21.6
 install has textures for, grouped (BASICS, WOOD, STONE, …). Click a tile to put
-it in the selected hotbar slot; digits and Tab change the slot while it is
-open; Esc or I closes it. On the Blocks tab the search box has the keyboard as soon as the screen opens, so letters (I included), digits and Space type into it; there, Esc clears the text and then closes. The 9-slot hotbar is saved with each world. Saves
+it in the selected hotbar slot. On the Craft tab, digits and Tab change the
+slot and Esc or I closes the screen. On the Blocks tab the search box has the
+keyboard as soon as the screen opens: letters (I included), digits, Space and
+Tab stay in the box, and Esc clears the text, then closes. The 9-slot hotbar is saved with each world. Saves
 from before the inventory come up with the default bar once.
 
 Only whole cubes are listed. No stairs, slabs, fences, doors, torches,

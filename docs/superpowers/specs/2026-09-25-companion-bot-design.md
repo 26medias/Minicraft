@@ -464,3 +464,131 @@ Rules for every run:
 - **CLI:** `loadConfig` is fully injected; `checkLiveAck` runs after the world is resolved; there is a
   `revert` subcommand; the status line shows "paused near <kid>".
 - **`mustMine`** comes from the `listWorlds()` row.
+
+## 12b. Amendment (Julien, 2026-09-25, after a live demo): the bot can fly and jump
+
+Observed on the live server: the SDK's `walkTo` has no jump and no flight, so the demo bot got stuck at
+the bottom of stairs and only teleport-hopped after 3 failures. Julien: "allow the bot to fly and
+jump". Following and looking "work very well".
+
+**SDK additions** (Task 5):
+- **`FLY_SPEED`** (10 b/s = `WALK_SPEED × FLY_TIER_DEFAULT`) is exported from
+  `src/game/player-constants.ts`. The game's `player.ts` imports it, with no behaviour change. The SDK
+  re-exports it.
+- **`flyTo({ x, y, z }): Promise<WalkResult>`:**
+  - It flies in a straight 3D line at `FLY_SPEED`, one pose per `POS_EVERY_MS`, facing the direction of
+    travel (pitch toward the target).
+  - Before each step, the bot's body box at the next pose (x ± 0.3, z ± 0.3, y .. y + 1.8) must overlap
+    no solid block.
+  - If it does, the bot climbs straight up (same x/z, +1 per step at `FLY_SPEED`) until the next
+    horizontal step is clear, up to 16 blocks above its start or the world top. Then it continues toward
+    the target.
+  - If no clearance is found → it rejects `BlockedError{at, reason: 'wall'}`. An out-of-world target
+    → `'noGround'`.
+  - Like `walkTo`: it's cancelled by `walkTo`, `flyTo`, `move`, disconnect or `close` (resolves
+    `'cancelled'`, never rejects); `lookAt` and `mine` don't cancel it.
+  - It never moves more than `FLY_SPEED × POS_EVERY_MS/1000` per pose, so it never snaps on kids'
+    screens.
+- **`walkTo` jump:** a 1-block step-up is shown as an arc over 2 pose ticks (+0.6, then +1.0) instead
+  of an instant +1. The ground rules are unchanged.
+- **The stairs defect:** Task 5 also reproduces the "stuck at the bottom of stairs" case with
+  generated or hand-built full-block stairs, fixes `walkTo` if it's a walk bug (e.g. the centre-column
+  or body-fit check on diagonal steps), and pins it with a test.
+
+**Companion follow modes** (Task 4; this replaces hop-first):
+- **walk** while the target kid is on the ground and within walking reach.
+- **fly** when:
+  - the kid is flying (§12a flying flag), or
+  - the kid's feet are > 1.5 above the bot's reachable ground, or
+  - a walk rejected `BlockedError`.
+
+  The fly target is `kid + v·0.5 − followDist·unit(kid − bot)`, at the kid's height (clamped ≥ the
+  ground + 0), re-issued every tick when the target moved > 0.5. The bot flies alongside a flying kid,
+  not under him.
+- **land:** when the kid is back on the ground (not flying for > 1 s), the bot flies down to
+  `groundY` near its landing target, then walks again.
+- **hop** (a `move` of ≤ 7.5 in 3D, at most 1/s): only if `flyTo` itself rejects `BlockedError`
+  twice in a row (e.g. enclosed caves).
+- Hovering kid (20 up, horizontal distance ≤ 1.5): the bot flies up to his level at `followDist`
+  and hovers beside him. There's no jitter, because the fly target barely moves.
+- Swimming kid: the bot walks, or flies low above the water surface. It never lands in liquid.
+
+**Tests:**
+- SDK flight: speed per pose; a body-box collision → climb-over; enclosed → `BlockedError`;
+  cancellation; no pose delta > 1.0 block; the walk jump arc; the stairs reproduction.
+- Companion: mode switching (walk → fly on `BlockedError`, a flying kid → fly, the kid lands → land →
+  walk); a hovering kid → it hovers beside him (0 hops); flight is re-issued without awaiting; hops
+  only after 2 blocked flights.
+- E2E: the kid script adds a 4-step staircase and a 3-block wall that the kid climbs or flies over
+  (the kid-client uses the SDK's `flyTo`). Assert the bot stays within `followDist + 4` through them,
+  with no pose jump > 8, and a hop count of 0 on that stretch.
+
+**Target rotation (Julien: "if a player is not moving, it should move on to another player"):**
+- A target kid is **idle** when:
+  - his horizontal speed has been < 0.3 b/s, **and**
+  - he has placed or broken nothing,
+  - for `idleSwitchMs` (default **30 s**).
+- When the target is idle and **another non-bot kid with a pose is online**, the companion switches to
+  the nearest *other* kid. That new target stays sticky for at least `minTargetMs` (default **20 s**),
+  so it never flips back and forth.
+- The previous kid becomes eligible again when he moves, builds, or every other kid is idle too
+  (round-robin, nearest first).
+- With only one kid online, nothing changes: it keeps following and watching him.
+- Switching is logged, and shown on the status line ("following Noah (switched: Julien idle 30s)").
+
+This supersedes §6's "sticky until they leave or > 48 blocks": the target also changes on idleness.
+It's still keyed by name.
+
+Tests:
+- Perception or target selection:
+  - one kid idle for 30 s plus another online → switch;
+  - a switched target is kept for ≥ 20 s even if the old kid moves;
+  - a single idle kid → no switch;
+  - both idle → round-robin between them, at most once per 20 s.
+- E2E: add a second, raw non-bot kid ("Kid2") that stands idle while Kid walks, then the reverse. The
+  companion switches to the active one within `idleSwitchMs + 2 s`.
+
+**§12b re-gate corrections:**
+- **Stairs:**
+  - Today's `walkTo` climbs full-block stairs straight up, straight down and along the edge (probed).
+  - The demo's failure was most likely a diagonal approach into a stair's side, which is a 2-block
+    rise: the limit of straight-line walking, not a walk bug.
+  - Task 5 fixes `walkTo` **only if** it first shows a repro that is **red on the current SDK**,
+    taken from the demo geometry. Otherwise there's no walk change, and the case is pinned in the
+    companion: a walk blocked at a stair side → `flyTo` → arrives.
+- **"Reachable ground":** `groundY(bx, bz, bot.y)` at the bot's column. The fly trigger is that the
+  kid's feet are > 1.5 above it.
+- **Hover test:** assert the `flyTo` target is at the kid's height ± 0.5, at horizontal ≈
+  `followDist`, and not re-issued while the kid is still. It no longer just asserts "0 hops".
+- **Hop test:** 1 rejected `flyTo` → 0 hops; 2 → 1 hop.
+- **Enclosed-flight test:** runs with a timeout. The pose-delta bound is ≤ 1.0 + 1e-9.
+- **E2E:**
+  - `Kid2` connects **only at the rotation stretch**, after the companion is locked on `Kid`. It
+    takes no part in the idle-baseline or Laya legs.
+  - Every stand in `Kid`'s script before the rotation stretch is capped at ≤ 20 s (well under
+    `idleSwitchMs`), with small moves between.
+  - The rotation assertion is timed from `Kid`'s last move or edit.
+  - The wall-stretch follow bound starts from the kid's landing + 2 s.
+
+**§12b engine re-gate corrections (these override the above where they differ):**
+- **The stairs root cause is in the companion's follow condition, not in `walkTo`.** `walkTo`
+  arrives on stairs straight, at 45° and 30°, and going down (probed). The demo stalled because
+  follow looked only at the horizontal distance: the bot sat at the base, 2 blocks from the kid
+  horizontally and 6 below.
+  - `follow` is also offered when |kid.y − bot.y| > 1.5.
+  - Fly mode triggers on |kid.y − bot.y| > 1.5 even when the kid is close horizontally.
+  - Test: the kid stands on step 5, the bot is at the base 2 away horizontally → a `flyTo` within one
+    tick.
+  - Task 5's stairs test is a **green regression pin**: `walkTo` arrives up and down straight and
+    diagonal stairs. There's no walk change unless a red repro appears.
+- **Lead clamp:** `lead = clamp(v·0.5, length ≤ followDist − 0.5)`. Following stops when the 3D
+  distance is ≤ `followDist + 1` and the kid's speed over the **last 0.3 s** is < 0.5 b/s, so the bot
+  never flies into a kid who stops. Measured: never closer than 1 block.
+  - The e2e judges a **flying** kid against `followDist + 5`.
+- **`flyTo`:**
+  - each climb step also needs a clear body box, otherwise it rejects `'wall'` (a ceiling);
+  - the 16-block climb cap is measured from the flight's start y;
+  - `flyTo` and `walkTo` share one movement slot, so each cancels the other.
+- **Test hygiene:** with no server messages, the SDK drops to `reconnecting` after about 5 s, which
+  cancels walks and flights. Flight, walk and mine tests feed `ping`s or keep advances short, and
+  assert the bot is still connected.

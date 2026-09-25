@@ -28,7 +28,7 @@
   - Local target `http://localhost:18090`. `loadConfig` refuses any target on port 8080.
   - Tests never read `~/minicraft-mp`, never use port 8080, and never use `minicraft-server.leap-forward.ca`.
 - The live token comes from `MC_LIVE_TOKEN` (env, or `bots/.env.live`), else `~/minicraft-mp/token`, at runtime only.
-- **Companion tuning:** `tickMs` 500, `editEveryMs` 2000, `editBudget` 50, `followDist` 2, `minConfidence` 0.40 (compared against **max(p)**, i.e. Laya's `answer_confidence`, never Laya's calibrated `confidence`), `stopMs` 600000 per kid (by name, not an area), `wanderTether` 12, `statusEveryMs` 30000. Hops: final pose ≤ 7.5 blocks (3D) from the bot, ≤ 1 per second, landing outside every kid's Chebyshev buffer.
+- **Companion tuning:** `tickMs` 500, `editEveryMs` 2000, `editBudget` 50, `followDist` 2, `minConfidence` 0.40 (compared against **max(p)**, i.e. Laya's `answer_confidence`, never Laya's calibrated `confidence`), `stopMs` 600000 per kid (by name, not an area), `wanderTether` 12, `statusEveryMs` 30000, `idleSwitchMs` 30000, `minTargetMs` 20000. Hops: final pose ≤ 7.5 blocks (3D) from the bot, ≤ 1 per second, landing outside every kid's Chebyshev buffer.
 - **Kid buffer:** the columns overlapped by the kid box (x ± 0.3, z ± 0.3), widened by 1 (Chebyshev ≤ 1), against every non-bot player with a pose. The kid body box (y .. y+1.8) is also excluded.
 - **Verification in every task:**
   - `npm run bots:test`;
@@ -192,6 +192,11 @@ Jumps peak at 1.33, so they never count. Launch and slime pads may count for abo
 - [ ] **Step 2: Perception tests:**
   - the asymmetric bearing row (a kid at +dx, −dz → "north-east", north = −z);
   - stickiness (a second kid comes nearer, and the target is unchanged);
+  - **target rotation (spec §12b):**
+    - the target idle for `idleSwitchMs` plus another kid online → switch to the nearest other kid;
+    - the new target is kept ≥ `minTargetMs`;
+    - a single idle kid → no switch;
+    - all idle → round-robin, at most once per `minTargetMs`;
   - reconnect (a new id with the same name → the same target);
   - the look target via the fake raycast on generated terrain;
   - placement filtering (multi-op, liquid, and another player's edits are ignored);
@@ -237,6 +242,8 @@ Jumps peak at 1.33, so they never count. Launch and slime pads may count for abo
 
 **Interfaces:** `runCompanion({ body, world, brain, config, log, clock, rng }) → { stop(): Promise<void> }`; `Logger`; `Status`.
 
+**Follow modes (spec §12b; this supersedes hop-first).** The bot walks, flies (`flyTo`) or lands per §12b. A hop is only a last resort after 2 blocked `flyTo`s. The hop rules below apply to that last resort.
+
 **Hops (amended at gate 2).** The bot hops only when:
 - the kid's **horizontal** distance is > `followDist + 1`, **and**
 - either (the kid is flying and his horizontal speed is > 1 block/s) or 3 walks in a row were blocked.
@@ -255,6 +262,9 @@ At most 1 hop per second. With no valid cell, the bot watches.
   - a brain timeout → a scripted decision, reason `fallback:timeout`; 5 in a row → scripted for the session, and the status line shows `SCRIPTED-FALLBACK`;
   - **follow re-issues `walkTo` on the very next tick** after the kid moved > 0.5, with a fake `walkTo` that never resolves. Asserted at the single next tick, so an implementation that awaits behind a cap fails;
   - leaving follow → `move(pose())`;
+  - **stairs (§12b engine re-gate):** the kid on step 5 with the bot at the base, 2 away horizontally → a `flyTo` within one tick. `follow` is offered when |dy| > 1.5;
+  - **lead clamp:** a kid flying away then stopping → the bot is never within 1 block (the lead is clamped to `followDist − 0.5`, and following stops on the last-0.3 s speed);
+  - **follow modes (§12b):** walk → fly on `BlockedError`; a flying kid → fly alongside; the kid lands → land → walk; a hovering kid → hovers beside him, 0 hops; `flyTo` re-issued each tick without awaiting; a hop only after 2 blocked flights;
   - hops:
     - 2 hop-eligible ticks within 1 s → exactly 1 `move`;
     - a hovering kid 20 blocks up, **circling at horizontal radius ≤ 1.5 at ~2 b/s**, with the fake `walkTo` **rejecting BlockedError every time** → **0 hops over 10 s**. Only the horizontal-distance condition prevents the hop, so removing it goes red;
@@ -279,7 +289,9 @@ At most 1 hop per second. With no valid cell, the bot watches.
 
 ---
 
-### Task 5: SDK changes: `mine` re-check, and exported solidity helpers
+### Task 5: SDK changes: `mine` re-check, solidity helpers, flight, walk jump, stairs fix
+
+**Also implement spec §12b's SDK part (with its re-gate corrections; the stairs fix happens only if a repro is red on the current SDK):** `FLY_SPEED` (exported from `src/game/player-constants.ts`, with the game's `player.ts` importing it and no behaviour change); `flyTo`; the `walkTo` jump arc; and the stairs reproduction plus fix. Tests are per §12b; prove each red. Update the SDK README (`flyTo` row, jump, stairs note).
 
 **Files:** Modify `packages/minicraft-bot/src/bot-client.ts`, `packages/minicraft-bot/src/index.ts` (+ README rows), `packages/minicraft-bot/test/bot-client.test.ts`.
 
@@ -370,7 +382,8 @@ Modify `bots/bots.config.ts`: the exact Laya start argv, health path and URL, ta
         - Then stand.
      6. **5:** break one bot-placed block;
      7. **6:** place another valid 3a-style line, aimed at the block under N, whose N is AIR, outside the buffer, and within 6 of the bot's eye (so a stop-off mutation really places);
-     8. walk 10 more blocks.
+     8. **Target rotation:** a second non-bot kid, `Kid2` (the same stripped-`bot` BotClient), joins **only now**, near `Kid`, and stands idle. Every earlier stand of `Kid` is capped at ≤ 20 s. After the staircase and wall below, `Kid` stands idle while `Kid2` walks. Assert the companion switches to `Kid2` within `idleSwitchMs + 2 s`, and is logged doing so.
+     9. walk up a **4-step staircase**, then **fly over a 3-block wall** (the kid uses the SDK `flyTo`), then walk 10 more blocks. Assert the bot stays within `followDist + 4` on that stretch, with no pose jump > 8 and 0 hops.
 - [ ] **Step 4: Assertions,** over the companion leg (scripted brain):
   - **(a)** ≥ 80% of 100 ms samples within `followDist + 2` while the kid stands (after a 2 s settle), and ≥ 80% within `followDist + 4` while he walks;
   - **(b)** at least one bot block lands exactly at N from step 3a, of C0's type;

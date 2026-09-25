@@ -169,8 +169,7 @@ world.
 - **`gen`**: the world generator version (`supportedGen`, currently `{3}`; `genHeight[3] = 256`).
   It is not a protocol version — it selects which terrain algorithm the client must run to agree
   with everyone else in the world. See
-  [`docs/worldgen-from-seed.md`](worldgen-from-seed.md) (a companion reference for the generator
-  itself, kept in another checkout) for what `gen` actually determines.
+  [`docs/worldgen-from-seed.md`](worldgen-from-seed.md) (the generator's rebuild reference) for what `gen` actually determines.
 
 ## 7. Pose conventions and coordinates
 

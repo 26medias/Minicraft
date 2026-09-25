@@ -126,7 +126,12 @@ export function matchCheat(text: string, cheats = CHEATS): Cheat | null
   typed into the box. The existing `stopPropagation()` keeps them from the game.
 - **Esc** keeps its behaviour: it clears the text, or closes the screen when the box is empty. The
   I key closes the screen only when the box does not have focus, for example on the Craft tab.
-- `close()` blurs the box.
+- `close()` blurs the box, and so does `setTab('craft')`.
+- **Focus comes back.** Tab, Shift+Tab (Tab is his hotbar-cycle key) or a click on the dark backdrop
+  (`#inventory-root` outside the card) would otherwise take focus out of the box. The box's `blur`
+  handler therefore runs `requestAnimationFrame(() => { if (this.isOpen && this.tab === 'blocks')
+  this.search.focus(); })`. Probed: Tab, Shift+Tab and the backdrop all keep typing in the box, Esc
+  still clears then closes, and switching to the Craft tab is unaffected.
 - **Clicks keep focus in the box.** On the Blocks tab, a click on a tile, a tab button or the
   pickaxe row re-focuses the search box instead of calling `blur()`. The blur only existed to stop
   Space re-firing a focused tile, and focusing the box prevents that too. The card's non-input areas
@@ -150,7 +155,7 @@ true when a code was granted. Its handler starts with `if (!this.isOpen) return`
 |---|---|
 | Empty or blank box, or only punctuation | Nothing, exactly as today. No grant, no toast, no sound. |
 | Text matches no code | **Nothing, exactly as today.** The text and filter stay. There is no toast and no "nope" sound, since either would reveal that codes exist. |
-| Text matches a code or alias | main.ts grants (§7), then calls `markDirty()` and `syncHotbar()` (badges, pickaxe row, craft dots), shows a toast (§8) and plays `playCraft()`. The Inventory then empties the box and calls `applySearch()`; focus stays in the box. `preventDefault()`. |
+| Text matches a code or alias | main.ts calls `applyCheat(player, cheat, () => autosave.markDirty())` (§7), which makes the **only** `markDirty` call. It then calls `syncHotbar()` (badges, pickaxe row, craft dots), shows a toast (§8) and plays `playCraft()`. The Inventory then empties the box and calls `applySearch()`; focus stays in the box. `preventDefault()`. |
 | Enter held down | The first keydown grants and empties the box; the repeats see an empty box and do nothing. |
 | IME composition | `'type'`. |
 
@@ -187,7 +192,9 @@ The logic lives in a new pure module, `src/game/cheats.ts` (`normalizeCode`, `ma
 ## 7. Grant semantics: `applyCheat(player, cheat, markDirty)`
 
 The function replaces `player.inventory` and `player.tools` with new objects and never mutates them
-in place. It calls `markDirty` exactly once and returns `{ pickaxeChanged }`, which is true exactly
+in place. It calls the injected `markDirty` exactly once, and it is the grant path's only caller.
+main.ts passes `() => autosave.markDirty()`, as `onCraft` does; in multiplayer `autosave` is the
+`MpSync`. The function returns `{ pickaxeChanged }`, which is true exactly
 when the **equipped** tier changed. It never touches the hotbar (J2). It is independent of
 `mustMine`: the same grant lands in every world.
 
@@ -343,11 +350,15 @@ never prod). A new leg in `scripts/crafting-smoke.ts` (already headless) or a ne
 7. *Click, then type*
    - Click a block tile, then type "Tunnel this!" + Enter with no further click.
    - The screen is still open and `tunnel_tnt` rose by 50.
-   - Red on a tile click that blurs to BODY, where the next I closes the screen.
+   - Then press Tab, press Shift+Tab, click the backdrop (`#inventory-root` outside the card), and
+     type "Jump!" + Enter. The screen is still open and `slime_pad` rose by 50.
+   - Red on: a tile click that blurs to BODY, where the next I closes the screen; a Tab or backdrop
+     click that loses the box.
 8. *No match keeps the box*: "diamond" + Enter → the box still says "diamond", and the grid is still
    filtered.
 9. *Grant, toast and markDirty*
-   - `__mc` exposes a `markDirty` call counter.
+   - `__mc` exposes a counter that wraps the real `AutoSave` or `MpSync` `markDirty`, not the lambda
+     passed to `applyCheat`.
    - Inside **one** `evaluate`: read the counter, set the box to "  big BOOM!! ", dispatch the Enter
      keydown, then read the counter again. It rose by **exactly 1**, the box is empty and the Big
      TNT tile shows `50`.
@@ -359,9 +370,9 @@ never prod). A new leg in `scripts/crafting-smoke.ts` (already headless) or a ne
      visible; if it is hidden, use its solo position (top 10 px plus its height).
    - A second Big Boom → 100; a second cheat toast replaces the first, so exactly one is visible.
    - Reload → still 100.
-   - Red on: a missing solo toast host; a toast under the pill; a grant without `markDirty`, which
-     the counter catches even though other actions would have saved the state; more than one cheat
-     toast.
+   - Red on: a missing solo toast host; a toast under the pill; more than one cheat toast.
+   - Red on the sabotage "the grant path makes no `markDirty` call": the counter rises by 0. It is
+     also red on a double call (a second `markDirty` in main.ts), where the counter rises by 2.
 10. "Mole Power!" → the HUD shows the diamond icon.
 
 **Multiplayer: `scripts/mp-e2e.ts`, new scenario `E13`**
@@ -395,9 +406,12 @@ E13 runs before E5 and E6. It joins the `needMp` list and the "A comes back" lis
        block through the real right-click path with pointer lock (not `setBlock`).
        - B's log shows the `edit` with id 1000, and there is no 4003.
        - A's count drops by 1.
-    - **Red on** a build whose grant passes `() => {}` as `markDirty`. Step 2 fails because the stash
-      is not written. Step 5 fails too: the idle wait means nothing else dirties the extras before
-      the rejoin. Verify this once by running E13 against that sabotaged build.
+    - **Red on** the sabotage "the grant path makes no `markDirty` call".
+      - Step 2's stash read, inside the same `evaluate` as the Enter, is the real instrument: no
+        call means no stash write.
+      - Step 5 alone is not reliable. Liquid or TNT activity nearby fires `onWorldMutated` →
+        `markDirty`, which would send the live extras anyway.
+      - Verify this once by running E13 against the sabotaged build.
 12. `E5` (the leaving toasts) runs before and after the toast-extraction commit, and stays green.
     `E6`'s "same inventory counts" check is unaffected.
 

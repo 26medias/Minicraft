@@ -990,3 +990,159 @@ func TestFxMineBadFaceStripped(t *testing.T) {
 		}
 	}
 }
+
+// ── bots (spec §4) ──
+
+func botHello(name, bid string) proto.Hello {
+	h := hello(name, bid)
+	h.Bot = true
+	return h
+}
+
+// A bot's join is relayed with bot:true; a human's join carries no "bot" key at all (omitempty).
+// The welcome.players entry for the bot also carries bot:true.
+func TestBotFlagRelay(t *testing.T) {
+	w := newTestWorld(t, nil, nil)
+	watcher := newSender()
+	mustJoin(t, w, "Kai", "k", watcher)
+
+	bot := newSender()
+	botID, err := w.Join(botHello("Robo", "r"), bot)
+	if err != nil {
+		t.Fatalf("bot join: %v", err)
+	}
+	waitFor(t, "the bot's join relay", func() bool { return watcher.count(proto.TJoin) == 1 })
+
+	human := newSender()
+	humanID := mustJoin(t, w, "Mia", "m", human)
+	waitFor(t, "the human's join relay", func() bool { return watcher.count(proto.TJoin) == 2 })
+
+	var botJoinRaw, humanJoinRaw string
+	for _, m := range watcher.all() {
+		if typeOf(m.data) != proto.TJoin {
+			continue
+		}
+		if strings.Contains(string(m.data), `"Robo"`) {
+			botJoinRaw = string(m.data)
+		}
+		if strings.Contains(string(m.data), `"Mia"`) {
+			humanJoinRaw = string(m.data)
+		}
+	}
+	if !strings.Contains(botJoinRaw, `"bot":true`) {
+		t.Fatalf("bot's join message missing bot:true: %s", botJoinRaw)
+	}
+	if strings.Contains(humanJoinRaw, `"bot"`) {
+		t.Fatalf("human's join message carries a bot field: %s", humanJoinRaw)
+	}
+
+	late := newSender()
+	mustJoin(t, w, "Late", "z", late)
+	var sawBot, sawHuman bool
+	for _, p := range late.welcome(t).Players {
+		switch p.ID {
+		case botID.ID:
+			sawBot = p.Bot
+		case humanID:
+			sawHuman = p.Bot
+		}
+	}
+	if !sawBot {
+		t.Fatalf("welcome.players for the bot is missing bot:true")
+	}
+	if sawHuman {
+		t.Fatalf("welcome.players for the human carries bot:true")
+	}
+}
+
+// GET /worlds online (World.Online) lists only non-bots. This is also the instrument: dropping
+// the bot filter from humanInfos makes this fail (recorded in the task report).
+func TestOnlineExcludesBots(t *testing.T) {
+	w := newTestWorld(t, nil, nil)
+	human := newSender()
+	humanID := mustJoin(t, w, "Noah", "n", human)
+	bot := newSender()
+	if _, err := w.Join(botHello("Robo", "r"), bot); err != nil {
+		t.Fatalf("bot join: %v", err)
+	}
+
+	on := w.Online()
+	if len(on) != 1 || on[0].ID != humanID {
+		t.Fatalf("Online() = %+v, want only the human", on)
+	}
+}
+
+// A bot with a name already online from a different browser (bid) gets 4009, the same rule as a
+// human.
+func TestBotNameTakenOtherBid(t *testing.T) {
+	w := newTestWorld(t, nil, nil)
+	a := newSender()
+	mustJoin(t, w, "Robo", "bid1", a)
+	b := newSender()
+	_, err := w.Join(botHello("ROBO", "bid2"), b)
+	je, ok := err.(*JoinError)
+	if !ok || je.Code != proto.CloseNameTaken {
+		t.Fatalf("bot join with a taken name got %v, want a 4009 JoinError", err)
+	}
+}
+
+// HumanCount tracks online non-bots (used by Delete); KickBots drops every bot with the given
+// code and reason and leaves humans alone.
+func TestHumanCountAndKickBots(t *testing.T) {
+	w := newTestWorld(t, nil, nil)
+	human := newSender()
+	humanID := mustJoin(t, w, "Noah", "n", human)
+	bot1, bot2 := newSender(), newSender()
+	bot1ID, err := w.Join(botHello("Robo1", "r1"), bot1)
+	if err != nil {
+		t.Fatalf("bot1 join: %v", err)
+	}
+	bot2ID, err := w.Join(botHello("Robo2", "r2"), bot2)
+	if err != nil {
+		t.Fatalf("bot2 join: %v", err)
+	}
+	waitFor(t, "humanCount settles at 1", func() bool { return w.HumanCount() == 1 })
+
+	w.KickBots(proto.CloseUnknownWorld, "unknown_world")
+	waitFor(t, "both bots kicked", func() bool {
+		return len(bot1.kicked()) == 1 && len(bot2.kicked()) == 1
+	})
+	if k := bot1.kicked(); k[0] != proto.CloseUnknownWorld {
+		t.Fatalf("bot1 kicked with %v, want [4006]", k)
+	}
+	if k := bot2.kicked(); k[0] != proto.CloseUnknownWorld {
+		t.Fatalf("bot2 kicked with %v, want [4006]", k)
+	}
+	if k := human.kicked(); len(k) != 0 {
+		t.Fatalf("the human was kicked: %v", k)
+	}
+	waitFor(t, "the human is the only one left", func() bool {
+		on := w.Online()
+		return len(on) == 1 && on[0].ID == humanID
+	})
+	_ = bot1ID
+	_ = bot2ID
+}
+
+// A takeover can change the bot flag (a reconnecting bot's session replaces a human's, or vice
+// versa); humanCount must follow the change, not the original join.
+func TestTakeoverChangesBotFlagUpdatesHumanCount(t *testing.T) {
+	w := newTestWorld(t, nil, nil)
+	a1 := newSender()
+	mustJoin(t, w, "Noah", "n", a1)
+	if hc := w.HumanCount(); hc != 1 {
+		t.Fatalf("HumanCount = %d, want 1", hc)
+	}
+
+	a2 := newSender()
+	res, err := w.Join(botHello("Noah", "n"), a2)
+	if err != nil {
+		t.Fatalf("takeover join: %v", err)
+	}
+	if !res.Takeover {
+		t.Fatal("expected a takeover")
+	}
+	if hc := w.HumanCount(); hc != 0 {
+		t.Fatalf("HumanCount after a bot takeover = %d, want 0", hc)
+	}
+}

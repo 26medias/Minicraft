@@ -26,7 +26,9 @@ func ChooseSpawn(row *store.PlayerRow, resume bool, online []*Player, rnd *rand.
 	if !resume {
 		var targets []*Player
 		for _, p := range online {
-			if p.HasPos {
+			// Bots are never spawn-near targets (spec §4): a bot has no physics and may be
+			// mid-air or inside stone.
+			if p.HasPos && !p.Bot {
 				targets = append(targets, p)
 			}
 		}

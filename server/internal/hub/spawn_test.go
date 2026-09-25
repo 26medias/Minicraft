@@ -80,4 +80,25 @@ func TestChooseSpawnG6(t *testing.T) {
 			t.Fatalf("got %+v, want first (the only online player has no pose)", got)
 		}
 	})
+
+	// spec §4: bots are never spawn-near targets.
+	bot := &Player{ID: 11, Name: "Robo", Bot: true, HasPos: true, X: 1, Y: 2, Z: 3, Yaw: 0.5, Pitch: 0}
+	t.Run("only a bot online, never joined, falls back to first", func(t *testing.T) {
+		if got := ChooseSpawn(nil, false, []*Player{bot}, rnd); got != (proto.Spawn{Mode: proto.SpawnFirst}) {
+			t.Fatalf("got %+v, want first (bots filtered out leave no target)", got)
+		}
+	})
+	t.Run("only a bot online, a saved pos falls back to return", func(t *testing.T) {
+		if got := ChooseSpawn(saved, false, []*Player{bot}, rnd); got != wantReturn {
+			t.Fatalf("got %+v, want return (bots filtered out leave no target)", got)
+		}
+	})
+	t.Run("a bot and a kid online: the bot is never picked", func(t *testing.T) {
+		for i := 0; i < 200; i++ {
+			got := ChooseSpawn(nil, false, []*Player{bot, friend}, rnd)
+			if got.Mode != proto.SpawnNear || got.Target != friend.ID {
+				t.Fatalf("got %+v, want near the kid, never the bot", got)
+			}
+		}
+	})
 }

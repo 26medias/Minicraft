@@ -70,6 +70,10 @@ type Player struct {
 	X, Y, Z, Yaw, Pitch float64
 	HasPos              bool
 	Extras              []byte
+	// Bot marks a bot connection (spec §4), set from the hello at join. A bot behaves like any
+	// other player except: it is excluded from /worlds online, from ChooseSpawn's near targets,
+	// and from the delete-occupied check (it is kicked with 4006 instead).
+	Bot bool
 
 	sender Sender
 	dirty  bool // pose or extras changed since the last flush (gate-2 B4)
@@ -138,6 +142,14 @@ type CmdLeaving struct {
 type CmdTick struct{}
 type CmdFlush struct{}
 
+// CmdKickBots kicks every online bot with Code/Reason (spec §4: deleting a world kicks its bots
+// with 4006). Queued like any other command, so a caller that submits it just before Stop is
+// guaranteed (FIFO on the inbox) that it runs before the final flush.
+type CmdKickBots struct {
+	Code   int
+	Reason string
+}
+
 type cmdJoin struct {
 	hello proto.Hello
 	key   string
@@ -180,6 +192,10 @@ type World struct {
 	inbox   chan any
 	done    chan struct{}
 	count   atomic.Int32
+	// humanCount is count minus the online bots (gate-2 engine note: players is owned by run(),
+	// so Delete needs its own atomic counter, updated on join, on remove, and on a takeover that
+	// changes the bot flag).
+	humanCount atomic.Int32
 
 	// owned by run()
 	cells      map[store.CellKey]proto.Cell
@@ -340,6 +356,13 @@ func (w *World) Online() []proto.PlayerInfo {
 // Empty reports whether no player is online. It never waits on run().
 func (w *World) Empty() bool { return w.count.Load() == 0 }
 
+// HumanCount reports the number of online non-bot players. It never waits on run() (like Empty).
+func (w *World) HumanCount() int { return int(w.humanCount.Load()) }
+
+// KickBots queues a kick of every online bot with code/reason (spec §4). It never waits on run();
+// a caller that needs the kick to have run first (Delete, before Stop) relies on inbox FIFO order.
+func (w *World) KickBots(code int, reason string) { w.Submit(CmdKickBots{Code: code, Reason: reason}) }
+
 // LastPos returns the live record of a player, online or left while this world was loaded; the
 // pose follows pos messages. False if the world holds no record (the store may still have one).
 func (w *World) LastPos(nameKey string) (store.PlayerRow, bool) {
@@ -430,8 +453,10 @@ func (w *World) handle(cmd any) {
 		w.tick()
 	case CmdFlush:
 		w.flush()
+	case CmdKickBots:
+		w.kickBots(c.Code, c.Reason)
 	case cmdOnline:
-		c.reply <- w.infos(0)
+		c.reply <- w.humanInfos()
 	case cmdLastPos:
 		c.reply <- w.lastPos(c.key)
 	case cmdSnapshotCopy:
@@ -468,6 +493,15 @@ func (w *World) join(c cmdJoin) {
 			return
 		}
 		p.sender = c.s // subscribe
+		if p.Bot != c.hello.Bot {
+			// A takeover can change the bot flag; humanCount must follow it (gate-2 engine note).
+			if p.Bot {
+				w.humanCount.Add(1)
+			} else {
+				w.humanCount.Add(-1)
+			}
+			p.Bot = c.hello.Bot
+		}
 		c.reply <- joinReply{res: JoinResult{ID: p.ID, Takeover: true}}
 		return
 	}
@@ -492,6 +526,7 @@ func (w *World) join(c cmdJoin) {
 		Name:    norm.NFC.String(strings.TrimSpace(c.hello.Name)),
 		Skin:    proto.SkinOf(c.hello.Skin),
 		Bid:     c.hello.Bid,
+		Bot:     c.hello.Bot,
 		sender:  c.s,
 	}
 	w.nextID++
@@ -508,7 +543,7 @@ func (w *World) join(c cmdJoin) {
 	}
 	delete(w.known, c.key)
 
-	w.broadcast(enc(proto.Join{T: proto.TJoin, ID: p.ID, Name: p.Name, Skin: p.Skin}), 0)
+	w.broadcast(enc(proto.Join{T: proto.TJoin, ID: p.ID, Name: p.Name, Skin: p.Skin, Bot: p.Bot}), 0)
 	if !w.welcome(p, c.s, spawn, c.pre) {
 		c.s.Kick(proto.CloseSlow, "slow")
 		w.known[c.key] = w.rowOf(p)
@@ -521,6 +556,9 @@ func (w *World) join(c cmdJoin) {
 	w.players[p.ID] = p
 	w.byName[c.key] = p.ID
 	w.count.Add(1)
+	if !p.Bot {
+		w.humanCount.Add(1)
+	}
 	w.stopIdle()
 	c.reply <- joinReply{res: JoinResult{ID: p.ID}}
 }
@@ -617,8 +655,25 @@ func (w *World) remove(p *Player) {
 	w.known[p.NameKey] = w.rowOf(p)
 	w.leftDirty[p.NameKey] = struct{}{}
 	w.count.Add(-1)
+	if !p.Bot {
+		w.humanCount.Add(-1)
+	}
 	if len(w.players) == 0 {
 		w.startIdle()
+	}
+}
+
+// kickBots drops every online bot with code/reason, the same way a slow or resynced connection is
+// dropped (spec §4: deleting a world kicks its bots with 4006).
+func (w *World) kickBots(code int, reason string) {
+	var bots []*Player
+	for _, p := range w.players {
+		if p.Bot {
+			bots = append(bots, p)
+		}
+	}
+	for _, p := range bots {
+		w.drop(p, code, reason)
 	}
 }
 
@@ -763,7 +818,19 @@ func (w *World) infos(except int) []proto.PlayerInfo {
 	out := make([]proto.PlayerInfo, 0, len(w.players))
 	for id, p := range w.players {
 		if id != except {
-			out = append(out, proto.PlayerInfo{ID: p.ID, Name: p.Name, Skin: p.Skin, X: p.X, Y: p.Y, Z: p.Z, Yaw: p.Yaw, Pitch: p.Pitch, HasPos: p.HasPos})
+			out = append(out, proto.PlayerInfo{ID: p.ID, Name: p.Name, Skin: p.Skin, X: p.X, Y: p.Y, Z: p.Z, Yaw: p.Yaw, Pitch: p.Pitch, HasPos: p.HasPos, Bot: p.Bot})
+		}
+	}
+	return out
+}
+
+// humanInfos lists only non-bot players (spec §4: GET /worlds online excludes bots).
+func (w *World) humanInfos() []proto.PlayerInfo {
+	all := w.infos(0)
+	out := make([]proto.PlayerInfo, 0, len(all))
+	for _, pi := range all {
+		if !pi.Bot {
+			out = append(out, pi)
 		}
 	}
 	return out

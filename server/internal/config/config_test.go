@@ -117,3 +117,60 @@ func TestBadFlag(t *testing.T) {
 		t.Fatal("expected an error for an unknown flag")
 	}
 }
+
+// ── MinClient (spec §4) ──
+
+func TestMinClientFromEnv(t *testing.T) {
+	t.Setenv("MC_MIN_CLIENT", "3")
+	c, err := FromFlags([]string{"-token", "t"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if c.MinClient != 3 {
+		t.Fatalf("MinClient = %d, want 3", c.MinClient)
+	}
+}
+
+// The flag wins only when explicitly set, even when its value equals the zero default.
+func TestMinClientFlagBeatsEnv(t *testing.T) {
+	t.Setenv("MC_MIN_CLIENT", "3")
+	c, err := FromFlags([]string{"-token", "t", "-min-client", "0"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if c.MinClient != 0 {
+		t.Fatalf("MinClient = %d, want 0 (the explicit flag beats the env)", c.MinClient)
+	}
+}
+
+func TestMinClientDefaultZero(t *testing.T) {
+	t.Setenv("MC_MIN_CLIENT", "")
+	c, err := FromFlags([]string{"-token", "t"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if c.MinClient != 0 {
+		t.Fatalf("MinClient = %d, want 0 (no flag, no env)", c.MinClient)
+	}
+}
+
+func TestMinClientBadEnv(t *testing.T) {
+	t.Setenv("MC_MIN_CLIENT", "abc")
+	if _, err := FromFlags([]string{"-token", "t"}); err == nil {
+		t.Fatal("expected an error for MC_MIN_CLIENT=abc")
+	}
+}
+
+func TestMinClientNegativeEnv(t *testing.T) {
+	t.Setenv("MC_MIN_CLIENT", "-1")
+	if _, err := FromFlags([]string{"-token", "t"}); err == nil {
+		t.Fatal("expected an error for MC_MIN_CLIENT=-1")
+	}
+}
+
+func TestMinClientNegativeFlag(t *testing.T) {
+	t.Setenv("MC_MIN_CLIENT", "")
+	if _, err := FromFlags([]string{"-token", "t", "-min-client", "-1"}); err == nil {
+		t.Fatal("expected an error for -min-client -1")
+	}
+}

@@ -38,13 +38,24 @@ type harness struct {
 }
 
 func newHarness(t *testing.T) *harness {
+	return newHarnessCfg(t, config.Config{})
+}
+
+// newHarnessCfg is newHarness with a caller-supplied config (e.g. MinClient); Token and Origins
+// default the same way newHarness's did when left unset.
+func newHarnessCfg(t *testing.T, cfg config.Config) *harness {
 	t.Helper()
 	db := filepath.Join(t.TempDir(), "mc.sqlite")
 	st, err := store.Open(db)
 	if err != nil {
 		t.Fatal(err)
 	}
-	cfg := config.Config{Token: testToken, Origins: strings.Split(config.DefaultOrigins, ",")}
+	if cfg.Token == "" {
+		cfg.Token = testToken
+	}
+	if cfg.Origins == nil {
+		cfg.Origins = strings.Split(config.DefaultOrigins, ",")
+	}
 	srv := NewServer(cfg, st)
 	ts := httptest.NewServer(srv.Handler())
 	h := &harness{t: t, db: db, srv: srv, ts: ts, st: st}
@@ -1361,5 +1372,173 @@ func TestHugeExtrasIgnored(t *testing.T) {
 		if k != int(websocket.StatusGoingAway) {
 			t.Fatalf("noah kicked %v", kicks.of("noah"))
 		}
+	}
+}
+
+// ── client version gate (spec §4) ──
+
+func readErrorMsg(t *testing.T, cl *client, d time.Duration) proto.ErrorMsg {
+	t.Helper()
+	m := cl.until(proto.TError, d, nil)
+	var em proto.ErrorMsg
+	if err := json.Unmarshal(m.data, &em); err != nil {
+		t.Fatal(err)
+	}
+	return em
+}
+
+func TestVersionGateRefusesOld(t *testing.T) {
+	h := newHarnessCfg(t, config.Config{MinClient: 2})
+	w := h.world("gate")
+
+	cl := h.dial()
+	hl := hello(w.UUID, "Old", "b1")
+	hl.Ver = 1
+	cl.send(hl)
+	em := readErrorMsg(t, cl, 3*time.Second)
+	if em.Code != proto.CloseProto || em.Message != "outdated" || em.Min != 2 {
+		t.Fatalf("error = %+v, want {code:4004 message:outdated min:2}", em)
+	}
+	if code := cl.closeCode(3 * time.Second); code != websocket.StatusCode(proto.CloseProto) {
+		t.Fatalf("close code = %v, want 4004", code)
+	}
+}
+
+func TestVersionGateAdmitsAtMinimum(t *testing.T) {
+	h := newHarnessCfg(t, config.Config{MinClient: 2})
+	w := h.world("gate-ok")
+	cl := h.dial()
+	hl := hello(w.UUID, "New", "b1")
+	hl.Ver = 2
+	cl.join(hl) // must not error or close
+}
+
+// A missing ver counts as 0, which is refused once the minimum is above 0.
+func TestVersionGateMissingVerCountsAsZero(t *testing.T) {
+	h := newHarnessCfg(t, config.Config{MinClient: 2})
+	w := h.world("gate-missing")
+	cl := h.dial()
+	hl := hello(w.UUID, "NoVer", "b1")
+	// hl.Ver left at its zero value: no `ver` was sent by the client's build.
+	cl.send(hl)
+	em := readErrorMsg(t, cl, 3*time.Second)
+	if em.Message != "outdated" || em.Min != 2 {
+		t.Fatalf("error = %+v, want outdated with min:2", em)
+	}
+}
+
+// With MinClient 0 (the default), a missing ver is admitted.
+func TestVersionGateZeroMinimumAdmitsMissingVer(t *testing.T) {
+	h := newHarness(t)
+	w := h.world("gate-zero")
+	cl := h.dial()
+	cl.join(hello(w.UUID, "NoVer", "b1")) // Ver left at 0
+}
+
+// A negative ver is clamped to 0 by the server, not treated as "very old" or rejected outright.
+func TestVersionGateNegativeVerClamped(t *testing.T) {
+	h := newHarness(t)
+	w := h.world("gate-neg")
+	cl := h.dial()
+	hl := hello(w.UUID, "Neg", "b1")
+	hl.Ver = -5
+	cl.join(hl)
+}
+
+// A malformed ver or bot (wrong JSON type) fails the hello decode with 1008, the same as a
+// malformed proto today (spec §4).
+func TestVersionGateMalformedFieldsClose1008(t *testing.T) {
+	h := newHarness(t)
+	w := h.world("gate-malformed")
+	cases := []string{
+		`{"t":"hello","world":"` + w.UUID + `","name":"A","skin":"red","bid":"b1","proto":1,"gen":3,"ver":"2"}`,
+		`{"t":"hello","world":"` + w.UUID + `","name":"A","skin":"red","bid":"b2","proto":1,"gen":3,"ver":1.5}`,
+		`{"t":"hello","world":"` + w.UUID + `","name":"A","skin":"red","bid":"b3","proto":1,"gen":3,"ver":1,"bot":1}`,
+	}
+	for _, raw := range cases {
+		cl := h.dial()
+		cl.sendRaw([]byte(raw))
+		if code := cl.closeCode(3 * time.Second); code != websocket.StatusPolicyViolation {
+			t.Fatalf("case %s: close = %v, want 1008", raw, code)
+		}
+	}
+}
+
+// A wrong proto still gets message "proto", with no min, even when the server has a minimum set.
+func TestVersionGateProtoRefusalHasNoMin(t *testing.T) {
+	h := newHarnessCfg(t, config.Config{MinClient: 2})
+	w := h.world("gate-proto")
+	cl := h.dial()
+	hl := hello(w.UUID, "Bad", "b1")
+	hl.Proto = 99
+	cl.send(hl)
+	em := readErrorMsg(t, cl, 3*time.Second)
+	if em.Message != "proto" || em.Min != 0 {
+		t.Fatalf("error = %+v, want message proto and no min", em)
+	}
+}
+
+// ── bots (spec §4): relay, /worlds online, and delete rules ──
+
+func botHello(world, name, bid string) proto.Hello {
+	h := hello(world, name, bid)
+	h.Bot = true
+	return h
+}
+
+// A bot's welcome.players entry and join relay carry bot:true; /worlds online excludes it.
+func TestBotJoinIsHiddenFromOnline(t *testing.T) {
+	h := newHarness(t)
+	w := h.world("bot-online")
+	bot := h.dial()
+	bot.join(botHello(w.UUID, "Robo", "b1"))
+
+	_, b := h.do(http.MethodGet, "/worlds", nil)
+	var rows []proto.WorldListing
+	if err := json.Unmarshal(b, &rows); err != nil {
+		t.Fatal(err)
+	}
+	for _, r := range rows {
+		if r.UUID == w.UUID && len(r.Online) != 0 {
+			t.Fatalf("GET /worlds online = %+v, want the bot excluded", r.Online)
+		}
+	}
+}
+
+// A world with only bots online is not "occupied": DELETE succeeds and the bots are kicked with
+// 4006. A world with a human online (bots or not) still 409s, and nobody is kicked by the refused
+// attempt.
+func TestDeleteBotRules(t *testing.T) {
+	h := newHarness(t)
+	w := h.world("bots-and-humans")
+
+	human := h.dial()
+	human.join(hello(w.UUID, "Noah", "hb"))
+	bot := h.dial()
+	bot.join(botHello(w.UUID, "Robo", "bb"))
+
+	if res, _ := h.do(http.MethodDelete, "/worlds/"+w.UUID, nil); res.StatusCode != http.StatusConflict {
+		t.Fatalf("DELETE with a human and a bot online = %d, want 409", res.StatusCode)
+	}
+	select {
+	case <-bot.done:
+		t.Fatalf("the bot was closed by the refused delete: %v", bot.err)
+	case <-time.After(300 * time.Millisecond):
+	}
+
+	human.c.Close(websocket.StatusNormalClosure, "")
+	deadline := time.Now().Add(5 * time.Second)
+	for len(h.srv.reg.onlineOf(w.UUID)) != 0 {
+		if time.Now().After(deadline) {
+			t.Fatal("the human never left")
+		}
+		time.Sleep(5 * time.Millisecond)
+	}
+
+	if res, _ := h.do(http.MethodDelete, "/worlds/"+w.UUID, nil); res.StatusCode != http.StatusNoContent {
+		t.Fatalf("DELETE with only a bot online = %d, want 204", res.StatusCode)
+	}
+	if code := bot.closeCode(3 * time.Second); code != websocket.StatusCode(proto.CloseUnknownWorld) {
+		t.Fatalf("bot close code = %v, want 4006", code)
 	}
 }

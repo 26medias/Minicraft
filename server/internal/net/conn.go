@@ -210,6 +210,14 @@ func (c *Conn) refuse(code int, message string) {
 	c.Kick(code, message)
 }
 
+// refuseOutdated sends the "outdated" error message with Min set, then kicks with the same code
+// (spec §4: a client build below the server's minimum).
+func (c *Conn) refuseOutdated(min int) {
+	b, _ := json.Marshal(proto.ErrorMsg{T: proto.TError, Code: proto.CloseProto, Message: "outdated", Min: min})
+	c.Send(b)
+	c.Kick(proto.CloseProto, "outdated")
+}
+
 // serve runs the reader: hello, the join, then routing to the world until the socket ends.
 // It returns once the writer has finished too.
 func (c *Conn) serve(token bool) {
@@ -261,6 +269,10 @@ func (c *Conn) hello() (*hub.World, int, bool) {
 	}
 	if h.Proto < proto.MinProto || h.Proto > proto.MaxProto {
 		c.refuse(proto.CloseProto, "proto")
+		return nil, 0, false
+	}
+	if min := c.srv.cfg.MinClient; max(h.Ver, 0) < min {
+		c.refuseOutdated(min)
 		return nil, 0, false
 	}
 	if !supportedGen[h.Gen] {

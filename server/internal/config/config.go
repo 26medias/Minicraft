@@ -4,9 +4,11 @@ package config
 import (
 	"errors"
 	"flag"
+	"fmt"
 	"io"
 	"os"
 	"path/filepath"
+	"strconv"
 	"strings"
 )
 
@@ -22,6 +24,9 @@ type Config struct {
 	BackupDir string
 	// GCSBucket is where backups are uploaded (env MC_GCS_BUCKET); empty disables the upload.
 	GCSBucket string
+	// MinClient is the lowest client build version admitted (spec §4); 0 admits all. Set by
+	// -min-client or MC_MIN_CLIENT; the flag wins only when it is explicitly passed.
+	MinClient int
 }
 
 // FromFlags parses args (without the program name). -token falls back to the
@@ -37,6 +42,7 @@ func FromFlags(args []string) (Config, error) {
 	fs.StringVar(&origins, "origins", DefaultOrigins, "comma-separated allowed origins")
 	fs.StringVar(&c.BackupDir, "backup-dir", "", "directory for backup.sqlite (default: the -db directory)")
 	fs.StringVar(&c.GCSBucket, "gcs-bucket", "", "GCS bucket for backups (env MC_GCS_BUCKET; empty disables upload)")
+	fs.IntVar(&c.MinClient, "min-client", 0, "lowest client build version admitted (env MC_MIN_CLIENT; 0 admits all)")
 	if err := fs.Parse(args); err != nil {
 		return Config{}, err
 	}
@@ -54,6 +60,25 @@ func FromFlags(args []string) (Config, error) {
 	}
 	if c.BackupDir == "" {
 		c.BackupDir = filepath.Dir(c.DB)
+	}
+	// -min-client wins only when explicitly passed; otherwise MC_MIN_CLIENT, else the default 0.
+	minClientSet := false
+	fs.Visit(func(f *flag.Flag) {
+		if f.Name == "min-client" {
+			minClientSet = true
+		}
+	})
+	if !minClientSet {
+		if v := os.Getenv("MC_MIN_CLIENT"); v != "" {
+			n, err := strconv.Atoi(v)
+			if err != nil || n < 0 {
+				return Config{}, fmt.Errorf("MC_MIN_CLIENT must be a non-negative integer, got %q", v)
+			}
+			c.MinClient = n
+		}
+	}
+	if c.MinClient < 0 {
+		return Config{}, errors.New("-min-client must be non-negative")
 	}
 	c.Origins = splitList(origins)
 	return c, nil

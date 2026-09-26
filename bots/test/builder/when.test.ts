@@ -61,4 +61,43 @@ describe('--when players', () => {
 		expect(logs.some((e) => e.k === 'resumed')).toBe(true);
 		expect(asks).toBeGreaterThan(0);
 	}, 30_000);
+
+	// Review probe. Red if a build paused mid-way is dropped (a second project starts, the first stranded 'building').
+	it('the kid leaves mid-build: no placement while paused; he rejoins: the same build resumes', async () => {
+		const world = new FakeWorld();
+		const body = new FakeBody();
+		body.world = world;
+		body.current = { x: 100.5, y: world.surfaceY(100, 100) + 1, z: 100.5, yaw: 0, pitch: 0 };
+		body.placeImpl = async (x, y, z, name) => {
+			world.set(x, y, z, name);
+			return true;
+		};
+		const kid = player({ id: 7, name: 'Noah', x: 130.5, y: world.surfaceY(130, 130) + 1, z: 130.5 });
+		body.list = [kid];
+		const logs: Array<Record<string, unknown>> = [];
+		const start = Date.now();
+		const h = runBuilder({
+			name: 'Milo', body, world, spawn: { x: 110, y: world.surfaceY(110, 110) + 1, z: 110 }, primary: null, noEdits: false, when: 'players',
+			clock: () => 1e12 + (Date.now() - start) * 20, statePath: join(mkdtempSync(join(tmpdir(), 'when-')), 'b.json'), log: (e) => logs.push(e), rng: () => 0.3,
+			paceMs: 0, restMs: 1e9, known: new Set(blockNames()),
+		});
+		const places = () => logs.filter((e) => e.k === 'place').length;
+		let t0 = Date.now();
+		while (places() < 3 && Date.now() - t0 < 10_000) await new Promise((r) => setTimeout(r, 10));
+		body.list = [];
+		t0 = Date.now();
+		while (!logs.some((e) => e.k === 'paused') && Date.now() - t0 < 5000) await new Promise((r) => setTimeout(r, 10));
+		await new Promise((r) => setTimeout(r, 300));
+		const atPause = places();
+		await new Promise((r) => setTimeout(r, 1500));
+		const afterPause = places();
+		body.list = [kid];
+		t0 = Date.now();
+		while (places() <= afterPause && Date.now() - t0 < 10_000) await new Promise((r) => setTimeout(r, 10));
+		await h.stop();
+		const projects = logs.filter((e) => e.k === 'project');
+		expect(afterPause).toBe(atPause);
+		expect(projects.length).toBe(1);
+		expect(places()).toBeGreaterThan(afterPause);
+	}, 40_000);
 });

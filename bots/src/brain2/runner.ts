@@ -125,6 +125,9 @@ export class BehaviourRunner {
 		if (this.inFlight === 'mine') body.stopMining();
 		this.gen++;                                           // rule 6: a result arriving later is discarded
 		this.climb = null;
+		// The behaviour's movement goal ends with it (a later behaviour must never be flown to it); the stuck window
+		// carries over, so a bot whose behaviours keep failing the same way still escalates.
+		this.wd.clear();
 		if (a.plan !== null && a.beh.endPatch) {
 			// Guarded: end() also runs from tick()'s catch, so a throw here would escape tick() as an unhandled rejection.
 			try {

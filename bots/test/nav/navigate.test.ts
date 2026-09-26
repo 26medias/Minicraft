@@ -174,4 +174,22 @@ describe('stuck watchdog', () => {
 		await wd.guard();
 		expect(logs).toEqual([]);
 	});
+
+	// Review mutant. Red if a goal after a long idle inherits the old window: the first guard would escalate at once.
+	it('after 15 s with no goal, a new goal starts a fresh window', async () => {
+		const world = floorWorld();
+		const body = new FakeBody();
+		body.current = { x: 300.5, y: Y, z: 300.5, yaw: 0, pitch: 0 };
+		let t = 0;
+		const logs: Array<Record<string, unknown>> = [];
+		const wd = new StuckWatchdog({ body, world, clock: () => t, log: (e) => logs.push(e) });
+		wd.want({ x: 330.5, z: 300.5 });
+		wd.reached();
+		t = 60_000;
+		wd.want({ x: 330.5, z: 300.5 });
+		expect(await wd.guard()).toBe('ok');
+		t = 74_999;
+		expect(await wd.guard()).toBe('ok');
+		expect(logs).toEqual([]);
+	});
 });

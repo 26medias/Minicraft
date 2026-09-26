@@ -65,4 +65,47 @@ describe('BehaviourRunner stuck watchdog', () => {
 		expect(clock.t).toBeLessThan(50_000);
 		expect(body.calls.filter((c) => c.fn === 'move').at(-1)?.args[0]).toMatchObject({ x: 0.5, y: Y + 8, z: 0.5 });
 	});
+
+	// Review repro. Red if a behaviour's goal outlives it: a walk that failed, then 20 s later a look-only behaviour
+	// was flown 40 blocks to the old walk target.
+	it('a failed walk\'s goal ends with its behaviour: a later still behaviour is never flown to it', async () => {
+		const clock = new ManualClock(0);
+		const world = new FakeWorld();
+		world.fill({ x: 90, y: Y - 1, z: 90 }, { x: 150, y: Y - 1, z: 110 }, 'stone');
+		const body = new FakeBody();
+		body.world = world;
+		body.current = { x: 100.5, y: Y, z: 100.5, yaw: 0, pitch: 0 };
+		let blocked = true;
+		body.walkImpl = async () => {
+			if (blocked) throw new BlockedError({ ...body.current }, 'wall', 'walkTo');
+			return 'arrived';
+		};
+		body.flyImpl = async () => {
+			if (blocked) throw new BlockedError({ ...body.current }, 'wall', 'flyTo');
+			return 'arrived';
+		};
+		const store = new Store(initialState(PIP, body.current), clock.now);
+		const own = new Ownership(world, () => store.state.owned);
+		const perceiver = createPerceiver({ body, world, own, store, tuning: { followDist: 2, idleSwitchMs: 30_000, minTargetMs: 20_000 }, clock: clock.now });
+		const logs: Array<[string, unknown]> = [];
+		const runner = new BehaviourRunner({
+			store, body, world, own, perceiver, tripwire: new Tripwire(600), stop: new StopSignal(600_000), clock: clock.now, noEdits: () => false,
+			fit: async () => 'yes', log: (k, d) => logs.push([k, d]), rng: () => 0, spawn: { x: 256, y: 120, z: 256 },
+		});
+		BEHAVIOURS.watch = { ...walker, next: () => ({ kind: 'walk', to: { x: 140.5, z: 100.5 }, speed: 1 }) as Action as Next };
+		runner.start('watch', {});
+		for (let i = 0; i < 20 && store.state.behaviour; i++) {
+			clock.advance(200);
+			await runner.tick();
+		}
+		expect(store.state.behaviour).toBeNull();
+		blocked = false;
+		clock.advance(20_000);
+		BEHAVIOURS.watch = { ...walker, next: () => ({ kind: 'look', at: { x: 100, y: Y + 1, z: 110 } }) as Action as Next };
+		const before = body.calls.length;
+		runner.start('watch', {});
+		await runner.tick();
+		expect(body.calls.slice(before).filter((c) => c.fn === 'flyTo' || c.fn === 'move')).toHaveLength(0);
+		expect(logs.filter(([k]) => k === 'unstick')).toHaveLength(0);
+	});
 });

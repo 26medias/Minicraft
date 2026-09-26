@@ -8,22 +8,23 @@ import { runBuilder, type BuilderBuild, type BuilderFile } from '../../src/build
 import { cellKey, planCells } from '../../src/builder/moves.js';
 import { PALETTES } from '../../src/builder/palettes.data.js';
 import { runDecorator, type DecoratorFile } from '../../src/decorator/decorator.js';
-import { capCount } from '../../src/shared/cap.js';
+import { capCount, capMsUntilSlot, capReached } from '../../src/shared/cap.js';
 import { readPlan, type NeighbourhoodPlan } from '../../src/foreman/plan-file.js';
 import { FakeBody, FakeWorld } from '../fake-port.js';
 
 const known = new Set(blockNames());
 const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
+const HOUR = 60 * 60_000;
 
-/** A finished small house at (ox, oz), built into the world, as a builder record. */
-function house(world: FakeWorld, id: string, ox: number, oz: number): BuilderBuild {
-	const t = templateOf('house', 'small');
+/** A finished small house at (ox, oz), built into the world, as a builder record timestamped `t` (default now). */
+function house(world: FakeWorld, id: string, ox: number, oz: number, t = Date.now()): BuilderBuild {
+	const tpl = templateOf('house', 'small');
 	const oy = world.surfaceY(ox, oz) + 1;
-	const cells = planCells(t, { x: ox, y: oy, z: oz }, PALETTES[0]);
+	const cells = planCells(tpl, { x: ox, y: oy, z: oz }, PALETTES[0]);
 	for (const c of cells) world.set(c.cell.x, c.cell.y, c.cell.z, c.block);
 	return {
-		id, template: 'house', variant: 'small', palette: PALETTES[0].name, origin: { x: ox, y: oy, z: oz }, w: t.w, d: t.d, h: t.h,
-		cells, placed: cells.map((c) => cellKey(c.cell)), skipped: [], status: 'done', t: 1,
+		id, template: 'house', variant: 'small', palette: PALETTES[0].name, origin: { x: ox, y: oy, z: oz }, w: tpl.w, d: tpl.d, h: tpl.h,
+		cells, placed: cells.map((c) => cellKey(c.cell)), skipped: [], status: 'done', t,
 	};
 }
 
@@ -32,21 +33,47 @@ function rng(seed: number) {
 	return () => ((s = (s * 1664525 + 1013904223) >>> 0) / 2 ** 32);
 }
 
-describe('build cap', () => {
+describe('build cap (pure)', () => {
+	const now = 10_000_000;
+
 	it('counts finished builds and any that placed a block; not attempts that placed nothing', () => {
 		expect(capCount([
-			{ status: 'done', placed: ['a'] }, { status: 'abandoned', placed: ['a'] }, { status: 'abandoned', placed: [] }, { status: 'building', placed: [] },
-		])).toBe(2);
+			{ status: 'done', placed: ['a'], t: now }, { status: 'abandoned', placed: ['a'], t: now },
+			{ status: 'abandoned', placed: [], t: now }, { status: 'building', placed: [], t: now },
+		], now)).toBe(2);
 	});
 
 	it('builds on claimed plan lots never count toward the cap', () => {
-		expect(capCount([{ status: 'done', placed: ['a'], lot: 'lot-1' }, { status: 'done', placed: ['a'] }])).toBe(1);
+		expect(capCount([{ status: 'done', placed: ['a'], lot: 'lot-1', t: now }, { status: 'done', placed: ['a'], t: now }], now)).toBe(1);
 	});
 
-	/** Runs a builder over a state file holding `n` finished builds, with --max-builds `max`; returns its log kinds and the body's places. */
-	async function builderRun(n: number, max: number, planLot = false) {
+	it('a build older than the rolling hour no longer counts, or reaches the cap', () => {
+		const recs = [{ status: 'done' as const, placed: ['a'], t: now - HOUR - 1 }];
+		expect(capCount(recs, now)).toBe(0);
+		expect(capReached(recs, 1, now)).toBe(false);
+	});
+
+	it('a build within the rolling hour counts, and reaches the cap at max', () => {
+		const recs = [{ status: 'done' as const, placed: ['a'], t: now - (HOUR - 60_000) }];
+		expect(capCount(recs, now)).toBe(1);
+		expect(capReached(recs, 1, now)).toBe(true);
+		expect(capReached(recs, 2, now)).toBe(false);
+	});
+
+	it('msUntilSlot is the time until the oldest counted record ages out, 0 once under the cap', () => {
+		const recs = [{ status: 'done' as const, placed: ['a'], t: now - 50 * 60_000 }];
+		expect(capMsUntilSlot(recs, 1, now)).toBe(10 * 60_000);
+		expect(capMsUntilSlot(recs, 2, now)).toBe(0);
+	});
+});
+
+describe('build cap (bots)', () => {
+	/** Runs a builder over a state file holding `n` builds `ageMinutes` old, with --max-builds `max`; returns its log and the body's places. */
+	async function builderRun(n: number, max: number, opts: { planLot?: boolean; ageMinutes?: number } = {}) {
+		const { planLot = false, ageMinutes = 0 } = opts;
 		const world = new FakeWorld();
-		const builds = Array.from({ length: n }, (_, i) => house(world, `b${i}`, 100 + i * 12, 100));
+		const t = Date.now() - ageMinutes * 60_000;
+		const builds = Array.from({ length: n }, (_, i) => house(world, `b${i}`, 100 + i * 12, 100, t));
 		const owned: Record<string, number> = {};
 		for (const b of builds) for (const c of b.cells) owned[cellKey(c.cell)] = blockId(c.block)!;
 		const file: BuilderFile = { v: 1, builds, owned };
@@ -79,12 +106,12 @@ describe('build cap', () => {
 		return { log, places: body.calls.filter((c) => c.fn === 'place').length, current: h.stats.current, lot };
 	}
 
-	it('the builder at its cap (restored from its file) never plans another build and never places', async () => {
+	it('the builder with N builds in the last hour (restored from its file) never plans another build and never places', async () => {
 		const r = await builderRun(3, 3);
 		expect(r.log.some((e) => e.k === 'cap-reached' && e.builds === 3 && e.max === 3)).toBe(true);
 		expect(r.log.some((e) => e.k === 'decision' && e.what === 'project')).toBe(false);
 		expect(r.places).toBe(0);
-		expect(r.current).toMatch(/cap reached/);
+		expect(r.current).toMatch(/hourly limit reached/);
 	});
 
 	it('control: one under the cap, the same builder plans its next build', async () => {
@@ -93,13 +120,20 @@ describe('build cap', () => {
 		expect(r.log.some((e) => e.k === 'decision' && e.what === 'project')).toBe(true);
 	});
 
+	it('a builder whose builds are all more than 60 min old builds again despite n >= max', async () => {
+		const r = await builderRun(3, 3, { ageMinutes: 61 });
+		expect(r.log.some((e) => e.k === 'cap-reached')).toBe(false);
+		expect(r.log.some((e) => e.k === 'decision' && e.what === 'project')).toBe(true);
+	});
+
 	it('a capped --join-plan builder still claims the open plan lot (control: the same capped bot without a plan does not)', async () => {
-		const r = await builderRun(3, 3, true);
+		const r = await builderRun(3, 3, { planLot: true });
 		expect(r.lot?.claimedBy).toBe('Milo');
 		expect(r.log.some((e) => e.k === 'project' && e.lot === 'lot-1') || r.log.some((e) => e.k === 'lot-rejected' && e.lot === 'lot-1')).toBe(true);
 	});
 
-	async function decoratorRun(n: number, max: number) {
+	/** Runs a decorator over a state file holding `n` decorations `ageMinutes` old, with --max-decorations `max`. */
+	async function decoratorRun(n: number, max: number, ageMinutes = 0) {
 		const world = new FakeWorld();
 		const b = house(world, 'b1', 100, 100);
 		const root = mkdtempSync(join(tmpdir(), 'cap-deco-'));
@@ -108,10 +142,11 @@ describe('build cap', () => {
 		const owned: Record<string, number> = {};
 		for (const c of b.cells) owned[cellKey(c.cell)] = blockId(c.block)!;
 		writeFileSync(join(bdir, 'Milo.json'), JSON.stringify({ v: 1, builds: [b], owned }));
+		const t = Date.now() - ageMinutes * 60_000;
 		const deco: DecoratorFile = {
 			v: 1, owned: {},
 			decorations: Array.from({ length: n }, (_, i) => ({
-				id: `d${i}`, bot: 'Milo', buildId: 'gone', kind: 'lights' as const, description: 'x', cells: [], placed: ['1,2,3'], skipped: [], status: 'done' as const, t: 1,
+				id: `d${i}`, bot: 'Milo', buildId: 'gone', kind: 'lights' as const, description: 'x', cells: [], placed: ['1,2,3'], skipped: [], status: 'done' as const, t,
 			})),
 		};
 		const statePath = join(root, 'Deco.json');
@@ -130,12 +165,18 @@ describe('build cap', () => {
 		return { log, places: body.calls.filter((c) => c.fn === 'place').length };
 	}
 
-	it('the decorator at its cap never starts a decoration; control one under it does', async () => {
+	it('the decorator with N decorations in the last hour never starts one; control one under it does', async () => {
 		const capped = await decoratorRun(5, 5);
 		expect(capped.log.some((e) => e.k === 'cap-reached')).toBe(true);
 		expect(capped.log.some((e) => e.k === 'decoration')).toBe(false);
 		expect(capped.places).toBe(0);
 		const under = await decoratorRun(5, 6);
 		expect(under.log.some((e) => e.k === 'decoration')).toBe(true);
+	});
+
+	it('a decorator whose decorations are all more than 60 min old decorates again despite n >= max', async () => {
+		const r = await decoratorRun(5, 5, 61);
+		expect(r.log.some((e) => e.k === 'cap-reached')).toBe(false);
+		expect(r.log.some((e) => e.k === 'decoration')).toBe(true);
 	});
 });

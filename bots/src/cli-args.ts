@@ -27,11 +27,11 @@ export interface ParsedArgs {
 	jev: boolean;
 	/** `--llm-params` (architect, experiment E6): Ollama proposes the design's numbers before the choices. */
 	llmParams: boolean;
-	/** `--max-builds N` (builder, architect, helper): stop building after N builds (counted across restarts). */
+	/** `--max-builds N` (builder, architect, helper): N builds per rolling hour (counted across restarts). */
 	maxBuilds?: string;
-	/** `--max-decorations N` (decorator): stop decorating after N decorations (counted across restarts). */
+	/** `--max-decorations N` (decorator): N decorations per rolling hour (counted across restarts). */
 	maxDecorations?: string;
-	/** `--max-blasts N` (landscaper): stop after N blasts (counted across restarts). */
+	/** `--max-blasts N` (landscaper): N blasts per rolling hour (counted across restarts). */
 	maxBlasts?: string;
 	/** `--pickaxe <name>` (landscaper): the pickaxe it mines with (hand … emerald). */
 	pickaxe?: string;

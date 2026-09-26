@@ -168,7 +168,8 @@ plaza, houses, one tower; lots 4–6 blocks apart), every lot passing brain2's s
 kid positions, flat and natural, headroom, ≥ 12 from kid cells). Then lot by lot with the builder's move loop: the
 statue, then each house/tower followed by a path from its door to the plaza (on top of the ground, only into air) and
 lamps on posts at both path ends. The plan persists in `bots/.state/village/<target>/<world>/<name>.json`, so a
-restart resumes it. Same flags, engines and safety as the builder; e2e leg: `village`.
+restart resumes it. One village at a time: once it's done, the bot rests in the plaza and starts a new one an hour
+later. Same flags, engines and safety as the builder; e2e leg: `village`.
 
 ```bash
 npm --prefix bots run bot -- village --target local|live --world <uuid|name> --name <n> [--skin <s>] \
@@ -246,7 +247,8 @@ floor level, places it, sends `fx prime`, waits the game's fuse (3 s) and applie
 `blastCells`) as batched edits (`BotClient.breakMany`) with `fx boom`. A blast removes natural cells only and is
 dropped whole when any cell is within 12 of a kid cell, within 24 of a kid, or touches liquid (checked before lighting
 and again after the fuse). Blast edits go through a plan-bound budget (exactly the planned cells, else every edit
-halts). `--max-blasts N` (default 6, counted across restarts). `--pickaxe <name>` (hand|wood|stone|copper|iron|gold|diamond|emerald, default hand; granted, not crafted): mines with that pickaxe's time, and a multi-block tier (iron and up) also breaks the game's area around each mined cell on the hit face, keeping only cells that pass the mining safety rules on their own and are in reach (one batched edit, counted in the tripwire's plan, all into the inventory; never for the TNT hole). `--grant-ores N`: N of each ore and TNT raw ingredient into the inventory, once per state file (`granted` in it). Done squares are posted `flattened`. e2e leg: `landscaper`.
+halts). `--max-blasts N` (default 15 per rolling hour, counted across restarts — see "The build cap" above).
+`--pickaxe <name>` (hand|wood|stone|copper|iron|gold|diamond|emerald, default hand; granted, not crafted): mines with that pickaxe's time, and a multi-block tier (iron and up) also breaks the game's area around each mined cell on the hit face, keeping only cells that pass the mining safety rules on their own and are in reach (one batched edit, counted in the tripwire's plan, all into the inventory; never for the TNT hole). `--grant-ores N`: N of each ore and TNT raw ingredient into the inventory, once per state file (`granted` in it). Done squares are posted `flattened`. e2e leg: `landscaper`.
 
 The board is `bots/.state/shared/<target>/<world>/board.json` (`bots/src/board/`), with the foreman plan's lock and
 atomic writes: posts `flat-needed | flattened | build-request | decorate | kid-marker`, open → claimed → done, claims
@@ -260,11 +262,15 @@ npm --prefix bots run bot -- landscaper --target local|live --world <uuid|name> 
 
 ## The build cap
 
-Builder, architect and helper stop building after `--max-builds N` builds (default 12); the decorator after
-`--max-decorations N` (default 40); the village bot builds one village and stops. The count comes from the bot's own
-state file (a record counts once it placed a block), so it holds across restarts. A capped bot stays online, logs
-`cap-reached` once, and only wanders and looks around near its builds: no edits. Raise the flag (or move the state
-file aside) to let it build again.
+Builder, architect and helper stop building once `--max-builds N` builds (default 10) have landed in the last
+rolling hour; the decorator likewise with `--max-decorations N` (default 30/h); the landscaper's `--max-blasts N`
+(default 15/h, see below) works the same way. These are a safety valve against a runaway loop, not a throttle — the
+defaults are deliberately generous so a big world keeps visibly being built on, mined and blown up. The village bot
+builds one village at a time, then may start a new one an hour after the last one finished. The count comes from the
+bot's own state file (a record counts once it placed a block, from its timestamp), so it holds across restarts and
+empties out again as builds age past the hour. A capped bot stays online, logs `cap-reached`, and only wanders and
+looks around near its builds until a slot frees up: no edits, and the status line reads `hourly limit reached (k/N),
+next in m min`. Raise the flag to raise the per-hour rate.
 
 ## Only while a kid plays (`--when`)
 

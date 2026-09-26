@@ -36,7 +36,11 @@ export interface VillageLot { spec: LotSpec; build: BuilderBuild; path?: CellsRe
 export interface Village {
 	id: string; theme: string; layout: Layout; anchor: Vec3; centre: Col; lots: VillageLot[];
 	status: 'building' | 'done'; t: number;
+	/** When it finished (status became 'done'): a new village may start `VILLAGE_COOLDOWN_MS` after this. */
+	doneAt?: number;
 }
+/** One village at a time; a new one may start this long after the last one finished. */
+export const VILLAGE_COOLDOWN_MS = 60 * 60_000;
 export interface VillageFile { v: 1; village: Village | null; owned: Record<string, number> }
 
 export function villageStatePath(stateRoot: string, target: string, world: string, name: string): string {
@@ -338,6 +342,10 @@ export function runVillage(o: VillageOpts): VillageHandle {
 	}
 
 	async function once(): Promise<void> {
+		if (file.village?.status === 'done' && file.village.doneAt !== undefined && clock() - file.village.doneAt >= VILLAGE_COOLDOWN_MS) {
+			file.village = null;
+			save();
+		}
 		const v = file.village ?? (await plan());
 		if (!v) {
 			stats.current = 'no village site found; waiting';
@@ -394,12 +402,14 @@ export function runVillage(o: VillageOpts): VillageHandle {
 		if (stopped || trip.halted || paused()) return;
 		if (v.status !== 'done') {
 			v.status = 'done';
+			v.doneAt = clock();
 			save();
 			o.log({ k: 'village-end', t: clock(), id: v.id, lots: v.lots.map((l) => `${l.spec.role} ${l.build.status}`) });
 			const top = Math.max(...v.lots.map((l) => l.build.origin.y + l.build.h));
 			o.body.fx({ kind: 'firework', x: v.centre.x, y: top + 2, z: v.centre.z });
 		}
-		stats.current = `the ${v.theme} village is finished; resting in the plaza`;
+		const nextMin = Math.max(0, Math.ceil((VILLAGE_COOLDOWN_MS - (clock() - (v.doneAt ?? clock()))) / 60_000));
+		stats.current = `the ${v.theme} village is finished; resting in the plaza (next village in ${nextMin} min)`;
 		await restNear(plaza, o.restMs ?? 30_000);
 	}
 

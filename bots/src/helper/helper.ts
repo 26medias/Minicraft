@@ -19,7 +19,7 @@ import { constructBuild, loadBuilderFile, makeAsk, saveBuilderFile, type Builder
 import type { ChoiceEngine } from '../builder/engines.js';
 import { cellKey, planCells } from '../builder/moves.js';
 import type { SharedCells } from '../shared/bot-cells.js';
-import { capCount, capReached, countsTowardCap, DEFAULT_MAX_BUILDS } from '../shared/cap.js';
+import { capCount, capMsUntilSlot, capReached, countsTowardCap, DEFAULT_MAX_BUILDS, minutesUntilSlot } from '../shared/cap.js';
 import { HELP_CHOICES, helpTemplate, helperSite, kidBuilding, kidPalette, type KidPlacement } from './plan.js';
 import { StuckWatchdog } from '../nav/navigate.js';
 import { pickWanderSpot, wanderer } from '../nav/wander.js';
@@ -192,12 +192,14 @@ export function runHelper(o: HelperOpts): HelperHandle {
 
 
 	let capLogged = false;
-	/** Past the build cap: no more edits, only a wander and a look around near one of its builds. */
+	/** Past the hourly build cap: no more edits, only a wander and a look around near one of its builds until a slot ages out. */
 	async function capped(): Promise<void> {
-		const n = capCount(file.builds);
-		if (!capLogged) o.log({ k: 'cap-reached', t: clock(), builds: n, max: maxBuilds });
+		const now = clock();
+		const n = capCount(file.builds, now);
+		const nextMin = minutesUntilSlot(capMsUntilSlot(file.builds, maxBuilds, now));
+		if (!capLogged) o.log({ k: 'cap-reached', t: now, builds: n, max: maxBuilds, nextMin });
 		capLogged = true;
-		stats.current = `build cap reached (${n}/${maxBuilds}); wandering near my builds`;
+		stats.current = `hourly limit reached (${n}/${maxBuilds}), next in ${nextMin} min`;
 		const mine = file.builds.filter(countsTowardCap);
 		const b = mine[Math.floor(o.rng() * mine.length) % Math.max(1, mine.length)];
 		if (b) await restNear(b, 60_000);
@@ -223,9 +225,11 @@ export function runHelper(o: HelperOpts): HelperHandle {
 			let b = resume;
 			resume = null;
 			try {
-				if (!b && capReached(file.builds, maxBuilds)) {
+				if (!b && capReached(file.builds, maxBuilds, clock())) {
 					await capped();
 					continue;
+				} else if (!b) {
+					capLogged = false;
 				}
 				b ??= await pickHelp();
 				if (!b) {

@@ -23,7 +23,7 @@ import { palettesFor, type Palette } from './palettes.data.js';
 import { flyLeg, navigate, StuckWatchdog } from '../nav/navigate.js';
 import { pickWanderSpot, wanderer } from '../nav/wander.js';
 import type { SharedCells } from '../shared/bot-cells.js';
-import { capCount, capReached, DEFAULT_MAX_BUILDS } from '../shared/cap.js';
+import { capCount, capMsUntilSlot, capReached, DEFAULT_MAX_BUILDS, minutesUntilSlot } from '../shared/cap.js';
 import { claimLot, planAvoidBoxes, updateLot, type PlanLot } from '../foreman/plan-file.js';
 import { endLot, fitsLot, lotSite, rejectStatus, renewClaim } from '../foreman/join.js';
 import { showtimeOf } from '../nav/showtime.js';
@@ -375,12 +375,14 @@ export function runBuilder(o: BuilderOpts): BuilderHandle {
 
 
 	let capLogged = false;
-	/** Past the build cap: no more edits, only a wander and a look around near one of its builds. */
+	/** Past the hourly build cap: no more edits, only a wander and a look around near one of its builds until a slot ages out. */
 	async function capped(): Promise<void> {
-		const n = capCount(file.builds);
-		if (!capLogged) o.log({ k: 'cap-reached', t: clock(), builds: n, max: maxBuilds });
+		const now = clock();
+		const n = capCount(file.builds, now);
+		const nextMin = minutesUntilSlot(capMsUntilSlot(file.builds, maxBuilds, now));
+		if (!capLogged) o.log({ k: 'cap-reached', t: now, builds: n, max: maxBuilds, nextMin });
 		capLogged = true;
-		stats.current = `build cap reached (${n}/${maxBuilds}); wandering near my builds`;
+		stats.current = `hourly limit reached (${n}/${maxBuilds}), next in ${nextMin} min`;
 		const mine = file.builds.filter((x) => x.status === 'done' || x.placed.length > 0);
 		const b = mine[Math.floor(o.rng() * mine.length) % Math.max(1, mine.length)];
 		if (b) await restNear(b, 60_000);
@@ -406,13 +408,15 @@ export function runBuilder(o: BuilderOpts): BuilderHandle {
 			let b = resume;
 			resume = null;
 			try {
-				if (!b && capReached(file.builds, maxBuilds)) {
+				if (!b && capReached(file.builds, maxBuilds, clock())) {
 					// Plan lots don't count toward the cap (the plan bounds them): a capped --join-plan bot still claims them.
 					if (o.joinPlan) b = await pickProject(true);
 					if (!b) {
 						await capped();
 						continue;
 					}
+				} else if (!b) {
+					capLogged = false;
 				}
 				b ??= await pickProject();
 				if (!b) {

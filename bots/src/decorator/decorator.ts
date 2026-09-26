@@ -18,7 +18,7 @@ import { approach, checkPlace, eyeDist, PLACE_MAX } from '../builder/builder.js'
 import type { ChoiceEngine } from '../builder/engines.js';
 import { cellKey } from '../builder/moves.js';
 import type { SharedCells } from '../shared/bot-cells.js';
-import { capCount, capReached, countsTowardCap, DEFAULT_MAX_DECORATIONS } from '../shared/cap.js';
+import { capCount, capMsUntilSlot, capReached, countsTowardCap, DEFAULT_MAX_DECORATIONS, minutesUntilSlot } from '../shared/cap.js';
 import { candidateDecorations, niceBuild, readBuilderRecords, type DecorCell, type DecorKind, type KnownBuild } from './decor.js';
 import { StuckWatchdog } from '../nav/navigate.js';
 import { pickWanderSpot, wanderer } from '../nav/wander.js';
@@ -294,12 +294,14 @@ export function runDecorator(o: DecoratorOpts): DecoratorHandle {
 			resume.why = 'build gone';
 			save();
 		}
-		if (capReached(file.decorations, maxDecorations)) {
-			// Past the cap: no more edits, only a wander and a look around near a build it decorated.
-			const n = capCount(file.decorations);
-			if (!capLogged) o.log({ k: 'cap-reached', t: clock(), decorations: n, max: maxDecorations });
+		const now = clock();
+		if (capReached(file.decorations, maxDecorations, now)) {
+			// Past the hourly cap: no more edits, only a wander and a look around near a build it decorated until a slot ages out.
+			const n = capCount(file.decorations, now);
+			const nextMin = minutesUntilSlot(capMsUntilSlot(file.decorations, maxDecorations, now));
+			if (!capLogged) o.log({ k: 'cap-reached', t: now, decorations: n, max: maxDecorations, nextMin });
 			capLogged = true;
-			stats.current = `decoration cap reached (${n}/${maxDecorations}); wandering near the builds`;
+			stats.current = `hourly limit reached (${n}/${maxDecorations}), next in ${nextMin} min`;
 			const mine = file.decorations.filter(countsTowardCap);
 			const d = mine[Math.floor(o.rng() * mine.length) % Math.max(1, mine.length)];
 			const kbd = d && recs.builds.find((b) => b.bot === d.bot && b.build.id === d.buildId);
@@ -307,6 +309,7 @@ export function runDecorator(o: DecoratorOpts): DecoratorHandle {
 			else await sleep(10_000);
 			return;
 		}
+		capLogged = false;
 		const kb = await pickBuild(recs.builds);
 		if (!kb) {
 			stats.current = recs.builds.length ? 'every build is decorated; waiting' : 'no builder builds yet; waiting';

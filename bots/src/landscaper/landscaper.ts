@@ -35,8 +35,9 @@ import type { SharedCells } from '../shared/bot-cells.js';
 import { idlePaused, PresenceGate, type WhenMode } from '../shared/when.js';
 import { flyLeg, landingFor } from '../nav/navigate.js';
 import { pickWanderSpot, wanderer } from '../nav/wander.js';
+import { minutesUntilSlot, msUntilSlot, windowCount, windowReached } from '../shared/cap.js';
 
-export const DEFAULT_MAX_BLASTS = 6;
+export const DEFAULT_MAX_BLASTS = 15;
 const TOY = 'flatten_tnt';
 const TOY_ID = blockId(TOY)!;
 const FUSE_MS = tntSpec(TOY)!.fuse * 1000;
@@ -539,12 +540,15 @@ export function runLandscaper(o: LandscaperOpts): LandscaperHandle {
 		}
 	}
 
+	/** The blast timestamps counting toward the hourly cap (a dropped blast placed nothing: it never counts). */
+	const blastTimes = (): number[] => file.blasts.filter((b) => !b.dropped).map((b) => b.t);
+
 	/** The rest between areas: on the ground, the next area picked and its TNT made ready meanwhile, then idling out the rest. */
 	async function rest(): Promise<void> {
 		const until = clock() + (o.restMs ?? LANDSCAPER_REST_SEC * 1000);
 		stats.current = 'resting between areas';
 		await land();
-		if (file.blasts.filter((b) => !b.dropped).length < maxBlasts && !stopped && !halted()) {
+		if (!windowReached(blastTimes(), clock(), maxBlasts) && !stopped && !halted()) {
 			const next = file.areas.find((a) => a.status === 'active') ?? await pickArea();
 			if (next && (file.inv[TOY] ?? 0) < 1) {
 				gctx.anchor = { x: next.x0 + next.size / 2, z: next.z0 + next.size / 2 };
@@ -572,8 +576,11 @@ export function runLandscaper(o: LandscaperOpts): LandscaperHandle {
 					await idle(5000);
 					continue;
 				}
-				if (file.blasts.filter((b) => !b.dropped).length >= maxBlasts) {
-					stats.current = `blast cap reached (${maxBlasts}); resting`;
+				const nowT = clock();
+				if (windowReached(blastTimes(), nowT, maxBlasts)) {
+					const n = windowCount(blastTimes(), nowT);
+					const nextMin = minutesUntilSlot(msUntilSlot(blastTimes(), nowT, maxBlasts));
+					stats.current = `hourly limit reached (${n}/${maxBlasts}), next in ${nextMin} min`;
 					await idle(60_000);
 					continue;
 				}

@@ -98,11 +98,11 @@ export interface Config {
 	jev: boolean;
 	/** `--llm-params` (architect, experiment E6). */
 	llmParams: boolean;
-	/** `--max-builds N` (builder, architect, helper); undefined = the bot's default (12). */
+	/** `--max-builds N` (builder, architect, helper): N per rolling hour; undefined = the bot's default (10/h). */
 	maxBuilds?: number;
-	/** `--max-decorations N` (decorator); undefined = the default (40). */
+	/** `--max-decorations N` (decorator): N per rolling hour; undefined = the default (30/h). */
 	maxDecorations?: number;
-	/** `--max-blasts N` (landscaper); undefined = the default (6). */
+	/** `--max-blasts N` (landscaper): N per rolling hour; undefined = the default (15/h). */
 	maxBlasts?: number;
 	/** `--pickaxe <name>` (landscaper): the pickaxe's tier (0 hand … 7 emerald; default 0). */
 	pickaxe: number;

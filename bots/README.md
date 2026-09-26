@@ -1,10 +1,13 @@
 # bots
 
 Local TypeScript bots that join a Minicraft multiplayer world as players. They run on Julien's own
-desktop, never deployed. The first (and so far only) bot is **companion**: it follows a kid, looks
-at what he's looking at, and helps him build by continuing his line of blocks.
+desktop, never deployed. This file is the runbook: setup, every command and flag, and the details of
+each bot. The system overview (bot types, architecture, the board, safety, state files, running them
+live under systemd, the control panel, known issues) is **`docs/bots.md`**.
 
-Design: `docs/superpowers/specs/2026-09-25-companion-bot-design.md`.
+Designs: `docs/superpowers/specs/2026-09-25-companion-bot-design.md` (companion v1) and
+`docs/superpowers/specs/2026-09-25-bot-brain-design.md` (brain v2). The other bots were live
+experiments; they are described here and in `docs/bots.md`.
 
 ## Setup
 
@@ -32,14 +35,62 @@ Design: `docs/superpowers/specs/2026-09-25-companion-bot-design.md`.
 3. **Start a brain** (in its own terminal, left running):
 
    ```bash
-   npm run brains -- laya
+   npm --prefix bots run brains -- laya
    ```
 
    This spawns Laya's exact start command from `bots.config.ts` (which mirrors `BRAINS.md`), on
-   `127.0.0.1:8000`. Ctrl-C stops it. `npm run brains -- clm` starts CLM the same way, but see the
-   note above — its health check will fail downstream in the companion CLI.
+   `127.0.0.1:8000`. Ctrl-C stops it. `npm --prefix bots run brains -- clm` starts CLM the same way,
+   but see the note above — its health check will fail downstream in the companion CLI. To keep Laya
+   running without a terminal, start it as the `laya` user unit (`docs/bots.md`, "Laya as a user unit").
 
-All commands below (`npm run bot`, `npm run brains`) are run from `bots/`.
+4. **Jev** (optional, hosted): `--brain jev` and brain v2's `--jev` read `JEV_API_KEY` from the
+   repo's `.env` (a worktree falls back to `~/Projects/Minicraft/.env`). It is never printed.
+
+All commands below are run from the repo root (or the worktree's root) with `npm --prefix bots run …`.
+
+## Command reference
+
+```bash
+npm --prefix bots run bot -- <command> --target local|live [--world <uuid|name>] [--name <n>] [--skin <s>] [flags]
+```
+
+Commands: `companion` (the default when the first argument is a flag), `builder`, `decorator`,
+`village`, `helper`, `architect`, `foreman`, `landscaper`, `revert`. Without `--world` a command lists
+the target's worlds and exits.
+
+| Flag | Commands | Meaning |
+|---|---|---|
+| `--target local\|live` | all (required) | A target from `bots.config.ts`. |
+| `--world <uuid\|name>` | all | The world; a name must match exactly one (case-insensitive). |
+| `--name <n>` | all | Default `Bot`. Letters, digits, spaces, ≤ 16; never a name online or saved in the world. |
+| `--skin <id>` | all | Default: the first skin no online kid wears. |
+| `--brain <b>` | companion: `laya` (default), `clm`, `scripted`, `v2`; builder, decorator, village, helper, architect, landscaper: `laya` (default) or `jev` | The decision engine. |
+| `--compare` | laya/jev bots | Also ask the other engine; log both and whether they agree. |
+| `--personality pip\|rex` | companion `--brain v2` | Default `pip`. |
+| `--jev` | companion `--brain v2` | Jev answers selection's social and situational questions. |
+| `--tui` | companion `--brain v2` | The live terminal view. |
+| `--rest-sec N` | builder, decorator, village, helper, architect (default 30); landscaper (default 15) | Rest after each build / between areas. |
+| `--max-builds N` | builder, architect, helper | Builds per rolling hour (default 10). |
+| `--max-decorations N` | decorator | Decorations per rolling hour (default 30). |
+| `--max-blasts N` | landscaper | Blasts per rolling hour (default 15). |
+| `--pickaxe <tier>` | landscaper | `hand` (default), `wood`, `stone`, `copper`, `iron`, `gold`, `diamond`, `emerald`. |
+| `--grant-ores N` | landscaper | N of each ore and TNT ingredient, once per state file. |
+| `--join-plan` | builder, architect | Build on the foreman's open lots first. |
+| `--llm-params` | architect | Ollama proposes the design's numbers. |
+| `--when always\|players` | every bot except companion v1 | `players`: active only while a non-bot player is online. Default `always`. |
+| `--no-edits` | all bots | Move and look only. |
+| `--revert-on-exit` | companion (v1 and v2) | Run `revert()` on the way out. |
+| `--i-deployed-the-server` | `--target live`, once per world | Acknowledges the live server supports bots. |
+| `--builds` | revert | Take brain v2's standing builds apart instead of replaying the journal. |
+
+A flag a command doesn't use is accepted and ignored. Other scripts:
+
+```bash
+npm --prefix bots run brains -- laya            # start Laya in the foreground
+npm --prefix bots run panel                     # the control panel, http://127.0.0.1:7777/
+npm run bot:replay -- <log.jsonl> [--data <file.ts>]   # brain v2 replay (repo root)
+npm run bot:bench                               # the brain v2 model benchmark (repo root)
+```
 
 ## A local server for playtesting
 
@@ -78,7 +129,7 @@ outright.
 ## Running the companion
 
 ```bash
-npm run bot -- companion --target local|live --world <uuid|name> \
+npm --prefix bots run bot -- companion --target local|live --world <uuid|name> \
 	[--name Robo] [--skin <id>] [--brain laya|clm|scripted] \
 	[--no-edits] [--revert-on-exit] [--i-deployed-the-server]
 ```
@@ -94,7 +145,7 @@ npm run bot -- companion --target local|live --world <uuid|name> \
   bots their own names (a `Robo` prefix is a good habit).
 - **`--skin`** defaults to the first catalog skin no online kid is currently wearing.
 - **`--brain`** defaults to `laya`. A down or unhealthy brain refuses to start — for `laya`, the
-  message names the start command (`npm run brains -- laya`); for `clm`, it explains why (the GPU
+  message names the start command (`npm --prefix bots run brains -- laya`); for `clm`, it explains why (the GPU
   note above) and points at `BRAINS.md` — unless you pass `--brain scripted` (deterministic, no
   external process, always available; the same rules the loop falls back to on a brain failure).
 - **`--no-edits`**: follow and watch only, no `help_build`. Recommended for your first live
@@ -106,23 +157,27 @@ npm run bot -- companion --target local|live --world <uuid|name> \
 `revert` is a second subcommand, for cleaning up after a bot without starting the loop:
 
 ```bash
-npm run bot -- revert --target <target> --world <uuid|name> --name <bot's name>
+npm --prefix bots run bot -- revert --target <target> --world <uuid|name> --name <bot's name>
 ```
 
-It connects with the bot's own saved state, calls `revert()`, prints how many cells it restored,
-and exits.
+It connects with the bot's own saved state (the SDK journal, `bots/.state/<target>/<world>/<name>.json`,
+the last 10,000 edits), calls `revert()`, prints how many cells it restored, and exits. It works for
+every bot type; stop the bot first.
 
 ## The builder bot
 
 A small, separate bot (`bots/src/builder/`): it only builds (never mines), with unlimited blocks. It loops: pick a
 project (a template × size, not one of the last two kinds built; the model chooses, else random-weighted) and a
 palette → find a flat site near the nearest online kid (else world spawn), widening 32 → 64 → 96, ≥ 12 from any kid
-cell and clear of its own builds → place one block at a time (the model picks among ≤ 3 supported cells, else lowest
-then nearest), ~0.8 s apart → a firework → rest 5 minutes → again.
+cell and clear of its own builds, preferring a site in front of a kid ("showtime", 15–30 blocks away) → place one block
+at a time (the model picks among ≤ 3 supported cells, else lowest then nearest), ~0.8 s apart → a firework → rest
+`--rest-sec` (default 30 s), wandering nearby → again. Every move goes through the shared navigator and its stuck
+watchdog (`docs/bots.md`).
 
 ```bash
 npm --prefix bots run bot -- builder --target local|live --world <uuid|name> --name <n> [--skin <s>] \
-	--brain laya|jev [--compare] [--when always|players] [--no-edits] [--i-deployed-the-server]
+	[--brain laya|jev] [--compare] [--rest-sec N] [--max-builds N] [--join-plan] [--when always|players] \
+	[--no-edits] [--i-deployed-the-server]
 ```
 
 - **`--brain laya`** asks Laya (`npm run brains -- laya`, 400 ms timeout); **`--brain jev`** asks Jev (hosted, 3 s
@@ -148,7 +203,8 @@ cell, flying within reach like the builder → rest `--rest-sec` with an idle lo
 
 ```bash
 npm --prefix bots run bot -- decorator --target local|live --world <uuid|name> --name <n> [--skin <s>] \
-	--brain laya|jev [--compare] [--rest-sec N] [--when always|players] [--no-edits] [--i-deployed-the-server]
+	[--brain laya|jev] [--compare] [--rest-sec N] [--max-decorations N] [--when always|players] [--no-edits] \
+	[--i-deployed-the-server]
 ```
 
 - **Where:** only into air, only on natural or bot ground, outside every build's footprint and within 4 blocks of
@@ -173,7 +229,7 @@ later. Same flags, engines and safety as the builder; e2e leg: `village`.
 
 ```bash
 npm --prefix bots run bot -- village --target local|live --world <uuid|name> --name <n> [--skin <s>] \
-	--brain laya|jev [--compare] [--rest-sec N] [--when always|players] [--no-edits] [--i-deployed-the-server]
+	[--brain laya|jev] [--compare] [--rest-sec N] [--when always|players] [--no-edits] [--i-deployed-the-server]
 ```
 
 ## The helper bot (experiment E5)
@@ -189,7 +245,8 @@ it idles near spawn, looking around. State `bots/.state/helper/<target>/<world>/
 
 ```bash
 npm --prefix bots run bot -- helper --target local|live --world <uuid|name> --name <n> [--skin <s>] \
-	--brain laya|jev [--compare] [--rest-sec N] [--when always|players] [--no-edits] [--i-deployed-the-server]
+	[--brain laya|jev] [--compare] [--rest-sec N] [--max-builds N] [--when always|players] [--no-edits] \
+	[--i-deployed-the-server]
 ```
 
 ## The architect bot (experiment E6)
@@ -207,19 +264,23 @@ each range and validated, else the choices (`llm-params` log line). e2e leg: `ar
 
 ```bash
 npm --prefix bots run bot -- architect --target local|live --world <uuid|name> --name <n> [--skin <s>] \
-	--brain laya|jev [--compare] [--llm-params] [--rest-sec N] [--when always|players] [--no-edits] [--i-deployed-the-server]
+	[--brain laya|jev] [--compare] [--llm-params] [--rest-sec N] [--max-builds N] [--join-plan] \
+	[--when always|players] [--no-edits] [--i-deployed-the-server]
 ```
 
 ## The foreman and `--join-plan` (experiment E7)
 
 `bots/src/foreman/`: one neighbourhood per world, shared through a plan file
-`bots/.state/shared/<target>/<world>/plan.json`. The foreman lays it out near the nearest kid (else spawn): 2 rows of
+`bots/.state/shared/<target>/<world>/plan.json`. The foreman lays it out anchored on world spawn, widening its search
+(32, 64, then 96) when nothing fits: 2 rows of
 3–5 lots (7×7, room for 16 high; 10, then 8, then 6 lots), 4 columns apart, with a road grid in the gaps (a gravel main
 street between the rows, cobblestone cross streets, 1-wide verges) and lamps (oak post + lamp) at every crossing and
 at both ends of the main street. Every lot passes brain2's site rules (as the village: flat and natural, headroom,
 ≥ 12 from kid cells), the whole area stays ≥ 16 from spawn and from every kid standing, and every road column is
 natural ground within 3 of the lots. It writes the plan, then builds the roads and the lamps itself (on top of the
-ground, only into air, `checkPlace` and a Tripwire), then strolls the streets with no more edits.
+ground, only into air, `checkPlace` and a Tripwire), then strolls the streets with no more edits. With no plan that has
+a lot left, it posts one `flat-needed` (24×24 near spawn) on the board and lays its next plan on the landscaper's
+`flattened` answer (the old plan is archived as `plan-<ts>.json`).
 
 Builder and architect bots started with **`--join-plan`** claim the next open lot that fits (an architect design,
 or a template, no larger than the lot), re-check only the rules that can change since the plan (their own builds, a
@@ -247,17 +308,20 @@ floor level, places it, sends `fx prime`, waits the game's fuse (3 s) and applie
 `blastCells`) as batched edits (`BotClient.breakMany`) with `fx boom`. A blast removes natural cells only and is
 dropped whole when any cell is within 12 of a kid cell, within 24 of a kid, or touches liquid (checked before lighting
 and again after the fuse). Blast edits go through a plan-bound budget (exactly the planned cells, else every edit
-halts). `--max-blasts N` (default 15 per rolling hour, counted across restarts — see "The build cap" above).
+halts). `--max-blasts N` (default 15 per rolling hour, counted across restarts — see "The build cap" below).
 `--pickaxe <name>` (hand|wood|stone|copper|iron|gold|diamond|emerald, default hand; granted, not crafted): mines with that pickaxe's time, and a multi-block tier (iron and up) also breaks the game's area around each mined cell on the hit face, keeping only cells that pass the mining safety rules on their own and are in reach (one batched edit, counted in the tripwire's plan, all into the inventory; never for the TNT hole). `--grant-ores N`: N of each ore and TNT raw ingredient into the inventory, once per state file (`granted` in it). Done squares are posted `flattened`. e2e leg: `landscaper`.
 
 The board is `bots/.state/shared/<target>/<world>/board.json` (`bots/src/board/`), with the foreman plan's lock and
 atomic writes: posts `flat-needed | flattened | build-request | decorate | kid-marker`, open → claimed → done, claims
 expire after 15 min. **Kid markers:** a kid stacks exactly 3 wool of one colour: red = flatten here, blue = build a
 house here, green = make a garden here. A watching bot posts it once and the nearest one sets off a firework above it.
-Marker cells are kid cells: no bot touches them.
+Marker cells are kid cells: no bot touches them. Today only the landscaper watches for markers, and only red ones are
+acted on; blue and green get the firework and a post, but no bot builds on them yet.
 
 ```bash
-npm --prefix bots run bot -- landscaper --target local|live --world <uuid|name> --name <n> [--brain laya|jev] [--compare] [--max-blasts N] [--pickaxe <name>] [--grant-ores N] [--rest-sec N] [--when always|players] [--no-edits] [--i-deployed-the-server]
+npm --prefix bots run bot -- landscaper --target local|live --world <uuid|name> --name <n> [--skin <s>] \
+	[--brain laya|jev] [--compare] [--max-blasts N] [--pickaxe <name>] [--grant-ores N] [--rest-sec N] \
+	[--when always|players] [--no-edits] [--i-deployed-the-server]
 ```
 
 ## The build cap
@@ -274,8 +338,8 @@ next in m min`. Raise the flag to raise the per-hour rate.
 
 ## Only while a kid plays (`--when`)
 
-Every builder-family bot (builder, decorator, village, helper, architect, foreman) and the brain v2 companion take
-`--when always|players` (default `always`). With `players` the bot is active only while at least one non-bot player
+Every builder-family bot (builder, decorator, village, helper, architect, foreman), the landscaper and the brain v2
+companion take `--when always|players` (default `always`); companion v1 ignores it. With `players` the bot is active only while at least one non-bot player
 is online. When none is, it pauses: it stays connected, ends its current move or build step (a half-built build
 resumes later), makes no model call (Laya, Jev) and no edit, and only looks around; brain v2 keeps perceiving, so it
 notices the player who joins. It resumes 5 s after a player joins (and pauses 5 s after the last one leaves), and logs
@@ -283,7 +347,7 @@ notices the player who joins. It resumes 5 s after a player joins (and pauses 5 
 
 ## Shared bot cells
 
-Builder, decorator, village, helper and architect append every cell they place to
+Builder, decorator, village, helper, architect, foreman and landscaper append every cell they write to
 `bots/.state/shared/<target>/<world>/bot-cells.jsonl` (`{x,y,z,id,bot,t}`, append-only). A cell whose current block
 equals the latest entry's id counts as a bot cell (not a kid's), so one bot does not back off from another's blocks;
 a kid's later edit of the cell (a non-bot edit event) still makes it a kid cell.
@@ -380,11 +444,12 @@ in a test, the way `bots/test/fixtures/laya-exchange.json` and
 
 `--brain v2` runs the emotional brain (`bots/src/brain2/`, spec
 `docs/superpowers/specs/2026-09-25-bot-brain-design.md`). Until part 2 it uses code engines only
-(no Laya, no LLM): every expert runs its code path.
+(no Laya, no LLM): every expert runs its code path, except that `--jev` (experiment E2) lets Jev
+answer selection's social and situational questions (the code rules stay the fallback).
 
 ```bash
 npm --prefix bots run bot -- companion --target local|live --world <uuid|name> --brain v2 \
-	[--personality pip|rex] [--name Pip] [--tui] [--when always|players] [--no-edits] [--revert-on-exit]
+	[--personality pip|rex] [--jev] [--name Pip] [--tui] [--when always|players] [--no-edits] [--revert-on-exit]
 ```
 
 - **`--personality`** defaults to `pip` (shy, curious builder); `rex` is the bold explorer.
@@ -421,8 +486,10 @@ npm --prefix bots run bot -- companion --target live --world <uuid|name> --brain
 
 The live checklist below applies too (the token, `--i-deployed-the-server` once per world).
 
-- **Stopping it.** Press Ctrl-C in its terminal, or `systemctl --user stop minicraft-bot` if you
-  run it as that systemd user unit (it sends SIGTERM). Either one stops the loop, flushes the
+- **Stopping it.** Press Ctrl-C in its terminal, or `systemctl --user stop mcbot-<slug-of-name>` if
+  you run it as a systemd user unit (it sends SIGTERM). ⚠ Bot units are `mcbot-*`; never stop or
+  list bots with a `minicraft-*` glob, which also matches `minicraft-server` and `minicraft-tunnel`.
+  Running bots under systemd: `docs/bots.md`, "Operations". Either one stops the loop, flushes the
   brain file and closes the connection. A second Ctrl-C exits at once without the flush. If
   something still keeps the process up 5 s after the clean stop, it exits by itself.
 - **Stop the bot before you run `revert`.** A running bot writes its brain file every 5 s, so it
@@ -512,11 +579,13 @@ localhost only, and it rejects foreign `Host` headers and non-JSON POSTs.
   `.state/logs/<target>/<world>/` (the last 2 MB): brain2 behaviour, emotions, relations, inventory,
   selections and events; or builder-family project, placed count, cap, decisions and movement trouble.
 - `-- --dry-run` makes Start/Stop print the argv instead of running it (use this for development).
+- It offers the common flags only; `--pickaxe`, `--grant-ores`, `--max-blasts`, `--llm-params` and
+  `--rest-sec` need the CLI. Running it as the `botpanel` user unit: `docs/bots.md`.
 
 ## Adding a bot
 
-Everything companion-specific lives in `bots/src/bots/companion.ts`; the pieces it's built from are
-reusable:
+Companion v1 lives in `bots/src/bots/companion.ts`, brain v2 in `bots/src/brain2/`, and each other bot
+in its own directory (`builder/`, `decorator/`, …). The reusable pieces:
 
 - `bots/src/port.ts` — the `Body`/`WorldView` port. A new bot should use this, never the SDK's
   `BotClient`/`BotWorld` directly, so it stays testable against `bots/test/fake-port.ts`.
@@ -525,10 +594,12 @@ reusable:
 - `bots/src/body/{perceive,candidates,guard,act,stop-signal,log,status}.ts` — perception,
   candidate/guard logic, movement, the stop signal, the decision log and the status line. A new
   bot can reuse as much of this as fits, or write its own equivalents next to it.
-- `bots/src/cli.ts` — `parseCommand` only recognises `companion` and `revert` today. A new bot
-  needs its own case there (and its own file under `bots/src/bots/`), wired the same way
-  `companionCommand` is: build/health-check a brain, resolve the world and name, connect, run a
-  loop, log, handle SIGINT/SIGTERM.
+- `bots/src/nav/` (the shared navigator, stuck watchdog, wander), `bots/src/shared/` (bot-cell
+  registry, caps, `--when`), `bots/src/board/` (the board) and `builder/builder.ts`'s `checkPlace`
+  and move loop, which the whole builder family reuses.
+- `bots/src/cli.ts` — a new bot needs its own name in `parseCommand` and its own `…Command`,
+  wired like `builderCommand`: engines, resolve the world and name, connect, run, log, crash
+  guards, SIGINT/SIGTERM. Add its type to `bots/panel/lib.ts`'s `BOT_TYPES` for the panel.
 
 Add tests next to the existing ones (`bots/test/*.test.ts` against the fake port; extend
 `bots/test/e2e.ts` if the new bot needs end-to-end coverage against a real server).
@@ -549,4 +620,8 @@ BOTS_E2E_SCRATCH=<a scratch directory you own> npm run bots:e2e
 
 It needs `BOTS_E2E_SCRATCH` — there's no default — for the server build, its temp database and
 logs. A Laya leg runs automatically if Laya's health check passes at `127.0.0.1:8000`; otherwise
-it prints a clear `SKIP` line rather than failing.
+it prints a clear `SKIP` line rather than failing. `-- --only <legs>` runs a comma-separated subset:
+`companion`, `idle`, `laya`, `cli`, `brain2-help`, `brain2-alone`, `brain2-mine`, `brain2-revert`,
+`brain2-follow-watch`, `brain2-cli`, `brain2-productive`, `builder`, `village`, `architect`,
+`helper`, `decorator`, `foreman`, `landscaper`. The navigation leg runs alone:
+`BOTS_E2E_SCRATCH=<dir> node_modules/.bin/tsx bots/test/e2e-nav.ts`.

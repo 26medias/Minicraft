@@ -1,6 +1,6 @@
 # Bot brain: emotions, behaviours and a blackboard of experts
 
-**Status:** design, rev 3.3, 2026-09-25. It was brainstormed with Julien on 2026-09-25.
+**Status:** part 1 implemented; part 2 pending Julien's engine decision; experiments beyond the spec documented in `docs/bots.md`. Design rev 3.3, 2026-09-25. It was brainstormed with Julien on 2026-09-25.
 - **Rev 1** (`193069b`) went through gate 1 with four reviewers: models, rigour, engine and sequencing, and consumer. All four ran probes.
 - **Rev 2** (`e7b20dd`) repaired every finding and added rulings R12–R15, which Julien made on the review's questions.
 - **Rev 3** (`e1cddce`) repaired the re-gate of rev 2, where the same four reviewers re-ran their probes.

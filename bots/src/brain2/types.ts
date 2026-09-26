@@ -33,6 +33,13 @@ export type Action =
 	| { kind: 'follow-tick'; kid: string };
 export const EDIT_KINDS = new Set<Action['kind']>(['place', 'break', 'mine']);
 export interface ActiveBehaviour { kind: BehaviourKind; params: Record<string, unknown>; startedT: number; step: number; rejections: number; failures: number; plannedEdits: number; progress: string; lastResults: boolean[] }  // lastResults: the last 3 executed actions' success (keep-going, spec §5.3)
+/** A selection in flight (spec §5.3): the request writes it, social and situational answer it, merge marks it done. */
+export interface Selection {
+	id: number; t: number; trigger: string; urgent: boolean;
+	social: Record<string, { near: number; help: number }> | null;            // per kid; null = not answered yet
+	situational: { behaviour: BehaviourKind; params: Record<string, unknown>; because: string } | 'none' | null;
+	done: boolean;
+}
 export interface Personality {
 	name: string;
 	summary: string; // ≤ 8 words, used in prompts
@@ -56,5 +63,6 @@ export interface State {
 	explored: Record<string, true>;   // 'cx,cz'
 	body: { pose: { x: number; y: number; z: number; yaw: number; pitch: number }; gesture: string | null; editsHalted: string | null };
 	behaviour: ActiveBehaviour | null;
+	selection: Selection | null;
 	version: number;
 }

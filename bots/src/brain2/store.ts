@@ -17,7 +17,7 @@ export function initialState(p: Personality, pose: State['body']['pose']): State
 	return {
 		personality: p, emotions, relations: {}, memory: { current: null, past: [] }, events: [],
 		inventory: {}, builds: [], digs: [], owned: {}, explored: {},
-		body: { pose, gesture: null, editsHalted: null }, behaviour: null, version: 0,
+		body: { pose, gesture: null, editsHalted: null }, behaviour: null, selection: null, version: 0,
 	};
 }
 

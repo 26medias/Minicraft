@@ -13,6 +13,8 @@ export const EMOTIONAL: Record<BehaviourKind, { bias: number; w: Partial<Record<
 };
 
 /** select.merge weights (spec §5.3). */
-export const MERGE: { emotional: number; social: number; situational: number; inertia: number; recency: number; recencyBad: number; resume: number; lineBonus: number } = {
+export const MERGE: { emotional: number; social: number; situational: number; inertia: number; recency: number; recencyBad: number; resume: number; lineBonus: number; weary: number } = {
 	emotional: 1.0, social: 1.0, situational: 0.3, inertia: 0.6, recency: 0.5, recencyBad: 0.8, resume: 0.4, lineBonus: 1.5,
+	/** Follow/Watch after ≥ 3 min of them in the last 5 min (experiment A: the bot goes off to do things, then returns). */
+	weary: 2.0,
 };

@@ -188,7 +188,7 @@ export function runBrain2(d: Brain2Deps): Brain2Handle {
 		name: 'decay', layer: 1, trigger: every(DECAY_MS), engine: 'code', priority: 0,
 		reads: () => null, materialKey: () => '', run: async () => null, fallback: () => null,
 		merge: (_p, s) => {
-			const p = decayPatch(s, DECAY_MS, pending);
+			const p = decayPatch(s, DECAY_MS, pending, clock());
 			return { patch: p.length ? [...p, ...bandsPatch(withValues(s, p))] : [], cause: { kind: 'decay', by: 'decay' } };
 		},
 	};

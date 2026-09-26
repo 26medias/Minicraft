@@ -33,6 +33,19 @@ const KEEP_GOING_MS = 30_000;
 const KEEP_GOING_BORED_MS = 60_000;
 const APPRAISAL_TRIGGER = 0.5;
 const DEFAULT_TYPICAL_MAX = 60_000;
+/** Follow/Watch get the weary penalty after this much of them in the last RECENT_MS (experiment A). */
+const WEARY_MS = 3 * 60_000;
+const WITH_KID: BehaviourKind[] = ['follow', 'watch'];
+
+/** Milliseconds of Follow/Watch in the window (now − RECENT_MS, now], the running one included. */
+export function withKidMs(s: Readonly<State>, now: number): number {
+	const from = now - RECENT_MS;
+	let ms = 0;
+	for (const e of s.memory.past) if (WITH_KID.includes(e.behaviour)) ms += Math.max(0, Math.min(e.endedT, now) - Math.max(e.endedT - e.lastedMs, from));
+	const b = s.behaviour;
+	if (b && WITH_KID.includes(b.kind)) ms += Math.max(0, now - Math.max(b.startedT, from));
+	return ms;
+}
 
 export interface Row { behaviour: BehaviourKind; emotional: number; social: number; situational: number; inertia: number; recency: number; bonus: number; masked: boolean; total: number }
 export type Tables = { EMOTIONAL: typeof EMOTIONAL; MERGE: typeof MERGE };
@@ -64,9 +77,11 @@ export function selectInputs(s: Readonly<State>, kids: KidInfo[], now: number, p
 	const relation = r ? (Object.fromEntries(RELATION_AXES.map((a) => [a, r.axes[a].value])) as SelectInputs['relation']) : null;
 	const typicalMaxMs = Object.fromEntries(ORDER.map((k) => [k, BEHAVIOURS[k]?.typicalMs[1] ?? DEFAULT_TYPICAL_MAX])) as SelectInputs['typicalMaxMs'];
 	const pausedDigs = s.digs.filter((d) => d.status === 'paused');
+	const weary = withKidMs(s, now) >= WEARY_MS;
 	const recency = Object.fromEntries(ORDER.map((k) => {
 		// The running behaviour is scored by inertia, never by its own earlier episodes: a resumed Mine was penalised as
 		// 'recent' by the episode it resumed and lost to anything at the next trigger (brain2-productive).
+		if (weary && WITH_KID.includes(k)) return [k, 'weary'];            // long following is boring, running or not
 		if (k === s.behaviour?.kind) return [k, 'none'];
 		const last = s.memory.past.find((e) => e.behaviour === k);
 		const recent = !!last && now - last.endedT <= RECENT_MS;
@@ -116,7 +131,7 @@ export function scoreInputs(inputs: SelectInputs, tables: Tables): Row[] {
 		const situational = inputs.situational === behaviour ? 1 : 0;
 		const inertia = inputs.current === behaviour ? M.inertia * Math.min(1, inputs.startedAgoMs / inputs.typicalMaxMs[behaviour]) : 0;
 		const rec = inputs.recency[behaviour];
-		const recency = rec === 'recent' ? -M.recency : rec === 'bad' ? -M.recencyBad : rec === 'resume' ? M.resume : 0;
+		const recency = rec === 'recent' ? -M.recency : rec === 'bad' ? -M.recencyBad : rec === 'resume' ? M.resume : rec === 'weary' ? -(M.weary ?? 0) : 0;
 		const bonus = behaviour === 'help-build' && inputs.lineFresh ? M.lineBonus : 0;
 		const masked = inputs.masked.includes(behaviour);
 		const total = masked ? -Infinity : M.emotional * emotional + M.social * social + M.situational * situational + inertia + recency + bonus;

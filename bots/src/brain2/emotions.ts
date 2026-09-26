@@ -54,8 +54,9 @@ export function decayStep(
  * `pending` is the expert's private accumulated drift, keyed 'mood' or 'rel.<name>.<axis>'. It's kept out
  * of the store, so an unsettled axis writes a change only when the drift is applied (spec §4.1, rev 3.3).
  */
-export function decayPatch(s: State, dtMs: number, pending: Map<string, number>): Patch {
+export function decayPatch(s: State, dtMs: number, pending: Map<string, number>, now?: number): Patch {
 	const out: Patch = [];
+	const bored = now === undefined ? 0 : followBoredom(s, now);
 	const one = (id: string, path: string[], value: number, baseline: number, hl: number) => {
 		const r = decayStep({ value, pendingDrift: pending.get(id) ?? 0 }, baseline, hl, dtMs);
 		if (r.pendingDrift === 0) pending.delete(id); else pending.set(id, r.pendingDrift);
@@ -64,12 +65,26 @@ export function decayPatch(s: State, dtMs: number, pending: Map<string, number>)
 	for (const ax of GLOBAL_AXES) {
 		// Resting halves Stimulation's half-life (spec §6 Rest).
 		const hl = ax === 'stimulation' && s.behaviour?.kind === 'rest' ? s.personality.halfLifeMs[ax] / 2 : s.personality.halfLifeMs[ax];
-		one(ax, ['emotions', ax, 'value'], s.emotions[ax].value, s.personality.baselines[ax], hl);
+		// Following is boring (experiment A): Stimulation decays toward a baseline lowered the longer Follow/Watch runs.
+		const base = ax === 'stimulation' ? s.personality.baselines[ax] - bored : s.personality.baselines[ax];
+		one(ax, ['emotions', ax, 'value'], s.emotions[ax].value, base, hl);
 	}
 	for (const [name, rel] of Object.entries(s.relations)) {
 		for (const ax of RELATION_AXES) one(`rel.${name}.${ax}`, ['relations', name, 'axes', ax, 'value'], rel.axes[ax].value, 0, s.personality.relationHalfLifeMs[ax]);
 	}
 	return out;
+}
+
+/** Stimulation's baseline drop per 30 s of Follow/Watch, and its cap (experiment A: long following is boring). */
+export const FOLLOW_BORED_STEP = 0.05;
+export const FOLLOW_BORED_EVERY_MS = 30_000;
+export const FOLLOW_BORED_MAX = 0.8;
+
+/** How far Stimulation's baseline is lowered now: 0.05 per full 30 s the current Follow/Watch has run, capped. */
+export function followBoredom(s: Readonly<State>, now: number): number {
+	const b = s.behaviour;
+	if (!b || (b.kind !== 'follow' && b.kind !== 'watch')) return 0;
+	return Math.min(FOLLOW_BORED_MAX, FOLLOW_BORED_STEP * Math.floor(Math.max(0, now - b.startedT) / FOLLOW_BORED_EVERY_MS));
 }
 
 /** Recomputes every band with hysteresis. It is applied after any emotion patch, with the same cause. */

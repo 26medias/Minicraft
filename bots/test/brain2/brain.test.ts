@@ -251,3 +251,34 @@ describe('runBrain2 wiring details', () => {
 		await again.h.stop();
 	});
 });
+
+describe('experiment A: long following is boring', () => {
+	// Live evidence: a warm bot chose Follow 30/30 selections with a kid online. Red without the boredom drift and the
+	// weary penalty (mutation run: MERGE.weary = 0 and FOLLOW_BORED_STEP = 0 → Follow 100%; the weary penalty alone keeps it green).
+	it('with an idle kid present for 20 min, the bot alternates: Follow 30–70% of the time, and some Mine or Build', async () => {
+		const r = rig({ at: { x: SPAWN.x + 2.5, z: SPAWN.z + 0.5 } });
+		const warm = coolRelation();
+		for (const [ax, v] of [['affection', 0.7], ['cooperation', 0.3], ['respect', 0.3], ['grievance', 0]] as const) warm.axes[ax] = { value: v, band: bandOf(v), deltas: [] };
+		r.h.store.apply([
+			{ path: ['inventory'], value: { stone: 40, dirt: 20 } },
+			{ path: ['relations', 'Noah'], value: warm },
+		], { kind: 'body', by: 'test' });
+		const x = SPAWN.x + 6.5, z = SPAWN.z + 3.5;
+		const noah = player({ id: 7, name: 'Noah', x, y: r.world.surfaceY(Math.floor(x), Math.floor(z)) + 1, z });
+		r.body.list = [noah];
+		const time: Record<string, number> = {};
+		await r.run(20 * MIN, () => {
+			r.body.list = [{ ...noah }];                                     // idle: never moves, never edits
+			const k = r.h.store.state.behaviour?.kind ?? 'idle';
+			time[k] = (time[k] ?? 0) + 100;
+		});
+		await r.h.stop();
+		if (process.env.DUMP) (await import('node:fs')).writeFileSync(process.env.DUMP, r.lines.join('\n'));
+		const share = (time.follow ?? 0) / (20 * MIN);
+		const kinds = started(r.selects()).map((s) => s.winner);
+		const summary = `${JSON.stringify(Object.fromEntries(Object.entries(time).map(([k, v]) => [k, Math.round(v / 1000)])))} s; started ${kinds.join(',')}`;
+		expect(share, summary).toBeGreaterThanOrEqual(0.3);
+		expect(share, summary).toBeLessThanOrEqual(0.7);
+		expect(kinds.some((k) => k === 'mine' || k === 'build'), summary).toBe(true);
+	}, 300_000);
+});

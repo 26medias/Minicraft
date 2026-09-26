@@ -13,7 +13,7 @@ export const LOGS_KEPT = 20;
 export interface SelectInputs {
 	emotions: Record<GlobalAxis, number>; relation: Record<RelationAxis, number> | null;
 	current: BehaviourKind | null; startedAgoMs: number; typicalMaxMs: Record<BehaviourKind, number>;
-	recency: Record<BehaviourKind, 'none' | 'recent' | 'bad' | 'resume'>; lineFresh: boolean;
+	recency: Record<BehaviourKind, 'none' | 'recent' | 'bad' | 'resume' | 'weary'>; lineFresh: boolean;
 	social: { near: number; help: number } | null; situational: BehaviourKind | null; masked: BehaviourKind[];
 }
 export type LogLine =

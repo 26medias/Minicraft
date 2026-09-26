@@ -56,6 +56,31 @@ function peekSession(key: string): boolean {
  * Options. Each screen replaces the card's content; Back
  * returns home.
  */
+/**
+ * The kid's status plaque. The part before " · " is the headline and what follows sits smaller
+ * underneath ("All done for today" / "play again tomorrow"); the separator stays in the text so it
+ * still reads as one sentence. `play-go` when he can play, `play-wait` when he can't.
+ */
+function paintPlayLine(el: HTMLElement, st: PlayStatus): void {
+	el.replaceChildren();
+	el.classList.toggle('hidden', st.line === null);
+	el.classList.toggle('play-go', st.canPlay);
+	el.classList.toggle('play-wait', !st.canPlay);
+	if (st.line === null) return;
+	const [head, ...rest] = st.line.split(' · ');
+	const part = (className: string, text: string) => {
+		const s = document.createElement('span');
+		s.className = className;
+		s.textContent = text;
+		el.appendChild(s);
+	};
+	part('play-line-head', head);
+	if (rest.length > 0) {
+		part('play-line-sep', ' · ');
+		part('play-line-sub', rest.join(' · '));
+	}
+}
+
 export class MainMenu {
 	private root: HTMLDivElement;
 	private onAction: ((a: MenuAction) => void) | null = null;
@@ -191,7 +216,7 @@ export class MainMenu {
 			const line = document.createElement('div');
 			line.className = 'play-line';
 			line.id = 'play-line';
-			line.textContent = st.line ?? '';
+			paintPlayLine(line, st);
 			parent.appendChild(line);
 			return () => null;
 		}
@@ -223,11 +248,7 @@ export class MainMenu {
 		const line = document.createElement('div');
 		line.className = 'play-line';
 		line.id = 'play-line';
-		const paintLine = () => {
-			const st = this.status();
-			line.textContent = st.line ?? '';
-			line.classList.toggle('hidden', st.line === null);
-		};
+		const paintLine = () => paintPlayLine(line, this.status());
 		paintLine();
 		card.appendChild(line);
 		const home = document.createElement('div');
@@ -242,18 +263,22 @@ export class MainMenu {
 		this.refresh = setInterval(paintLine, 30_000);
 	}
 
-	/** A PIN row: calls `onOk` once the right PIN is entered. */
+	/** The PIN prompt: calls `onOk` once the right PIN is entered. */
 	private pinGate(parent: HTMLElement, labelText: string, onOk: () => void): void {
-		const row = document.createElement('div');
-		row.className = 'pin-row';
+		const gate = document.createElement('div');
+		gate.className = 'pin-gate';
 		const label = document.createElement('label');
-		label.textContent = `${labelText} `;
+		label.className = 'pin-gate-label';
+		label.htmlFor = 'pin-input';
+		label.textContent = labelText;
 		const input = document.createElement('input');
 		input.type = 'password';
 		input.inputMode = 'numeric';
 		input.maxLength = 4;
 		input.autocomplete = 'off';
 		input.id = 'pin-input';
+		input.className = 'pin-code';
+		input.placeholder = '••••';
 		const go = document.createElement('button');
 		go.id = 'pin-go';
 		go.textContent = 'Open';
@@ -262,7 +287,7 @@ export class MainMenu {
 		err.id = 'pin-error';
 		go.onclick = () => {
 			if (input.value === loadPin()) {
-				row.remove();
+				gate.remove();
 				onOk();
 			} else {
 				err.textContent = 'Wrong PIN';
@@ -271,12 +296,17 @@ export class MainMenu {
 			}
 		};
 		input.onkeydown = (e) => { if (e.key === 'Enter') go.click(); };
-		label.appendChild(input);
-		const forgot = document.createElement('div');
-		forgot.className = 'menu-hint';
-		forgot.textContent = "Forgot the PIN? On this computer press F12, open Console, type localStorage.removeItem('minicraft:v1:pin') and press Enter. Only the PIN is removed.";
-		row.append(label, go, err, forgot);
-		parent.appendChild(row);
+		// The way out is there when it is needed, and out of the way otherwise.
+		const forgot = document.createElement('details');
+		forgot.className = 'pin-forgot';
+		const summary = document.createElement('summary');
+		summary.textContent = 'Forgot the PIN?';
+		const how = document.createElement('div');
+		how.className = 'menu-hint';
+		how.textContent = "On this computer press F12, open Console, type localStorage.removeItem('minicraft:v1:pin') and press Enter. Only the PIN is removed.";
+		forgot.append(summary, how);
+		gate.append(label, input, err, go, forgot);
+		parent.appendChild(gate);
 		input.focus();
 	}
 
@@ -736,7 +766,7 @@ export class MainMenu {
 		card.appendChild(body);
 		this.backButton(card);
 		if (loadPin() === null) this.renderParentsBody(body);
-		else this.pinGate(body, 'Parent PIN', () => this.renderParentsBody(body));
+		else this.pinGate(body, 'Type the parent PIN', () => this.renderParentsBody(body));
 	}
 
 	/**
@@ -751,16 +781,30 @@ export class MainMenu {
 		const loaded = loadRules();
 		const rules = loaded.kind === 'set' ? loaded.rules : { startMin: null, dailyMin: null };
 		const rerender = (f?: { id: string; text: string }) => this.renderParentsBody(body, f);
-		const section = (text: string) => {
-			const h = document.createElement('div');
-			h.className = 'menu-section';
-			h.textContent = text;
-			body.appendChild(h);
+		// Each part is its own tray, so "today only" and "every day" can't be mistaken for each other.
+		const panel = (title: string, note: string | null, kind: string) => {
+			const p = document.createElement('section');
+			p.className = `parents-panel parents-panel-${kind}`;
+			const head = document.createElement('div');
+			head.className = 'parents-panel-head';
+			const h = document.createElement('h2');
+			h.textContent = title;
+			head.appendChild(h);
+			if (note !== null) {
+				const n = document.createElement('span');
+				n.className = 'parents-panel-note';
+				n.textContent = note;
+				head.appendChild(n);
+			}
+			p.appendChild(head);
+			body.appendChild(p);
+			return p;
 		};
 		const message = (id: string) => {
 			const m = document.createElement('div');
 			m.className = 'menu-msg';
 			m.id = id;
+			m.setAttribute('role', 'status');
 			if (flash?.id === id) {
 				m.textContent = flash.text;
 				m.classList.add('ok');
@@ -774,22 +818,29 @@ export class MainMenu {
 			m.classList.toggle('ok', ok);
 			m.classList.toggle('bad', !ok);
 		};
-		const row = () => {
+		const row = (parent: HTMLElement, className: string) => {
 			const r = document.createElement('div');
-			r.className = 'parents-row';
-			body.appendChild(r);
+			r.className = className;
+			parent.appendChild(r);
 			return r;
+		};
+		const hint = (parent: HTMLElement, text: string) => {
+			const h = document.createElement('div');
+			h.className = 'menu-hint';
+			h.textContent = text;
+			parent.appendChild(h);
+			return h;
 		};
 		const failText = "Couldn't save. Try again.";
 
 		// 1. Today: where things stand, and changes that end at midnight.
-		section('Today');
+		const today = panel('Today', 'Only until midnight', 'today');
 		const summary = document.createElement('div');
 		summary.className = 'parents-today';
 		summary.id = 'today-summary';
 		summary.textContent = todaySummary(this.statusInput());
-		body.appendChild(summary);
-		const todayRow = row();
+		today.appendChild(summary);
+		const todayRow = row(today, 'parents-actions');
 		// Read at the press, not at the render: the screen may stay open past midnight.
 		const current = (): Today => {
 			const now = Date.now();
@@ -815,22 +866,19 @@ export class MainMenu {
 			clearSession();
 			rerender({ id: 'today-msg', text: "✓ Today's time starts over from zero." });
 		});
-		const todayHint = document.createElement('div');
-		todayHint.className = 'menu-hint';
-		todayHint.textContent = 'These change today only. The rules below and the worlds are never touched.';
-		body.appendChild(todayHint);
 		const todayMsg = message('today-msg');
-		body.appendChild(todayMsg);
+		today.appendChild(todayMsg);
+		hint(today, 'These change today only. The everyday rules and the worlds are never touched.');
 
 		// 2. Every day: the rules. Staged in the fields, written only by Save rules.
-		section('Every day');
+		const every = panel('Every day', 'Until you change them', 'every');
 		if (loaded.kind === 'broken') {
 			const warn = document.createElement('div');
 			warn.className = 'menu-warning';
 			warn.textContent = 'The saved rules could not be read, so play is locked. Save the rules again to fix it.';
-			body.appendChild(warn);
+			every.appendChild(warn);
 		}
-		const startRow = row();
+		const startRow = row(every, 'parents-field');
 		const startOn = document.createElement('input');
 		startOn.type = 'checkbox';
 		startOn.id = 'rule-start-on';
@@ -846,23 +894,24 @@ export class MainMenu {
 		time.value = `${pad(Math.floor(startMin / 60))}:${pad(startMin % 60)}`;
 		time.disabled = !startOn.checked;
 		startRow.append(startLabel, time);
-		const dailyRow = row();
+		const dailyRow = row(every, 'parents-field');
 		const dailyLabel = document.createElement('label');
-		dailyLabel.textContent = 'Play time per day ';
+		dailyLabel.htmlFor = 'rule-daily';
+		dailyLabel.textContent = 'Play time per day';
 		const daily = this.durationSelect('rule-daily', true, rules.dailyMin);
-		dailyLabel.appendChild(daily);
-		dailyRow.appendChild(dailyLabel);
-		const rulesHint = document.createElement('div');
-		rulesHint.className = 'menu-hint';
-		rulesHint.textContent = 'Play time is counted for the whole day, in every world, and starts fresh at midnight. With "No limit" there is no daily limit; the kids can still set their own timer before each game.';
-		body.appendChild(rulesHint);
-		const saveRow = row();
+		dailyRow.append(dailyLabel, daily);
+		hint(every, 'Counted for the whole day, in every world, and starts fresh at midnight. With "No limit" the kids can still set their own timer before each game.');
+		const saveRow = row(every, 'parents-save');
 		const rulesMsg = message('rules-msg');
-		const unsaved = () => say(rulesMsg, 'Not saved yet.', false);
+		let saveBtn: HTMLButtonElement | null = null;
+		const unsaved = () => {
+			say(rulesMsg, 'Not saved yet.', false);
+			saveBtn?.classList.add('needs-save');
+		};
 		startOn.onchange = () => { time.disabled = !startOn.checked; unsaved(); };
 		time.onchange = unsaved;
 		daily.onchange = unsaved;
-		this.button(saveRow, 'Save rules', 'rules-save', () => {
+		saveBtn = this.button(saveRow, 'Save rules', 'rules-save', () => {
 			let start: number | null = null;
 			if (startOn.checked) {
 				const m = /^(\d{2}):(\d{2})$/.exec(time.value);
@@ -874,31 +923,31 @@ export class MainMenu {
 			if (rulesChangeClearsSession(loaded, next)) clearSession();
 			rerender({ id: 'rules-msg', text: `✓ Saved. ${rulesSentence(next, Date.now())}` });
 		});
-		body.appendChild(rulesMsg);
-		if (pin === null) {
-			const warn = document.createElement('div');
-			warn.className = 'menu-warning';
-			warn.textContent = 'No PIN yet: anyone can open Parents and change this. Set a PIN below.';
-			body.appendChild(warn);
-		}
+		saveRow.appendChild(rulesMsg);
 
 		// 3. Parent PIN: typed twice; asked for when opening Parents.
-		section('Parent PIN');
+		const pinPanel = panel('Parent PIN', null, 'pin');
 		const pinMsg = message('pin-msg');
 		const pinForm = document.createElement('div');
-		pinForm.className = 'pin-row';
-		const pinField = (id: string, placeholder: string) => {
+		pinForm.className = 'pin-form';
+		const pinField = (id: string, labelText: string) => {
+			const l = document.createElement('label');
+			l.className = 'pin-field';
+			const t = document.createElement('span');
+			t.textContent = labelText;
 			const i = document.createElement('input');
 			i.type = 'password';
 			i.inputMode = 'numeric';
 			i.maxLength = 4;
 			i.autocomplete = 'off';
 			i.id = id;
-			i.placeholder = placeholder;
+			i.placeholder = '••••';
+			l.append(t, i);
+			pinForm.appendChild(l);
 			return i;
 		};
 		const pin1 = pinField('pin-set-input', 'New PIN');
-		const pin2 = pinField('pin-set-again', 'Again');
+		const pin2 = pinField('pin-set-again', 'Type it again');
 		const savePinBtn = document.createElement('button');
 		savePinBtn.id = 'pin-save';
 		savePinBtn.textContent = 'Save PIN';
@@ -908,18 +957,15 @@ export class MainMenu {
 			if (!savePin(pin1.value)) { say(pinMsg, failText, false); return; }
 			rerender({ id: 'pin-msg', text: '✓ PIN saved. It is asked for every time Parents is opened.' });
 		};
-		pinForm.append(pin1, pin2, savePinBtn);
+		pinForm.appendChild(savePinBtn);
 		if (pin === null) {
-			const hint = document.createElement('div');
-			hint.className = 'menu-hint';
-			hint.textContent = 'Set a 4-digit PIN so only parents can open this screen.';
-			body.append(hint, pinForm);
+			const warn = document.createElement('div');
+			warn.className = 'menu-warning';
+			warn.textContent = 'No PIN yet: anyone can open Parents and change the rules. Set a 4-digit PIN so only parents can.';
+			pinPanel.append(warn, pinForm);
 		} else {
-			const state = document.createElement('div');
-			state.className = 'menu-hint';
-			state.textContent = 'A PIN is set.';
-			const pinRow = row();
-			pinRow.before(state);
+			hint(pinPanel, 'A PIN is set. It is asked for every time Parents is opened.');
+			const pinRow = row(pinPanel, 'parents-actions');
 			this.button(pinRow, 'Change PIN', 'pin-change', () => {
 				pinRow.replaceWith(pinForm);
 				pin1.focus();
@@ -927,12 +973,13 @@ export class MainMenu {
 			this.button(pinRow, 'Remove PIN', 'pin-reset', () => {
 				if (!clearPin()) { say(pinMsg, failText, false); return; }
 				rerender({ id: 'pin-msg', text: '✓ PIN removed. Anyone can open Parents now.' });
-			});
+			}, 'is-danger');
 		}
-		body.appendChild(pinMsg);
+		pinPanel.appendChild(pinMsg);
 		// 4. Multiplayer worlds: shown only when the server is reachable (spec §8.3).
-		const mp = document.createElement('div');
+		const mp = document.createElement('section');
 		mp.id = 'parents-mp-worlds';
+		mp.className = 'parents-panel';
 		body.appendChild(mp);
 		void this.fillParentsMp(mp);
 	}
@@ -949,10 +996,12 @@ export class MainMenu {
 		// The body was re-rendered (any Parents button) or the screen left while this was in flight.
 		if (!box.isConnected) return;
 		box.innerHTML = '';
-		const h = document.createElement('div');
-		h.className = 'menu-section';
+		const head = document.createElement('div');
+		head.className = 'parents-panel-head';
+		const h = document.createElement('h2');
 		h.textContent = 'Multiplayer worlds';
-		box.appendChild(h);
+		head.appendChild(h);
+		box.appendChild(head);
 		if (rows.length === 0) {
 			const none = document.createElement('div');
 			none.className = 'menu-hint';

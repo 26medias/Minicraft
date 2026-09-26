@@ -200,6 +200,7 @@
 .menu-card #w-create,
 .menu-card #mp-w-create,
 .menu-card #rules-save,
+.menu-card #pin-go,
 .mp-screen-button,
 .playtime-button {
 	color: #fff;
@@ -345,9 +346,9 @@
 	line-height: 1.35;
 }
 .menu-hint {
-	color: var(--mc-sand);
-	opacity: 0.75;
+	color: #d4c4a2;
 	font-size: 14px;
+	line-height: 1.45;
 	margin: 6px 0 10px;
 }
 .menu-error {
@@ -458,99 +459,315 @@
 	text-shadow: 0 3px 0 var(--mc-outline);
 }
 
-/* --- Where the kid stands, and the PIN ------------------------------------------------------------ */
+/* --- Where the kid stands -------------------------------------------------------------------------- */
 
-/* "Play at 7:00 AM", "15 minutes left today", "All done for today": a plaque the kid can read. */
+/* "25 minutes left today", "Play at 7:00 AM", "All done for today · play again tomorrow": a plaque the
+   kid can read at a glance. When he can play it is a dark hole with moss-green words, clearly not a
+   button; when he can't it is a quiet dusk stone, and the words are bigger because they are the
+   whole message. What follows the " · " sits underneath, smaller; the separator stays in the text so
+   it still reads as one sentence. */
 .play-line {
-	margin: 0 0 14px;
-	padding: 10px 14px;
+	margin: 0 0 16px;
+	padding: 12px 16px;
 	text-align: center;
-	font: 22px/1.2 var(--mc-font-display);
+	font: 24px/1.15 var(--mc-font-display);
 	letter-spacing: 0.02em;
 	color: var(--mc-cream);
 	text-shadow: 0 2px 0 var(--mc-outline);
-	background: rgba(15, 10, 6, 0.55);
-	border: 3px solid rgba(0, 0, 0, 0.55);
+	background: rgba(15, 10, 6, 0.6);
+	border: 3px solid var(--mc-outline);
 	border-radius: 6px;
 	box-shadow: inset 0 2px 0 rgba(255, 255, 255, 0.06);
 }
-.pin-row {
+.play-line.play-go {
+	color: #d6ff9e;
+	background: var(--mc-hole);
+	box-shadow:
+		inset 0 3px 6px rgba(0, 0, 0, 0.6),
+		inset 0 -3px 0 rgba(143, 209, 58, 0.35);
+}
+.play-line.play-wait {
+	padding: 16px 16px 14px;
+	font-size: 30px;
+	border-color: var(--mc-outline);
+	background: linear-gradient(180deg, rgba(58, 62, 96, 0.85), rgba(26, 24, 46, 0.92));
+	box-shadow:
+		inset 0 3px 0 rgba(200, 210, 255, 0.18),
+		inset 0 -4px 0 rgba(0, 0, 0, 0.3);
+}
+.play-line-sep {
+	font-size: 0;
+}
+.play-line-sub {
+	display: inline-block;
+	width: 100%;
+	margin-top: 6px;
+	font-size: 19px;
+	color: var(--mc-sand);
+}
+
+/* --- Parents: today, the rules, the PIN, each in its own tray ------------------------------------- */
+
+.menu-card[data-screen='parents'] {
+	width: min(100%, 540px);
+}
+/* A grown-up screen with a lot on it: the logo gives way. */
+.menu-logo:has(+ .menu-card[data-screen='parents']) {
+	width: min(60vw, 300px);
+}
+.parents-panel {
+	margin: 0 0 16px;
+	padding: 16px 16px 16px;
+	background: rgba(12, 8, 4, 0.34);
+	border: 2px solid rgba(0, 0, 0, 0.55);
+	border-radius: 8px;
+	box-shadow: inset 0 3px 10px rgba(0, 0, 0, 0.35), 0 1px 0 rgba(255, 240, 210, 0.1);
+}
+.parents-panel:empty {
+	display: none;
+}
+.parents-panel-head {
+	display: flex;
+	flex-wrap: wrap;
+	align-items: baseline;
+	justify-content: space-between;
+	gap: 4px 12px;
+	margin: 0 0 12px;
+}
+.parents-panel-head h2 {
+	margin: 0;
+	font: 26px/1.1 var(--mc-font-display);
+	font-weight: normal;
+	letter-spacing: 0.02em;
+	color: var(--mc-cream);
+	text-shadow: 0 2px 0 var(--mc-outline), 0 4px 6px rgba(0, 0, 0, 0.4);
+}
+/* How long a change lasts: sun-yellow for today only, moss for every day. */
+.parents-panel-note {
+	padding: 3px 10px;
+	font-size: 14px;
+	font-weight: 700;
+	border-radius: 999px;
+	border: 2px solid var(--mc-outline);
+	white-space: nowrap;
+}
+.parents-panel-today .parents-panel-note {
+	color: #3b2a06;
+	background: #f2c14e;
+}
+.parents-panel-every .parents-panel-note {
+	color: #fff;
+	background: #4f8a1f;
+	text-shadow: 0 1px 0 var(--mc-moss-deep);
+}
+.parents-today {
+	padding: 12px 14px;
+	font-size: 18px;
+	font-weight: 600;
+	line-height: 1.4;
+	background: var(--mc-hole);
+	border: 3px solid var(--mc-outline);
+	border-radius: 6px;
+	box-shadow: inset 0 3px 6px rgba(0, 0, 0, 0.6);
+}
+.parents-panel .menu-hint {
+	margin: 10px 0 0;
+}
+/* Today's buttons share one row, equal widths, whatever set is showing. */
+.parents-actions {
+	display: grid;
+	grid-auto-flow: column;
+	grid-auto-columns: minmax(0, 1fr);
+	gap: 10px;
+	margin: 12px 0 0;
+}
+.menu-card .parents-actions button {
+	--lift: 4px;
+	min-height: 48px;
+	margin: 0 0 var(--lift);
+	padding: 8px 8px 7px;
+	font-size: 17px;
+	text-wrap: balance;
+}
+.menu-card button.is-danger {
+	color: #6b1d10;
+}
+/* A setting: what it is on the left, its value on the right. */
+.parents-field {
 	display: flex;
 	flex-wrap: wrap;
 	align-items: center;
-	gap: 8px;
+	justify-content: space-between;
+	gap: 8px 16px;
+	min-height: 48px;
+	margin: 0 0 10px;
 }
-.pin-row > .menu-hint {
-	flex-basis: 100%;
-	margin-bottom: 0;
+.parents-field > label {
+	font-size: 17px;
 }
-.menu-card .pin-row input {
-	width: 6em;
+.parents-field .menu-check {
+	margin: 0;
+}
+.menu-card .parents-field input[type='time'],
+.menu-card .parents-field select {
+	flex: none;
+	width: 10.5em;
+	margin: 0;
+}
+.parents-save {
+	margin-top: 16px;
+}
+.menu-card #rules-save {
+	margin: 0 0 var(--lift);
+	font-size: 22px;
+}
+/* A change is waiting: the Save button breathes until it is pressed. */
+.menu-card #rules-save.needs-save {
+	animation: mc-needs-save 1.4s ease-in-out infinite;
+}
+@keyframes mc-needs-save {
+	50% {
+		filter: brightness(1.2) saturate(1.25);
+	}
+}
+@media (prefers-reduced-motion: reduce) {
+	.menu-card #rules-save.needs-save {
+		animation: none;
+		filter: brightness(1.15);
+	}
+}
+/* What a press did, right under it: moss for done, amber for not yet / didn't work. */
+.menu-msg {
+	margin: 12px 0 0;
+	padding: 8px 12px;
+	font-size: 15px;
+	font-weight: 600;
+	line-height: 1.4;
+	border: 2px solid transparent;
+	border-radius: 6px;
+}
+.menu-msg:empty {
+	display: none;
+}
+.menu-msg.ok {
+	color: #e4ffc0;
+	background: rgba(60, 110, 20, 0.55);
+	border-color: var(--mc-moss);
+	text-shadow: 0 1px 0 var(--mc-outline);
+}
+.menu-msg.bad {
+	color: #ffd88a;
+	background: rgba(120, 76, 14, 0.5);
+	border-color: rgba(240, 180, 70, 0.7);
+}
+/* The PIN: two labelled fields and Save PIN on one line. */
+.pin-form {
+	display: grid;
+	grid-template-columns: 1fr 1fr auto;
+	align-items: end;
+	gap: 10px 12px;
+	margin-top: 12px;
+}
+.pin-field {
+	display: flex;
+	flex-direction: column;
+	gap: 6px;
+	font-size: 15px;
+}
+.menu-card .pin-field input,
+.menu-card .pin-code {
 	margin: 0;
 	font-size: 20px;
 	letter-spacing: 0.3em;
 	text-align: center;
 }
-.menu-card .pin-row button {
+.menu-card .pin-form #pin-save {
 	--lift: 4px;
-	display: inline-block;
 	width: auto;
+	min-height: 48px;
 	margin: 0 0 var(--lift);
-	padding: 8px 14px 7px;
+	padding: 8px 16px 7px;
 	font-size: 17px;
 }
-/* --- Parents: today, the rules, and what each press did ---------------------------------------------- */
+.pin-form .menu-warning,
+.parents-panel-pin .menu-warning {
+	margin: 0;
+	font-size: 15px;
+}
 
-.parents-today {
-	margin: 0 0 4px;
-	padding: 10px 12px;
-	font-size: 17px;
-	font-weight: 600;
-	line-height: 1.35;
-	background: rgba(15, 10, 6, 0.55);
-	border: 3px solid rgba(0, 0, 0, 0.55);
-	border-radius: 6px;
-}
-.parents-row {
+/* The PIN prompt: a small locked door in the middle of the card. */
+.pin-gate {
 	display: flex;
-	flex-wrap: wrap;
+	flex-direction: column;
 	align-items: center;
-	gap: 8px 10px;
-	margin: 10px 0;
+	gap: 12px;
+	max-width: 320px;
+	margin: 4px auto 16px;
+	padding: 20px 20px 16px;
+	text-align: center;
+	background: rgba(12, 8, 4, 0.34);
+	border: 2px solid rgba(0, 0, 0, 0.55);
+	border-radius: 8px;
+	box-shadow: inset 0 3px 10px rgba(0, 0, 0, 0.35), 0 1px 0 rgba(255, 240, 210, 0.1);
 }
-.menu-card .parents-row button {
-	--lift: 4px;
-	display: inline-block;
-	width: auto;
+.menu-card .pin-gate-label {
+	font: 24px/1.15 var(--mc-font-display);
+	letter-spacing: 0.02em;
+	color: var(--mc-cream);
+	text-shadow: 0 2px 0 var(--mc-outline);
+}
+.menu-card .pin-gate .pin-code {
+	width: 7.5em;
+	padding: 12px 0 12px 0.3em;
+	font-size: 26px;
+	letter-spacing: 0.4em;
+}
+.pin-gate .menu-error {
+	margin: 0;
+}
+.menu-card .pin-gate #pin-go {
 	margin: 0 0 var(--lift);
-	padding: 8px 14px 7px;
-	font-size: 17px;
-}
-.menu-card .parents-row #rules-save {
-	--lift: 6px;
-	width: 100%;
-	padding: 12px 14px 11px;
 	font-size: 22px;
 }
-.parents-row .menu-check {
-	margin: 0;
+.pin-forgot {
+	align-self: stretch;
+	font-size: 14px;
+	color: var(--mc-sand);
 }
-.menu-card .parents-row input[type='time'] {
-	width: auto;
-	margin: 0;
-}
-.menu-msg {
-	min-height: 1.2em;
-	margin: 2px 0 10px;
-	font-size: 15px;
+.pin-forgot summary {
+	cursor: pointer;
 	font-weight: 600;
 }
-.menu-msg.ok {
-	color: var(--mc-moss);
-	text-shadow: 0 1px 0 var(--mc-outline);
+.pin-forgot summary:hover {
+	color: var(--mc-cream);
 }
-.menu-msg.bad {
-	color: var(--mc-danger);
+.pin-forgot .menu-hint {
+	margin: 8px 0 0;
+	text-align: left;
+	overflow-wrap: anywhere;
+}
+
+@media (max-width: 520px) {
+	.menu-card[data-screen='parents'] {
+		padding: 26px 12px 20px;
+	}
+	.parents-panel {
+		padding: 14px 12px;
+	}
+	.parents-actions {
+		grid-auto-flow: row;
+	}
+	.menu-card .parents-field input[type='time'],
+	.menu-card .parents-field select {
+		width: 100%;
+	}
+	.pin-form {
+		grid-template-columns: 1fr 1fr;
+	}
+	.menu-card .pin-form #pin-save {
+		grid-column: 1 / -1;
+		width: 100%;
+	}
 }
 
 /* --- Multiplayer screens (multiplayer spec §8.2) --------------------------------------------------- */

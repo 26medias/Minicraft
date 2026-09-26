@@ -1,0 +1,177 @@
+import { describe, expect, it } from 'vitest';
+import { BlockedError } from 'minicraft-bot';
+import { airPathToSky, navigate, StuckWatchdog, walkOrFly } from '../../src/nav/navigate.js';
+import { FakeBody, FakeWorld } from '../fake-port.js';
+import type { Vec3 } from '../../src/types.js';
+
+/**
+ * A physical body over a FakeWorld. A walk fails at a step up > 1 (or no ground), where it stands. A flight follows
+ * the SDK's rules in 1-block ticks (bot-client stepFly): straight toward the target when the body fits, else across at
+ * the same height, else straight up — at most 16 above where the flight started — else blocked where it is. Scenes are
+ * built high in the sky (y ≥ 200), above the generated terrain, so every one is exactly what the test fills.
+ */
+function physBody(world: FakeWorld, at: Vec3): FakeBody {
+	const body = new FakeBody();
+	body.world = world;
+	body.current = { ...at, yaw: 0, pitch: 0 };
+	const fits = (x: number, y: number, z: number) => !world.isSolid(world.getBlock(x, y, z)) && !world.isSolid(world.getBlock(x, y + 1, z));
+	const blocked = (kind: 'walkTo' | 'flyTo') => new BlockedError({ ...body.current }, 'wall', kind);
+	body.walkImpl = async (t) => {
+		const p = body.pose();
+		const n = Math.max(1, Math.ceil(Math.hypot(t.x - p.x, t.z - p.z) * 4));
+		for (let i = 1; i <= n; i++) {
+			const x = p.x + ((t.x - p.x) * i) / n, z = p.z + ((t.z - p.z) * i) / n;
+			const g = world.groundY(x, z, body.current.y);
+			if (g === null || g > body.current.y + 1) throw blocked('walkTo');
+			body.current = { ...body.current, x, y: g, z };
+		}
+		return 'arrived';
+	};
+	body.flyImpl = async (t) => {
+		const startY = body.current.y;
+		for (let tick = 0; tick < 2000; tick++) {
+			const c = body.current;
+			const dx = t.x - c.x, dy = t.y - c.y, dz = t.z - c.z;
+			const d = Math.hypot(dx, dy, dz), h = Math.hypot(dx, dz);
+			if (d < 1e-9) return 'arrived';
+			const s = Math.min(d, 1);
+			const n = { x: c.x + (dx / d) * s, y: c.y + (dy / d) * s, z: c.z + (dz / d) * s };
+			if (fits(n.x, n.y, n.z)) {
+				body.current = { ...c, ...n };
+				continue;
+			}
+			const hs = Math.min(h, 1);
+			if (h > 1e-9 && fits(c.x + (dx / h) * hs, c.y, c.z + (dz / h) * hs)) {
+				body.current = { ...c, x: c.x + (dx / h) * hs, z: c.z + (dz / h) * hs };
+				continue;
+			}
+			if (h <= 1e-9 || c.y + 1 > startY + 16 || !fits(c.x, c.y + 1, c.z)) throw blocked('flyTo');
+			body.current = { ...c, y: c.y + 1 };
+		}
+		throw blocked('flyTo');
+	};
+	return body;
+}
+
+const Y = 200;
+/** A stone floor at y = Y − 1 over x, z ∈ [280, 360]. */
+function floorWorld(): FakeWorld {
+	const w = new FakeWorld();
+	w.fill({ x: 280, y: Y - 1, z: 280 }, { x: 360, y: Y - 1, z: 360 }, 'stone');
+	return w;
+}
+
+describe('navigator', () => {
+	it('a cliff 25 high between start and target: flies high (lift past the 16 climb) and arrives on top', async () => {
+		const world = floorWorld();
+		world.fill({ x: 320, y: Y, z: 280 }, { x: 360, y: Y + 24, z: 360 }, 'stone'); // plateau top at Y + 24
+		const body = physBody(world, { x: 300.5, y: Y, z: 300.5 });
+		const logs: Array<Record<string, unknown>> = [];
+		const r = await navigate(body, world, { x: 335.5, z: 300.5 }, { log: (e) => logs.push(e) });
+		expect(r).toEqual({ ok: true, via: 'walk' });
+		expect(body.pose()).toMatchObject({ x: 335.5, y: Y + 25, z: 300.5 });
+		const flights = body.calls.filter((c) => c.fn === 'flyTo').map((c) => c.args[0] as Vec3);
+		// the walk stops at the cliff's foot; straight up from there first (the route is 25 above: past flyTo's
+		// climb), then across onto the plateau
+		expect(flights[0]).toEqual({ x: 319.75, y: Y + 25, z: 300.5 });
+		expect(flights).toHaveLength(2);
+		expect(logs.some((e) => e.k === 'walk-fly' && e.lift === Y + 25)).toBe(true);
+	});
+
+	it('a target under an overhang: lands on a standable open-sky cell beside it, not on the roof', async () => {
+		const world = floorWorld();
+		// A wall 3 high between: no walk across; the column-top flight alone would land on the roof.
+		world.fill({ x: 315, y: Y, z: 280 }, { x: 315, y: Y + 2, z: 360 }, 'stone');
+		world.fill({ x: 329, y: Y + 4, z: 299 }, { x: 331, y: Y + 4, z: 301 }, 'stone'); // a 3 × 3 roof over the target
+		const body = physBody(world, { x: 300.5, y: Y, z: 300.5 });
+		const r = await navigate(body, world, { x: 330.5, y: Y, z: 300.5 });
+		expect(r.ok).toBe(true);
+		const p = body.pose();
+		expect(p.y).toBe(Y); // on the floor, not on the roof (Y + 5)
+		expect(Math.hypot(p.x - 330.5, p.z - 300.5)).toBeLessThanOrEqual(3);
+		expect(Math.floor(p.x) >= 329 && Math.floor(p.x) <= 331 && Math.floor(p.z) >= 299 && Math.floor(p.z) <= 301).toBe(false);
+	});
+
+	it('start in a tunnel (dead end toward the target): along the tunnel to open sky, up, across, down', async () => {
+		const world = floorWorld();
+		// A rock mass 8 high over x 295–315, with a tunnel along z = 300 from x 300 to its west mouth at x 295.
+		world.fill({ x: 295, y: Y, z: 290 }, { x: 315, y: Y + 7, z: 310 }, 'stone');
+		world.fill({ x: 295, y: Y, z: 300 }, { x: 300, y: Y + 1, z: 300 }, 0);
+		const body = physBody(world, { x: 300.5, y: Y, z: 300.5 });
+		const r = await navigate(body, world, { x: 330.5, z: 300.5 });
+		expect(r).toEqual({ ok: true, via: 'fly-high' });
+		expect(body.pose()).toMatchObject({ x: 330.5, y: Y, z: 300.5 });
+		expect(airPathToSky(world, { x: 300.5, y: Y, z: 300.5 })?.at(-1)).toMatchObject({ x: 294.5, y: Y });
+	});
+
+	it('walkOrFly with mayFly false: a blocked walk stays a failure, no flight', async () => {
+		const world = floorWorld();
+		world.fill({ x: 310, y: Y, z: 280 }, { x: 310, y: Y + 3, z: 360 }, 'stone');
+		const body = physBody(world, { x: 300.5, y: Y, z: 300.5 });
+		await expect(walkOrFly(body, world, { x: 330.5, z: 300.5 }, { mayFly: false })).rejects.toThrow();
+		expect(body.calls.some((c) => c.fn === 'flyTo')).toBe(false);
+	});
+});
+
+describe('stuck watchdog', () => {
+	it('a body that never moves: fly-high, then the air path, then a teleport up, then abandon — 15 s apart', async () => {
+		const world = floorWorld();
+		// Sealed in a stone box: nothing gets out except the teleport.
+		world.fill({ x: 298, y: Y, z: 298 }, { x: 302, y: Y + 6, z: 302 }, 'stone');
+		world.set(300, Y, 300, 0);
+		world.set(300, Y + 1, 300, 0);
+		const body = new FakeBody();
+		body.current = { x: 300.5, y: Y, z: 300.5, yaw: 0, pitch: 0 };
+		body.walkImpl = async () => {
+			throw new BlockedError({ ...body.current }, 'wall', 'walkTo');
+		};
+		body.flyImpl = async () => {
+			throw new BlockedError({ ...body.current }, 'wall', 'flyTo');
+		};
+		let t = 0;
+		const logs: Array<Record<string, unknown>> = [];
+		const wd = new StuckWatchdog({ body, world, clock: () => t, log: (e) => logs.push(e) });
+		const levels = () => logs.filter((e) => e.k === 'unstick' && !e.abandon).map((e) => e.level);
+		wd.want({ x: 330.5, z: 300.5 });
+		expect(await wd.guard()).toBe('ok');
+		t = 14_999;
+		expect(await wd.guard()).toBe('ok');
+		expect(levels()).toEqual([]);
+		t = 15_000;
+		expect(await wd.guard()).toBe('ok');
+		expect(levels()).toEqual([1]);
+		t = 20_000;
+		expect(await wd.guard()).toBe('ok');
+		expect(levels()).toEqual([1]); // not yet: 15 s from the last escalation
+		t = 30_000;
+		expect(await wd.guard()).toBe('ok');
+		expect(levels()).toEqual([1, 2]);
+		expect(body.calls.some((c) => c.fn === 'move')).toBe(false);
+		t = 45_000;
+		expect(await wd.guard()).toBe('abandon');
+		expect(levels()).toEqual([1, 2, 3]);
+		const moves = body.calls.filter((c) => c.fn === 'move');
+		expect(moves).toHaveLength(1);
+		expect(moves[0].args[0]).toMatchObject({ x: 300.5, y: Y + 6 + 2, z: 300.5 });
+		expect(wd.active).toBe(false);
+	});
+
+	it('a bot that keeps moving, or that reaches its goal, never escalates', async () => {
+		const world = floorWorld();
+		const body = new FakeBody();
+		body.current = { x: 300.5, y: Y, z: 300.5, yaw: 0, pitch: 0 };
+		let t = 0;
+		const logs: Array<Record<string, unknown>> = [];
+		const wd = new StuckWatchdog({ body, world, clock: () => t, log: (e) => logs.push(e) });
+		wd.want({ x: 330.5, z: 300.5 });
+		for (let i = 1; i <= 10; i++) {
+			t = i * 10_000;
+			body.current = { ...body.current, x: body.current.x + 1 };
+			await wd.guard();
+		}
+		wd.reached();
+		t += 60_000;
+		await wd.guard();
+		expect(logs).toEqual([]);
+	});
+});

@@ -2,8 +2,8 @@
  * The behaviour runner (spec §7): one action in flight at a time, paced by style, and every action
  * judged by safety (§7.1 tier 1), sense (tier 2) and fit (tier 3, injected) before it runs.
  */
-import { CRAFTED_ONLY, EYE_HEIGHT, WORLDGEN_BLOCKS, blockId, type WalkResult } from 'minicraft-bot';
-import { createFollowState, followTick, isBlocked, stopMoving, type FollowState } from '../body/act.js';
+import { CRAFTED_ONLY, EYE_HEIGHT, WORLDGEN_BLOCKS, blockId } from 'minicraft-bot';
+import { createFollowState, followTick, stopMoving, type FollowState } from '../body/act.js';
 import type { StopSignal } from '../body/stop-signal.js';
 import type { Body, WorldView } from '../port.js';
 import type { Clock } from './clock.js';
@@ -17,7 +17,7 @@ import { BEHAVIOURS, type Behaviour, type BehaviourCtx } from './behaviours/beha
 import { SALIENCE } from './data/salience.data.js';
 import { RING, climbPath } from './behaviours/spiral.js';
 import { escapeTarget } from './behaviours/mine.js';
-import { bodyTop, routeTop } from './behaviours/site-search.js';
+import { walkOrFly } from '../nav/navigate.js';
 
 export type FitFn = (a: Action, ctx: BehaviourCtx) => Promise<'yes' | 'wait' | 'no'>;
 export interface RunnerDeps {
@@ -29,10 +29,6 @@ export interface RunnerDeps {
 }
 
 const CAUSE = { kind: 'behaviour', by: 'runner' } as const;
-/** The highest feet y a lift flight aims at (the world is 256 high, the body 1.8). */
-const WORLD_TOP_FEET = 254;
-/** flyTo climbs at most this far above where it starts (the SDK's FLY_CLIMB_MAX). */
-const FLY_CLIMB = 16;
 /** Fit is asked only when a kid is this close to the action's cell (spec §7.1 tier 3). */
 const FIT_RANGE = 8;
 const MAX_WAITS = 3;
@@ -401,39 +397,18 @@ export class BehaviourRunner {
 					break;
 				case 'walk': {
 					this.inFlight = 'walk';
-					let r: WalkResult;
-					try {
-						r = await body.walkTo(a.to, { speed: ctx.style.walkSpeed });
-					} catch (walkErr) {
-						// walkTo is a straight line with no pathfinding: at a wall or a cliff, fly to the same column
-						// (the kids fly too). Never for a dig's step walks, which must stay in the staircase. The target is
-						// on top of the column (its topmost solid block + 1): groundY from near the bot can land in a cave
-						// or under an overhang, which flyTo refuses (ruling R24 batch).
-						if (!isBlocked(walkErr) || this.gen !== gen || this.inStaircase(a.to)) throw walkErr;
-						via = `fly (${walkErr instanceof Error ? walkErr.message : String(walkErr)})`;
-						const top = bodyTop(world, a.to.x, a.to.z);
-						const to = { x: a.to.x, y: top >= 0 ? top + 1 : body.pose().y, z: a.to.z };
-						// flyTo climbs at most 16 above where it starts: over a taller hill on the way (live: 18 up to a
-						// Mine pillar, "same action failed 3 times"), first straight up to clear the route's highest column.
-						const from = body.pose();
-						const top1 = routeTop(world, from, to) + 1;
-						const lift = top1 > from.y + FLY_CLIMB - 1 ? Math.min(top1, WORLD_TOP_FEET) : null;
-						this.d.log('walk-fly', { to, ...(lift !== null ? { lift } : {}) });
-						this.inFlight = 'fly';
-						if (lift !== null) {
-							try {
-								r = await body.flyTo({ x: from.x, y: lift, z: from.z });
-							} catch (liftErr) {
-								if (!isBlocked(liftErr)) throw liftErr;
-								r = 'arrived';                    // blocked overhead: the direct flight may still get there
-							}
-							if (r === 'cancelled' || this.gen !== gen) {
-								cancelled = true;
-								break;
-							}
-						}
-						r = await body.flyTo(to);                 // blocked too → the outer catch: one failure
-					}
+					// The shared navigator's walk (nav/navigate.ts): at a wall or a cliff, a flight to the same column
+					// (the kids fly too). Never for a dig's step walks, which must stay in the staircase.
+					const r = await walkOrFly(body, world, a.to, {
+						speed: ctx.style.walkSpeed,
+						mayFly: !this.inStaircase(a.to),
+						alive: () => this.gen === gen,
+						onFly: (v, to, lift) => {
+							via = v;
+							this.d.log('walk-fly', { to, ...(lift !== null ? { lift } : {}) });
+							this.inFlight = 'fly';
+						},
+					});
 					cancelled = r === 'cancelled';
 					ok = r === 'arrived';
 					if (ok) this.arrivalT = this.d.clock();

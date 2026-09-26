@@ -26,6 +26,7 @@ import type { SharedCells } from '../shared/bot-cells.js';
 import { planAvoidBoxes } from '../foreman/plan-file.js';
 import { boxOf, doorFronts, lampSpots, planPath, plazaGoal, VillageSearch, type Box, type Col, type LotSpec } from './plan.js';
 import { LAYOUTS, THEMES, themeBlocks, themeSlug, type Layout, type VillageTheme } from './themes.data.js';
+import { StuckWatchdog } from '../nav/navigate.js';
 
 export interface CellsRec { cells: Array<{ cell: Vec3; block: string }>; placed: string[]; skipped: string[]; status: 'placing' | 'done' | 'abandoned'; why?: string }
 export interface VillageLot { spec: LotSpec; build: BuilderBuild; path?: CellsRec; lamps?: CellsRec }
@@ -78,6 +79,8 @@ export interface VillageHandle { stop(): Promise<void>; stats: VillageStats; fil
 
 export function runVillage(o: VillageOpts): VillageHandle {
 	const clock = o.clock ?? (() => Date.now());
+	// The stuck watchdog every approach on this body shares (nav/navigate.ts): its `unstick` lines go to this bot's log.
+	StuckWatchdog.for(o.body, o.world).log = (e) => o.log({ ...e, t: clock() });
 	const pace = o.paceMs ?? 800;
 	const file = loadVillageFile(o.statePath);
 	const own = new Ownership(o.world, () => file.owned, o.shared ? () => o.shared!.cells() : undefined);

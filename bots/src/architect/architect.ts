@@ -27,6 +27,7 @@ import { claimLot, planAvoidBoxes, updateLot, type PlanLot } from '../foreman/pl
 import { endLot, fitsLot, lotSite, rejectStatus, renewClaim } from '../foreman/join.js';
 import { clampParams, IDEAS, makeDesign, presetParams, THEMES, themeSlug, type Design, type DRole, type Idea, type Theme } from './designs.js';
 import type { ParamProposer } from './llm-params.js';
+import { StuckWatchdog } from '../nav/navigate.js';
 
 export interface ArchitectBuild extends BuilderBuild { idea: string; theme: string; size: string; style: string; params: Record<string, number>; by: Record<string, string> }
 export interface ArchitectFile extends BuilderFile { builds: ArchitectBuild[] }
@@ -67,6 +68,8 @@ export function designBuild(id: string, d: Design, origin: Vec3, by: Record<stri
 
 export function runArchitect(o: ArchitectOpts): ArchitectHandle {
 	const clock = o.clock ?? (() => Date.now());
+	// The stuck watchdog every approach on this body shares (nav/navigate.ts): its `unstick` lines go to this bot's log.
+	StuckWatchdog.for(o.body, o.world).log = (e) => o.log({ ...e, t: clock() });
 	const pace = o.paceMs ?? 800;
 	const file = loadBuilderFile(o.statePath) as ArchitectFile;
 	const own = new Ownership(o.world, () => file.owned, o.shared ? () => o.shared!.cells() : undefined);

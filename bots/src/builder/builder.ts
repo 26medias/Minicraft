@@ -20,6 +20,7 @@ import { TEMPLATES, type Role, type Template } from '../brain2/behaviours/templa
 import type { ChoiceEngine } from './engines.js';
 import { candidateMoves, cellKey, describeMove, heuristicPick, planCells, type PlanCell } from './moves.js';
 import { palettesFor, type Palette } from './palettes.data.js';
+import { flyLeg, navigate, StuckWatchdog } from '../nav/navigate.js';
 import type { SharedCells } from '../shared/bot-cells.js';
 import { capCount, capReached, countsTowardCap, DEFAULT_MAX_BUILDS } from '../shared/cap.js';
 import { claimLot, planAvoidBoxes, updateLot, type PlanLot } from '../foreman/plan-file.js';
@@ -77,7 +78,6 @@ const WEIGHT: Record<string, number> = { house: 3, tower: 2, wall: 1, creeper: 2
 const REACH = 4.5;
 /** Never place a block when the eye is farther than this from the cell centre. */
 export const PLACE_MAX = 5;
-const WORLD_TOP_FEET = 254;
 const MAX_REACH_FAILS = 5;
 
 export const eyeDist = (p: Vec3, cell: Vec3) => Math.hypot(cell.x + 0.5 - p.x, cell.y + 0.5 - (p.y + 1.6), cell.z + 0.5 - p.z);
@@ -86,63 +86,60 @@ const inFootprint = (b: { origin: Vec3; w: number; d: number }, p: { x: number; 
 	p.x >= b.origin.x - m && p.x < b.origin.x + b.w + m && p.z >= b.origin.z - m && p.z < b.origin.z + b.d + m;
 
 /**
- * Flies to a stand spot just outside the footprint beside `cell`. On a blocked flight (a tree trunk, a wall) it
- * unsticks: straight up through a clear column (+6, +12, +20), across at max(that height, cell.y + 4), then down.
- * Returns true only when the eye ends within PLACE_MAX of the cell centre.
+ * Gets within reach of `cell` from a stand spot just outside the footprint (the two sides nearest the cell), through
+ * the shared navigator (nav/navigate.ts: walk, else brain2's flight to the column, else fly high) and the bot's stuck
+ * watchdog. A bot already hovering, or a stand spot in the air (a tall build's upper layers), flies straight there
+ * first; after landing it rises to the cell's height. Returns true only when the eye ends within PLACE_MAX of the cell
+ * centre. Movement is code: no model is asked.
  */
 export async function approach(
 	body: Body, world: WorldView, b: { origin: Vec3; w: number; d: number }, cell: Vec3, log: (e: Record<string, unknown>) => void = () => undefined,
 ): Promise<boolean> {
+	const wd = StuckWatchdog.for(body, world);
 	const p = body.pose();
 	const c = { x: cell.x + 0.5, y: cell.y + 0.5, z: cell.z + 0.5 };
-	if (!inFootprint(b, p, 0.4) && eyeDist(p, cell) <= REACH) return true;
+	if (!inFootprint(b, p, 0.4) && eyeDist(p, cell) <= REACH) {
+		wd.reached();
+		return true;
+	}
 	const sides = [
 		{ x: b.origin.x - 1.2, z: c.z }, { x: b.origin.x + b.w + 1.2, z: c.z },
 		{ x: c.x, z: b.origin.z - 1.2 }, { x: c.x, z: b.origin.z + b.d + 1.2 },
 	].sort((u, v) => Math.hypot(u.x - c.x, u.z - c.z) - Math.hypot(v.x - c.x, v.z - c.z));
-	const fly = async (t: Vec3) => (await body.flyTo(t)) === 'arrived';
 	const good = () => eyeDist(body.pose(), cell) <= PLACE_MAX;
+	const done = () => {
+		wd.reached();
+		return true;
+	};
 	for (const s of sides.slice(0, 2)) {
-		const y = Math.max(cell.y, groundTop(world, Math.floor(s.x), Math.floor(s.z)) + 1);
-		try {
-			if (await fly({ x: s.x, y, z: s.z })) return good();
-			continue; // cancelled: try the other side
-		} catch (err) {
-			log({ k: 'fly-blocked', to: s, err: err instanceof Error ? err.message : String(err) });
-		}
-		// Unstick: straight up through a clear column, across high, then down.
-		try {
-			const q = body.pose();
-			const fx = Math.floor(q.x), fz = Math.floor(q.z), fy = Math.floor(q.y);
-			let alt: number | null = null;
-			for (const dy of [6, 12, 20]) {
-				const hy = Math.min(fy + dy, WORLD_TOP_FEET);
-				if (hy <= fy) break;
-				let clear = true;
-				for (let yy = fy; yy <= hy + 1 && clear; yy++) if (world.getBlock(fx, yy, fz) !== 0) clear = false;
-				if (!clear) continue;
-				try {
-					if (await fly({ x: q.x, y: hy, z: q.z })) {
-						alt = hy;
-						break;
-					}
-				} catch {
-					// try higher
-				}
+		const ground = groundTop(world, Math.floor(s.x), Math.floor(s.z)) + 1;
+		const y = Math.max(cell.y, ground);
+		const q = body.pose();
+		const reach = world.groundY(q.x, q.z, q.y);
+		const hovering = reach === null || q.y - reach > 0.25;
+		if (hovering || y > ground) {
+			try {
+				if ((await flyLeg(body, { x: s.x, y, z: s.z })) === 'arrived' && good()) return done();
+			} catch (err) {
+				log({ k: 'fly-blocked', to: s, err: err instanceof Error ? err.message : String(err) });
 			}
-			if (alt === null) {
-				log({ k: 'unstick-failed', at: { x: q.x, y: q.y, z: q.z } });
-				continue;
-			}
-			const cruise = Math.min(Math.max(alt, cell.y + 4), WORLD_TOP_FEET);
-			if (cruise > alt && !(await fly({ x: q.x, y: cruise, z: q.z }))) continue;
-			if (!(await fly({ x: s.x, y: cruise, z: s.z }))) continue;
-			if (await fly({ x: s.x, y, z: s.z })) return good();
-		} catch (err) {
-			log({ k: 'fly-failed', to: s, err: err instanceof Error ? err.message : String(err) });
 		}
+		const nav = await navigate(body, world, { x: s.x, y: ground, z: s.z }, { log, watchdog: wd });
+		if (!nav.ok) {
+			log({ k: 'nav-failed', to: s, why: nav.reason });
+			if (nav.reason.startsWith('stuck')) return false; // the watchdog's last resort: this approach is dropped
+			continue;
+		}
+		if (body.pose().y < y - 0.01) {
+			try {
+				await flyLeg(body, { x: body.pose().x, y, z: body.pose().z });
+			} catch (err) {
+				log({ k: 'fly-blocked', to: { ...s, y }, err: err instanceof Error ? err.message : String(err) });
+			}
+		}
+		if (good()) return done();
 	}
-	return good() && !inFootprint(b, body.pose(), 0.4);
+	return good() && !inFootprint(b, body.pose(), 0.4) ? done() : false;
 }
 const KID_INSIDE_MAX_MS = 60_000;
 
@@ -169,6 +166,8 @@ export interface BuilderHandle { stop(): Promise<void>; stats: BuilderStats; fil
 
 export function runBuilder(o: BuilderOpts): BuilderHandle {
 	const clock = o.clock ?? (() => Date.now());
+	// The stuck watchdog every approach on this body shares (nav/navigate.ts): its `unstick` lines go to this bot's log.
+	StuckWatchdog.for(o.body, o.world).log = (e) => o.log({ ...e, t: clock() });
 	const pace = o.paceMs ?? 800;
 	const file = loadBuilderFile(o.statePath);
 	const own = new Ownership(o.world, () => file.owned, o.shared ? () => o.shared!.cells() : undefined);

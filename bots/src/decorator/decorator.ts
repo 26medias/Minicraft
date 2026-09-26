@@ -21,6 +21,7 @@ import { cellKey } from '../builder/moves.js';
 import type { SharedCells } from '../shared/bot-cells.js';
 import { capCount, capReached, countsTowardCap, DEFAULT_MAX_DECORATIONS } from '../shared/cap.js';
 import { candidateDecorations, niceBuild, readBuilderRecords, type DecorCell, type DecorKind, type KnownBuild } from './decor.js';
+import { StuckWatchdog } from '../nav/navigate.js';
 
 export interface DecorRecord {
 	id: string; bot: string; buildId: string; kind: DecorKind; description: string; cells: DecorCell[];
@@ -73,6 +74,8 @@ export interface DecoratorHandle { stop(): Promise<void>; stats: DecoratorStats;
 
 export function runDecorator(o: DecoratorOpts): DecoratorHandle {
 	const clock = o.clock ?? (() => Date.now());
+	// The stuck watchdog every approach on this body shares (nav/navigate.ts): its `unstick` lines go to this bot's log.
+	StuckWatchdog.for(o.body, o.world).log = (e) => o.log({ ...e, t: clock() });
 	const pace = o.paceMs ?? 800;
 	const file = loadDecoratorFile(o.statePath);
 	let builderOwned: Record<string, number> = {};

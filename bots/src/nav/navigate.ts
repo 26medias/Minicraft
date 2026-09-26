@@ -54,7 +54,7 @@ export interface WalkOrFlyOpts {
  */
 export async function walkOrFly(body: Body, world: WorldView, to: Col, o: WalkOrFlyOpts = {}): Promise<WalkResult> {
 	try {
-		return await body.walkTo(to, o.speed !== undefined ? { speed: o.speed } : undefined);
+		return await body.walkTo({ x: to.x, z: to.z }, o.speed !== undefined ? { speed: o.speed } : undefined);
 	} catch (walkErr) {
 		if (!isBlocked(walkErr) || o.mayFly === false || (o.alive && !o.alive())) throw walkErr;
 		const top = bodyTop(world, to.x, to.z);

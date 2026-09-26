@@ -22,6 +22,7 @@ import { cellKey, planCells } from '../builder/moves.js';
 import type { SharedCells } from '../shared/bot-cells.js';
 import { capCount, capReached, countsTowardCap, DEFAULT_MAX_BUILDS } from '../shared/cap.js';
 import { HELP_CHOICES, helpTemplate, helperSite, kidBuilding, kidPalette, type KidPlacement } from './plan.js';
+import { StuckWatchdog } from '../nav/navigate.js';
 
 export interface HelperBuild extends BuilderBuild { kid: string; kidCells: Vec3[]; kidBlocks: string[]; minGap: number; rot: number }
 export interface HelperFile extends BuilderFile { builds: HelperBuild[] }
@@ -49,6 +50,8 @@ const SETTLE_MS = 5000;
 
 export function runHelper(o: HelperOpts): HelperHandle {
 	const clock = o.clock ?? (() => Date.now());
+	// The stuck watchdog every approach on this body shares (nav/navigate.ts): its `unstick` lines go to this bot's log.
+	StuckWatchdog.for(o.body, o.world).log = (e) => o.log({ ...e, t: clock() });
 	const pace = o.paceMs ?? 800;
 	const file = loadBuilderFile(o.statePath) as HelperFile;
 	const own = new Ownership(o.world, () => file.owned, o.shared ? () => o.shared!.cells() : undefined);

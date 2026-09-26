@@ -19,10 +19,26 @@ function stuckBody(world: FakeWorld) {
 }
 
 describe('builder approach (unstick)', () => {
-	it('a blocked direct flight climbs straight up, crosses high, descends and arrives within reach', async () => {
+	it('walks to a stand spot beside the cell (the shared navigator), no flight needed on open ground', async () => {
+		const world = new FakeWorld();
+		const body = stuckBody(world);
+		const oy = world.surfaceY(125, 100) + 1;
+		const b = { origin: { x: 125, y: oy, z: 100 }, w: 5, d: 5 };
+		const cell = { x: 125, y: oy, z: 102 };
+		const ok = await approach(body, world, b, cell);
+		expect(ok).toBe(true);
+		expect(eyeDist(body.pose(), cell)).toBeLessThanOrEqual(PLACE_MAX);
+		expect(body.calls[0]).toMatchObject({ fn: 'walkTo', args: [{ x: 123.8, z: 102.5 }, undefined] });
+		expect(body.calls.some((c) => c.fn === 'flyTo')).toBe(false);
+	});
+
+	it('a blocked walk and a blocked column flight: flies high (up, across, down) and arrives within reach', async () => {
 		const world = new FakeWorld();
 		const body = stuckBody(world);
 		const start = body.pose();
+		body.walkImpl = async () => {
+			throw blocked(body.pose());
+		};
 		// Rejects any flight that changes x/z while still at the start altitude (the tree trunk); the rest resolve.
 		body.flyImpl = async (t) => {
 			const p = body.pose();
@@ -32,20 +48,25 @@ describe('builder approach (unstick)', () => {
 		const oy = world.surfaceY(125, 100) + 1;
 		const b = { origin: { x: 125, y: oy, z: 100 }, w: 5, d: 5 };
 		const cell = { x: 125, y: oy, z: 102 };
-		const ok = await approach(body, world, b, cell);
+		const logs: Array<Record<string, unknown>> = [];
+		const ok = await approach(body, world, b, cell, (e) => logs.push(e));
 		expect(ok).toBe(true);
 		expect(eyeDist(body.pose(), cell)).toBeLessThanOrEqual(PLACE_MAX);
+		expect(logs.some((e) => e.k === 'fly-high')).toBe(true);
 		const flights = body.calls.filter((c) => c.fn === 'flyTo').map((c) => c.args[0] as { x: number; y: number; z: number });
-		// the second flight is straight up from where it was stuck
-		expect(flights[1].x).toBe(start.x);
-		expect(flights[1].z).toBe(start.z);
-		expect(flights[1].y).toBeGreaterThan(start.y);
+		// after the refused column flight: straight up from where it was stuck
+		const up = flights.find((f) => f.y > start.y + 1)!;
+		expect(up.x).toBe(start.x);
+		expect(up.z).toBe(start.z);
 	});
 
 	it('every flight blocked: approach fails, and the builder never places from out of reach, then abandons', async () => {
 		const world = new FakeWorld();
 		const body = stuckBody(world);
 		body.flyImpl = async () => {
+			throw blocked(body.pose());
+		};
+		body.walkImpl = async () => {
 			throw blocked(body.pose());
 		};
 		let placed = 0;

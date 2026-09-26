@@ -24,6 +24,7 @@ import { readBuilderRecords } from '../decorator/decor.js';
 import type { SharedCells } from '../shared/bot-cells.js';
 import { areaD, areaW, NeighbourhoodSearch, ROWS } from './layout.js';
 import { createPlan, readPlan, type NeighbourhoodPlan, type PlanCell } from './plan-file.js';
+import { StuckWatchdog } from '../nav/navigate.js';
 
 export interface Progress { placed: string[]; skipped: string[]; status: 'placing' | 'done' }
 export interface ForemanFile { v: 1; planId: string | null; roads: Progress; lamps: Progress; owned: Record<string, number> }
@@ -68,6 +69,8 @@ export interface ForemanHandle { stop(): Promise<void>; stats: ForemanStats; fil
 
 export function runForeman(o: ForemanOpts): ForemanHandle {
 	const clock = o.clock ?? (() => Date.now());
+	// The stuck watchdog every approach on this body shares (nav/navigate.ts): its `unstick` lines go to this bot's log.
+	StuckWatchdog.for(o.body, o.world).log = (e) => o.log({ ...e, t: clock() });
 	const pace = o.paceMs ?? 800;
 	const file = loadForemanFile(o.statePath);
 	const own = new Ownership(o.world, () => file.owned, o.shared ? () => o.shared!.cells() : undefined);

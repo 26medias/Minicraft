@@ -10,7 +10,7 @@
 import { World } from '../../../src/engine/world/world';
 import { ChunkOverlay } from '../../../src/engine/world/overlay';
 import { applyRemoteOps } from '../../../src/engine/world/apply-remote';
-import { CHUNK_SIZE_X, CHUNK_SIZE_Z, chunkIndex, worldToChunk, type WorldHeight } from '../../../src/engine/world/coords';
+import { CHUNK_SIZE_X, CHUNK_SIZE_Z, chunkIndex, chunkIndexOrNeg, worldToChunk, type WorldHeight } from '../../../src/engine/world/coords';
 import { AIR, BLOCKS, BLOCK_BY_NAME, isLiquid as isLiquidId, isSolid as isSolidId } from '../../../src/data/blocks.data';
 import { MpSync, type StorageLike } from '../../../src/net/mp-sync';
 import { decodeSnapshot } from '../../../src/net/snapshot';
@@ -304,7 +304,9 @@ export class WorldCore {
 			const k = c.join(',');
 			if (!seen.has(k)) { seen.add(k); out.push(c); }
 		}
-		for (const k of this.localEdited.get(chunkIndex(cx, cz)) ?? []) {
+		// chunkIndex has no bounds check and aliases an out-of-world chunk onto a real one (gate 2 fix round 1).
+		const ci = chunkIndexOrNeg(cx, cz);
+		for (const k of ci === -1 ? [] : (this.localEdited.get(ci) ?? [])) {
 			if (seen.has(k)) continue;
 			seen.add(k);
 			const [x, y, z] = k.split(',').map(Number);

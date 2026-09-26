@@ -446,6 +446,13 @@ describe('isEdited / editedCellsInChunk (brain2 spec §4.5)', () => {
 		world.onServerEdit({ t: 'edit', seq: 1, by: 2, ops: [[13, 60, 13, STONE, 0, 0]] } as EditOut);
 		expect(view.isEdited(13, 60, 13)).toBe(true);
 	});
+	// Red (gate 2 fix round 1): chunkIndex(-1, 32) === 0 with no bounds check, so a local write in
+	// chunk (0, 0) would alias onto this out-of-world chunk.
+	it('editedCellsInChunk returns nothing for an out-of-world chunk that would alias a real one', () => {
+		const { world, view } = setup();
+		world.localSet(5, 60, 5, STONE); // chunk (0, 0), index 0 — same as chunkIndex(-1, 32)
+		expect(view.editedCellsInChunk(-1, 32)).toEqual([]);
+	});
 });
 
 describe('worldSpawn (brain2 spec §6)', () => {

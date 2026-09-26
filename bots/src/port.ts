@@ -139,7 +139,15 @@ export function realPort(client: BotClient, listing: WorldListing): Port {
 		mine: (x, y, z) => client.mine(x, y, z),
 		// A cancel with no SDK change: BotClient.mine calls its private cancelMine() first (sending
 		// mine-stop for a mine in flight), then resolves false for the out-of-world cell (gate 2).
-		stopMining: () => void client.mine(0, -10, 0),
+		// mine() throws synchronously (assertConnected) when idle/connecting/closed; a disconnected
+		// client has nothing to stop, so swallow that (gate 2 fix round 1).
+		stopMining: () => {
+			try {
+				void client.mine(0, -10, 0);
+			} catch {
+				/* not connected: nothing to stop */
+			}
+		},
 		fx: (msg) => client.fx(msg),
 		revert: (sinceMs) => client.revert(sinceMs),
 		journal: () => client.journal(),

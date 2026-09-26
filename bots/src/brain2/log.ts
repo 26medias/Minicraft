@@ -17,7 +17,7 @@ export type LogLine =
 	| { k: 'change'; t: number; id: number; path: string; old: unknown; new: unknown; deleted?: true; cause: Cause }
 	| ({ k: 'call'; t: number } & CallLine)
 	| { k: 'select'; t: number; selectionId: number; trigger: string; urgent: boolean; player: string | null; inputs: SelectInputs;
-		rows: Array<{ behaviour: BehaviourKind; emotional: number; social: number; situational: number; inertia: number; recency: number; bonus: number; masked: boolean; total: number }>;  // RAW terms (unweighted); total weighted
+		rows: Array<{ behaviour: BehaviourKind; emotional: number; social: number; situational: number; inertia: number; recency: number; bonus: number; masked: boolean; total: number }>;  // emotional/social/situational RAW (unweighted); inertia/recency/bonus MERGE-scaled; total = the weighted sum (R13)
 		winner: BehaviourKind | null; params: Record<string, unknown> }
 	| { k: 'event'; t: number; kind: string; data?: unknown };
 const KINDS = new Set(['meta', 'change', 'call', 'select', 'event']);

@@ -45,6 +45,7 @@ import { brain2CliLeg, brain2Legs, brain2ProductiveLeg } from './e2e-brain2.js';
 import type { McServer } from './mcserver.js';
 import { builderLeg } from './e2e-builder.js';
 import { decoratorLeg } from './e2e-decorator.js';
+import { villageLeg } from './e2e-village.js';
 
 /* eslint-disable @typescript-eslint/no-explicit-any */
 
@@ -779,6 +780,7 @@ async function main(): Promise<void> {
 		}
 		if (want('cli')) await leg('cli', 'the real CLI: SIGINT exit and --revert-on-exit', cliLeg);
 		if (want('builder')) await leg('builder', 'the builder CLI, engines down: finishes a build (≥ 20 cells), nothing on the kid pillar', () => builderLeg({ check, info }));
+		if (want('village')) await leg('village', 'the village CLI, engines down: ≥ 2 lots and ≥ 1 path, nothing on the kid pillar', () => villageLeg({ check, info }));
 		if (want('decorator')) await leg('decorator', 'the decorator CLI, engines down: ≥ 10 decoration cells, nothing on the kid pillar', () => decoratorLeg({ check, info }));
 	} finally {
 		try {

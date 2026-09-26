@@ -18,6 +18,7 @@ import { groundTop } from '../brain2/behaviours/site-search.js';
 import { approach, checkPlace, eyeDist, PLACE_MAX } from '../builder/builder.js';
 import type { ChoiceEngine } from '../builder/engines.js';
 import { cellKey } from '../builder/moves.js';
+import type { SharedCells } from '../shared/bot-cells.js';
 import { candidateDecorations, niceBuild, readBuilderRecords, type DecorCell, type DecorKind, type KnownBuild } from './decor.js';
 
 export interface DecorRecord {
@@ -61,6 +62,8 @@ export interface DecoratorOpts {
 	/** The rest after each decoration (the CLI's --rest-sec). */
 	restMs?: number;
 	known: ReadonlySet<string>;
+	/** The shared bot-cell registry: placed cells are appended; other bots' cells count as bot cells. */
+	shared?: SharedCells | null;
 }
 export interface DecoratorStats { placed: number; refused: number; failed: number; done: number; abandoned: number; asks: number; fallbacks: number; current: string }
 export interface DecoratorHandle { stop(): Promise<void>; stats: DecoratorStats; file: DecoratorFile; done: Promise<void> }
@@ -71,7 +74,12 @@ export function runDecorator(o: DecoratorOpts): DecoratorHandle {
 	const file = loadDecoratorFile(o.statePath);
 	let builderOwned: Record<string, number> = {};
 	// Builder cells count as bot cells (never "kid"), so the kid-cell buffer does not refuse the ground beside them.
-	const own = new Ownership(o.world, () => ({ ...builderOwned, ...file.owned }));
+	let merged: Record<string, number> = {};
+	const refreshMerged = () => {
+		merged = { ...builderOwned, ...file.owned };
+	};
+	refreshMerged();
+	const own = new Ownership(o.world, () => merged, o.shared ? () => o.shared!.cells() : undefined);
 	const stop = new StopSignal(LIMITS.STOP_SIGNAL_MS);
 	const trip = new Tripwire();
 	const stats: DecoratorStats = { placed: 0, refused: 0, failed: 0, done: 0, abandoned: 0, asks: 0, fallbacks: 0, current: 'starting' };
@@ -94,7 +102,10 @@ export function runDecorator(o: DecoratorOpts): DecoratorHandle {
 		o.body.onEdit((e) => {
 			const who = stop.onEdit(e, o.body.journal(), clock());
 			if (who) o.log({ k: 'stop-signal', kid: who, t: clock() });
-			for (const op of own.onEdit(e, o.body.you)) if (op.value === undefined) delete file.owned[op.path[1] as string];
+			for (const op of own.onEdit(e, o.body.you)) if (op.value === undefined) {
+				delete file.owned[op.path[1] as string];
+				delete merged[op.path[1] as string];
+			}
 		}),
 		o.body.onReconnect(() => own.reset()),
 	];
@@ -219,7 +230,9 @@ export function runDecorator(o: DecoratorOpts): DecoratorHandle {
 				const id = blockId(dc.block);
 				if (id !== null) {
 					file.owned[k] = id;
+					merged[k] = id;
 					own.ownWrite(dc.cell.x, dc.cell.y, dc.cell.z, id);
+					o.shared?.append(dc.cell, id);
 				}
 				stats.placed++;
 			} else {
@@ -257,6 +270,7 @@ export function runDecorator(o: DecoratorOpts): DecoratorHandle {
 	async function once(): Promise<void> {
 		const recs = readBuilderRecords(o.builderDir);
 		builderOwned = recs.owned;
+		refreshMerged();
 		const resume = file.decorations.find((d) => d.status === 'placing');
 		if (resume) {
 			const kb = recs.builds.find((b) => b.bot === resume.bot && b.build.id === resume.buildId);

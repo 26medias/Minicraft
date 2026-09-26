@@ -13,8 +13,17 @@ export class Ownership {
 	private dropped = new Set<string>();         // owned keys found stale; kept until the store deletes them
 	private pending: Patch = [];
 	private kidIndex = new Map<string, Set<string>>();
+	/** Cells a kid (a non-bot author) edited since this process started watching: a shared bot entry no longer counts. */
+	private kidTouched = new Set<string>();
 
-	constructor(private readonly world: WorldView, private readonly owned: () => Readonly<Record<string, number>>) {}
+	/**
+	 * `shared`: the other bots' latest placed id per cell (the shared bot-cell registry); a cell whose current block
+	 * equals it counts as `bot`, unless a kid edited it since.
+	 */
+	constructor(
+		private readonly world: WorldView, private readonly owned: () => Readonly<Record<string, number>>,
+		private readonly shared?: () => Readonly<Record<string, number>>,
+	) {}
 
 	classify(x: number, y: number, z: number): CellClass {
 		const [cx, cz] = chunkOf(x, z);
@@ -22,6 +31,10 @@ export class Ownership {
 		const k = key(x, y, z);
 		const mine = this.owned()[k];
 		if (mine !== undefined && !this.dropped.has(k) && this.world.getBlock(x, y, z) === mine) return 'bot';
+		if (this.shared && !this.kidTouched.has(k)) {
+			const s = this.shared()[k];
+			if (s !== undefined && this.world.getBlock(x, y, z) === s) return 'bot';
+		}
 		return this.world.isEdited(x, y, z) ? 'kid' : 'natural';
 	}
 
@@ -38,6 +51,8 @@ export class Ownership {
 		const out: Patch = [];
 		for (const c of e.cells) {
 			const k = key(c.x, c.y, c.z);
+			if (e.byBot) this.kidTouched.delete(k);
+			else this.kidTouched.add(k);
 			if (this.owned()[k] !== undefined) {
 				this.dropped.add(k);
 				out.push({ path: ['owned', k], value: undefined });

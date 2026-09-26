@@ -20,6 +20,7 @@ import { TEMPLATES, type Role, type Template } from '../brain2/behaviours/templa
 import type { ChoiceEngine } from './engines.js';
 import { candidateMoves, cellKey, describeMove, heuristicPick, planCells, type PlanCell } from './moves.js';
 import { palettesFor, type Palette } from './palettes.data.js';
+import type { SharedCells } from '../shared/bot-cells.js';
 
 export interface BuilderBuild {
 	id: string; template: string; variant: 'small' | 'medium'; palette: string; origin: Vec3; w: number; d: number; h: number;
@@ -149,6 +150,8 @@ export interface BuilderOpts {
 	restMs?: number;
 	/** Block names the catalog knows (the SDK's blockNames()); palettes with an unknown name are dropped. */
 	known: ReadonlySet<string>;
+	/** The shared bot-cell registry: placed cells are appended; other bots' cells count as bot cells. */
+	shared?: SharedCells | null;
 }
 export interface BuilderStats { placed: number; refused: number; failed: number; buildsDone: number; buildsAbandoned: number; asks: number; fallbacks: number; current: string }
 export interface BuilderHandle { stop(): Promise<void>; stats: BuilderStats; file: BuilderFile; done: Promise<void> }
@@ -157,13 +160,11 @@ export function runBuilder(o: BuilderOpts): BuilderHandle {
 	const clock = o.clock ?? (() => Date.now());
 	const pace = o.paceMs ?? 800;
 	const file = loadBuilderFile(o.statePath);
-	const own = new Ownership(o.world, () => file.owned);
+	const own = new Ownership(o.world, () => file.owned, o.shared ? () => o.shared!.cells() : undefined);
 	const stop = new StopSignal(LIMITS.STOP_SIGNAL_MS);
 	const trip = new Tripwire();
 	const stats: BuilderStats = { placed: 0, refused: 0, failed: 0, buildsDone: 0, buildsAbandoned: 0, asks: 0, fallbacks: 0, current: 'starting' };
 	let stopped = false;
-	let lastEditT: number | null = null;
-	let lastRefusal = '';
 	const wakers = new Set<() => void>();
 	const sleep = (ms: number) => new Promise<void>((res) => {
 		if (stopped) return res();
@@ -189,41 +190,7 @@ export function runBuilder(o: BuilderOpts): BuilderHandle {
 
 	const kidsNow = (): KidPos[] => o.body.players().filter((p) => !p.bot && p.hasPos).map((p) => ({ name: p.name, x: p.x, y: p.y, z: p.z }));
 
-	// Engines: a failing engine is skipped for 60 s after 3 failures in a row.
-	const health = new Map<string, { fails: number; until: number }>();
-	const usable = (e: ChoiceEngine | null | undefined): e is ChoiceEngine => !!e && (health.get(e.name)?.until ?? 0) <= clock();
-	async function askOne(e: ChoiceEngine, state: string, instructions: string, options: Record<string, string>) {
-		const t0 = clock();
-		try {
-			const a = await e.choose(state, instructions, options);
-			health.set(e.name, { fails: 0, until: 0 });
-			return { engine: e.name, choice: a.choice, probs: a.probs, ms: clock() - t0 };
-		} catch (err) {
-			const h = health.get(e.name) ?? { fails: 0, until: 0 };
-			h.fails++;
-			if (h.fails >= 3) {
-				h.until = clock() + 60_000;
-				h.fails = 0;
-			}
-			health.set(e.name, h);
-			return { engine: e.name, error: err instanceof Error ? err.message : String(err), ms: clock() - t0 };
-		}
-	}
-	/** Asks the primary (and, with --compare, the secondary in parallel); null = fall back. */
-	async function ask(what: string, state: string, instructions: string, options: Record<string, string>): Promise<string | null> {
-		stats.asks++;
-		const p = usable(o.primary) ? askOne(o.primary, state, instructions, options) : null;
-		const s = usable(o.secondary) ? askOne(o.secondary, state, instructions, options) : null;
-		const [pa, sa] = await Promise.all([p, s]);
-		const choice = pa && 'choice' in pa ? pa.choice ?? null : null;
-		if (choice === null) stats.fallbacks++;
-		o.log({
-			k: 'decision', what, t: clock(), state, instructions, options, primary: pa ?? { engine: o.primary?.name ?? null, skipped: true },
-			...(o.secondary ? { secondary: sa ?? { engine: o.secondary.name, skipped: true }, agree: !!(pa && sa && 'choice' in pa && 'choice' in sa && pa.choice === sa.choice) } : {}),
-			fallback: choice === null,
-		});
-		return choice;
-	}
+	const ask = makeAsk({ primary: o.primary, secondary: o.secondary, clock, log: o.log, stats });
 
 	function nearestKid(): KidPos | null {
 		const p = o.body.pose();
@@ -285,121 +252,16 @@ export function runBuilder(o: BuilderOpts): BuilderHandle {
 		}
 	}
 
-	const insideBox = inFootprint;
-
-	/** Flies within reach of `cell`; true only when the eye ends within PLACE_MAX of the cell centre. */
-	async function reach(b: BuilderBuild, cell: Vec3): Promise<boolean> {
-		return approach(o.body, o.world, b, cell, (e) => o.log({ ...e, t: clock() }));
-	}
-
-	async function construct(b: BuilderBuild): Promise<void> {
-		const plan: PlanCell[] = b.cells;
-		const done = new Set<string>([...b.placed, ...b.skipped]);
-		trip.resetPlan(Math.max(1, plan.length - b.placed.length));
-		let kidInsideSince: number | null = null;
-		let reachFails = 0;
-		const tag = `${b.variant} ${b.template}`;
-		const end = (status: 'done' | 'abandoned', why: string) => {
-			b.status = status;
-			b.why = why;
-			if (status === 'done') stats.buildsDone++;
-			else stats.buildsAbandoned++;
-			save();
-			o.log({ k: 'build-end', t: clock(), id: b.id, status, why, placed: b.placed.length, cells: plan.length });
-		};
-		while (!stopped) {
-			stats.current = `building ${tag} ${b.placed.length}/${plan.length} at ${b.origin.x},${b.origin.z}`;
-			if (trip.halted) return;
-			const kids = kidsNow();
-			if (own.kidCellWithin(b.origin.x + b.w / 2, b.origin.z + b.d / 2, Math.max(b.w, b.d) / 2 + 1)) return end('abandoned', 'kid cells at the site');
-			if (kids.some((k) => insideBox(b, k, 1))) {
-				kidInsideSince ??= clock();
-				if (clock() - kidInsideSince > KID_INSIDE_MAX_MS) return end('abandoned', 'a kid stayed inside the site');
-				await sleep(2000);
-				continue;
-			}
-			kidInsideSince = null;
-			const p = o.body.pose();
-			const eye = { x: p.x, y: p.y + 1.6, z: p.z };
-			const moves = candidateMoves(plan, done, o.world, eye);
-			if (moves.length === 0) {
-				if (b.placed.length >= plan.length / 2) {
-					const top = Math.max(...plan.map((c) => c.cell.y)) + 2;
-					o.body.fx({ kind: 'firework', x: b.origin.x + b.w / 2, y: top, z: b.origin.z + b.d / 2 });
-					return end('done', 'finished');
-				}
-				return end('abandoned', 'nothing left to place');
-			}
-			let pick = heuristicPick(moves)!;
-			if (moves.length > 1) {
-				const options = Object.fromEntries(moves.map((m, i) => [`block-${i + 1}`, describeMove(m, eye)]));
-				const state = `I am building a ${tag} with ${b.placed.length} of ${plan.length} blocks placed. I build from the bottom up.`;
-				const a = await ask('move', state, 'Which block should the builder place next so the build grows neatly and looks good?', options);
-				const i = a ? Number(a.slice('block-'.length)) - 1 : -1;
-				if (moves[i]) pick = moves[i];
-			}
-			const k = cellKey(pick.cell);
-			const verdictNow = () => checkPlace(pick.cell, pick.block, {
-				world: o.world, own, kids: kidsNow(), stop, now: clock(), lastEditT, noEdits: o.noEdits, halted: trip.halted, self: o.body.pose(),
-			});
-			let v = verdictNow();
-			if (v.ok) {
-				const there = await reach(b, pick.cell);
-				if (stopped) return;
-				// Never place from afar: only after a successful approach, with the eye within PLACE_MAX.
-				if (!there || eyeDist(o.body.pose(), pick.cell) > PLACE_MAX) {
-					stats.failed++;
-					reachFails++;
-					o.log({ k: 'unreachable', t: clock(), cell: pick.cell, fails: reachFails, eyeDist: Math.round(eyeDist(o.body.pose(), pick.cell) * 10) / 10 });
-					if (reachFails >= MAX_REACH_FAILS) return end('abandoned', 'cannot reach the site');
-					await sleep(Math.max(pace, 1000));
-					continue;
-				}
-				reachFails = 0;
-				v = verdictNow();
-			}
-			if (!v.ok) {
-				stats.refused++;
-				if (v.reason !== lastRefusal) o.log({ k: 'refused', t: clock(), cell: pick.cell, reason: v.reason });
-				lastRefusal = v.reason;
-				if (v.reason === 'cell not air' || v.reason === 'kid cell buffer') {
-					done.add(k);
-					b.skipped.push(k);
-				} else if (v.reason === 'own body') {
-					await o.body.flyTo({ x: o.body.pose().x, y: o.body.pose().y + 3, z: o.body.pose().z }).catch(() => undefined);
-				} else {
-					await sleep(2000);
-				}
-				continue;
-			}
-			lastRefusal = '';
-			o.body.lookAt(pick.cell.x + 0.5, pick.cell.y + 0.5, pick.cell.z + 0.5);
-			let ok = false;
-			try {
-				ok = await o.body.place(pick.cell.x, pick.cell.y, pick.cell.z, pick.block);
-			} catch (err) {
-				o.log({ k: 'place-error', t: clock(), err: err instanceof Error ? err.message : String(err) });
-			}
-			lastEditT = clock();
-			trip.recordEdit(pick.cell, lastEditT);
-			done.add(k);
-			if (ok) {
-				b.placed.push(k);
-				const id = blockId(pick.block);
-				if (id !== null) {
-					file.owned[k] = id;
-					own.ownWrite(pick.cell.x, pick.cell.y, pick.cell.z, id);
-				}
-				stats.placed++;
-			} else {
-				b.skipped.push(k);
-				stats.failed++;
-			}
-			o.log({ k: 'place', t: lastEditT, id: b.id, cell: pick.cell, block: pick.block, ok });
-			save();
-			await sleep(pace);
-		}
-	}
+	const edits = { lastEditT: null as number | null, lastRefusal: '' };
+	const construct = (b: BuilderBuild) => constructBuild(b, {
+		body: o.body, world: o.world, own, stop, trip, kidsNow, ask, log: o.log, save, sleep, clock, pace, noEdits: o.noEdits,
+		stopped: () => stopped, stats, edits,
+		onPlaced: (cell, id) => {
+			file.owned[cellKey(cell)] = id;
+			own.ownWrite(cell.x, cell.y, cell.z, id);
+			o.shared?.append(cell, id);
+		},
+	});
 
 	/** Rests for `ms` while visibly alive: every few seconds a short hop beside the build or a look at it. */
 	async function restNear(b: BuilderBuild, ms: number): Promise<void> {
@@ -446,6 +308,8 @@ export function runBuilder(o: BuilderOpts): BuilderHandle {
 					continue;
 				}
 				await construct(b);
+				if (b.status === 'done') stats.buildsDone++;
+				else if (b.status === 'abandoned') stats.buildsAbandoned++;
 				if (b.status === 'done' && !stopped) {
 					stats.current = `resting after the ${b.variant} ${b.template}`;
 					await restNear(b, o.restMs ?? 30_000);
@@ -485,4 +349,174 @@ export function runBuilder(o: BuilderOpts): BuilderHandle {
 			o.log({ k: 'stop', t: clock(), stats });
 		},
 	};
+}
+
+type Ask = (what: string, state: string, instructions: string, options: Record<string, string>) => Promise<string | null>;
+
+/**
+ * The choice asker shared by the builder and the village bot: asks the primary (and, with --compare, the secondary in
+ * parallel), logs a `decision` line, returns the primary's choice or null (= fall back). A failing engine is skipped
+ * for 60 s after 3 failures in a row.
+ */
+export function makeAsk(o: {
+	primary: ChoiceEngine | null; secondary?: ChoiceEngine | null; clock: () => number; log: (e: Record<string, unknown>) => void;
+	stats: { asks: number; fallbacks: number };
+}): Ask {
+	const { clock, stats } = o;
+	const health = new Map<string, { fails: number; until: number }>();
+	const usable = (e: ChoiceEngine | null | undefined): e is ChoiceEngine => !!e && (health.get(e.name)?.until ?? 0) <= clock();
+	async function askOne(e: ChoiceEngine, state: string, instructions: string, options: Record<string, string>) {
+		const t0 = clock();
+		try {
+			const a = await e.choose(state, instructions, options);
+			health.set(e.name, { fails: 0, until: 0 });
+			return { engine: e.name, choice: a.choice, probs: a.probs, ms: clock() - t0 };
+		} catch (err) {
+			const h = health.get(e.name) ?? { fails: 0, until: 0 };
+			h.fails++;
+			if (h.fails >= 3) {
+				h.until = clock() + 60_000;
+				h.fails = 0;
+			}
+			health.set(e.name, h);
+			return { engine: e.name, error: err instanceof Error ? err.message : String(err), ms: clock() - t0 };
+		}
+	}
+	return async (what, state, instructions, options) => {
+		stats.asks++;
+		const p = usable(o.primary) ? askOne(o.primary, state, instructions, options) : null;
+		const s = usable(o.secondary) ? askOne(o.secondary, state, instructions, options) : null;
+		const [pa, sa] = await Promise.all([p, s]);
+		const choice = pa && 'choice' in pa ? pa.choice ?? null : null;
+		if (choice === null) stats.fallbacks++;
+		o.log({
+			k: 'decision', what, t: clock(), state, instructions, options, primary: pa ?? { engine: o.primary?.name ?? null, skipped: true },
+			...(o.secondary ? { secondary: sa ?? { engine: o.secondary.name, skipped: true }, agree: !!(pa && sa && 'choice' in pa && 'choice' in sa && pa.choice === sa.choice) } : {}),
+			fallback: choice === null,
+		});
+		return choice;
+	};
+}
+
+export interface ConstructCtx {
+	body: Body; world: WorldView; own: Ownership; stop: StopSignal; trip: Tripwire; kidsNow: () => KidPos[]; ask: Ask;
+	log: (e: Record<string, unknown>) => void; save: () => void; sleep: (ms: number) => Promise<void>; clock: () => number;
+	pace: number; noEdits: boolean; stopped: () => boolean;
+	stats: { placed: number; refused: number; failed: number; current: string };
+	/** Mutable across builds: the last edit time (for the safety verdict) and the last refusal logged. */
+	edits: { lastEditT: number | null; lastRefusal: string };
+	/** A cell was placed (ok): record ownership (and the shared registry). */
+	onPlaced: (cell: Vec3, id: number) => void;
+}
+
+/**
+ * The builder's move loop for one build: the model picks among ≤ 3 supported cells (else lowest-then-nearest), each
+ * placement judged by checkPlace, placed only after an approach within PLACE_MAX. Sets b.status to done/abandoned when
+ * it ends (a stop leaves it 'building' to resume).
+ */
+export async function constructBuild(b: BuilderBuild, c: ConstructCtx): Promise<void> {
+	const o = c;
+	const clock = c.clock;
+	const plan: PlanCell[] = b.cells;
+	const done = new Set<string>([...b.placed, ...b.skipped]);
+	c.trip.resetPlan(Math.max(1, plan.length - b.placed.length));
+	let kidInsideSince: number | null = null;
+	let reachFails = 0;
+	const tag = `${b.variant} ${b.template}`;
+	const end = (status: 'done' | 'abandoned', why: string) => {
+		b.status = status;
+		b.why = why;
+		c.save();
+		o.log({ k: 'build-end', t: clock(), id: b.id, status, why, placed: b.placed.length, cells: plan.length });
+	};
+	while (!c.stopped()) {
+		c.stats.current = `building ${tag} ${b.placed.length}/${plan.length} at ${b.origin.x},${b.origin.z}`;
+		if (c.trip.halted) return;
+		const kids = c.kidsNow();
+		if (c.own.kidCellWithin(b.origin.x + b.w / 2, b.origin.z + b.d / 2, Math.max(b.w, b.d) / 2 + 1)) return end('abandoned', 'kid cells at the site');
+		if (kids.some((k) => inFootprint(b, k, 1))) {
+			kidInsideSince ??= clock();
+			if (clock() - kidInsideSince > KID_INSIDE_MAX_MS) return end('abandoned', 'a kid stayed inside the site');
+			await c.sleep(2000);
+			continue;
+		}
+		kidInsideSince = null;
+		const p = o.body.pose();
+		const eye = { x: p.x, y: p.y + 1.6, z: p.z };
+		const moves = candidateMoves(plan, done, o.world, eye);
+		if (moves.length === 0) {
+			if (b.placed.length >= plan.length / 2) {
+				const top = Math.max(...plan.map((q) => q.cell.y)) + 2;
+				o.body.fx({ kind: 'firework', x: b.origin.x + b.w / 2, y: top, z: b.origin.z + b.d / 2 });
+				return end('done', 'finished');
+			}
+			return end('abandoned', 'nothing left to place');
+		}
+		let pick = heuristicPick(moves)!;
+		if (moves.length > 1) {
+			const options = Object.fromEntries(moves.map((m, i) => [`block-${i + 1}`, describeMove(m, eye)]));
+			const state = `I am building a ${tag} with ${b.placed.length} of ${plan.length} blocks placed. I build from the bottom up.`;
+			const a = await c.ask('move', state, 'Which block should the builder place next so the build grows neatly and looks good?', options);
+			const i = a ? Number(a.slice('block-'.length)) - 1 : -1;
+			if (moves[i]) pick = moves[i];
+		}
+		const k = cellKey(pick.cell);
+		const verdictNow = () => checkPlace(pick.cell, pick.block, {
+			world: o.world, own: c.own, kids: c.kidsNow(), stop: c.stop, now: clock(), lastEditT: c.edits.lastEditT, noEdits: c.noEdits, halted: c.trip.halted, self: o.body.pose(),
+		});
+		let v = verdictNow();
+		if (v.ok) {
+			const there = await approach(o.body, o.world, b, pick.cell, (e) => o.log({ ...e, t: clock() }));
+			if (c.stopped()) return;
+			// Never place from afar: only after a successful approach, with the eye within PLACE_MAX.
+			if (!there || eyeDist(o.body.pose(), pick.cell) > PLACE_MAX) {
+				c.stats.failed++;
+				reachFails++;
+				o.log({ k: 'unreachable', t: clock(), cell: pick.cell, fails: reachFails, eyeDist: Math.round(eyeDist(o.body.pose(), pick.cell) * 10) / 10 });
+				if (reachFails >= MAX_REACH_FAILS) return end('abandoned', 'cannot reach the site');
+				await c.sleep(Math.max(c.pace, 1000));
+				continue;
+			}
+			reachFails = 0;
+			v = verdictNow();
+		}
+		if (!v.ok) {
+			c.stats.refused++;
+			if (v.reason !== c.edits.lastRefusal) o.log({ k: 'refused', t: clock(), cell: pick.cell, reason: v.reason });
+			c.edits.lastRefusal = v.reason;
+			if (v.reason === 'cell not air' || v.reason === 'kid cell buffer') {
+				done.add(k);
+				b.skipped.push(k);
+			} else if (v.reason === 'own body') {
+				await o.body.flyTo({ x: o.body.pose().x, y: o.body.pose().y + 3, z: o.body.pose().z }).catch(() => undefined);
+			} else {
+				await c.sleep(2000);
+			}
+			continue;
+		}
+		c.edits.lastRefusal = '';
+		o.body.lookAt(pick.cell.x + 0.5, pick.cell.y + 0.5, pick.cell.z + 0.5);
+		let ok = false;
+		try {
+			ok = await o.body.place(pick.cell.x, pick.cell.y, pick.cell.z, pick.block);
+		} catch (err) {
+			o.log({ k: 'place-error', t: clock(), err: err instanceof Error ? err.message : String(err) });
+		}
+		const t = clock();
+		c.edits.lastEditT = t;
+		c.trip.recordEdit(pick.cell, t);
+		done.add(k);
+		if (ok) {
+			b.placed.push(k);
+			const id = blockId(pick.block);
+			if (id !== null) c.onPlaced(pick.cell, id);
+			c.stats.placed++;
+		} else {
+			b.skipped.push(k);
+			c.stats.failed++;
+		}
+		o.log({ k: 'place', t, id: b.id, cell: pick.cell, block: pick.block, ok });
+		c.save();
+		await c.sleep(c.pace);
+	}
 }

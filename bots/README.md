@@ -159,6 +159,29 @@ npm --prefix bots run bot -- decorator --target local|live --world <uuid|name> -
   cells, so the ground beside a build is not mistaken for a kid's.
 - **State:** `bots/.state/decorator/<target>/<world>/<name>.json`; log as the builder's. e2e leg: `decorator`.
 
+## The village bot
+
+A planner (`bots/src/village/`): it plans one village near the nearest kid (else spawn), then builds it. The model
+picks a theme (`THEMES` in `themes.data.ts`: cozy wood, stone fort, sandy desert, snowy) and a layout (row / circle /
+square around a plaza); the site search tries plaza centres by distance for 5, then 4, then 3 builds (a statue in the
+plaza, houses, one tower; lots 4–6 blocks apart), every lot passing brain2's site rules (spawn, leash, other builds,
+kid positions, flat and natural, headroom, ≥ 12 from kid cells). Then lot by lot with the builder's move loop: the
+statue, then each house/tower followed by a path from its door to the plaza (on top of the ground, only into air) and
+lamps on posts at both path ends. The plan persists in `bots/.state/village/<target>/<world>/<name>.json`, so a
+restart resumes it. Same flags, engines and safety as the builder; e2e leg: `village`.
+
+```bash
+npm --prefix bots run bot -- village --target local|live --world <uuid|name> --name <n> [--skin <s>] \
+	--brain laya|jev [--compare] [--rest-sec N] [--no-edits] [--i-deployed-the-server]
+```
+
+## Shared bot cells
+
+Builder, decorator and village append every cell they place to
+`bots/.state/shared/<target>/<world>/bot-cells.jsonl` (`{x,y,z,id,bot,t}`, append-only). A cell whose current block
+equals the latest entry's id counts as a bot cell (not a kid's), so one bot does not back off from another's blocks;
+a kid's later edit of the cell (a non-bot edit event) still makes it a kid cell.
+
 ## The live checklist
 
 Running against the kids' real world is the same command with `--target live`, plus:

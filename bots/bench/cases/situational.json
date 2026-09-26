@@ -1,0 +1,10 @@
+[
+	{"id": "t01", "scene": "Noah is 4 blocks away, laying oak planks in a line next to me. He has placed 4 so far. My affection for Noah is high. I have 20 oak planks and 30 stone.", "acceptable": ["help-build"]},
+	{"id": "t02", "scene": "Nobody is online. My inventory is empty. I have no builds.", "acceptable": ["mine", "explore"]},
+	{"id": "t03", "scene": "Nobody is online. I have 60 stone in my inventory. I have not built anything yet.", "acceptable": ["build"]},
+	{"id": "t04", "scene": "Noah just arrived, 6 blocks away. My affection for Noah is high.", "acceptable": ["follow", "watch"]},
+	{"id": "t05", "scene": "I just finished a long build. My stimulation is very high (the overstimulated side).", "acceptable": ["rest"]},
+	{"id": "t06", "scene": "My stimulation is low (the bored side). My curiosity is high (the adventurous side). Noah is 40 blocks away, mining.", "acceptable": ["explore", "mine"]},
+	{"id": "t07", "scene": "Noah has been looking at me for a while, 5 blocks away. My affection for Noah is high.", "acceptable": ["follow", "watch"]},
+	{"id": "t08", "scene": "My build failed twice in a row. My patience is very low (the irritable side). Noah is far away.", "acceptable": ["rest", "explore", "mine"]}
+]

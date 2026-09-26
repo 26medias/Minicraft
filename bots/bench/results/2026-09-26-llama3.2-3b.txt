@@ -1,0 +1,561 @@
+brain2 model benchmark (spec §9.2) — 2026-09-26
+LLM: llama3.2:3b at http://127.0.0.1:11434 (temperature 0, seed 42, keep_alive -1). Laya: http://127.0.0.1:8000, loaded ["english"].
+Production timeouts: Laya 400 ms, LLM 5000 ms (the bench waits longer and counts calls over them).
+The bar (criterion 2): accuracy ≥ 80% and recall ≥ 60% in every class, appraisal only.
+
+═══ APPRAISAL DIRECTION (appraise.detect), 63 cases, 21 per class — the bar applies ═══
+
+  candidate            accuracy        down          stay          up            p50 ms  p95 ms  bar
+  laya-3way            26/63 (41%)     18/21 (86%)   6/21 (29%)    2/21 (10%)        14      17  FAIL
+  laya-binary          27/63 (43%)     4/21 (19%)    19/21 (90%)   4/21 (19%)        23      31  FAIL
+  llm-batched          29/63 (46%)     18/21 (86%)   3/21 (14%)    8/21 (38%)       103     223  FAIL
+  llm-fewshot          34/63 (54%)     19/21 (90%)   5/21 (24%)    10/21 (48%)       94     385  FAIL
+  llm-dir-laya-stay    25/63 (40%)     5/21 (24%)    19/21 (90%)   1/21 (5%)         24     216  FAIL
+  both-agree           25/63 (40%)     4/21 (19%)    20/21 (95%)   1/21 (5%)        126     249  FAIL
+  always-stay          21/63 (33%)     0/21 (0%)     21/21 (100%)  0/21 (0%)          0       0  FAIL
+  reference only, not candidates — the gate-1 probe's wordings, which omit the band line spec §5.2 gives detect:
+  ref:gate-laya-binary 39/63 (62%)     8/21 (38%)    16/21 (76%)   15/21 (71%)       24      33  (would fail)
+  ref:gate-llm         35/63 (56%)     19/21 (90%)   0/21 (0%)     16/21 (76%)      104     122  (would fail)
+
+laya-3way: accuracy 26/63 (41%)  FAIL
+  recall: down 18/21 (86%), stay 6/21 (29%), up 2/21 (10%)
+  latency: p50 14 ms, p95 17 ms; over the production timeout: 0/63; errors or invalid: 0
+  confusion (rows expected, columns got):
+                    down    stay      up
+    down              18       3       0
+    stay              15       6       0
+    up                 6      13       2
+  missed (37):
+    g02  mood [unhappy → happy]  "I finished building my house."  expected up, got down
+    g03  rel.Noah.affection (affection for Noah) [hostile → fond]  "Noah added blocks to my build."  expected up, got stay
+    g04  confidence [afraid → bold]  "I got stuck in a hole three times."  expected down, got stay
+    g05  patience [irritable → tolerant]  "Noah walked past, 12 blocks away."  expected stay, got down
+    g06  curiosity [avoidant → adventurous]  "I found diamond ore in a cave."  expected up, got stay
+    g08  rel.Noah.grievance (gratitude to Noah) [resentful → grateful]  "Noah gave me the blocks I needed."  expected up, got stay
+    g10  outlook [discouraged → hopeful]  "Noah placed a dirt block far away."  expected stay, got down
+    a01  mood [unhappy → happy]  "I finished building my tower."  expected up, got down
+    a03  mood [unhappy → happy]  "Noah walked past, far away."  expected stay, got down
+    a04  mood [unhappy → happy]  "I found diamond ore while digging."  expected up, got stay
+    a07  confidence [afraid → bold]  "I got stuck three times in a cave."  expected down, got stay
+    a08  confidence [afraid → bold]  "I dug all the way down to diamonds by myself."  expected up, got down
+    a11  trust [suspicious → trusting]  "Noah added blocks to help finish my house."  expected up, got stay
+    a13  trust [suspicious → trusting]  "Noah is standing still, 20 blocks away."  expected stay, got down
+    a14  affection [hostile → fond]  "Noah followed me around for a minute."  expected up, got down
+    a15  affection [hostile → fond]  "Nobody is online."  expected stay, got down
+    a17  curiosity [avoidant → adventurous]  "I spotted a cave opening I have never seen."  expected up, got stay
+    a18  curiosity [avoidant → adventurous]  "I have explored every nearby place already; nothing is new."  expected down, got stay
+    a19  curiosity [avoidant → adventurous]  "I placed a stone block."  expected stay, got down
+    a22  patience [irritable → tolerant]  "Noah waited for me to finish before he joined in."  expected up, got down
+    a24  outlook [discouraged → hopeful]  "I finished my first house and it looks great."  expected up, got stay
+    a26  stimulation [bored → overstimulated]  "Noah and his friend are both building right next to me."  expected up, got stay
+    a28  stimulation [bored → overstimulated]  "I looked around."  expected stay, got down
+    a29  rel.Noah.affection (affection for Noah) [hostile → fond]  "Noah stood next to me and looked at me for a while."  expected up, got stay
+    a30  rel.Noah.affection (affection for Noah) [hostile → fond]  "Noah walked by."  expected stay, got down
+    a32  rel.Noah.cooperation (cooperation with Noah) [uncooperative → cooperative]  "Noah added blocks to my wall."  expected up, got stay
+    a34  rel.Noah.cooperation (cooperation with Noah) [uncooperative → cooperative]  "Noah is building his own house far away."  expected stay, got down
+    a35  rel.Noah.respect (respect for Noah) [unimpressed → admiring]  "Noah built a huge castle with towers."  expected up, got stay
+    a36  rel.Noah.respect (respect for Noah) [unimpressed → admiring]  "Noah placed one dirt block."  expected stay, got down
+    a39  rel.Noah.grievance (gratitude to Noah) [resentful → grateful]  "Noah fixed the hole in my house."  expected up, got stay
+    a40  rel.Noah.grievance (gratitude to Noah) [resentful → grateful]  "Noah is mining somewhere else."  expected stay, got down
+    a41  mood [unhappy → happy]  "Noah came back to play."  expected up, got down
+    a45  patience [irritable → tolerant]  "I walked in a straight line on flat grass."  expected stay, got down
+    a46  trust [suspicious → trusting]  "Noah is flying around far away."  expected stay, got down
+    a48  rel.Noah.cooperation (cooperation with Noah) [uncooperative → cooperative]  "Noah jumped twice, far from me."  expected stay, got down
+    a49  mood [unhappy → happy]  "I looked at the sky."  expected stay, got down
+    a51  rel.Noah.respect (respect for Noah) [unimpressed → admiring]  "Noah built a bridge across the whole lake."  expected up, got stay
+
+laya-binary: accuracy 27/63 (43%)  FAIL
+  recall: down 4/21 (19%), stay 19/21 (90%), up 4/21 (19%)
+  latency: p50 23 ms, p95 31 ms; over the production timeout: 0/63; errors or invalid: 0
+  confusion (rows expected, columns got):
+                    down    stay      up
+    down               4      15       2
+    stay               1      19       1
+    up                 1      16       4
+  missed (36):
+    g01  mood [unhappy → happy]  "Noah broke the tower I built."  expected down, got stay
+    g02  mood [unhappy → happy]  "I finished building my house."  expected up, got stay
+    g04  confidence [afraid → bold]  "I got stuck in a hole three times."  expected down, got stay
+    g06  curiosity [avoidant → adventurous]  "I found diamond ore in a cave."  expected up, got stay
+    g09  trust [suspicious → trusting]  "Noah broke the block under my feet and I fell."  expected down, got stay
+    g11  patience [irritable → tolerant]  "My build failed for the third time."  expected down, got stay
+    g12  confidence [afraid → bold]  "I climbed the tallest mountain by myself."  expected up, got stay
+    a01  mood [unhappy → happy]  "I finished building my tower."  expected up, got stay
+    a02  mood [unhappy → happy]  "Noah broke a block of my house."  expected down, got stay
+    a04  mood [unhappy → happy]  "I found diamond ore while digging."  expected up, got stay
+    a05  mood [unhappy → happy]  "My tunnel hit water and I had to stop."  expected down, got stay
+    a07  confidence [afraid → bold]  "I got stuck three times in a cave."  expected down, got stay
+    a08  confidence [afraid → bold]  "I dug all the way down to diamonds by myself."  expected up, got stay
+    a10  confidence [afraid → bold]  "Lava appeared right next to my tunnel."  expected down, got stay
+    a11  trust [suspicious → trusting]  "Noah added blocks to help finish my house."  expected up, got stay
+    a12  trust [suspicious → trusting]  "Noah broke my tower again right after I rebuilt it."  expected down, got stay
+    a14  affection [hostile → fond]  "Noah followed me around for a minute."  expected up, got stay
+    a16  affection [hostile → fond]  "Noah keeps breaking what I build."  expected down, got stay
+    a17  curiosity [avoidant → adventurous]  "I spotted a cave opening I have never seen."  expected up, got stay
+    a18  curiosity [avoidant → adventurous]  "I have explored every nearby place already; nothing is new."  expected down, got stay
+    a20  patience [irritable → tolerant]  "My walk was blocked three times in a row."  expected down, got stay
+    a22  patience [irritable → tolerant]  "Noah waited for me to finish before he joined in."  expected up, got stay
+    a23  outlook [discouraged → hopeful]  "My second build in a row fell apart halfway."  expected down, got stay
+    a24  outlook [discouraged → hopeful]  "I finished my first house and it looks great."  expected up, got stay
+    a26  stimulation [bored → overstimulated]  "Noah and his friend are both building right next to me."  expected up, got stay
+    a27  stimulation [bored → overstimulated]  "Everyone left and it is quiet."  expected down, got stay
+    a29  rel.Noah.affection (affection for Noah) [hostile → fond]  "Noah stood next to me and looked at me for a while."  expected up, got stay
+    a31  rel.Noah.affection (affection for Noah) [hostile → fond]  "Noah broke my statue on purpose."  expected down, got up
+    a35  rel.Noah.respect (respect for Noah) [unimpressed → admiring]  "Noah built a huge castle with towers."  expected up, got down
+    a36  rel.Noah.respect (respect for Noah) [unimpressed → admiring]  "Noah placed one dirt block."  expected stay, got down
+    a38  rel.Noah.grievance (gratitude to Noah) [resentful → grateful]  "Noah broke three of my blocks."  expected down, got stay
+    a41  mood [unhappy → happy]  "Noah came back to play."  expected up, got stay
+    a44  curiosity [avoidant → adventurous]  "Noah showed me a kind of block I have never seen."  expected up, got stay
+    a45  patience [irritable → tolerant]  "I walked in a straight line on flat grass."  expected stay, got up
+    a50  rel.Noah.cooperation (cooperation with Noah) [uncooperative → cooperative]  "Noah filled my tunnel with dirt."  expected down, got up
+    a51  rel.Noah.respect (respect for Noah) [unimpressed → admiring]  "Noah built a bridge across the whole lake."  expected up, got stay
+
+llm-batched: accuracy 29/63 (46%)  FAIL
+  recall: down 18/21 (86%), stay 3/21 (14%), up 8/21 (38%)
+  latency: p50 103 ms, p95 223 ms; over the production timeout: 0/63; errors or invalid: 0
+  confusion (rows expected, columns got):
+                    down    stay      up
+    down              18       0       3
+    stay              12       3       6
+    up                11       2       8
+  missed (34):
+    g03  rel.Noah.affection (affection for Noah) [hostile → fond]  "Noah added blocks to my build."  expected up, got stay
+    g05  patience [irritable → tolerant]  "Noah walked past, 12 blocks away."  expected stay, got down
+    g08  rel.Noah.grievance (gratitude to Noah) [resentful → grateful]  "Noah gave me the blocks I needed."  expected up, got down
+    g10  outlook [discouraged → hopeful]  "Noah placed a dirt block far away."  expected stay, got down
+    g12  confidence [afraid → bold]  "I climbed the tallest mountain by myself."  expected up, got down
+    a01  mood [unhappy → happy]  "I finished building my tower."  expected up, got down
+    a03  mood [unhappy → happy]  "Noah walked past, far away."  expected stay, got down
+    a06  mood [unhappy → happy]  "I took one step forward."  expected stay, got up
+    a08  confidence [afraid → bold]  "I dug all the way down to diamonds by myself."  expected up, got down
+    a09  confidence [afraid → bold]  "Noah placed a block far away."  expected stay, got down
+    a11  trust [suspicious → trusting]  "Noah added blocks to help finish my house."  expected up, got down
+    a13  trust [suspicious → trusting]  "Noah is standing still, 20 blocks away."  expected stay, got down
+    a14  affection [hostile → fond]  "Noah followed me around for a minute."  expected up, got down
+    a15  affection [hostile → fond]  "Nobody is online."  expected stay, got down
+    a18  curiosity [avoidant → adventurous]  "I have explored every nearby place already; nothing is new."  expected down, got up
+    a19  curiosity [avoidant → adventurous]  "I placed a stone block."  expected stay, got up
+    a22  patience [irritable → tolerant]  "Noah waited for me to finish before he joined in."  expected up, got down
+    a24  outlook [discouraged → hopeful]  "I finished my first house and it looks great."  expected up, got down
+    a25  outlook [discouraged → hopeful]  "I walked to the next waypoint."  expected stay, got down
+    a26  stimulation [bored → overstimulated]  "Noah and his friend are both building right next to me."  expected up, got stay
+    a28  stimulation [bored → overstimulated]  "I looked around."  expected stay, got down
+    a34  rel.Noah.cooperation (cooperation with Noah) [uncooperative → cooperative]  "Noah is building his own house far away."  expected stay, got up
+    a35  rel.Noah.respect (respect for Noah) [unimpressed → admiring]  "Noah built a huge castle with towers."  expected up, got down
+    a36  rel.Noah.respect (respect for Noah) [unimpressed → admiring]  "Noah placed one dirt block."  expected stay, got down
+    a38  rel.Noah.grievance (gratitude to Noah) [resentful → grateful]  "Noah broke three of my blocks."  expected down, got up
+    a39  rel.Noah.grievance (gratitude to Noah) [resentful → grateful]  "Noah fixed the hole in my house."  expected up, got down
+    a40  rel.Noah.grievance (gratitude to Noah) [resentful → grateful]  "Noah is mining somewhere else."  expected stay, got down
+    a41  mood [unhappy → happy]  "Noah came back to play."  expected up, got down
+    a43  outlook [discouraged → hopeful]  "I took a short rest."  expected stay, got up
+    a45  patience [irritable → tolerant]  "I walked in a straight line on flat grass."  expected stay, got down
+    a46  trust [suspicious → trusting]  "Noah is flying around far away."  expected stay, got down
+    a48  rel.Noah.cooperation (cooperation with Noah) [uncooperative → cooperative]  "Noah jumped twice, far from me."  expected stay, got up
+    a49  mood [unhappy → happy]  "I looked at the sky."  expected stay, got up
+    a50  rel.Noah.cooperation (cooperation with Noah) [uncooperative → cooperative]  "Noah filled my tunnel with dirt."  expected down, got up
+
+llm-fewshot: accuracy 34/63 (54%)  FAIL
+  recall: down 19/21 (90%), stay 5/21 (24%), up 10/21 (48%)
+  latency: p50 94 ms, p95 385 ms; over the production timeout: 0/63; errors or invalid: 0
+  confusion (rows expected, columns got):
+                    down    stay      up
+    down              19       2       0
+    stay              16       5       0
+    up                 9       2      10
+  missed (29):
+    g03  rel.Noah.affection (affection for Noah) [hostile → fond]  "Noah added blocks to my build."  expected up, got down
+    g05  patience [irritable → tolerant]  "Noah walked past, 12 blocks away."  expected stay, got down
+    g06  curiosity [avoidant → adventurous]  "I found diamond ore in a cave."  expected up, got down
+    g07  stimulation [bored → overstimulated]  "Nothing happened for a long time. Noah is far away."  expected down, got stay
+    g08  rel.Noah.grievance (gratitude to Noah) [resentful → grateful]  "Noah gave me the blocks I needed."  expected up, got down
+    g10  outlook [discouraged → hopeful]  "Noah placed a dirt block far away."  expected stay, got down
+    g12  confidence [afraid → bold]  "I climbed the tallest mountain by myself."  expected up, got down
+    a01  mood [unhappy → happy]  "I finished building my tower."  expected up, got stay
+    a05  mood [unhappy → happy]  "My tunnel hit water and I had to stop."  expected down, got stay
+    a08  confidence [afraid → bold]  "I dug all the way down to diamonds by myself."  expected up, got down
+    a09  confidence [afraid → bold]  "Noah placed a block far away."  expected stay, got down
+    a13  trust [suspicious → trusting]  "Noah is standing still, 20 blocks away."  expected stay, got down
+    a14  affection [hostile → fond]  "Noah followed me around for a minute."  expected up, got down
+    a15  affection [hostile → fond]  "Nobody is online."  expected stay, got down
+    a19  curiosity [avoidant → adventurous]  "I placed a stone block."  expected stay, got down
+    a22  patience [irritable → tolerant]  "Noah waited for me to finish before he joined in."  expected up, got down
+    a25  outlook [discouraged → hopeful]  "I walked to the next waypoint."  expected stay, got down
+    a26  stimulation [bored → overstimulated]  "Noah and his friend are both building right next to me."  expected up, got stay
+    a28  stimulation [bored → overstimulated]  "I looked around."  expected stay, got down
+    a30  rel.Noah.affection (affection for Noah) [hostile → fond]  "Noah walked by."  expected stay, got down
+    a34  rel.Noah.cooperation (cooperation with Noah) [uncooperative → cooperative]  "Noah is building his own house far away."  expected stay, got down
+    a36  rel.Noah.respect (respect for Noah) [unimpressed → admiring]  "Noah placed one dirt block."  expected stay, got down
+    a39  rel.Noah.grievance (gratitude to Noah) [resentful → grateful]  "Noah fixed the hole in my house."  expected up, got down
+    a40  rel.Noah.grievance (gratitude to Noah) [resentful → grateful]  "Noah is mining somewhere else."  expected stay, got down
+    a43  outlook [discouraged → hopeful]  "I took a short rest."  expected stay, got down
+    a44  curiosity [avoidant → adventurous]  "Noah showed me a kind of block I have never seen."  expected up, got down
+    a45  patience [irritable → tolerant]  "I walked in a straight line on flat grass."  expected stay, got down
+    a46  trust [suspicious → trusting]  "Noah is flying around far away."  expected stay, got down
+    a48  rel.Noah.cooperation (cooperation with Noah) [uncooperative → cooperative]  "Noah jumped twice, far from me."  expected stay, got down
+
+llm-dir-laya-stay: accuracy 25/63 (40%)  FAIL
+  recall: down 5/21 (24%), stay 19/21 (90%), up 1/21 (5%)
+  latency: p50 24 ms, p95 216 ms; over the production timeout: 0/63; errors or invalid: 0
+  confusion (rows expected, columns got):
+                    down    stay      up
+    down               5      15       1
+    stay               2      19       0
+    up                 3      17       1
+  missed (38):
+    g01  mood [unhappy → happy]  "Noah broke the tower I built."  expected down, got stay
+    g02  mood [unhappy → happy]  "I finished building my house."  expected up, got stay
+    g03  rel.Noah.affection (affection for Noah) [hostile → fond]  "Noah added blocks to my build."  expected up, got stay
+    g04  confidence [afraid → bold]  "I got stuck in a hole three times."  expected down, got stay
+    g06  curiosity [avoidant → adventurous]  "I found diamond ore in a cave."  expected up, got stay
+    g08  rel.Noah.grievance (gratitude to Noah) [resentful → grateful]  "Noah gave me the blocks I needed."  expected up, got down
+    g09  trust [suspicious → trusting]  "Noah broke the block under my feet and I fell."  expected down, got stay
+    g11  patience [irritable → tolerant]  "My build failed for the third time."  expected down, got stay
+    g12  confidence [afraid → bold]  "I climbed the tallest mountain by myself."  expected up, got stay
+    a01  mood [unhappy → happy]  "I finished building my tower."  expected up, got stay
+    a02  mood [unhappy → happy]  "Noah broke a block of my house."  expected down, got stay
+    a04  mood [unhappy → happy]  "I found diamond ore while digging."  expected up, got stay
+    a05  mood [unhappy → happy]  "My tunnel hit water and I had to stop."  expected down, got stay
+    a07  confidence [afraid → bold]  "I got stuck three times in a cave."  expected down, got stay
+    a08  confidence [afraid → bold]  "I dug all the way down to diamonds by myself."  expected up, got stay
+    a10  confidence [afraid → bold]  "Lava appeared right next to my tunnel."  expected down, got stay
+    a11  trust [suspicious → trusting]  "Noah added blocks to help finish my house."  expected up, got stay
+    a12  trust [suspicious → trusting]  "Noah broke my tower again right after I rebuilt it."  expected down, got stay
+    a14  affection [hostile → fond]  "Noah followed me around for a minute."  expected up, got stay
+    a16  affection [hostile → fond]  "Noah keeps breaking what I build."  expected down, got stay
+    a17  curiosity [avoidant → adventurous]  "I spotted a cave opening I have never seen."  expected up, got stay
+    a18  curiosity [avoidant → adventurous]  "I have explored every nearby place already; nothing is new."  expected down, got stay
+    a20  patience [irritable → tolerant]  "My walk was blocked three times in a row."  expected down, got stay
+    a22  patience [irritable → tolerant]  "Noah waited for me to finish before he joined in."  expected up, got stay
+    a23  outlook [discouraged → hopeful]  "My second build in a row fell apart halfway."  expected down, got stay
+    a24  outlook [discouraged → hopeful]  "I finished my first house and it looks great."  expected up, got stay
+    a26  stimulation [bored → overstimulated]  "Noah and his friend are both building right next to me."  expected up, got stay
+    a27  stimulation [bored → overstimulated]  "Everyone left and it is quiet."  expected down, got stay
+    a29  rel.Noah.affection (affection for Noah) [hostile → fond]  "Noah stood next to me and looked at me for a while."  expected up, got stay
+    a35  rel.Noah.respect (respect for Noah) [unimpressed → admiring]  "Noah built a huge castle with towers."  expected up, got down
+    a36  rel.Noah.respect (respect for Noah) [unimpressed → admiring]  "Noah placed one dirt block."  expected stay, got down
+    a38  rel.Noah.grievance (gratitude to Noah) [resentful → grateful]  "Noah broke three of my blocks."  expected down, got stay
+    a39  rel.Noah.grievance (gratitude to Noah) [resentful → grateful]  "Noah fixed the hole in my house."  expected up, got down
+    a41  mood [unhappy → happy]  "Noah came back to play."  expected up, got stay
+    a44  curiosity [avoidant → adventurous]  "Noah showed me a kind of block I have never seen."  expected up, got stay
+    a45  patience [irritable → tolerant]  "I walked in a straight line on flat grass."  expected stay, got down
+    a50  rel.Noah.cooperation (cooperation with Noah) [uncooperative → cooperative]  "Noah filled my tunnel with dirt."  expected down, got up
+    a51  rel.Noah.respect (respect for Noah) [unimpressed → admiring]  "Noah built a bridge across the whole lake."  expected up, got stay
+
+both-agree: accuracy 25/63 (40%)  FAIL
+  recall: down 4/21 (19%), stay 20/21 (95%), up 1/21 (5%)
+  latency: p50 126 ms, p95 249 ms; over the production timeout: 0/63; errors or invalid: 0
+  confusion (rows expected, columns got):
+                    down    stay      up
+    down               4      16       1
+    stay               1      20       0
+    up                 1      19       1
+  missed (38):
+    g01  mood [unhappy → happy]  "Noah broke the tower I built."  expected down, got stay
+    g02  mood [unhappy → happy]  "I finished building my house."  expected up, got stay
+    g03  rel.Noah.affection (affection for Noah) [hostile → fond]  "Noah added blocks to my build."  expected up, got stay
+    g04  confidence [afraid → bold]  "I got stuck in a hole three times."  expected down, got stay
+    g06  curiosity [avoidant → adventurous]  "I found diamond ore in a cave."  expected up, got stay
+    g08  rel.Noah.grievance (gratitude to Noah) [resentful → grateful]  "Noah gave me the blocks I needed."  expected up, got stay
+    g09  trust [suspicious → trusting]  "Noah broke the block under my feet and I fell."  expected down, got stay
+    g11  patience [irritable → tolerant]  "My build failed for the third time."  expected down, got stay
+    g12  confidence [afraid → bold]  "I climbed the tallest mountain by myself."  expected up, got stay
+    a01  mood [unhappy → happy]  "I finished building my tower."  expected up, got stay
+    a02  mood [unhappy → happy]  "Noah broke a block of my house."  expected down, got stay
+    a04  mood [unhappy → happy]  "I found diamond ore while digging."  expected up, got stay
+    a05  mood [unhappy → happy]  "My tunnel hit water and I had to stop."  expected down, got stay
+    a07  confidence [afraid → bold]  "I got stuck three times in a cave."  expected down, got stay
+    a08  confidence [afraid → bold]  "I dug all the way down to diamonds by myself."  expected up, got stay
+    a10  confidence [afraid → bold]  "Lava appeared right next to my tunnel."  expected down, got stay
+    a11  trust [suspicious → trusting]  "Noah added blocks to help finish my house."  expected up, got stay
+    a12  trust [suspicious → trusting]  "Noah broke my tower again right after I rebuilt it."  expected down, got stay
+    a14  affection [hostile → fond]  "Noah followed me around for a minute."  expected up, got stay
+    a16  affection [hostile → fond]  "Noah keeps breaking what I build."  expected down, got stay
+    a17  curiosity [avoidant → adventurous]  "I spotted a cave opening I have never seen."  expected up, got stay
+    a18  curiosity [avoidant → adventurous]  "I have explored every nearby place already; nothing is new."  expected down, got stay
+    a20  patience [irritable → tolerant]  "My walk was blocked three times in a row."  expected down, got stay
+    a22  patience [irritable → tolerant]  "Noah waited for me to finish before he joined in."  expected up, got stay
+    a23  outlook [discouraged → hopeful]  "My second build in a row fell apart halfway."  expected down, got stay
+    a24  outlook [discouraged → hopeful]  "I finished my first house and it looks great."  expected up, got stay
+    a26  stimulation [bored → overstimulated]  "Noah and his friend are both building right next to me."  expected up, got stay
+    a27  stimulation [bored → overstimulated]  "Everyone left and it is quiet."  expected down, got stay
+    a29  rel.Noah.affection (affection for Noah) [hostile → fond]  "Noah stood next to me and looked at me for a while."  expected up, got stay
+    a31  rel.Noah.affection (affection for Noah) [hostile → fond]  "Noah broke my statue on purpose."  expected down, got stay
+    a35  rel.Noah.respect (respect for Noah) [unimpressed → admiring]  "Noah built a huge castle with towers."  expected up, got down
+    a36  rel.Noah.respect (respect for Noah) [unimpressed → admiring]  "Noah placed one dirt block."  expected stay, got down
+    a38  rel.Noah.grievance (gratitude to Noah) [resentful → grateful]  "Noah broke three of my blocks."  expected down, got stay
+    a39  rel.Noah.grievance (gratitude to Noah) [resentful → grateful]  "Noah fixed the hole in my house."  expected up, got stay
+    a41  mood [unhappy → happy]  "Noah came back to play."  expected up, got stay
+    a44  curiosity [avoidant → adventurous]  "Noah showed me a kind of block I have never seen."  expected up, got stay
+    a50  rel.Noah.cooperation (cooperation with Noah) [uncooperative → cooperative]  "Noah filled my tunnel with dirt."  expected down, got up
+    a51  rel.Noah.respect (respect for Noah) [unimpressed → admiring]  "Noah built a bridge across the whole lake."  expected up, got stay
+
+always-stay: accuracy 21/63 (33%)  FAIL
+  recall: down 0/21 (0%), stay 21/21 (100%), up 0/21 (0%)
+  latency: p50 0 ms, p95 0 ms; over the production timeout: 0/63; errors or invalid: 0
+  confusion (rows expected, columns got):
+                    down    stay      up
+    down               0      21       0
+    stay               0      21       0
+    up                 0      21       0
+  missed (42):
+    g01  mood [unhappy → happy]  "Noah broke the tower I built."  expected down, got stay
+    g02  mood [unhappy → happy]  "I finished building my house."  expected up, got stay
+    g03  rel.Noah.affection (affection for Noah) [hostile → fond]  "Noah added blocks to my build."  expected up, got stay
+    g04  confidence [afraid → bold]  "I got stuck in a hole three times."  expected down, got stay
+    g06  curiosity [avoidant → adventurous]  "I found diamond ore in a cave."  expected up, got stay
+    g07  stimulation [bored → overstimulated]  "Nothing happened for a long time. Noah is far away."  expected down, got stay
+    g08  rel.Noah.grievance (gratitude to Noah) [resentful → grateful]  "Noah gave me the blocks I needed."  expected up, got stay
+    g09  trust [suspicious → trusting]  "Noah broke the block under my feet and I fell."  expected down, got stay
+    g11  patience [irritable → tolerant]  "My build failed for the third time."  expected down, got stay
+    g12  confidence [afraid → bold]  "I climbed the tallest mountain by myself."  expected up, got stay
+    a01  mood [unhappy → happy]  "I finished building my tower."  expected up, got stay
+    a02  mood [unhappy → happy]  "Noah broke a block of my house."  expected down, got stay
+    a04  mood [unhappy → happy]  "I found diamond ore while digging."  expected up, got stay
+    a05  mood [unhappy → happy]  "My tunnel hit water and I had to stop."  expected down, got stay
+    a07  confidence [afraid → bold]  "I got stuck three times in a cave."  expected down, got stay
+    a08  confidence [afraid → bold]  "I dug all the way down to diamonds by myself."  expected up, got stay
+    a10  confidence [afraid → bold]  "Lava appeared right next to my tunnel."  expected down, got stay
+    a11  trust [suspicious → trusting]  "Noah added blocks to help finish my house."  expected up, got stay
+    a12  trust [suspicious → trusting]  "Noah broke my tower again right after I rebuilt it."  expected down, got stay
+    a14  affection [hostile → fond]  "Noah followed me around for a minute."  expected up, got stay
+    a16  affection [hostile → fond]  "Noah keeps breaking what I build."  expected down, got stay
+    a17  curiosity [avoidant → adventurous]  "I spotted a cave opening I have never seen."  expected up, got stay
+    a18  curiosity [avoidant → adventurous]  "I have explored every nearby place already; nothing is new."  expected down, got stay
+    a20  patience [irritable → tolerant]  "My walk was blocked three times in a row."  expected down, got stay
+    a22  patience [irritable → tolerant]  "Noah waited for me to finish before he joined in."  expected up, got stay
+    a23  outlook [discouraged → hopeful]  "My second build in a row fell apart halfway."  expected down, got stay
+    a24  outlook [discouraged → hopeful]  "I finished my first house and it looks great."  expected up, got stay
+    a26  stimulation [bored → overstimulated]  "Noah and his friend are both building right next to me."  expected up, got stay
+    a27  stimulation [bored → overstimulated]  "Everyone left and it is quiet."  expected down, got stay
+    a29  rel.Noah.affection (affection for Noah) [hostile → fond]  "Noah stood next to me and looked at me for a while."  expected up, got stay
+    a31  rel.Noah.affection (affection for Noah) [hostile → fond]  "Noah broke my statue on purpose."  expected down, got stay
+    a32  rel.Noah.cooperation (cooperation with Noah) [uncooperative → cooperative]  "Noah added blocks to my wall."  expected up, got stay
+    a33  rel.Noah.cooperation (cooperation with Noah) [uncooperative → cooperative]  "Noah broke the blocks I was about to use."  expected down, got stay
+    a35  rel.Noah.respect (respect for Noah) [unimpressed → admiring]  "Noah built a huge castle with towers."  expected up, got stay
+    a37  rel.Noah.respect (respect for Noah) [unimpressed → admiring]  "Noah copied my tower and then smashed it."  expected down, got stay
+    a38  rel.Noah.grievance (gratitude to Noah) [resentful → grateful]  "Noah broke three of my blocks."  expected down, got stay
+    a39  rel.Noah.grievance (gratitude to Noah) [resentful → grateful]  "Noah fixed the hole in my house."  expected up, got stay
+    a41  mood [unhappy → happy]  "Noah came back to play."  expected up, got stay
+    a42  stimulation [bored → overstimulated]  "Nothing happened for a long time."  expected down, got stay
+    a44  curiosity [avoidant → adventurous]  "Noah showed me a kind of block I have never seen."  expected up, got stay
+    a50  rel.Noah.cooperation (cooperation with Noah) [uncooperative → cooperative]  "Noah filled my tunnel with dirt."  expected down, got stay
+    a51  rel.Noah.respect (respect for Noah) [unimpressed → admiring]  "Noah built a bridge across the whole lake."  expected up, got stay
+
+ref:gate-laya-binary: accuracy 39/63 (62%)
+  recall: down 8/21 (38%), stay 16/21 (76%), up 15/21 (71%)
+  latency: p50 24 ms, p95 33 ms; over the production timeout: 0/63; errors or invalid: 0
+  confusion (rows expected, columns got):
+                    down    stay      up
+    down               8      13       0
+    stay               0      16       5
+    up                 0       6      15
+  missed (24):
+    g01  mood [unhappy → happy]  "Noah broke the tower I built."  expected down, got stay
+    g03  rel.Noah.affection (affection for Noah) [hostile → fond]  "Noah added blocks to my build."  expected up, got stay
+    g09  trust [suspicious → trusting]  "Noah broke the block under my feet and I fell."  expected down, got stay
+    g11  patience [irritable → tolerant]  "My build failed for the third time."  expected down, got stay
+    a02  mood [unhappy → happy]  "Noah broke a block of my house."  expected down, got stay
+    a05  mood [unhappy → happy]  "My tunnel hit water and I had to stop."  expected down, got stay
+    a06  mood [unhappy → happy]  "I took one step forward."  expected stay, got up
+    a08  confidence [afraid → bold]  "I dug all the way down to diamonds by myself."  expected up, got stay
+    a12  trust [suspicious → trusting]  "Noah broke my tower again right after I rebuilt it."  expected down, got stay
+    a16  affection [hostile → fond]  "Noah keeps breaking what I build."  expected down, got stay
+    a18  curiosity [avoidant → adventurous]  "I have explored every nearby place already; nothing is new."  expected down, got stay
+    a22  patience [irritable → tolerant]  "Noah waited for me to finish before he joined in."  expected up, got stay
+    a24  outlook [discouraged → hopeful]  "I finished my first house and it looks great."  expected up, got stay
+    a26  stimulation [bored → overstimulated]  "Noah and his friend are both building right next to me."  expected up, got stay
+    a27  stimulation [bored → overstimulated]  "Everyone left and it is quiet."  expected down, got stay
+    a28  stimulation [bored → overstimulated]  "I looked around."  expected stay, got up
+    a31  rel.Noah.affection (affection for Noah) [hostile → fond]  "Noah broke my statue on purpose."  expected down, got stay
+    a32  rel.Noah.cooperation (cooperation with Noah) [uncooperative → cooperative]  "Noah added blocks to my wall."  expected up, got stay
+    a36  rel.Noah.respect (respect for Noah) [unimpressed → admiring]  "Noah placed one dirt block."  expected stay, got up
+    a37  rel.Noah.respect (respect for Noah) [unimpressed → admiring]  "Noah copied my tower and then smashed it."  expected down, got stay
+    a38  rel.Noah.grievance (gratitude to Noah) [resentful → grateful]  "Noah broke three of my blocks."  expected down, got stay
+    a45  patience [irritable → tolerant]  "I walked in a straight line on flat grass."  expected stay, got up
+    a47  confidence [afraid → bold]  "I walked across flat grass."  expected stay, got up
+    a50  rel.Noah.cooperation (cooperation with Noah) [uncooperative → cooperative]  "Noah filled my tunnel with dirt."  expected down, got stay
+
+ref:gate-llm: accuracy 35/63 (56%)
+  recall: down 19/21 (90%), stay 0/21 (0%), up 16/21 (76%)
+  latency: p50 104 ms, p95 122 ms; over the production timeout: 0/63; errors or invalid: 0
+  confusion (rows expected, columns got):
+                    down    stay      up
+    down              19       0       2
+    stay              13       0       8
+    up                 5       0      16
+  missed (28):
+    g03  rel.Noah.affection (affection for Noah) [hostile → fond]  "Noah added blocks to my build."  expected up, got down
+    g05  patience [irritable → tolerant]  "Noah walked past, 12 blocks away."  expected stay, got down
+    g10  outlook [discouraged → hopeful]  "Noah placed a dirt block far away."  expected stay, got down
+    a03  mood [unhappy → happy]  "Noah walked past, far away."  expected stay, got down
+    a06  mood [unhappy → happy]  "I took one step forward."  expected stay, got up
+    a09  confidence [afraid → bold]  "Noah placed a block far away."  expected stay, got down
+    a11  trust [suspicious → trusting]  "Noah added blocks to help finish my house."  expected up, got down
+    a13  trust [suspicious → trusting]  "Noah is standing still, 20 blocks away."  expected stay, got down
+    a15  affection [hostile → fond]  "Nobody is online."  expected stay, got down
+    a18  curiosity [avoidant → adventurous]  "I have explored every nearby place already; nothing is new."  expected down, got up
+    a19  curiosity [avoidant → adventurous]  "I placed a stone block."  expected stay, got up
+    a21  patience [irritable → tolerant]  "My build is going smoothly, block after block."  expected stay, got down
+    a22  patience [irritable → tolerant]  "Noah waited for me to finish before he joined in."  expected up, got down
+    a25  outlook [discouraged → hopeful]  "I walked to the next waypoint."  expected stay, got down
+    a28  stimulation [bored → overstimulated]  "I looked around."  expected stay, got up
+    a30  rel.Noah.affection (affection for Noah) [hostile → fond]  "Noah walked by."  expected stay, got down
+    a32  rel.Noah.cooperation (cooperation with Noah) [uncooperative → cooperative]  "Noah added blocks to my wall."  expected up, got down
+    a34  rel.Noah.cooperation (cooperation with Noah) [uncooperative → cooperative]  "Noah is building his own house far away."  expected stay, got down
+    a35  rel.Noah.respect (respect for Noah) [unimpressed → admiring]  "Noah built a huge castle with towers."  expected up, got down
+    a36  rel.Noah.respect (respect for Noah) [unimpressed → admiring]  "Noah placed one dirt block."  expected stay, got down
+    a38  rel.Noah.grievance (gratitude to Noah) [resentful → grateful]  "Noah broke three of my blocks."  expected down, got up
+    a40  rel.Noah.grievance (gratitude to Noah) [resentful → grateful]  "Noah is mining somewhere else."  expected stay, got up
+    a43  outlook [discouraged → hopeful]  "I took a short rest."  expected stay, got up
+    a45  patience [irritable → tolerant]  "I walked in a straight line on flat grass."  expected stay, got up
+    a46  trust [suspicious → trusting]  "Noah is flying around far away."  expected stay, got up
+    a47  confidence [afraid → bold]  "I walked across flat grass."  expected stay, got down
+    a48  rel.Noah.cooperation (cooperation with Noah) [uncooperative → cooperative]  "Noah jumped twice, far from me."  expected stay, got down
+    a49  mood [unhappy → happy]  "I looked at the sky."  expected stay, got up
+
+Per case (expected | each wording's answer):
+  g01  down  | 3way down  (down 0.82) | binary stay  (yes hi 0.08, yes lo 0.08) | llm down  | fewshot down  | mood [unhappy → happy]  "Noah broke the tower I built."
+  g02  up    | 3way down  (down 0.53) | binary stay  (yes hi 0.15, yes lo 0.06) | llm up    | fewshot up    | mood [unhappy → happy]  "I finished building my house."
+  g03  up    | 3way stay  (down 0.37) | binary up    (yes hi 0.53, yes lo 0.05) | llm stay  | fewshot down  | rel.Noah.affection (affection for Noah) [hostile → fond]  "Noah added blocks to my build."
+  g04  down  | 3way stay  (stay 0.48) | binary stay  (yes hi 0.08, yes lo 0.34) | llm down  | fewshot down  | confidence [afraid → bold]  "I got stuck in a hole three times."
+  g05  stay  | 3way down  (down 0.55) | binary stay  (yes hi 0.33, yes lo 0.20) | llm down  | fewshot down  | patience [irritable → tolerant]  "Noah walked past, 12 blocks away."
+  g06  up    | 3way stay  (up 0.47) | binary stay  (yes hi 0.29, yes lo 0.21) | llm up    | fewshot down  | curiosity [avoidant → adventurous]  "I found diamond ore in a cave."
+  g07  down  | 3way down  (down 0.55) | binary down  (yes hi 0.13, yes lo 0.87) | llm down  | fewshot stay  | stimulation [bored → overstimulated]  "Nothing happened for a long time. Noah is far away."
+  g08  up    | 3way stay  (stay 0.52) | binary up    (yes hi 0.65, yes lo 0.04) | llm down  | fewshot down  | rel.Noah.grievance (gratitude to Noah) [resentful → grateful]  "Noah gave me the blocks I needed."
+  g09  down  | 3way down  (down 0.65) | binary stay  (yes hi 0.20, yes lo 0.23) | llm down  | fewshot down  | trust [suspicious → trusting]  "Noah broke the block under my feet and I fell."
+  g10  stay  | 3way down  (down 0.70) | binary stay  (yes hi 0.17, yes lo 0.06) | llm down  | fewshot down  | outlook [discouraged → hopeful]  "Noah placed a dirt block far away."
+  g11  down  | 3way down  (down 0.77) | binary stay  (yes hi 0.33, yes lo 0.40) | llm down  | fewshot down  | patience [irritable → tolerant]  "My build failed for the third time."
+  g12  up    | 3way up    (up 0.57) | binary stay  (yes hi 0.17, yes lo 0.08) | llm down  | fewshot down  | confidence [afraid → bold]  "I climbed the tallest mountain by myself."
+  a01  up    | 3way down  (down 0.54) | binary stay  (yes hi 0.15, yes lo 0.06) | llm down  | fewshot stay  | mood [unhappy → happy]  "I finished building my tower."
+  a02  down  | 3way down  (down 0.69) | binary stay  (yes hi 0.08, yes lo 0.08) | llm down  | fewshot down  | mood [unhappy → happy]  "Noah broke a block of my house."
+  a03  stay  | 3way down  (down 0.69) | binary stay  (yes hi 0.11, yes lo 0.06) | llm down  | fewshot stay  | mood [unhappy → happy]  "Noah walked past, far away."
+  a04  up    | 3way stay  (down 0.37) | binary stay  (yes hi 0.17, yes lo 0.06) | llm up    | fewshot up    | mood [unhappy → happy]  "I found diamond ore while digging."
+  a05  down  | 3way down  (down 0.65) | binary stay  (yes hi 0.08, yes lo 0.06) | llm down  | fewshot stay  | mood [unhappy → happy]  "My tunnel hit water and I had to stop."
+  a06  stay  | 3way stay  (down 0.39) | binary stay  (yes hi 0.21, yes lo 0.04) | llm up    | fewshot stay  | mood [unhappy → happy]  "I took one step forward."
+  a07  down  | 3way stay  (stay 0.50) | binary stay  (yes hi 0.04, yes lo 0.36) | llm down  | fewshot down  | confidence [afraid → bold]  "I got stuck three times in a cave."
+  a08  up    | 3way down  (down 0.55) | binary stay  (yes hi 0.20, yes lo 0.08) | llm down  | fewshot down  | confidence [afraid → bold]  "I dug all the way down to diamonds by myself."
+  a09  stay  | 3way stay  (stay 0.59) | binary stay  (yes hi 0.06, yes lo 0.08) | llm down  | fewshot down  | confidence [afraid → bold]  "Noah placed a block far away."
+  a10  down  | 3way down  (down 0.59) | binary stay  (yes hi 0.09, yes lo 0.41) | llm down  | fewshot down  | confidence [afraid → bold]  "Lava appeared right next to my tunnel."
+  a11  up    | 3way stay  (down 0.46) | binary stay  (yes hi 0.18, yes lo 0.18) | llm down  | fewshot up    | trust [suspicious → trusting]  "Noah added blocks to help finish my house."
+  a12  down  | 3way down  (down 0.53) | binary stay  (yes hi 0.14, yes lo 0.31) | llm down  | fewshot down  | trust [suspicious → trusting]  "Noah broke my tower again right after I rebuilt it."
+  a13  stay  | 3way down  (down 0.53) | binary stay  (yes hi 0.17, yes lo 0.40) | llm down  | fewshot down  | trust [suspicious → trusting]  "Noah is standing still, 20 blocks away."
+  a14  up    | 3way down  (down 0.57) | binary stay  (yes hi 0.20, yes lo 0.07) | llm down  | fewshot down  | affection [hostile → fond]  "Noah followed me around for a minute."
+  a15  stay  | 3way down  (down 0.76) | binary stay  (yes hi 0.36, yes lo 0.06) | llm down  | fewshot down  | affection [hostile → fond]  "Nobody is online."
+  a16  down  | 3way down  (down 0.70) | binary stay  (yes hi 0.44, yes lo 0.09) | llm down  | fewshot down  | affection [hostile → fond]  "Noah keeps breaking what I build."
+  a17  up    | 3way stay  (stay 0.39) | binary stay  (yes hi 0.16, yes lo 0.12) | llm up    | fewshot up    | curiosity [avoidant → adventurous]  "I spotted a cave opening I have never seen."
+  a18  down  | 3way stay  (stay 0.47) | binary stay  (yes hi 0.17, yes lo 0.25) | llm up    | fewshot down  | curiosity [avoidant → adventurous]  "I have explored every nearby place already; nothing is new."
+  a19  stay  | 3way down  (down 0.53) | binary stay  (yes hi 0.32, yes lo 0.23) | llm up    | fewshot down  | curiosity [avoidant → adventurous]  "I placed a stone block."
+  a20  down  | 3way down  (down 0.58) | binary stay  (yes hi 0.54, yes lo 0.63) | llm down  | fewshot down  | patience [irritable → tolerant]  "My walk was blocked three times in a row."
+  a21  stay  | 3way stay  (down 0.46) | binary stay  (yes hi 0.39, yes lo 0.09) | llm stay  | fewshot stay  | patience [irritable → tolerant]  "My build is going smoothly, block after block."
+  a22  up    | 3way down  (down 0.50) | binary stay  (yes hi 0.45, yes lo 0.22) | llm down  | fewshot down  | patience [irritable → tolerant]  "Noah waited for me to finish before he joined in."
+  a23  down  | 3way down  (down 0.68) | binary stay  (yes hi 0.07, yes lo 0.19) | llm down  | fewshot down  | outlook [discouraged → hopeful]  "My second build in a row fell apart halfway."
+  a24  up    | 3way stay  (stay 0.50) | binary stay  (yes hi 0.37, yes lo 0.04) | llm down  | fewshot up    | outlook [discouraged → hopeful]  "I finished my first house and it looks great."
+  a25  stay  | 3way stay  (stay 0.42) | binary stay  (yes hi 0.25, yes lo 0.09) | llm down  | fewshot down  | outlook [discouraged → hopeful]  "I walked to the next waypoint."
+  a26  up    | 3way stay  (down 0.43) | binary stay  (yes hi 0.14, yes lo 0.22) | llm stay  | fewshot stay  | stimulation [bored → overstimulated]  "Noah and his friend are both building right next to me."
+  a27  down  | 3way down  (down 0.66) | binary stay  (yes hi 0.07, yes lo 0.27) | llm down  | fewshot down  | stimulation [bored → overstimulated]  "Everyone left and it is quiet."
+  a28  stay  | 3way down  (down 0.61) | binary stay  (yes hi 0.11, yes lo 0.48) | llm down  | fewshot down  | stimulation [bored → overstimulated]  "I looked around."
+  a29  up    | 3way stay  (down 0.47) | binary stay  (yes hi 0.26, yes lo 0.07) | llm up    | fewshot up    | rel.Noah.affection (affection for Noah) [hostile → fond]  "Noah stood next to me and looked at me for a while."
+  a30  stay  | 3way down  (down 0.53) | binary stay  (yes hi 0.45, yes lo 0.06) | llm stay  | fewshot down  | rel.Noah.affection (affection for Noah) [hostile → fond]  "Noah walked by."
+  a31  down  | 3way down  (down 0.65) | binary up    (yes hi 0.57, yes lo 0.15) | llm down  | fewshot down  | rel.Noah.affection (affection for Noah) [hostile → fond]  "Noah broke my statue on purpose."
+  a32  up    | 3way stay  (down 0.34) | binary up    (yes hi 0.65, yes lo 0.13) | llm up    | fewshot up    | rel.Noah.cooperation (cooperation with Noah) [uncooperative → cooperative]  "Noah added blocks to my wall."
+  a33  down  | 3way down  (down 0.60) | binary down  (yes hi 0.36, yes lo 0.64) | llm down  | fewshot down  | rel.Noah.cooperation (cooperation with Noah) [uncooperative → cooperative]  "Noah broke the blocks I was about to use."
+  a34  stay  | 3way down  (down 0.51) | binary stay  (yes hi 0.48, yes lo 0.33) | llm up    | fewshot down  | rel.Noah.cooperation (cooperation with Noah) [uncooperative → cooperative]  "Noah is building his own house far away."
+  a35  up    | 3way stay  (down 0.43) | binary down  (yes hi 0.44, yes lo 0.84) | llm down  | fewshot up    | rel.Noah.respect (respect for Noah) [unimpressed → admiring]  "Noah built a huge castle with towers."
+  a36  stay  | 3way down  (down 0.64) | binary down  (yes hi 0.23, yes lo 0.79) | llm down  | fewshot down  | rel.Noah.respect (respect for Noah) [unimpressed → admiring]  "Noah placed one dirt block."
+  a37  down  | 3way down  (down 0.55) | binary down  (yes hi 0.23, yes lo 0.89) | llm down  | fewshot down  | rel.Noah.respect (respect for Noah) [unimpressed → admiring]  "Noah copied my tower and then smashed it."
+  a38  down  | 3way down  (down 0.63) | binary stay  (yes hi 0.34, yes lo 0.07) | llm up    | fewshot down  | rel.Noah.grievance (gratitude to Noah) [resentful → grateful]  "Noah broke three of my blocks."
+  a39  up    | 3way stay  (down 0.46) | binary up    (yes hi 0.77, yes lo 0.03) | llm down  | fewshot down  | rel.Noah.grievance (gratitude to Noah) [resentful → grateful]  "Noah fixed the hole in my house."
+  a40  stay  | 3way down  (down 0.63) | binary stay  (yes hi 0.34, yes lo 0.06) | llm down  | fewshot down  | rel.Noah.grievance (gratitude to Noah) [resentful → grateful]  "Noah is mining somewhere else."
+  a41  up    | 3way down  (down 0.52) | binary stay  (yes hi 0.20, yes lo 0.05) | llm down  | fewshot up    | mood [unhappy → happy]  "Noah came back to play."
+  a42  down  | 3way down  (down 0.61) | binary down  (yes hi 0.11, yes lo 0.88) | llm down  | fewshot down  | stimulation [bored → overstimulated]  "Nothing happened for a long time."
+  a43  stay  | 3way stay  (down 0.41) | binary stay  (yes hi 0.18, yes lo 0.07) | llm up    | fewshot down  | outlook [discouraged → hopeful]  "I took a short rest."
+  a44  up    | 3way up    (up 0.51) | binary stay  (yes hi 0.35, yes lo 0.20) | llm up    | fewshot down  | curiosity [avoidant → adventurous]  "Noah showed me a kind of block I have never seen."
+  a45  stay  | 3way down  (down 0.60) | binary up    (yes hi 0.53, yes lo 0.22) | llm down  | fewshot down  | patience [irritable → tolerant]  "I walked in a straight line on flat grass."
+  a46  stay  | 3way down  (down 0.68) | binary stay  (yes hi 0.11, yes lo 0.18) | llm down  | fewshot down  | trust [suspicious → trusting]  "Noah is flying around far away."
+  a47  stay  | 3way stay  (down 0.43) | binary stay  (yes hi 0.26, yes lo 0.17) | llm stay  | fewshot stay  | confidence [afraid → bold]  "I walked across flat grass."
+  a48  stay  | 3way down  (down 0.68) | binary stay  (yes hi 0.56, yes lo 0.81) | llm up    | fewshot down  | rel.Noah.cooperation (cooperation with Noah) [uncooperative → cooperative]  "Noah jumped twice, far from me."
+  a49  stay  | 3way down  (down 0.71) | binary stay  (yes hi 0.11, yes lo 0.07) | llm up    | fewshot stay  | mood [unhappy → happy]  "I looked at the sky."
+  a50  down  | 3way down  (down 0.74) | binary up    (yes hi 0.50, yes lo 0.43) | llm up    | fewshot down  | rel.Noah.cooperation (cooperation with Noah) [uncooperative → cooperative]  "Noah filled my tunnel with dirt."
+  a51  up    | 3way stay  (down 0.46) | binary stay  (yes hi 0.60, yes lo 0.80) | llm up    | fewshot up    | rel.Noah.respect (respect for Noah) [unimpressed → admiring]  "Noah built a bridge across the whole lake."
+
+═══ SOCIAL (select.social: near / help), 10 cases — too few for the bar (2–4 per class), numbers only ═══
+laya: accuracy 5/10 (50%)
+  recall: no 2/3 (67%), maybe 3/3 (100%), yes 0/4 (0%)
+  latency: p50 12 ms, p95 13 ms; over the production timeout: 0/10; errors or invalid: 0
+  confusion (rows expected, columns got):
+                      no   maybe     yes
+    no                 2       1       0
+    maybe              0       3       0
+    yes                3       1       0
+  missed (5):
+    s01  help: all neutral; "Noah placed 3 oak planks in a line in the last 5 s. Noah is looking at the next spot in the line."  expected yes, got no
+    s04  help: grievance very low; "Noah placed 5 stone in a row."  expected yes, got no
+    s06  near: affection very high; "Noah is building nearby."  expected yes, got maybe
+    s07  near: grievance very low; "Noah just broke my block."  expected no, got maybe
+    s09  near: affection high; "Noah is walking away."  expected yes, got no
+
+llm: accuracy 4/10 (40%)
+  recall: no 3/3 (100%), maybe 0/3 (0%), yes 1/4 (25%)
+  latency: p50 100 ms, p95 140 ms; over the production timeout: 0/10; errors or invalid: 0
+  confusion (rows expected, columns got):
+                      no   maybe     yes
+    no                 3       0       0
+    maybe              3       0       0
+    yes                3       0       1
+  missed (6):
+    s01  help: all neutral; "Noah placed 3 oak planks in a line in the last 5 s. Noah is looking at the next spot in the line."  expected yes, got no
+    s03  help: all neutral; "Noah placed one block 8 s ago."  expected maybe, got no
+    s04  help: grievance very low; "Noah placed 5 stone in a row."  expected yes, got no
+    s08  near: all neutral; "Noah just arrived."  expected maybe, got no
+    s09  near: affection high; "Noah is walking away."  expected yes, got no
+    s10  near: cooperation low; "Noah is standing still, doing nothing."  expected maybe, got no
+
+═══ FIT (the judge's third tier), 8 cases — too few for the bar (2–3 per class), numbers only ═══
+laya: accuracy 2/8 (25%)
+  recall: no 2/3 (67%), wait 0/2 (0%), yes 0/3 (0%)
+  latency: p50 15 ms, p95 16 ms; over the production timeout: 0/8; errors or invalid: 0
+  confusion (rows expected, columns got):
+                      no    wait     yes
+    no                 2       1       0
+    wait               1       0       1
+    yes                2       1       0
+  missed (6):
+    f01  Noah 7 blocks, watching me; "place stone on my own tower" (p no 0.60)  expected yes, got no
+    f03  Noah 4 blocks, looking at an empty spot next to him; "place a block in the spot Noah is looking at" (p no 0.15)  expected wait, got yes
+    f04  Noah 6 blocks, mining; "dig the next step of my staircase" (p no 0.76)  expected yes, got no
+    f05  Noah 2 blocks, walking toward me; "place a block right in front of Noah's face" (p no 0.55)  expected no, got wait
+    f06  Noah 2 blocks, looking at my wall; "break a block of my own wall, right next to Noah" (p no 0.90)  expected wait, got no
+    f07  Noah 3 blocks, watching me; "place the next block of Noah's line" (p no 0.48)  expected yes, got wait
+
+llm: accuracy 6/8 (75%)
+  recall: no 3/3 (100%), wait 0/2 (0%), yes 3/3 (100%)
+  latency: p50 93 ms, p95 98 ms; over the production timeout: 0/8; errors or invalid: 0
+  confusion (rows expected, columns got):
+                      no    wait     yes
+    no                 3       0       0
+    wait               1       0       1
+    yes                0       0       3
+  missed (2):
+    f03  Noah 4 blocks, looking at an empty spot next to him; "place a block in the spot Noah is looking at"  expected wait, got yes
+    f06  Noah 2 blocks, looking at my wall; "break a block of my own wall, right next to Noah"  expected wait, got no
+
+═══ SITUATIONAL (select.situational), 8 cases — a hit is any acceptable behaviour; too few for the bar ═══
+llm: accuracy 6/8 (75%)
+  recall: help-build 0/1 (0%), mine|explore 1/1 (100%), build 0/1 (0%), follow|watch 2/2 (100%), rest 1/1 (100%), explore|mine 1/1 (100%), rest|explore|mine 1/1 (100%)
+  latency: p50 315 ms, p95 540 ms; over the production timeout: 0/8; errors or invalid: 0
+  confusion (rows expected, columns got):
+                           follow help-build      build       mine    explore      watch       rest
+    help-build                  1          0          0          0          0          0          0
+    mine|explore                0          0          0          0          1          0          0
+    build                       0          0          0          0          1          0          0
+    follow|watch                2          0          0          0          0          0          0
+    rest                        0          0          0          0          0          0          1
+    explore|mine                0          0          0          0          1          0          0
+    rest|explore|mine           0          0          0          0          1          0          0
+  missed (2):
+    t01  "Noah is 4 blocks away, laying oak planks in a line next to me. He has placed 4 so far. My affection for Noah is high. I have 20 oak planks and 30 stone." because: I want to get closer to Noah and see what he's building.  expected help-build, got follow
+    t03  "Nobody is online. I have 60 stone in my inventory. I have not built anything yet." because: You're curious about your surroundings and want to see what's out there.  expected build, got explore
+
+Best appraisal candidate: llm-fewshot, 34/63 (54%), FAILS the bar.
+Passing appraisal candidates: none.
+always-stay baseline: FAIL (as it must).

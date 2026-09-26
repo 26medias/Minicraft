@@ -10,7 +10,8 @@
 		"bot": "tsx src/cli.ts",
 		"brains": "tsx src/brains-cli.ts",
 		"e2e": "tsx test/e2e.ts",
-		"replay": "tsx src/brain2/replay.ts"
+		"replay": "tsx src/brain2/replay.ts",
+		"bench": "tsx bench/bench.ts"
 	},
 	"dependencies": {
 		"minicraft-bot": "file:../packages/minicraft-bot"

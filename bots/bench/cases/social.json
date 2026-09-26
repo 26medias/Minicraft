@@ -1,0 +1,12 @@
+[
+	{"id": "s01", "kid": "Noah", "relation": {"affection": "neutral", "cooperation": "neutral", "respect": "neutral", "grievance": "neutral"}, "events": ["Noah placed 3 oak planks in a line in the last 5 s.", "Noah is looking at the next spot in the line."], "question": "help", "expected": "yes"},
+	{"id": "s02", "kid": "Noah", "relation": {"affection": "neutral", "cooperation": "neutral", "respect": "neutral", "grievance": "neutral"}, "events": ["Noah is flying around, not building."], "question": "help", "expected": "no"},
+	{"id": "s03", "kid": "Noah", "relation": {"affection": "neutral", "cooperation": "neutral", "respect": "neutral", "grievance": "neutral"}, "events": ["Noah placed one block 8 s ago."], "question": "help", "expected": "maybe"},
+	{"id": "s04", "kid": "Noah", "relation": {"affection": "neutral", "cooperation": "neutral", "respect": "neutral", "grievance": "very low"}, "events": ["Noah placed 5 stone in a row."], "question": "help", "expected": "yes"},
+	{"id": "s05", "kid": "Noah", "relation": {"affection": "neutral", "cooperation": "neutral", "respect": "neutral", "grievance": "neutral"}, "events": ["Noah is mining down, far away."], "question": "help", "expected": "no"},
+	{"id": "s06", "kid": "Noah", "relation": {"affection": "very high", "cooperation": "neutral", "respect": "neutral", "grievance": "neutral"}, "events": ["Noah is building nearby."], "question": "near", "expected": "yes"},
+	{"id": "s07", "kid": "Noah", "relation": {"affection": "neutral", "cooperation": "neutral", "respect": "neutral", "grievance": "very low"}, "events": ["Noah just broke my block."], "question": "near", "expected": "no"},
+	{"id": "s08", "kid": "Noah", "relation": {"affection": "neutral", "cooperation": "neutral", "respect": "neutral", "grievance": "neutral"}, "events": ["Noah just arrived."], "question": "near", "expected": "maybe"},
+	{"id": "s09", "kid": "Noah", "relation": {"affection": "high", "cooperation": "neutral", "respect": "neutral", "grievance": "neutral"}, "events": ["Noah is walking away."], "question": "near", "expected": "yes"},
+	{"id": "s10", "kid": "Noah", "relation": {"affection": "neutral", "cooperation": "low", "respect": "neutral", "grievance": "neutral"}, "events": ["Noah is standing still, doing nothing."], "question": "near", "expected": "maybe"}
+]

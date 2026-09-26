@@ -62,7 +62,7 @@ interface Violation {
 
 function findViolations(): Violation[] {
 	const violations: Violation[] = [];
-	const dirs = [join(botsRoot, 'src'), join(botsRoot, 'test')];
+	const dirs = [join(botsRoot, 'src'), join(botsRoot, 'test'), join(botsRoot, 'bench')];
 	for (const dir of dirs) {
 		let files: string[];
 		try {

@@ -124,7 +124,7 @@ Spec §2 criteria 1, 3, 6 and 7 (the end-to-end measures), §9.1 (end-to-end), �
 - Modify: `bots/README.md` (a brain2 section: running, the TUI, replay, the bench, personalities, tuning with `--data`), `docs/superpowers/specs/2026-09-25-bot-brain-design.md` (status: implemented, with the plan's commit range), `CLAUDE.md` (one line under Repo State: `bots/src/brain2/` is the emotional brain, `--brain v2`)
 
 **Criteria:**
-- **Criterion 1 (e2e):** over the 20-minute session, every switch has a `select` line with a reason; no switch comes < 20 s after the previous one unless it's an outcome or urgent; ≤ 10 switches in every 5-minute window.
+- **Criterion 1 (e2e):** over the 20-minute session, every switch has a `select` line with a reason; no switch comes < 20 s after the previous one unless it's an outcome or urgent; ≤ 10 switches in every 5-minute window, **not counting** switches caused by an outcome, a stop signal or a hazard (spec criterion 1).
 - **Criterion 3 (offline).** How it runs:
   - A fixed **world script** plays on a `FakeBody`/`FakeWorld` with a `ManualClock`: the same `kid-client` script as criterion 7, expressed as scripted `player()` poses and `EditEvent`s per 100 ms tick. It lives in `bots/test/brain2/kid-script.ts`, and its output is the same for any bot.
   - `runBrain2` (`manual: true`) runs 20 simulated minutes for **Pip**, then for **Rex**, each on a fresh world copy.

@@ -327,7 +327,9 @@ export function controlRows(bindings: Record<Action, string>): ControlLine[] {
 
 Run: `npx vitest run src/ui/controls-model.test.ts` → PASS.
 
-- [ ] **Step 6: Mutants (seen red, then revert):** (1) `live` returns `bindings[a]` without the `winner` check; (2) `live` drops the `code !== ''` check and the row filter; (3) `controlRows` ignores `bindings` and uses `DEFAULT_KEYBINDINGS`; (4) `NAMED` loses `Equal`.
+- [ ] **Step 6: Mutants (seen red, then revert):** (1) `live` returns `bindings[a]` without the `winner` check; (2) drop the row filter (`if (codes.length > 0)`) and the `''` filter together (dropping only `code !== ''` in `live` is an equivalent mutant: `buildKeyToAction` already skips `''`); (3) `controlRows` ignores `bindings` and uses `DEFAULT_KEYBINDINGS`; (4) `NAMED` loses `Equal`.
+
+`keyText` deliberately differs from `keycapLabel` (craft-model.ts, the HUD's tiny pickaxe keycap): the Controls view has room for `Num 3` and `=`; the HUD keycap is left unchanged.
 
 - [ ] **Step 7: Commit**
 
@@ -402,6 +404,7 @@ git commit -m "feat(pause): key gates drop keydowns under the pause menu"
 - Produces: `class PauseMenu` with
   - `constructor(container: HTMLElement, rows: () => ControlLine[])`
   - `open(title: string): void` — shows the pause card (never the Controls view), focuses `#pause-resume`
+  - `showCard()` also focuses `#pause-resume`; `showControls()` focuses `#pause-back`
   - `close(): void` — hides, resets to the card
   - `showCard(): void`, `showControls(): void`
   - `setQuitting(): void` — every button disabled, Quit reads `Saving…`
@@ -461,7 +464,8 @@ export class PauseMenu {
 	showCard(): void {
 		this.view = 'card';
 		this.render();
-		this.root.querySelector<HTMLButtonElement>('#pause-controls')?.focus();
+		// Back to Return to Game, so Space/Enter on the card always mean "back to the game".
+		this.root.querySelector<HTMLButtonElement>('#pause-resume')?.focus();
 	}
 
 	showControls(): void {
@@ -539,9 +543,9 @@ export class PauseMenu {
 #pause-root.hidden {
 	display: none;
 }
-/* Set apart from Return to Game and Controls against mis-clicks. */
+/* Set apart from Return to Game and Controls against mis-clicks (margins collapse: 28 px is the gap). */
 .menu-card button.pause-quit {
-	margin-top: 16px;
+	margin-top: 28px;
 }
 .controls-row {
 	display: flex;
@@ -635,7 +639,8 @@ import { PauseMenu } from './ui/pause-menu';
   - `openInventory`: `if (inventoryOpen || frozen || colorPicker.isOpen || pauseOpen) return;`
   - `onKey`: `shouldHandleKey(down, a, { frozen, inventoryOpen, pickerOpen: colorPicker.isOpen, pauseOpen })`
   - `onSneak`: `sneakKeyChange(e.code, down, { frozen, inventoryOpen, pickerOpen: colorPicker.isOpen, pauseOpen })`
-  - Tab listener: `if (frozen || pauseOpen) return;` — this line must stay **before** `e.preventDefault()`, so Tab moves focus between the menu's buttons.
+  - Tab listener: keep `if (frozen) return; e.preventDefault();` and add `if (pauseOpen) return;` right **after** `e.preventDefault()`. Under the pause menu Tab does nothing at all: it neither cycles the hotbar nor moves focus, so focus stays on Return to Game and the kid's Tab-Tab-Space habit can never reach Quit (gate 2). Focus cannot leave the card either.
+  - `openInventory`'s `pauseOpen` gate is belt and braces: the I key is already dropped by `onKey` and `#pause-root` covers the HUD pickaxe, so no check can reach it. Say so in the code comment; it is not claimed as tested.
   - F3 listener: `if (frozen || inventoryOpen || colorPicker.isOpen || pauseOpen) return;`
 
 - [ ] **Step 5: Freezes close the menu (unless quitting).**
@@ -682,8 +687,9 @@ import { PauseMenu } from './ui/pause-menu';
 			if (mp) {
 				// Spec §3.6, in order: never rejoin, tell the friend, push the last edits.
 				clearAutojoin(sessionStorage);
-				if (leaving) leaving.update(0);
-				else void mp.client.send({ t: 'leaving', secondsLeft: 0 });
+				// `leaving` exists in every multiplayer session, timer or not; update(0) sends 0 even on a
+				// countdown that never started, and marks every threshold fired so nothing follows.
+				leaving?.update(0);
 				mpSync?.flushFrame();
 			}
 			// A stalled cloud upload must not leave "Saving…" up forever: the local copy is already
@@ -696,7 +702,7 @@ import { PauseMenu } from './ui/pause-menu';
 		};
 ```
 
-Check while editing: `clearAutojoin` is already imported in `main.ts` (used by the timer freeze); `leaving` is the `LeavingCountdown | null` declared before the playtime block; `mp.client.send` accepts `{ t: 'leaving', secondsLeft: number }` (the LeavingCountdown callback sends exactly that). If `leaving` or `mpSync` is declared *after* the insertion point in the real file, move the insertion point down to just before `loop.start();` — it must stay after all of them.
+Check while editing: `clearAutojoin` is already imported in `main.ts` (used by the timer freeze); `leaving` is the `LeavingCountdown | null` declared before the playtime block (non-null whenever `mp` is set). If `leaving` or `mpSync` is declared *after* the insertion point in the real file, move the insertion point down to just before `loop.start();` — it must stay after all of them.
 
 - [ ] **Step 7: DEV oracle.** In the `__mc = { … }` object literal add:
 
@@ -733,16 +739,16 @@ git commit -m "feat(pause): Esc opens the game menu in solo and multiplayer"
 Copy the harness from `scripts/menu-smoke.ts` (arg parsing, `startDev` with `--strictPort` and stop-by-port, `check`, the exit codes, the route guard that aborts on any non-localhost host). Differences:
 
 - Default `--port 5391`. `VITE_MINICRAFT_API_URL` = `DEAD_API` (`http://127.0.0.1:9099`), no MP URL.
-- The route for `DEAD_API` is **configurable** per phase: `apiMode: 'abort' | 'delay' | 'hang'`, and it records every request (`method`, `path`, time) in `apiLog`. `OPTIONS` → 204 with CORS headers `{ 'Access-Control-Allow-Origin': 'http://localhost:<port>', 'Access-Control-Allow-Methods': 'GET, PUT, POST, DELETE, OPTIONS', 'Access-Control-Allow-Headers': 'Authorization, Content-Type, If-Match' }` (read `src/persistence/cloud.ts` for the headers the PUT really sends and allow them). `'abort'` → `route.abort()`. `'delay'` → a PUT is answered after 1500 ms with `200` and the JSON body `cloud.ts`'s save path expects (read it; if unsure, any 200 — the oracle is the PUT's *arrival*, not its outcome); GETs → 404. `'hang'` → never answered.
+- The route for `DEAD_API` is **configurable** per phase: `apiMode: 'abort' | 'delay' | 'hang'`, and it records every request (`method`, `path`, time) in `apiLog`. `OPTIONS` → 204 with CORS headers `{ 'Access-Control-Allow-Origin': 'http://localhost:<port>', 'Access-Control-Allow-Methods': 'GET, PUT, POST, DELETE, OPTIONS', 'Access-Control-Allow-Headers': 'Authorization, Content-Type, If-Match, If-None-Match' }` (read `src/persistence/cloud.ts` for the headers the PUT really sends and allow them all; `If-None-Match` is sent on a first save). Every fulfilled response (not only OPTIONS) carries the `Access-Control-Allow-Origin` header. `'abort'` → `route.abort()`. `'delay'` → a PUT is answered after 1500 ms with `200` (any body: the oracle is the PUT's *arrival* and the timing, not a successful save — do not claim one); GETs → 404. `'hang'` → never answered. **`'hang'` only after the world is entered**: with it on at page load the world list GET hangs and Single Player never shows `#single-new`.
 - Headless Chromium (`chromium.launch()` with no `headless: false`). The worktree must have run `npm run build-atlas` first; the script checks `public/atlas.json` exists and exits 1 with that instruction if not.
-- Helpers: `lock()` = click the canvas (`#app canvas` or the renderer's canvas selector) and wait for `document.pointerLockElement !== null`; `unlock()` = `page.evaluate(() => document.exitPointerLock())` and wait for `__mc.pause.isOpen()` (or a short timeout when the check expects it closed). `M = () => page.evaluate(() => (window as any).__mc)`-style accessors for values.
+- Helpers: `lock()` = **no-op if `document.pointerLockElement` is already set** (a click while locked would mine), else click the canvas (`#app canvas` or the renderer's canvas selector) and wait for `document.pointerLockElement !== null`; `unlock()` = `page.evaluate(() => document.exitPointerLock())` and wait for `__mc.pause.isOpen()` (or a short timeout when the check expects it closed). `M = () => page.evaluate(() => (window as any).__mc)`-style accessors for values.
 
 Checks, in this order (one world, started from Single Player with the duration stepped once from No limit to `2 h` so `__mc.playtime` exists):
 
 | # | Steps | Assert |
 |---|---|---|
 | S1 | `lock()`, `unlock()` | `#pause-root` visible; `#pause-title` = `Paused`; `__mc.loop.paused === true` |
-| S2 | record slot/flying; press `Tab`, `Digit3`, `KeyF`, `KeyI`, `F3` | selected slot, `player.flying` (read the real field name in `player.ts`), `#inventory-root` hidden, `#perf-overlay` visibility all unchanged; menu still open |
+| S2 | record the selected slot (assert it is not index 4) and flying; press `Tab`, `Digit5`, `KeyF`, `KeyI`, `F3` | selected slot, `player.flying` (read the real field name in `player.ts`), `#inventory-root` hidden, `#perf-overlay` visibility all unchanged; `document.activeElement.id === 'pause-resume'` after the Tab (Tab does nothing under the menu); menu still open |
 | S3 | fresh cycle: `lock()`, `keyboard.down('KeyW')`, `unlock()`, click `#pause-resume` (S7 path), and only after the assert `keyboard.up('KeyW')` | `__mc.keys.forward === false` right after the menu closed |
 | S4 | menu open, press `Escape` | menu still open, card view (`#pause-resume` present) |
 | S5 | click `#pause-controls` | rows present; the `Jump` row's keys = `Space`; `Fly faster / slower` = `= / -`; press `Escape` → `#pause-resume` present (card) |
@@ -753,8 +759,8 @@ Checks, in this order (one world, started from Single Player with the duration s
 | S9 | `lock()`, press `KeyC` (picker opens), press `Escape` | picker hidden **and** pause not open |
 | S10 | now unlocked with nothing open: press `Escape` | pause open (rule b); then Return (S7 path) |
 | S11 | `unlock()` (menu open), `page.evaluate(() => __mc.playtime.setRemaining(1))`, wait for `#playtime-freeze:not(.hidden)` | TIME'S UP visible; `#pause-root` hidden |
-| S12 | go to the menu with `page.goto(BASE)` (the freeze ended the session), start a **new** world with a duration, `lock()`, place a block (right-click on the ground in front; read the placed cell with `__mc.world.getBlock` via a raycast helper, or place with the DEV path the other smokes use — read `scripts/cheat-smoke.ts` for how it places for real), set `apiMode = 'delay'`, `unlock()`, click `#pause-quit` | within 200 ms `#pause-quit` text = `Saving…` and it is disabled; a `PUT` in `apiLog` whose time is before the `framenavigated` event; after navigation the main menu is showing; Continue the world → `__mc.world.getBlock(x,y,z)` equals the placed block |
-| S13 | Continue, `lock()`, place another block, `apiMode = 'hang'`, `unlock()`, click `#pause-quit`, note the time | the page navigates within 3000 + 1500 ms |
+| S12 | go to the menu with `page.goto(BASE)` (the freeze ended the session), start a **new** world with a duration, set `apiMode = 'delay'`, `lock()`, place a block (right-click on the ground in front — read `scripts/cheat-smoke.ts` for how it places for real and reads the cell back with `__mc.world.getBlock`), then **within 2 s** (well under AutoSave's 5 s debounce) `unlock()` and click `#pause-quit`, noting `tClick` | within 200 ms `#pause-quit` text = `Saving…` and it is disabled; a `PUT` in `apiLog` with time **after `tClick`** and before navigation; navigation **≥ 1400 ms** after `tClick` (the flush was awaited: measured 1925 ms correct vs 350 ms for a no-flush Quit); the main menu shows after navigation; Continue → `__mc.world.getBlock(x,y,z)` equals the placed block (a sanity check only: `pagehide` writes the local copy even without a flush, so this line alone cannot catch a no-flush Quit) |
+| S13 | Continue (with `apiMode = 'delay'` so the menu loads), then set `apiMode = 'hang'` **before** placing; `lock()`, place another block, within 2 s `unlock()` and click `#pause-quit`, noting `tClick` | a `PUT` in `apiLog` after `tClick`; navigation **≥ 2800 ms and ≤ 4500 ms** after `tClick` (measured 3.4 s) |
 
 Rules for this task:
 
@@ -766,11 +772,13 @@ Rules for this task:
 |---|---|
 | delete the `pointerlockchange` listener's `openPause()` call | S1 |
 | drop `pauseOpen` from `onKey`'s gate state | S2 |
-| drop `pauseOpen` from the Tab listener | S2 |
+| drop the `if (pauseOpen) return;` from the Tab listener | S2 (slot changes) |
+| move the Tab listener's `if (pauseOpen) return;` before `e.preventDefault()` | S2 (focus leaves `#pause-resume`) |
 | drop `pauseOpen` from the F3 listener | S2 |
 | `closePause` without `resetKeys()` | S3 |
 | in the capture Esc listener add `else if (pauseOpen) closePause();` (Esc on the card closes the menu) | S4 |
 | `PauseMenu.close()` and `open()` both without `this.view = 'card'` | S5b |
+| the capture Esc listener ignores `'back'` | S5 |
 | `onResume` calls `closePause()` right after `requestPointerLock()` | S6 |
 | `pointerlockchange` locked branch does nothing | S7 |
 | register the Esc listener without the `true` (bubble phase) | S8 and/or S9 |
@@ -778,6 +786,7 @@ Rules for this task:
 | remove `if (!quitting) closePause();` from the timer freeze | S11 |
 | `onQuit` = `location.reload()` only | S12 |
 | drop the `cap` from the race | S13 |
+| `onQuit` sets "Saving…", waits 3 s, reloads, never calls `autosave.flush()` | S12 (no PUT after the click) |
 
 Record the table with "seen red: yes" per row in the task report. A mutant that does **not** turn its check red is a defect in the check: fix the check, not the mutant.
 
@@ -798,11 +807,11 @@ git commit -m "test(pause): headless smoke of the pause menu, every check with i
 **Interfaces:**
 - Consumes: `__mc.pause`, `#pause-root`, `#pause-title`, `#pause-quit` (Task 4/5); the existing `scenario(id, title, body)`, the two clients `A`, `B`, the `needMp` list and the E13 scenario as the model for placing a block and reading the other client's world (read E13 end to end first).
 
-- [ ] **Step 1:** Add scenario `E14` ("the pause menu: the shared world keeps going, and Quit says went home"), added to the `needMp` list and to whatever list gates A/B creation (the `['E3', 'E5', 'E6', 'E13', '4009']` style lists — add it where E13 is). Steps:
+- [ ] **Step 1:** Add scenario `E14` ("the pause menu: the shared world keeps going, and Quit says went home") **immediately after the E13 block**, and add `'E14'` to the `needMp` list (that is what makes A and B join). Placement matters: after E14, A's page is on the main menu, and E3 / E6 later in the file only check `A && B`. So E14 **ends by rejoining A**: copy the rejoin block that sits before E13 (≈ mp-e2e.ts:1094: `A = null`, a new page, `joinWorld(A, BASE, WORLD, '10 min')`, sleep 1500 — use its real code). Steps:
   1. A: lock the canvas, then `document.exitPointerLock()` → `#pause-root` visible, `#pause-title` = `Game Menu`.
   2. B places a block (as E13 does). Poll A's `__mc.world.getBlock(x,y,z)` until it equals the block (≤ 5 s) **while A's menu is still open** — assert both.
   3. A clicks `#pause-quit`. B: wait (≤ 5 s) for a toast whose text contains `went home` (read how other scenarios read toasts; the toast text comes from `leavingText`). A: wait for navigation, then assert the main menu is showing and `sessionStorage.getItem('mp:autojoin')` is null (use the real `AUTOJOIN_KEY` value from `src/game/boot.ts`).
-- [ ] **Step 2:** Run `npm run e2e:mp -- E14` (read the script's header for its exact CLI: it starts its own local `mcserver` on a temp database; never the live one) → E14 passes. Also run E13 once to show nothing around it broke.
+- [ ] **Step 2:** Run `MP_E2E_SCRATCH=<a dir under the session scratchpad> PATH=$HOME/.local/go/bin:$PATH npm run e2e:mp -- --only E14` (it starts its own local `mcserver` on a temp database; never the live one) → E14 passes. Then `--only E13,E14,E3,E6` (check the header for the list syntax) to show the rejoin leaves the later scenarios working.
 - [ ] **Step 3: Mutants:** (a) `openPause` sets `loop.mpDisconnected = true` → step 2 FAILS; (b) remove the `leaving.update(0)` / `send` lines from `onQuit` → step 3's toast FAILS. Revert each. State in the report: the `mp:autojoin` assertion only catches a Quit that calls `rejoinReload` (the flag is one-shot and consumed at boot), per spec §6.3.
 - [ ] **Step 4: Commit**
 
@@ -816,6 +825,6 @@ git commit -m "test(pause): E14 multiplayer pause keeps the world going, Quit sa
 ### Task 8: Whole-branch verification
 
 - [ ] **Step 1:** `npm run typecheck && npm run lint && npm test && npm run smoke:pause && npm run smoke:menu && npm run smoke:cheats` (the last two show nothing else broke; `smoke:menu` exercises the main menu the Quit lands on). Paste the tails.
-- [ ] **Step 2:** `npm run e2e:mp` full run (all scenarios) → green; paste the summary.
+- [ ] **Step 2:** `MP_E2E_SCRATCH=<scratch dir> PATH=$HOME/.local/go/bin:$PATH npm run e2e:mp` full run (all scenarios) → green; paste the summary.
 - [ ] **Step 3:** `npm run build` → succeeds.
 - [ ] **Step 4:** Write the manual checklist for Julien into the final report, verbatim from spec §6.4.

@@ -71,8 +71,9 @@ Accepted race: if an owner opens and closes within the same frame, before its ow
 - Input gates, all keyed on `pauseOpen`:
   - `shouldHandleKey` gains `pauseOpen` (drops every keydown like `frozen`; keyups pass);
     `sneakKeyChange` likewise;
-  - the Tab listener returns on `pauseOpen` **before** its `preventDefault`, so Tab moves focus between
-    the menu's buttons;
+  - Tab does nothing under the pause menu: the Tab listener calls `preventDefault` and returns on
+    `pauseOpen`, so it neither cycles the hotbar nor moves focus (gate 2: Tab-Tab-Space would reach
+    Quit); focus stays on Return to Game, where Space/Enter resume;
   - the F3 listener returns on `pauseOpen`;
   - `openInventory` refuses on `pauseOpen` (the one entry point: I key, HUD pickaxe);
   - mouse: `#pause-root` covers the canvas (fixed, inset 0, pointer-events auto), so no canvas click
@@ -92,17 +93,18 @@ style so it matches the main menu:
 - buttons, in order:
   1. **Return to Game** — `.home-button` (big green).
   2. **Controls** — plain `.menu-card button`.
-  3. **Quit to Menu** — plain button, with extra top margin (16 px) so it is set apart from the other
-     two against mis-clicks.
-- On open, focus moves to Return to Game; the card view is always the pause card on open (the
-  Controls view is reset by `close()`).
+  3. **Quit to Menu** — plain button, with a 28 px top margin (margins collapse; 28 px is the visible
+     gap) so it is set apart from the other two against mis-clicks.
+- On open, and on Back from Controls, focus moves to Return to Game; the card view is always the pause
+  card on open (the Controls view is reset by `close()`).
 
 ### 3.4 Return to Game
 
 A click on Return to Game requests the pointer lock (a user gesture) and **does not close the menu**.
 The menu closes when `pointerlockchange` reports the canvas locked. On a refusal (promise rejection,
 or `pointerlockerror`) the menu stays open and nothing else happens; the kid clicks again (the
-cooldown is ~1.5 s, M2). The promise's rejection is swallowed.
+cooldown is ~1.5 s, M2). The promise's rejection is swallowed; no `pointerlockerror` handler is
+needed, since a refusal changes nothing.
 
 Consequence for rule (a): the lock-granted `pointerlockchange` closes the menu; it never opens one.
 
@@ -159,8 +161,8 @@ Then:
   at boot, so it is not normally set during play); `leaving?.update(0)` (sends `leaving 0` →
   the friend's "Noah went home" toast, and marks every threshold fired so no countdown can follow);
   `mpSync.flushFrame()`; `autosave.flush()` raced against 3 s; `client.close(1000)`;
-  `location.reload()`. `client.close` sets `done`, so the close itself starts no reconnect. With no
-  play timer (`leaving` is null), send `{t:'leaving', secondsLeft: 0}` directly.
+  `location.reload()`. `client.close` sets `done`, so the close itself starts no reconnect. `leaving`
+  exists in every multiplayer session, timer or not, and `update(0)` sends 0 even if it never started.
 - **Play timer:** the reload applies the existing refresh rule (play-time spec §8.1): without a PIN
   or schedule the session is discarded — exactly what F5 or TIME'S UP → MENU does today. Quit adds
   no new way around the limit.
@@ -189,8 +191,8 @@ No confirmation dialog: the world is saved; a 7-year-old reads "Are you sure?" a
   `setQuitting()`, callbacks `onResume`, `onQuit`; ids `pause-root`, `pause-resume`,
   `pause-controls`, `pause-quit`, `pause-back`, `pause-title`.
 - `src/game/input-gate.ts` — `GateState` gains `pauseOpen`.
-- `src/main.ts` — wiring inside `startGame`: the capture Esc listener, a `pointerlockchange` and a
-  `pointerlockerror` listener of its own, the gates of §3.2, Quit.
+- `src/main.ts` — wiring inside `startGame`: the capture Esc listener, a `pointerlockchange` listener
+  of its own, the gates of §3.2, Quit.
 - `src/ui/ui.css` — `#pause-root` and the Quit spacing.
 - README "How to play → Menu": the Esc line describes the pause menu.
 
@@ -239,7 +241,7 @@ a real `pointerlockchange`. Start a solo New World **with a duration** (not "No 
 | S3 | hold W, open, Return → `__mc.keys.forward === false` | no `resetKeys` on close |
 | S4 | Esc on the pause card → still open | `escapeAction` returns 'resume' on the card |
 | S5 | Controls → the jump row shows `Space`, fly row `= / -`; Esc → pause card; open→close→open shows the card | no key display map; no reset in `close()` |
-| S6 | Return to Game with `requestPointerLock` stubbed to reject + `pointerlockerror` → menu stays open | close on click |
+| S6 | Return to Game with `requestPointerLock` stubbed to reject → menu stays open | close on click |
 | S7 | Return to Game (real lock) → menu closed, `loop.paused === false` | no close on locked |
 | S8 | I, switch to the **Craft tab** (search not focused), Esc → I closed and pause **not** open | bubble-phase listener |
 | S9 | C (colour picker), Esc → picker closed, pause not open | bubble-phase listener |
@@ -280,3 +282,11 @@ bubble listener; the Quit check uses the save API as oracle, since `pagehide` an
 `visibilitychange` already write the local copy on reload; the timer check starts with a duration
 and runs before Quit); the real headless lock instead of a synthetic event.
 Rejected: a 300 ms Esc-after-unlock guard — unneeded once Esc on the card does nothing.
+
+## 9. Gate 2 — what changed
+
+Tab does nothing under the menu (Tab-Tab-Space reached Quit); Back refocuses Return; Quit's gap 28 px;
+no `pointerlockerror` listener (a refusal needs none); the dead "no timer" multiplayer branch dropped
+(`leaving` always exists in multiplayer). The plan's S12/S13 checks now require a save request after
+the Quit click and a timed navigation, since a pre-Quit debounced save could satisfy them; E14 sits
+after E13 and rejoins A. Kept: `=` for fly speed (matches the README).

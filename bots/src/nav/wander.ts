@@ -8,11 +8,11 @@
 import { groundTop } from '../brain2/behaviours/site-search.js';
 import type { Body, WorldView } from '../port.js';
 import type { Vec3 } from '../types.js';
-import { bodyFits, navigate, nearestOpenSky, openSky, StuckWatchdog } from './navigate.js';
+import { bodyFits, isSubmerged, navigate, nearestOpenSky, openSky, StuckWatchdog } from './navigate.js';
 
 /** Wander destinations stay within this many blocks (horizontally) of the centre. */
 export const WANDER_MAX = 12;
-/** How far the escape (bot currently in liquid) looks for a dry open-sky cell. */
+/** How far the escape (bot currently submerged) looks for a dry open-sky cell. */
 export const ESCAPE_SEARCH = 16;
 /** Navigator failures in a row before the bot stops trying to move for a while. */
 export const FAIL_LIMIT = 2;
@@ -46,12 +46,6 @@ export function pickWanderSpot(world: WorldView, c: { x: number; z: number }, rn
 	return null;
 }
 
-/** True when the bot's feet or head cell is liquid (it is currently in the water, not just standing near it). */
-function inLiquid(world: WorldView, p: Vec3): boolean {
-	const x = Math.floor(p.x), y = Math.floor(p.y), z = Math.floor(p.z);
-	return world.isLiquid(world.getBlock(x, y, z)) || world.isLiquid(world.getBlock(x, y + 1, z));
-}
-
 export interface Wanderer {
 	/**
 	 * One idle move to `spot` (null: none found) through the navigator. Returns false (and only looks around) when
@@ -79,10 +73,24 @@ export function wanderer(body: Body, world: WorldView, o: { rng: () => number; c
 			}
 			if (fails >= FAIL_LIMIT) fails = 0; // the still spell is over: try moving again
 			const p = body.pose();
-			// Currently in the water (e.g. a hole in lake ice): the nearest dry open-sky cell within ESCAPE_SEARCH
-			// wins over the picked spot; failing that, `spot` itself is now always dry and open-sky, and navigate
-			// flies when the walk there is blocked.
-			const escape = inLiquid(world, p) ? nearestOpenSky(world, p.x, Math.floor(p.y), p.z, ESCAPE_SEARCH) : null;
+			// Submerged (in the water — e.g. a hole in lake ice — or under a solid/ice ceiling): the nearest dry
+			// open-sky cell within ESCAPE_SEARCH wins over the picked spot; failing that, `spot` itself is now
+			// always dry and open-sky, and navigate flies when the walk there is blocked.
+			const submerged = isSubmerged(world, p);
+			const escape = submerged ? nearestOpenSky(world, p.x, Math.floor(p.y), p.z, ESCAPE_SEARCH) : null;
+			if (submerged && !escape) {
+				// No dry open sky within ESCAPE_SEARCH either (e.g. a wide ice sheet over water): swimming toward
+				// `spot` still moves the pose, so the StuckWatchdog's own move-based check never escalates. Take its
+				// last-resort move ourselves — straight up to the first standable open-sky cell above this column
+				// (the ice's top, if that's what's overhead) — then keep wandering from there.
+				const up = standable(world, p.x, p.z);
+				if (up) {
+					body.move(up);
+					fails = 0;
+					o.log({ k: 'unstick', level: 3, how: 'teleport-up', reason: 'submerged', at: { x: Math.round(p.x * 10) / 10, y: Math.round(p.y * 10) / 10, z: Math.round(p.z * 10) / 10 }, t: o.clock() });
+					return true;
+				}
+			}
 			const dest = escape ?? spot;
 			const t0 = o.clock();
 			const live = () => alive() && o.clock() - t0 < STEP_MS;

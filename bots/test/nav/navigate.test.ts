@@ -272,4 +272,22 @@ describe('idle wander (nav/wander.ts)', () => {
 		expect(world.isLiquid(world.getBlock(fx, fy + 1, fz))).toBe(false);
 		expect(Math.hypot(p.x - 304.5, p.z - 304.5)).toBeLessThanOrEqual(17); // the nearby escape, not (340.5, 340.5)
 	});
+
+	it('under a 40 × 40 ice sheet over water: no dry cell within the escape search, so it teleports up onto the ice', async () => {
+		const world = floorWorld();
+		// A pond far wider than ESCAPE_SEARCH, capped edge to edge — no hole, no shore within reach.
+		world.fill({ x: 290, y: Y, z: 290 }, { x: 329, y: Y + 2, z: 329 }, 'water');
+		world.fill({ x: 290, y: Y + 3, z: 290 }, { x: 329, y: Y + 3, z: 329 }, 'ice');
+		const body = physBody(world, { x: 309.5, y: Y + 1, z: 309.5 }); // dead centre, well past 16 from any edge
+		const logs: Array<Record<string, unknown>> = [];
+		const w = wanderer(body, world, { rng: seq(9), clock: () => Date.now(), log: (e) => logs.push(e) });
+		const farSpot = { x: 340.5, y: Y, z: 340.5 };
+		expect(await w.go(farSpot, () => true)).toBe(true);
+		const p = body.pose();
+		expect(p).toMatchObject({ x: 309.5, y: Y + 4, z: 309.5 }); // standing on top of the ice
+		expect(body.calls.some((c) => c.fn === 'move')).toBe(true);
+		expect(body.calls.some((c) => c.fn === 'walkTo' || c.fn === 'flyTo')).toBe(false); // no swim toward the far spot
+		expect(logs.some((e) => e.k === 'unstick' && e.level === 3 && e.how === 'teleport-up' && e.reason === 'submerged')).toBe(true);
+		expect(w.fails).toBe(0);
+	});
 });

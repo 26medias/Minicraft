@@ -28,6 +28,9 @@ export const HOP_UP = 15;
 export const CRUISE_ABOVE = 3;
 /** flyHigh looks this far sideways for an open-sky column. */
 export const SKY_SEARCH = 6;
+/** flyHigh (and the wanderer's own escape) look this much further when the bot is submerged: a lake under a wide ice
+ * sheet can put the nearest dry cell well past SKY_SEARCH. */
+export const SUBMERGED_SKY_SEARCH = 16;
 /** A cancelled leg is reissued at most this many times. */
 export const MAX_REISSUE = 3;
 
@@ -97,6 +100,17 @@ export function openSky(world: WorldView, x: number, z: number, y: number): bool
 /** Feet cell (x, y, z) and the one above are not solid: a body fits there. */
 export function bodyFits(world: WorldView, x: number, y: number, z: number): boolean {
 	return !world.isSolid(world.getBlock(x, y, z)) && !world.isSolid(world.getBlock(x, y + 1, z));
+}
+
+/**
+ * True when the bot isn't in dry open air right now: its feet or head cell is liquid (swimming), or a solid/ice
+ * ceiling stands somewhere above its own column (openSky already treats ice, or any solid, as blocking). Both flyHigh
+ * and the wanderer widen their open-sky search from SKY_SEARCH to SUBMERGED_SKY_SEARCH when this holds, since a wide
+ * ice sheet over water can put the nearest dry cell well past 6.
+ */
+export function isSubmerged(world: WorldView, p: Vec3): boolean {
+	const x = Math.floor(p.x), y = Math.floor(p.y), z = Math.floor(p.z);
+	return world.isLiquid(world.getBlock(x, y, z)) || world.isLiquid(world.getBlock(x, y + 1, z)) || !openSky(world, x, z, y);
 }
 
 /**
@@ -179,8 +193,9 @@ export async function ascend(body: Body, y: number, o: LegOpts = {}): Promise<Wa
  */
 export async function flyHigh(body: Body, world: WorldView, to: { x: number; y?: number; z: number }, o: LegOpts = {}): Promise<WalkResult> {
 	const p = body.pose();
-	const sky = nearestOpenSky(world, p.x, Math.floor(p.y), p.z);
-	if (!sky) throw new Error('flyHigh: no open sky within 6');
+	const skyR = isSubmerged(world, p) ? SUBMERGED_SKY_SEARCH : SKY_SEARCH;
+	const sky = nearestOpenSky(world, p.x, Math.floor(p.y), p.z, skyR);
+	if (!sky) throw new Error(`flyHigh: no open sky within ${skyR}`);
 	if (Math.floor(sky.x) !== Math.floor(p.x) || Math.floor(sky.z) !== Math.floor(p.z)) {
 		const r = await flyLeg(body, { x: sky.x, y: p.y, z: sky.z }, o);
 		if (r !== 'arrived') return r;

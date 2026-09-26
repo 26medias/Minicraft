@@ -58,6 +58,9 @@ export function createPerceiver(d: { body: Body; world: WorldView; own: Ownershi
 			const patch: Patch = [];
 			// 1. Foreign, non-bot edits.
 			for (const e of edits.splice(0)) {
+				// onEdit runs for every edit (it already ignores by === you): a same-id overwrite by another bot, or
+				// by an unnamed player, must still drop ownership even though the event filter below skips it.
+				patch.push(...d.own.onEdit(e, d.body.you));
 				if (e.by === d.body.you || e.byBot || !e.byName) continue;
 				for (const c of e.cells) {
 					const k = `${c.x},${c.y},${c.z}`;
@@ -72,7 +75,6 @@ export function createPerceiver(d: { body: Body; world: WorldView; own: Ownershi
 						raw.push({ kind: 'added-to-my-build', t: now, player: e.byName, cell });
 					}
 				}
-				patch.push(...d.own.onEdit(e, d.body.you));
 			}
 			patch.push(...d.own.drainPending());
 			// 2. Players.

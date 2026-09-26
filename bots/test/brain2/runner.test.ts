@@ -185,11 +185,13 @@ describe('BehaviourRunner (spec §7)', () => {
 	});
 
 	// 9. Review Focus 5. Red if the runner spins on rejections (no end), writes no stuck event, or counts the kid's
-	// body-buffer rejections as plan vetoes (the tripwire would halt).
+	// body-buffer rejections as plan vetoes (the tripwire would halt). plannedEdits is pinned to 2 (not the plan's
+	// natural 3): at 3, the overrun threshold is 3 × 1.1 = 3.3, which 3 miscounted vetoes never clear, so a runner
+	// that mixed up body-buffer rejections with plan vetoes would still pass; at 2 the threshold is 2.2.
 	it('Review Focus 5: a kid standing inside the plan\'s cells', async () => {
 		const r = rig();
 		r.noah(6.5, 5.5);
-		BEHAVIOURS.watch = scripted([place(5, 5), place(6, 5), place(7, 5), 'done']);
+		BEHAVIOURS.watch = { ...scripted([place(5, 5), place(6, 5), place(7, 5), 'done']), plannedEdits: () => 2 };
 		r.runner.start('watch', {});
 		await r.steps(3);
 		expect(r.store.state.memory.past[0]).toMatchObject({ outcome: 'failed', why: 'kid body buffer' });
@@ -300,5 +302,37 @@ describe('BehaviourRunner (spec §7)', () => {
 		expect(r.store.state.behaviour?.rejections).toBe(0);
 		await r.steps(3, 700);
 		expect(r.store.state.behaviour?.lastResults).toEqual([false, true, true]);
+	});
+
+	// Fix-round finding 3: an exception from next()/onResult/plan must not escape the un-awaited tick() as an
+	// unhandled rejection (a crash on Node 22). Red on the old tick(), which had no catch around the body: the
+	// throw rejected tick()'s promise instead of ending the behaviour.
+	it('a behaviour whose next() throws ends failed, and tick() resolves', async () => {
+		const r = rig();
+		BEHAVIOURS.watch = { ...scripted(['done']), next: () => { throw new Error('boom'); } };
+		r.runner.start('watch', {});
+		await expect(r.runner.tick()).resolves.toBeUndefined();
+		expect(r.store.state.behaviour).toBeNull();
+		expect(r.store.state.memory.past[0]).toMatchObject({ outcome: 'failed' });
+		expect(r.store.state.memory.past[0].why).toMatch(/^error: boom/);
+	});
+
+	// Fix-round finding 4: a gesture that starts while fit is pending must still pause the runner (rule 1 only
+	// checks the gesture before fit is asked). Red on the old tick(), which executed the action once fit
+	// resolved regardless of a gesture set meanwhile.
+	it('a gesture set while fit is pending pauses the runner', async () => {
+		let resolveFit: (v: 'yes') => void = () => undefined;
+		const fit = vi.fn(() => new Promise<'yes' | 'wait' | 'no'>((res) => (resolveFit = res)));
+		const r = rig({ fit });
+		r.noah(10.5, 5.5);
+		BEHAVIOURS.watch = scripted([place(5, 5), 'done']);
+		r.runner.start('watch', {});
+		r.clock.advance(100);
+		const pending = r.runner.tick();
+		r.store.apply([{ path: ['body', 'gesture'], value: 'hop' }], { kind: 'gesture', by: 'test' });
+		resolveFit('yes');
+		await pending;
+		expect(r.calls('place')).toHaveLength(0);
+		expect(r.store.state.behaviour).not.toBeNull();
 	});
 });

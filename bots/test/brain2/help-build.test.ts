@@ -148,6 +148,19 @@ describe('Help-build (spec §6)', () => {
 		expect(r.tripwire.halted).toBeNull();
 	});
 
+	// Fix-round finding 1: a line out of vertical reach. Red on the old code, which walked to a fixed 3-block
+	// horizontal offset ignoring height, "arrived" instantly (FakeBody snaps to the target), and looped forever
+	// without ever placing or ending — 20 ticks left it still in help-build with nothing placed.
+	it('a line 6 blocks above the bot ends failed: stuck out of reach', async () => {
+		const r = helpRig();
+		const HIGH = Y + 6;
+		r.layLine('Noah', [[10, HIGH, 10], [11, HIGH, 10], [12, HIGH, 10]], 'oak_planks');
+		r.startHelp('Noah');
+		await r.ticks(20);
+		expect(r.placed()).toEqual([]);
+		expect(r.store.state.memory.past[0]).toMatchObject({ behaviour: 'help-build', outcome: 'failed', why: 'stuck: out of reach' });
+	});
+
 	// Spec §7.1 (batch A ruling 1): no Help-build for a kid with an active stop signal, at any distance. Noah stands
 	// 30 blocks from the line, outside STOP_RADIUS, so the safety tier's radius can't refuse first. Red without the rule.
 	it('never helps a kid with an active stop signal', async () => {

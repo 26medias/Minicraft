@@ -52,6 +52,19 @@ describe('perception v2 (spec §4.4, §5.1)', () => {
 		expect(r.kinds()).toContain('broke-my-block*');
 		expect('3,64,3' in r.store.state.owned).toBe(false);
 	});
+	// Fix-round finding 2: a same-id overwrite by another bot (or an unnamed player) must still drop ownership.
+	// Red on the old code, which `continue`d before calling own.onEdit for byBot/!byName edits, so the cell
+	// stayed classified 'bot' even though a foreigner rewrote it (the kid index would miss it entirely).
+	it('a same-id overwrite by another bot drops ownership', () => {
+		const r = rig();
+		r.world.set(3, 64, 3, 'stone');
+		r.store.apply([r.own.ownWrite(3, 64, 3, id('stone'))], { kind: 'body', by: 't' });
+		expect(r.own.classify(3, 64, 3)).toBe('bot');
+		r.body.emitEdit({ by: 55, byName: 'Robo', byBot: true, opCount: 1, cells: [{ x: 3, y: 64, z: 3, oldId: id('stone'), newId: id('stone') }] });
+		r.step();
+		expect('3,64,3' in r.store.state.owned).toBe(false);
+		expect(r.own.classify(3, 64, 3)).not.toBe('bot');
+	});
 	// Red without buckets (rev 3 M5): a kid placing a block every 2 s made ~20 salient bursts a minute.
 	// Counted cumulatively through a store subscription (the event list is capped at 30), on cells that stay within
 	// 16 blocks and are never 3 in a line (so no line-started crowds the list). Gate 2: the old version stayed green without buckets.

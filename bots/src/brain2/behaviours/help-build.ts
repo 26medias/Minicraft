@@ -18,9 +18,10 @@ export interface HelpBuildPlan {
 
 /** Done when the kid places nothing on the line for this long (spec §6). */
 const IDLE_MS = 15_000;
-/** Close enough to place; farther, walk to a point 3 blocks from the cell. */
+/** Close enough to place (eye-to-cell-centre, feet + 1). */
 const REACH = 4.5;
-const STAND_OFF = 3;
+/** Walk targets land this much inside the reach circle, so the eye-to-cell-centre distance clears REACH reliably. */
+const REACH_MARGIN = 0.15;
 const AHEAD = 2;
 
 const at = (o: Vec3, d: Vec3, i: number): Vec3 => ({ x: o.x + d.x * i, y: o.y + d.y * i, z: o.z + d.z * i });
@@ -77,10 +78,16 @@ export const HELP_BUILD: Behaviour<HelpBuildParams, HelpBuildPlan> = {
 		const cell = pl.ahead.find((c) => ctx.world.getBlock(c.x, c.y, c.z) === 0);
 		if (!cell) return { kind: 'wait', ms: 500 };
 		const cx = cell.x + 0.5, cz = cell.z + 0.5;
-		if (Math.hypot(cx - ctx.pose.x, cell.y + 0.5 - (ctx.pose.y + 1), cz - ctx.pose.z) > REACH) {
-			const dx = ctx.pose.x - cx, dz = ctx.pose.z - cz;
-			const h = Math.hypot(dx, dz) || 1;
-			return { kind: 'walk', to: { x: cx + (dx / h) * STAND_OFF, z: cz + (dz / h) * STAND_OFF }, speed: ctx.style.walkSpeed };
+		const dy = cell.y + 0.5 - (ctx.pose.y + 1);
+		if (Math.hypot(cx - ctx.pose.x, dy, cz - ctx.pose.z) > REACH) {
+			// Height alone puts the cell out of reach: no horizontal point helps (rev fix: the old code walked to a
+			// fixed 3-block offset regardless of dy, "arrived" instantly, and looped forever without exiting).
+			if (Math.abs(dy) >= REACH) return { failed: 'stuck: out of reach' };
+			const offset = Math.max(0, Math.sqrt(REACH * REACH - dy * dy) - REACH_MARGIN);
+			let dx = ctx.pose.x - cx, dz = ctx.pose.z - cz;
+			let h = Math.hypot(dx, dz);
+			if (h < 1e-6) { dx = 1; dz = 0; h = 1; } // standing on the cell's own x/z: pick a direction away from it
+			return { kind: 'walk', to: { x: cx + (dx / h) * offset, z: cz + (dz / h) * offset }, speed: ctx.style.walkSpeed };
 		}
 		return { kind: 'place', cell, block: pl.block, free: !ctx.mustMine };
 	},

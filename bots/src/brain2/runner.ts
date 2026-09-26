@@ -134,6 +134,7 @@ export class BehaviourRunner {
 			if (this.needsFit(a, ctx)) {
 				const f = await this.d.fit(a, ctx);
 				if (this.gen !== gen) return;                 // ended or switched while fit was pending
+				if (this.d.store.state.body.gesture) return;  // a gesture started mid-fit: don't act mid-gesture
 				if (f === 'no') return this.reject('fit: no', false);
 				if (f === 'wait' && (this.waits.get(k) ?? 0) < MAX_WAITS) {
 					this.waits.set(k, (this.waits.get(k) ?? 0) + 1);
@@ -145,6 +146,12 @@ export class BehaviourRunner {
 				if (!again.ok) return this.reject(again.reason, again.planVeto);
 			}
 			await this.execute(a, ctx, gen);
+		} catch (err) {
+			// An exception here would otherwise escape this un-awaited tick() as an unhandled rejection (Node 22
+			// crashes on those): end the behaviour instead.
+			const message = err instanceof Error ? err.message : String(err);
+			this.d.log('error', { error: message });
+			if (this.active) this.end('failed', `error: ${message}`);
 		} finally {
 			this.isBusy = false;
 		}

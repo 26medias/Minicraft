@@ -1,6 +1,6 @@
 # Pause menu (Esc) — design
 
-Date: 2026-09-25. Branch `pause-menu`, off `main` @ a3ee265.
+Date: 2026-09-25. Branch `pause-menu`, off `main` @ a3ee265. Rev 2 (gate 1 incorporated, §8).
 
 ## 1. What Julien asked for
 
@@ -8,199 +8,275 @@ Date: 2026-09-25. Branch `pause-menu`, off `main` @ a3ee265.
 > unless the inventory is open since ESC closes it too. Keep UI/UX consistent.
 > Menu: Return to Game · Controls · Quit (main menu)
 
-## 2. The problem Esc actually poses
+## 2. What Esc really does in a browser (measured at gate 1)
 
-While the game has the mouse (pointer lock), **the browser keeps Esc for itself**: Chrome and
-Firefox use it to release the pointer and do not deliver a `keydown` to the page. So "press Esc"
-reaches the game only as a `pointerlockchange` with `document.pointerLockElement === null`.
+Measured in Chromium with real X key events (xdotool, headed Chromium on a private Xvfb display):
 
-Today that unlock just leaves the game running with a free cursor; a click on the canvas takes the
-mouse back (README "Menu": "Esc — exit pointer-lock … the world keeps running").
+- **M1.** A real Esc while the pointer is locked releases the lock; the page gets
+  `pointerlockchange` (unlocked) and **no keydown and no keyup**.
+- **M2.** `requestPointerLock()` never throws; it returns a promise. Within ~1.2–1.5 s of the
+  user's own Esc unlock it is **refused** (SecurityError, and `pointerlockerror` fires, no
+  `pointerlockchange`). Firefox returns `undefined` (no promise): `pointerlockerror` is the one
+  signal that works in both.
+- **M3.** A lock requested from an Esc keydown/keyup is refused inside the cooldown and, after it, is
+  granted then dropped in the same millisecond (Esc is not an activating key). **Esc can never give
+  the mouse back.**
+- **M4.** Headless Chromium is permissive: the lock is granted without a gesture, a CDP Esc arrives
+  as a keydown and does *not* unlock, and `document.exitPointerLock()` fires a real
+  `pointerlockchange`. Headless cannot reproduce M1–M3.
 
-The game also releases the pointer **itself** in four places, and none of those must open the
-pause menu:
+The game releases the pointer **itself** in four places, none of which may open the pause menu:
 
 | Owner | Where | Flag set before `exitPointerLock()` |
 |---|---|---|
 | I screen | `openInventory` (main.ts) | `inventoryOpen = true` |
-| Colour picker (C) | `ColorPicker.show` | picker root un-hidden (`colorPicker.isOpen`) |
+| Colour picker (C) | `ColorPicker.show` | `colorPicker.isOpen` |
 | Play timer freeze | `playtime.freeze` | `frozen = true` |
-| Network freeze (MP) | `freezeForNetwork` | `frozen = true`, `loop.mpDisconnected = true` |
+| Network freeze (MP) | `freezeForNetwork` | `frozen = true` |
 
-`pointerlockchange` is dispatched asynchronously, after each of those flags is already set.
+`pointerlockchange` is dispatched asynchronously, after each flag is set.
 
 ## 3. Behaviour
 
 ### 3.1 When the pause menu opens
 
-The pause menu opens when, during a game (after `startGame`), either:
+During a game (after `startGame`), the pause menu opens when either:
 
-- **(a)** the pointer lock is lost (`pointerlockchange`, not locked) and no owner from §2 holds the
-  screen (`!inventoryOpen && !colorPicker.isOpen && !frozen`) and the pause menu is not already
-  open; or
-- **(b)** an `Escape` keydown reaches the page while the pointer is **not** locked, nothing from §2
-  is open, and the pause menu is not open — the "I clicked outside / closed the I screen and now
-  press Esc" case. This keydown must be the *same* keypress that closed the I screen or the colour
-  picker: that one must **not** reopen anything. Rule: decide from the state *before* any Esc
-  handler ran this event (see §5.2).
+- **(a) unlock:** `pointerlockchange` with `document.pointerLockElement !== canvas`, and none of
+  `inventoryOpen`, `colorPicker.isOpen`, `frozen`, `pauseOpen`, `quitting`. This is the real-Esc
+  path (M1). Alt-tab / focus loss unlocks too, so the kid comes back to a stopped world behind the
+  menu, as in Minecraft — intended.
+- **(b) Esc while unlocked:** an `Escape` keydown, not `e.repeat`, with the pointer not locked, and
+  none of the flags above as they were **before any Esc handler of this event ran** (§5.2). This is
+  the "I closed the I screen / clicked outside, now I press Esc" case. The Esc that closes the I
+  screen, clears its search, or closes the colour picker opens nothing.
 
-Case (a) also covers alt-tab / focus loss, which releases the pointer too: the game comes back
-paused behind the menu, as in Minecraft. This is intended.
+Accepted race: if an owner opens and closes within the same frame, before its own async
+`pointerlockchange` arrives, the menu opens over nothing. Harmless (Return to Game).
 
-### 3.2 What pausing does
+### 3.2 While the pause menu is open
 
-Exactly what an open I screen does today (reuse, don't invent):
-
-- `loop.paused` becomes true (a third owner in `updatePaused`: `frozen || inventoryOpen || pauseOpen`),
-  the mouse button is released (`loop.setLeftMouseDown(false)`), the mining ring cleared, held keys
-  reset on close.
-- **Solo:** the world stops (the paused branch loads/meshes chunks only).
-- **Multiplayer:** the shared world keeps running (remote ops, simulation — the existing C3 rule in
-  `loop.tickBody`); only the local player stands still. Their `pos` stops changing so nothing is sent.
-- **The play timer keeps counting.** The pause menu is not a way around the parent's limit. If the
-  timer freezes the game while the pause menu is up, the freeze wins: the pause menu closes (same as
-  `closeInventory()` in `freeze`), the TIME'S UP screen shows.
-- Same for the network freeze: `freezeForNetwork` closes the pause menu, "Reconnecting…" shows.
-- Keys: while the pause menu is open, game keydowns are dropped (`shouldHandleKey` gains a
-  `pauseOpen` input that behaves like `frozen` for keydowns; keyups always pass). Tab and Shift
-  (sneak) likewise. Mouse: the canvas click that normally re-locks must not fire through the overlay
-  — the overlay covers the canvas and takes the clicks.
+- **Esc on the pause card does nothing** (M3: it cannot resume). **Esc in the Controls view** goes
+  back to the pause card (non-repeat only).
+- A click on the backdrop outside the card does nothing.
+- `loop.paused` is true: a third owner in `updatePaused` (`frozen || inventoryOpen || pauseOpen`).
+  On open: `loop.setLeftMouseDown(false)` (multiplayer then sends `mine-stop` on the next frame),
+  mining ring cleared. On close: `resetKeys()`.
+- **Solo:** the world stops (the paused branch only loads/meshes chunks).
+- **Multiplayer:** the shared world keeps running (the existing C3 rule in `loop.tickBody`); only the
+  local player stands still, so no `pos` is sent. The friend sees Noah's avatar standing — no cue.
+- **The play timer keeps counting.** If the timer freezes the game while the menu is up, the freeze
+  wins: the menu closes (like `closeInventory()` in `freeze`) and TIME'S UP shows. Same for
+  `freezeForNetwork` ("Reconnecting…").
+- Input gates, all keyed on `pauseOpen`:
+  - `shouldHandleKey` gains `pauseOpen` (drops every keydown like `frozen`; keyups pass);
+    `sneakKeyChange` likewise;
+  - the Tab listener returns on `pauseOpen` **before** its `preventDefault`, so Tab moves focus between
+    the menu's buttons;
+  - the F3 listener returns on `pauseOpen`;
+  - `openInventory` refuses on `pauseOpen` (the one entry point: I key, HUD pickaxe);
+  - mouse: `#pause-root` covers the canvas (fixed, inset 0, pointer-events auto), so no canvas click
+    and no mousedown reaches the game; `mousedown` is also guarded by `loop.paused`.
 
 ### 3.3 The screen
 
-An overlay on top of the running game (the world stays visible, dimmed), holding one card styled
-with the existing menu classes so it matches the main menu:
+An overlay on the running game (the world stays visible, dimmed), one card in the existing menu
+style so it matches the main menu:
 
-- backdrop: `position: fixed; inset: 0; background: rgba(0,0,0,0.55)`, z-index 20 (above the I
-  screen's 15, below the timer's 30 and the MP screens);
-- card: `.menu-card`, title `<h1>Paused</h1>`;
-- buttons, in order, the big green `.home-button` for the first and the normal `.menu-card button`
-  for the others:
-  1. **Return to Game** — closes the menu and asks for the pointer lock (the click is a user
-     gesture). A rejected / failed request is swallowed (same `p.catch(() => {})` as the timer's
-     resume); the kid can still click the canvas.
-  2. **Controls** — replaces the card's contents with the Controls view (§3.4).
-  3. **Quit to Menu** — §3.5.
+- `#pause-root`: `position: fixed; inset: 0; background: rgba(0,0,0,0.55)`, flex-centred,
+  `overflow-y: auto` (the Controls card is ~570 px tall), **z-index 18**: above the I screen (15),
+  below toasts / colour picker (20), the timer (25/30) and the MP screens (50). Hidden =
+  `display: none`.
+- card: `.menu-card`. Title **"Paused"** in solo, **"Game Menu"** in multiplayer (the friend's world
+  keeps going, so "Paused" would be untrue).
+- buttons, in order:
+  1. **Return to Game** — `.home-button` (big green).
+  2. **Controls** — plain `.menu-card button`.
+  3. **Quit to Menu** — plain button, with extra top margin (16 px) so it is set apart from the other
+     two against mis-clicks.
+- On open, focus moves to Return to Game; the card view is always the pause card on open (the
+  Controls view is reset by `close()`).
 
-**Esc while the pause menu is open** = Return to Game (Minecraft does this). Chrome may refuse a
-lock requested within ~1 s of the user's own Esc unlock; if the request fails, the menu is closed
-anyway and the game sits unlocked — the next canvas click locks, the next Esc re-opens the menu by
-rule (b). Esc in the Controls view goes back to the pause card (not to the game).
+### 3.4 Return to Game
 
-### 3.4 Controls view
+A click on Return to Game requests the pointer lock (a user gesture) and **does not close the menu**.
+The menu closes when `pointerlockchange` reports the canvas locked. On a refusal (promise rejection,
+or `pointerlockerror`) the menu stays open and nothing else happens; the kid clicks again (the
+cooldown is ~1.5 s, M2). The promise's rejection is swallowed.
 
-A read-only list, not the Options rebinding screen: bindings are read once at `startGame`
-(`keyToAction`), so rebinding mid-game would silently not apply; rebinding stays on the main menu's
-Options. Rows are **what it does → key**, with the key shown as the game shows keys elsewhere
-(`keycapLabel`), from the live `opts.keybindings`; an unbound action is left out. Mouse and fixed
-keys are listed too. Order and wording, kid-sized:
+Consequence for rule (a): the lock-granted `pointerlockchange` closes the menu; it never opens one.
 
-| Does | Key |
+### 3.5 Controls view
+
+Read-only, not the Options rebinding screen: bindings are read once at `startGame` (`keyToAction`),
+so a mid-game rebinding would not apply; rebinding stays on the main menu's Options.
+
+Rows are **what it does → key(s)**, built from the live `opts.keybindings` by a pure function.
+Key text goes through one display function, `keyText(code)`: `KeyW`→`W`, `Digit3`→`3`,
+`Numpad3`→`Num 3`, `Space`→`Space`, `Equal`→`=`, `Minus`→`-`, `ShiftLeft`/`ShiftRight`→`Shift`,
+`Escape`→`Esc`, `Backquote`→`` ` ``, `ArrowUp`→`↑` (etc.), anything else as `e.code`. Words are the
+kid words below, one spelling: "color", as in the rest of the app.
+
+| Does | Key(s) |
 |---|---|
-| Walk | W A S D (the four live bindings) |
-| Jump | jump binding |
+| Walk | forward, left, back, right bindings, e.g. `W A S D` |
+| Jump | jump |
 | Mine | Hold left click |
 | Build | Right click |
 | Swap a block | Shift + right click |
-| Pick a block | 1 – 9, Tab |
-| Inventory | inventory binding |
-| Change pickaxe | cyclePickaxe binding |
-| Fly | toggleFly binding |
-| Fly faster / slower | flySpeedUp / flySpeedDown |
-| Light TNT | ignite binding |
-| Lamp colour | pickLightColor binding |
-| Sneak | Shift |
-| Pause | Esc |
+| Choose a block | slot1…slot9: `1 – 9` when they are exactly Digit1…Digit9, else the nine keys; then `, Tab` |
+| Inventory | inventory |
+| Change pickaxe | cyclePickaxe |
+| Fly | toggleFly |
+| Fly faster / slower | flySpeedUp `/` flySpeedDown |
+| Light TNT | ignite |
+| Lamp color | pickLightColor |
+| Stop bouncing | Hold Shift |
+| Menu | Esc |
 
-The row table is data (`src/data/controls.data.ts`), built into rows by a pure function (unit
-tested). One **Back** button (`.menu-back`) returns to the pause card.
+Rules: an unbound binding (`''`) is left out of its row; a row whose bindings are all unbound is left
+out. If a code is bound to two actions, `buildKeyToAction` makes the later action win, so the
+earlier action's row leaves that code out (the view never shows a key that does nothing).
 
-### 3.5 Quit to Menu
+The rows are data (`src/data/controls.data.ts`). One **Back** button (`.menu-back`) returns to the
+pause card.
 
-The main menu is only reachable by a reload today (startGame runs once per page load). Quit reuses
-that:
+### 3.6 Quit to Menu
 
-- **Solo:** `await autosave.flush()` (the cloud upload included when there is one; the button shows
-  "Saving…" and is disabled meanwhile), then `location.reload()`. If the flush rejects, reload
-  anyway: `pagehide` already writes the local copy synchronously.
-- **Multiplayer:** clear `mp:autojoin` **first** (so the reload lands on the menu, never a rejoin),
-  send `leaving {secondsLeft: 0}` so the friend sees "Noah went home" (the existing toast; no protocol
-  change), `mpSync.flushFrame()`, `autosave.flush()` (the MP save stand-in), `client.close(1000)`,
-  then `location.reload()` — the same order the timer freeze uses at 0.
-- **Play timer:** a reload applies the existing refresh rule (spec §8.1 of the play-time design):
-  without a PIN or schedule the session is discarded, exactly as an F5 or the TIME'S UP "MENU" button
-  does today. Quit adds no new way around the limit.
+The main menu is reachable only by a reload (startGame runs once per page load). Quit sets
+**`quitting = true`** first. While `quitting`:
+- both buttons are disabled, the Quit button reads "Saving…";
+- Esc does nothing, rules (a)/(b) open nothing;
+- the timer freeze and the network freeze do not close the menu (the reload is coming anyway);
+- multiplayer: a connection loss does not start the Reconnector (`link.wire`'s loss callback returns
+  on `quitting`), so nothing can re-arm `mp:autojoin`.
 
-No confirmation dialog: nothing is lost by quitting (the world is saved), and a 7-year-old reads
-"Are you sure?" as an obstacle.
+Then:
+- **Solo:** `autosave.flush()` raced against **3 s**, then `location.reload()` (also on rejection).
+  Safe: `DualAdapter.saveWorld` writes the local copy synchronously before awaiting the cloud;
+  `dirty` stays true during the upload, so `pagehide` rewrites the local copy and flags the upload.
+- **Multiplayer:** in this order — clear `mp:autojoin` (belt and braces: it is one-shot and consumed
+  at boot, so it is not normally set during play); `leaving?.update(0)` (sends `leaving 0` →
+  the friend's "Noah went home" toast, and marks every threshold fired so no countdown can follow);
+  `mpSync.flushFrame()`; `autosave.flush()` raced against 3 s; `client.close(1000)`;
+  `location.reload()`. `client.close` sets `done`, so the close itself starts no reconnect. With no
+  play timer (`leaving` is null), send `{t:'leaving', secondsLeft: 0}` directly.
+- **Play timer:** the reload applies the existing refresh rule (play-time spec §8.1): without a PIN
+  or schedule the session is discarded — exactly what F5 or TIME'S UP → MENU does today. Quit adds
+  no new way around the limit.
+- An accidental multiplayer Quit costs a rejoin through Multiplayer → world (autojoin is cleared).
+  Accepted.
+
+No confirmation dialog: the world is saved; a 7-year-old reads "Are you sure?" as a wall.
 
 ## 4. Not in scope
 
-- No settings / volume / FOV in the pause menu. No "Options" (rebinding) mid-game.
-- No change to the protocol, the server, the save format or the timer rules.
-- The main menu itself is unchanged.
+- No settings / volume / FOV in the pause menu; no rebinding mid-game.
+- No change to the protocol, server, save format or timer rules. No "paused" cue for the friend.
+- Options accepting `Escape` as a binding: pre-existing, out of scope (noted for later).
 
 ## 5. Structure
 
 ### 5.1 Files
 
-- `src/ui/pause-menu.ts` — `PauseMenu` class (DOM only): `open()`, `close()`, `isOpen`,
-  `showControls()`, callbacks `onResume`, `onQuit`; ids `pause-root`, `pause-resume`,
-  `pause-controls`, `pause-quit`, `pause-back` for tests.
-- `src/data/controls.data.ts` — the §3.4 rows (label + action key or fixed key text).
-- `src/ui/controls-model.ts` — `controlRows(bindings)` → `{does, keys}[]` (pure, unit tested).
-- `src/game/pause-model.ts` — pure decision functions (unit tested):
-  - `shouldOpenOnUnlock(s)` for rule (a);
-  - `escapeAction(s)` → `'open' | 'resume' | 'back' | 'none'` for a keydown Escape, given
-    `{locked, pauseOpen, controlsShown, inventoryOpen, pickerOpen, frozen}` *as they were before any
-    handler of this event ran*.
+- `src/game/pause-model.ts` — pure decisions (unit tested):
+  - `PauseState = {locked, pauseOpen, controlsShown, quitting, inventoryOpen, pickerOpen, frozen}`;
+  - `shouldOpenOnUnlock(s)` — rule (a);
+  - `escapeAction(s, repeat)` → `'open' | 'back' | 'none'` — rule (b) and §3.2.
+- `src/ui/controls-model.ts` — `keyText(code)` and `controlRows(bindings)` → `{does, keys}[]` (pure).
+- `src/data/controls.data.ts` — the §3.5 rows.
+- `src/ui/pause-menu.ts` — `PauseMenu` (DOM): `open(title)`, `close()`, `isOpen`, `controlsShown`,
+  `setQuitting()`, callbacks `onResume`, `onQuit`; ids `pause-root`, `pause-resume`,
+  `pause-controls`, `pause-quit`, `pause-back`, `pause-title`.
 - `src/game/input-gate.ts` — `GateState` gains `pauseOpen`.
-- `src/main.ts` — wiring inside `startGame`.
-- `src/ui/ui.css` — `#pause-root` backdrop.
-- README "How to play → Menu" line updated; `docs/` gets no new subsystem doc (a short section in
-  README is enough).
+- `src/main.ts` — wiring inside `startGame`: the capture Esc listener, a `pointerlockchange` and a
+  `pointerlockerror` listener of its own, the gates of §3.2, Quit.
+- `src/ui/ui.css` — `#pause-root` and the Quit spacing.
+- README "How to play → Menu": the Esc line describes the pause menu.
 
-### 5.2 Esc ordering
+### 5.2 Esc ordering (measured at gate 1)
 
-The I screen, the colour picker and the inventory search each have their own `window` keydown
-listener for Escape, registered before `startGame`'s. To read the state *before* they ran, main.ts
-registers its Escape listener in the **capture** phase on `window` (`addEventListener('keydown', …,
-true)`): capture-phase listeners on `window` run before bubble-phase ones on `window`. It snapshots
-the state, decides with `escapeAction`, and acts after (so it does not reorder the others). It does
-not `stopPropagation`.
+main.ts registers its Escape listener on `window` in the **capture** phase. It runs before every
+bubble listener on `window` (the I screen's, the colour picker's — registered earlier, at
+main.ts:131), and it still runs when the I screen's search `<input>` has focus and calls
+`stopPropagation` (a bubble listener would never see that Esc). It snapshots the state
+(`locked` = `document.pointerLockElement === canvas`, read then), decides with `escapeAction`, and
+acts; it never stops propagation. Capture is **required**, not a nicety.
 
 ### 5.3 Dev oracle
 
-`window.__mc.pause = { isOpen, controlsShown }` (DEV only), for the smoke.
+`window.__mc.pause = { isOpen(), controlsShown(), quitting() }` (DEV only).
 
 ## 6. Tests
 
-⚠ Headless Chromium cannot produce a real Esc-releases-pointer-lock, and `requestPointerLock` in
-headless is unreliable. So the instrument is split, and each part must be able to go red:
+Every check below names the mutant that must turn it red; the plan says how each mutant is applied
+and records that it was seen red once.
 
-1. **Unit (vitest):** `pause-model` — every row of the §3.1 / §3.3 decisions, including "Esc that
-   closes the I screen does not open the pause menu" and "unlock while the picker opens does not
-   open it". `controlRows` — live bindings shown, an unbound action left out, a rebinding changes the
-   row. `shouldHandleKey` with `pauseOpen`. Each test is checked to fail against a stub that returns
-   the opposite / against the pre-change `input-gate`.
-2. **Browser smoke** (`scripts/pause-smoke.ts`, same safety harness as `menu-smoke.ts`: own Vite on a
-   free port, dead save API, any non-localhost request aborts the run): New World → play; then
-   - fire the unlock path by dispatching a real `pointerlockchange` on `document` while
-     `pointerLockElement` is null → `#pause-root` visible, `__mc.loop.paused === true`;
-   - the player does not move while W is held under the menu;
-   - Controls → rows present, the jump row shows the bound key; Esc → back to the pause card;
-   - Return to Game → menu hidden, `loop.paused === false`;
-   - open the I screen (I), press Esc → I screen closed **and** pause menu **not** open;
-   - press Esc with nothing open and unlocked → pause menu opens (rule b);
-   - Quit → the page reloads to the main menu, and the world is in the list with the block placed
-     before quitting (proves the flush);
-   - the timer: set `__mc.playtime.setRemaining(1)` with the pause menu open → TIME'S UP visible,
-     pause menu hidden.
-   The smoke's own sanity: run once on `main` (no pause menu) and confirm it fails at the first
-   check.
-3. **Multiplayer** — one scenario added to `scripts/mp-e2e.ts` (it already runs two clients on a
-   local `mcserver`): A pauses; B places a block; A still receives it (A's world has it while paused);
-   A quits → B gets the "went home" toast, and A's page is on the menu, not rejoining.
+### 6.1 Unit (vitest)
 
-Manual check at `localhost:5173` in a headed browser (by Julien, not on his display by an agent):
-real Esc with the pointer locked opens the menu.
+- `pause-model`: every rule of §3.1–§3.2. Mutants: ignore `inventoryOpen`; ignore `pickerOpen`;
+  ignore `frozen`; ignore `locked`; ignore `repeat`; ignore `quitting`; Esc on the card returns
+  something other than `'none'`.
+- `controlRows` / `keyText`: live bindings shown; `Equal`→`=`; an unbound action is left out; an
+  all-unbound row is left out; rebinding changes the row; non-default slot keys listed; a code bound
+  twice shows only on the winning action. Mutants: hard-coded defaults; no unbound filter.
+- `shouldHandleKey` / `sneakKeyChange` with `pauseOpen`. Mutant: the pre-change `input-gate`.
+
+### 6.2 Browser smoke — `scripts/pause-smoke.ts`
+
+Same harness as `menu-smoke.ts`: its own Vite on a free port (`--strictPort`), dead save API, any
+non-localhost request aborts the run, headless. The worktree needs the atlas (`npm run build-atlas`
+before the first run; `public/atlas.*` is gitignored).
+
+The pointer path is **real** (M4): click the canvas → locked; page-side `document.exitPointerLock()` →
+a real `pointerlockchange`. Start a solo New World **with a duration** (not "No limit"), so
+`__mc.playtime` exists.
+
+| # | Check | Mutant that turns it red |
+|---|---|---|
+| S1 | lock, then unlock → `#pause-root` visible, title "Paused", `loop.paused` | no unlock listener |
+| S2 | under the menu: Tab, `3`, F, I, F3 → selected slot, flying, inventory, perf overlay unchanged | each gate removed in turn |
+| S3 | hold W, open, Return → `__mc.keys.forward === false` | no `resetKeys` on close |
+| S4 | Esc on the pause card → still open | `escapeAction` returns 'resume' on the card |
+| S5 | Controls → the jump row shows `Space`, fly row `= / -`; Esc → pause card; open→close→open shows the card | no key display map; no reset in `close()` |
+| S6 | Return to Game with `requestPointerLock` stubbed to reject + `pointerlockerror` → menu stays open | close on click |
+| S7 | Return to Game (real lock) → menu closed, `loop.paused === false` | no close on locked |
+| S8 | I, switch to the **Craft tab** (search not focused), Esc → I closed and pause **not** open | bubble-phase listener |
+| S9 | C (colour picker), Esc → picker closed, pause not open | bubble-phase listener |
+| S10 | unlocked, nothing open, Esc → pause opens (rule b) | no rule (b) |
+| S11 | `__mc.playtime.setRemaining(1)` with the menu open → TIME'S UP visible, pause hidden | freeze does not close pause |
+| S12 | (new game with a duration) place a block; answer the save API's PUT with a **delayed 200 (1.5 s)**; Quit → button reads "Saving…" and is disabled; the PUT arrives before navigation; the page is on the main menu; Continue → `__mc.world.getBlock` shows the block | Quit = bare `location.reload()` |
+| S13 | save PUT never answered → reload happens within 3 s + margin | no timeout race |
+
+### 6.3 Multiplayer — one scenario in `scripts/mp-e2e.ts`
+
+Two clients on its local `mcserver`. A pauses (title "Game Menu"); B places a block; A's world has it
+while paused (mutant: pause sets `mpDisconnected`-like freeze). A quits → B shows "… went home"
+(mutant: no `leaving`), A's page is on the main menu. The "not rejoining" assertion only catches a
+Quit that calls `rejoinReload` — stated, not overclaimed.
+
+### 6.4 Manual (Julien, headed browser, the browser Noah uses)
+
+1. Lock, one real Esc → the menu opens and **stays** open.
+2. Esc on the pause card, twice, > 2 s apart → nothing happens.
+3. Return to Game within 1 s of the Esc → menu stays; a second click resumes.
+4. Alt-tab away and back → the menu is up, the world stood still (solo).
+5. Firefox, if Noah uses it: 1–3 again.
+
+## 7. Open for Julien
+
+- Label: **"Quit to Menu"** (matches the existing MENU / Menu buttons) rather than "Save & Quit".
+
+## 8. Gate 1 — what changed from rev 1
+
+Accepted: Esc on the card does nothing (all three technical reviewers measured M3); Return closes only
+on lock; `quitting` latch + 3 s flush cap; the MP quit uses `leaving.update(0)` and blocks the
+Reconnector; gates for F3, Tab (before `preventDefault`), `openInventory`; z-index 18 so toasts draw
+above; `overflow-y: auto`; the key display map; "Stop bouncing: hold Shift" instead of "Sneak"
+(Shift only stops pads here — "Sneak" would make Noah expect edge protection); slot keys from
+bindings; "Game Menu" title in MP; kid words, "color" spelling; Quit set apart; every smoke check
+re-cut so it can go red, each with its named mutant (the Craft-tab / picker Esc checks catch a
+bubble listener; the Quit check uses the save API as oracle, since `pagehide` and
+`visibilitychange` already write the local copy on reload; the timer check starts with a duration
+and runs before Quit); the real headless lock instead of a synthetic event.
+Rejected: a 300 ms Esc-after-unlock guard — unneeded once Esc on the card does nothing.

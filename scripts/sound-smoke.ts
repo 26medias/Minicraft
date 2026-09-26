@@ -91,6 +91,16 @@ for (const sig of ['SIGINT', 'SIGTERM', 'SIGHUP'] as const) process.on(sig, () =
 		await page.click('#home-single');
 		const menuMusic = await page.waitForFunction(() => (window as unknown as { __music: { playing: boolean } }).__music.playing, null, { timeout: 8_000 }).then(() => true, () => false);
 		check(menuMusic, 'music plays on the menu within a few seconds of the first click');
+		// The playlist loops: when a track ends, a different one starts a few seconds later.
+		const first = await page.evaluate(() => (window as unknown as { __music: { track: number | null } }).__music.track);
+		// The skip needs the track's length, known once its metadata has loaded.
+		await page.waitForFunction(() => Number.isFinite((window as unknown as { __music: { el: HTMLAudioElement | null } }).__music.el?.duration), null, { timeout: 10_000 });
+		await page.evaluate(() => (window as unknown as { __music: { skipToEnd(): void } }).__music.skipToEnd());
+		const next = await page.waitForFunction((f) => {
+			const t = (window as unknown as { __music: { track: number | null } }).__music.track;
+			return t !== null && t !== f ? { t } : false; // wrapped: track 0 is falsy
+		}, first, { timeout: 12_000 }).then((h) => h.jsonValue().then((v) => (v as { t: number }).t), () => null);
+		check(next !== null, `after track ${first} ends, the next one (${next}) starts within seconds`);
 		await page.click('#single-new');
 		await page.fill('#w-seed', '3');
 		await page.click('#w-create');

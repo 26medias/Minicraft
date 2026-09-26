@@ -56,8 +56,20 @@ const d3 = (a: Vec3, b: Vec3) => Math.hypot(a.x - b.x, a.y - b.y, a.z - b.z);
  */
 export function filterBlast(destroyed: readonly Vec3[], c: FilterCtx): { remove: Vec3[]; dropped: string | null } {
 	const remove = destroyed.filter((q) => c.classify(q.x, q.y, q.z) === 'natural');
+	// Only the kid cells that can be within KID_CELL_DIST of the blast's box are checked per cell (a wide search's
+	// kid-cell list is thousands long; checking each removed cell against all of them starved the socket).
+	let kidCells = c.kidCells;
+	if (remove.length && kidCells.length) {
+		let x0 = Infinity, y0 = Infinity, z0 = Infinity, x1 = -Infinity, y1 = -Infinity, z1 = -Infinity;
+		for (const q of remove) {
+			x0 = Math.min(x0, q.x); y0 = Math.min(y0, q.y); z0 = Math.min(z0, q.z);
+			x1 = Math.max(x1, q.x); y1 = Math.max(y1, q.y); z1 = Math.max(z1, q.z);
+		}
+		const D = KID_CELL_DIST;
+		kidCells = kidCells.filter((k) => k.x >= x0 - D && k.x <= x1 + D && k.y >= y0 - D && k.y <= y1 + D && k.z >= z0 - D && k.z <= z1 + D);
+	}
 	for (const q of remove) {
-		for (const k of c.kidCells) if (d3(q, k) <= KID_CELL_DIST) return { remove: [], dropped: `within ${KID_CELL_DIST} of a kid cell` };
+		for (const k of kidCells) if (d3(q, k) <= KID_CELL_DIST) return { remove: [], dropped: `within ${KID_CELL_DIST} of a kid cell` };
 		for (const k of c.kids) if (d3(q, k) <= KID_POS_DIST) return { remove: [], dropped: `within ${KID_POS_DIST} of a kid` };
 		for (const [dx, dy, dz] of FACES) if (c.world.isLiquid(c.world.getBlock(q.x + dx, q.y + dy, q.z + dz))) return { remove: [], dropped: 'touches liquid' };
 	}
@@ -75,9 +87,12 @@ export function kidCellsNear(world: WorldView, classify: FilterCtx['classify'], 
 	return out;
 }
 
-/** The top terrain block of a column: the highest solid that is not leaves or a log (a canopy is not ground); −1 if none. */
-export function terrainTop(world: WorldView, x: number, z: number): number {
-	for (let y = WORLD_TOP; y >= 0; y--) {
+/**
+ * The top terrain block of a column: the highest solid that is not leaves or a log (a canopy is not ground); −1 if none.
+ * `from`: scan down from there (a known upper bound, e.g. the cached top of the unedited column) instead of the world top.
+ */
+export function terrainTop(world: WorldView, x: number, z: number, from = WORLD_TOP): number {
+	for (let y = Math.min(from, WORLD_TOP); y >= 0; y--) {
 		const v = world.getBlock(x, y, z);
 		if (!world.isSolid(v)) continue;
 		const n = world.blockName(v) ?? '';
@@ -85,6 +100,44 @@ export function terrainTop(world: WorldView, x: number, z: number): number {
 		return y;
 	}
 	return -1;
+}
+
+/**
+ * A cache of terrainTop per column, stored per chunk (a 16 × 16 Int16Array, −2 = unknown). `invalidate` a column when
+ * a cell in it changes (the landscaper does it from every edit event), `clear` on a reconnect.
+ */
+export class ColumnTops {
+	private readonly chunks = new Map<string, Int16Array>();
+	constructor(private readonly world: WorldView) {}
+	get(x: number, z: number): number {
+		const cx = Math.floor(x / 16), cz = Math.floor(z / 16);
+		const k = `${cx},${cz}`;
+		let a = this.chunks.get(k);
+		if (!a) {
+			a = new Int16Array(256).fill(-2);
+			this.chunks.set(k, a);
+		}
+		const i = (x - cx * 16) * 16 + (z - cz * 16);
+		if (a[i] === -2) a[i] = terrainTop(this.world, x, z);
+		return a[i];
+	}
+	invalidate(x: number, z: number): void {
+		const cx = Math.floor(x / 16), cz = Math.floor(z / 16);
+		const a = this.chunks.get(`${cx},${cz}`);
+		if (a) a[(x - cx * 16) * 16 + (z - cz * 16)] = -2;
+	}
+	clear(): void {
+		this.chunks.clear();
+	}
+	/** Chunks cached (for tests and the log). */
+	get size(): number {
+		return this.chunks.size;
+	}
+}
+
+/** The planner's options beyond the filter context: a column-top cache (the live world's tops, reused across candidates). */
+export interface PlanCtx extends Omit<FilterCtx, 'world'> {
+	tops?: (x: number, z: number) => number;
 }
 
 export interface BlastSpot {
@@ -145,13 +198,27 @@ export const spotKey = (x: number, y: number, z: number) => `${x},${y},${z}`;
  * rules out (tried before), gets no TNT on that layer. `footprint` (default MIN_FOOTPRINT) is the side of the flat
  * square the plan must leave at L: a board request passes its whole size, so the square ends flat at L all over.
  */
-export function evaluateArea(world: WorldView, x0: number, z0: number, size: number, f: Omit<FilterCtx, 'world'>, skipSpot?: (x: number, y: number, z: number) => boolean, footprint = Math.min(MIN_FOOTPRINT, size)): AreaPlan | string {
+export function evaluateArea(world: WorldView, x0: number, z0: number, size: number, f: PlanCtx, skipSpot?: (x: number, y: number, z: number) => boolean, footprint = Math.min(MIN_FOOTPRINT, size)): AreaPlan | string {
+	const it = evaluateAreaSteps(world, x0, z0, size, f, skipSpot, footprint);
+	for (;;) {
+		const r = it.next();
+		if (r.done) return r.value;
+	}
+}
+
+/**
+ * evaluateArea in steps: the generator yields after every column and every planned blast, so a caller can spread one
+ * square's planning over several event-loop turns (see Slicer); it returns the same plan or refusal.
+ */
+export function* evaluateAreaSteps(world: WorldView, x0: number, z0: number, size: number, f: PlanCtx, skipSpot?: (x: number, y: number, z: number) => boolean, footprint = Math.min(MIN_FOOTPRINT, size)): Generator<void, AreaPlan | string> {
+	const topOf = f.tops ?? ((x: number, z: number) => terrainTop(world, x, z));
 	let lo = Infinity, hi = -Infinity, ice = 0;
 	const tops = new Map<number, number>();
 	const all: number[] = [];
 	for (let x = x0; x < x0 + size; x++) {
 		for (let z = z0; z < z0 + size; z++) {
-			const t = terrainTop(world, x, z);
+			const t = topOf(x, z);
+			yield;
 			if (t < 0) return 'no ground';
 			lo = Math.min(lo, t);
 			hi = Math.max(hi, t);
@@ -173,7 +240,7 @@ export function evaluateArea(world: WorldView, x0: number, z0: number, size: num
 	if (floors.length === 0) return 'too steep';
 	let last = 'too little to remove';
 	for (const L of floors) {
-		const r = planAt(world, x0, z0, size, L, hi, f, skipSpot, footprint);
+		const r = yield* planAt(world, x0, z0, size, L, hi, f, topOf, skipSpot, footprint);
 		if (typeof r !== 'string') return { ...r, range: hi - lo };
 		last = r;
 		// A safety refusal holds at every floor.
@@ -183,7 +250,7 @@ export function evaluateArea(world: WorldView, x0: number, z0: number, size: num
 }
 
 /** The plan at one floor L (see evaluateArea), simulated top layer first on an overlay of the world. */
-function planAt(world: WorldView, x0: number, z0: number, size: number, L: number, hi: number, f: Omit<FilterCtx, 'world'>, skipSpot: ((x: number, y: number, z: number) => boolean) | undefined, footprint: number): Omit<AreaPlan, 'range'> | string {
+function* planAt(world: WorldView, x0: number, z0: number, size: number, L: number, hi: number, f: PlanCtx, topOf: (x: number, z: number) => number, skipSpot: ((x: number, y: number, z: number) => boolean) | undefined, footprint: number): Generator<void, Omit<AreaPlan, 'range'> | string> {
 	const gone = new Set<string>();
 	const key = (x: number, y: number, z: number) => `${x},${y},${z}`;
 	const ov = {
@@ -193,6 +260,8 @@ function planAt(world: WorldView, x0: number, z0: number, size: number, L: numbe
 		blockName: (v: number) => world.blockName(v),
 	} as unknown as WorldView;
 	const bw = blastWorld(ov);
+	// The overlay only removes cells, so a column's top on it is at most its top on the world: scan down from there.
+	const ovTop = (x: number, z: number) => terrainTop(ov, x, z, topOf(x, z));
 	const layers = Math.max(1, Math.ceil((hi - L - 1) / FLATTEN_HEIGHT));
 	const spots: BlastSpot[] = [];
 	const seen = new Set<string>();
@@ -201,7 +270,8 @@ function planAt(world: WorldView, x0: number, z0: number, size: number, L: numbe
 		const base = L + k * FLATTEN_HEIGHT;
 		for (const c of spotColumns(x0, z0, size)) {
 			if (skipSpot?.(c.x, base + 1, c.z)) continue;
-			const top = terrainTop(ov, c.x, c.z);
+			yield;
+			const top = ovTop(c.x, c.z);
 			if (top < base || top - base > MAX_DIG) continue;
 			const dig: Vec3[] = [];
 			for (let y = top; y >= base + 1; y--) if (ov.getBlock(c.x, y, c.z) !== 0) dig.push({ x: c.x, y, z: c.z });
@@ -232,17 +302,18 @@ function planAt(world: WorldView, x0: number, z0: number, size: number, L: numbe
 		}
 	}
 	if (seen.size < MIN_AREA_REMOVE) return 'too little to remove';
-	if (!hasFlatSquare(ov, x0, z0, size, L, Math.min(footprint, size))) return 'no flat footprint';
+	yield;
+	if (!hasFlatSquare(ovTop, x0, z0, size, L, Math.min(footprint, size))) return 'no flat footprint';
 	return { x0, z0, size, L, layers: Math.max(1, ...spots.map((s) => (s.layer ?? 0) + 1)), spots, removes: seen.size, removableFiltered: seen.size, digs };
 }
 
 /** Whether a contiguous `side` × `side` square of columns in the area has its top exactly at L (after the plan). */
-function hasFlatSquare(ov: WorldView, x0: number, z0: number, size: number, L: number, side: number): boolean {
+function hasFlatSquare(ovTop: (x: number, z: number) => number, x0: number, z0: number, size: number, L: number, side: number): boolean {
 	// 2D prefix sums of "column top == L".
 	const n = size + 1;
 	const ps = new Array<number>(n * n).fill(0);
 	for (let i = 1; i <= size; i++) for (let j = 1; j <= size; j++) {
-		const ok = terrainTop(ov, x0 + i - 1, z0 + j - 1) === L ? 1 : 0;
+		const ok = ovTop(x0 + i - 1, z0 + j - 1) === L ? 1 : 0;
 		ps[i * n + j] = ok + ps[(i - 1) * n + j] + ps[i * n + j - 1] - ps[(i - 1) * n + j - 1];
 	}
 	for (let i = side; i <= size; i++) for (let j = side; j <= size; j++) {

@@ -183,7 +183,7 @@ export function layoutOnRegion(region: { x0: number; z0: number; x1: number; z1:
  * columns first (10 lots), then 4, then 3, then 2 (4 lots: the floor). Radius widens in steps (`q.radii`, default
  * LIMITS.LEASH_STEPS: 32/64/96, as the site search): every column count is tried in full within the closest radius
  * before the search widens, so a wide, sparse fit never beats a tight one nearby. `step()` judges up to `batch`
- * centres; returns the site, null while searching, 'none' when nothing fits within the widest radius.
+ * centres (or as many as fit in `budgetMs`); returns the site, null while searching, 'none' when nothing fits within the widest radius.
  */
 export class NeighbourhoodSearch {
 	private readonly centres: Array<Col & { dist: number }> = [];
@@ -219,8 +219,12 @@ export class NeighbourhoodSearch {
 		return v;
 	};
 
-	step(batch = 40): NeighbourhoodSite | null | 'none' {
+	step(batch = 40, budgetMs = 15): NeighbourhoodSite | null | 'none' {
+		// Bounded by time as well as count: a call returns (null) once budgetMs has passed, so the caller's yield
+		// between calls keeps the bot's socket served (a fresh chunk's generation alone can take tens of ms).
+		const t0 = performance.now();
 		for (let i = 0; i < batch; i++) {
+			if (i > 0 && performance.now() - t0 >= budgetMs) return null;
 			if (this.ri >= this.radii.length) return 'none';
 			if (this.ni >= NeighbourhoodSearch.COLS.length) {
 				this.ri++;

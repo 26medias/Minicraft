@@ -28,7 +28,9 @@ import { makeAsk } from '../builder/builder.js';
 import { readPlan } from '../foreman/plan-file.js';
 import { claimNext, complete, post, renew, type Post } from '../board/board.js';
 import { MarkerWatcher } from '../board/markers.js';
-import { AREA, blastWorld, evaluateArea, filterBlast, kidCellsNear, KID_CELL_DIST, MIN_SPOT_REMOVE, scoreArea, spotKey as cellKey, terrainTop, type AreaPlan } from './blast-plan.js';
+import { AREA, blastWorld, ColumnTops, filterBlast, kidCellsNear, KID_CELL_DIST, MIN_SPOT_REMOVE, spotKey as cellKey, terrainTop, type AreaPlan } from './blast-plan.js';
+import { searchAreas } from './area-search.js';
+import { LagMonitor, Slicer } from '../shared/slice.js';
 import { craftUpTo, rawShortfall, type Inventory } from './craft.js';
 import { gather, mineCell, travelTo, type GatherCtx } from './gather.js';
 import type { SharedCells } from '../shared/bot-cells.js';
@@ -41,10 +43,7 @@ export const DEFAULT_MAX_BLASTS = 15;
 const TOY = 'flatten_tnt';
 const TOY_ID = blockId(TOY)!;
 const FUSE_MS = tntSpec(TOY)!.fuse * 1000;
-/** Candidate squares: centres on an 8-block grid, within each radius of the anchor in turn (the search widens only when a ring finds nothing). */
-export const SEARCH_RADII = [32, 64, 96, 128];
-/** No candidate square's centre is nearer world spawn than this. */
-export const SPAWN_CLEAR = 16;
+export { SEARCH_RADII, SPAWN_CLEAR } from './area-search.js';
 /** An area tried (picked) is not picked again, nor any square overlapping it, for this long. */
 export const TRIED_AREA_MS = 60 * 60_000;
 /** The rest between areas when `--rest-sec` is not given (between blasts of one area there is none). */
@@ -201,13 +200,19 @@ export function runLandscaper(o: LandscaperOpts): LandscaperHandle {
 		}
 	}
 
+	/** The terrain tops of columns it has looked at (reused across searches), kept true by every edit event. */
+	const tops = new ColumnTops(o.world);
 	const unsubs = [
 		o.body.onEdit((e) => {
+			for (const c of e.cells) tops.invalidate(c.x, c.z);
 			const who = stop.onEdit(e, o.body.journal(), clock());
 			if (who) o.log({ k: 'stop-signal', kid: who, t: clock() });
 			for (const op of own.onEdit(e, o.body.you)) if (op.value === undefined) delete file.owned[op.path[1] as string];
 		}),
-		o.body.onReconnect(() => own.reset()),
+		o.body.onReconnect(() => {
+			own.reset();
+			tops.clear();
+		}),
 	];
 
 	const anchor = (): Vec3 => {
@@ -237,47 +242,18 @@ export function runLandscaper(o: LandscaperOpts): LandscaperHandle {
 	 * centre) at least SPAWN_CLEAR from spawn.
 	 */
 	async function candidates(a: { x: number; z: number }, req?: number): Promise<AreaPlan[]> {
-		const classify = (x: number, y: number, z: number) => own.classify(x, y, z);
 		const size = req ?? o.areaSize ?? AREA;
-		const kids = kidsNow();
 		const now = clock();
 		const busy = [...file.areas.filter((x) => x.status !== 'abandoned'), ...file.triedAreas.filter((x) => now - x.t < TRIED_AREA_MS)];
 		const tried = new Set(file.triedSpots);
-		const skipSpot = (x: number, y: number, z: number) => tried.has(cellKey(x, y, z));
-		const out: AreaPlan[] = [];
-		const rejections: Record<string, number> = {};
-		let inner = -1;
-		let radius = 0;
-		for (const R of SEARCH_RADII) {
-			radius = R;
-			const kidCells = kidCellsNear(o.world, classify, a.x - R - size, a.z - R - size, a.x + R + size, a.z + R + size, KID_CELL_DIST + 8);
-			for (let dx = -R; dx <= R; dx += 8) {
-				for (let dz = -R; dz <= R; dz += 8) {
-					if (stopped) return [];
-					const d = Math.hypot(dx, dz);
-					if (d > R || d <= inner) continue;
-					const cx = Math.floor(a.x) + dx, cz = Math.floor(a.z) + dz;
-					const x0 = cx - Math.floor(size / 2), z0 = cz - Math.floor(size / 2);
-					const nearSpawn = req
-						? Math.hypot(Math.max(x0 - o.spawn.x, 0, o.spawn.x - (x0 + size - 1)), Math.max(z0 - o.spawn.z, 0, o.spawn.z - (z0 + size - 1))) < SPAWN_CLEAR
-						: Math.hypot(cx - o.spawn.x, cz - o.spawn.z) < SPAWN_CLEAR;
-					if (nearSpawn) {
-						rejections['near spawn'] = (rejections['near spawn'] ?? 0) + 1;
-						continue;
-					}
-					if (busy.some((b) => x0 < b.x0 + b.size + 4 && x0 + size + 4 > b.x0 && z0 < b.z0 + b.size + 4 && z0 + size + 4 > b.z0)) continue;
-					const r = evaluateArea(o.world, x0, z0, size, { classify, kidCells, kids }, skipSpot, req);
-					if (typeof r === 'string') rejections[r] = (rejections[r] ?? 0) + 1;
-					else out.push(r);
-					await new Promise((res) => setImmediate(res));
-				}
-			}
-			inner = R;
-			if (out.length) break;
-		}
-		out.sort((p, q) => scoreArea(q, a) - scoreArea(p, a));
-		o.log({ k: 'area-search', t: clock(), anchor: a, radius, size, found: out.length, rejections });
-		return out;
+		const slicer = new Slicer();
+		const t0 = clock();
+		const r = await searchAreas({
+			world: o.world, classify: (x, y, z) => own.classify(x, y, z), tops, spawn: o.spawn, kids: kidsNow(), busy,
+			skipSpot: (x, y, z) => tried.has(cellKey(x, y, z)), alive: () => !stopped, slicer,
+		}, a, size, req);
+		o.log({ k: 'area-search', t: clock(), anchor: a, radius: r.radius, size, found: r.found.length, rejections: r.rejections, candidates: r.candidates, ms: clock() - t0, slices: slicer.yields, longestSliceMs: Math.round(slicer.longest) });
+		return r.found;
 	}
 
 	const dirName = (dx: number, dz: number) => {
@@ -651,6 +627,8 @@ export function runLandscaper(o: LandscaperOpts): LandscaperHandle {
 		}
 	}
 
+	// The event-loop guard: a blocked loop starves the socket (pings, poses) until the server drops it.
+	const lag = new LagMonitor((ms) => o.log({ k: 'lag', t: clock(), ms, doing: stats.current }));
 	const statusTimer = o.status
 		? setInterval(() => {
 			o.status!(`${o.name}: ${stats.current} | blasts ${stats.blasts} (dropped ${stats.dropped}), removed ${stats.removed} | mined ${stats.mined} | areas ${stats.areasDone} | engine ${o.primary?.name ?? 'none'} (fallbacks ${stats.fallbacks}/${stats.asks})${halted() ? ' | EDITS HALTED' : ''}`);
@@ -674,6 +652,7 @@ export function runLandscaper(o: LandscaperOpts): LandscaperHandle {
 			stopped = true;
 			for (const w of [...wakers]) w();
 			if (statusTimer) clearInterval(statusTimer);
+			lag.stop();
 			await done;
 			watcher.stop();
 			for (const u of unsubs) u();

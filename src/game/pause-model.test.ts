@@ -1,11 +1,14 @@
 import { describe, it, expect } from 'vitest';
 import { escapeAction, shouldOpenOnUnlock, type PauseState } from './pause-model';
 
-const idle: PauseState = { locked: false, pauseOpen: false, controlsShown: false, quitting: false, inventoryOpen: false, pickerOpen: false, frozen: false };
+const idle: PauseState = { locked: false, pauseOpen: false, controlsShown: false, quitting: false, inventoryOpen: false, pickerOpen: false, frozen: false, focused: true };
 
 describe('shouldOpenOnUnlock (spec §3.1 a)', () => {
-	it('opens on an unlock nobody owns (the real Esc, alt-tab)', () => {
+	it('opens on an unlock nobody owns (the real Esc)', () => {
 		expect(shouldOpenOnUnlock(idle)).toBe(true);
+	});
+	it('does not open when the window lost focus (PrintScreen, alt-tab)', () => {
+		expect(shouldOpenOnUnlock({ ...idle, focused: false })).toBe(false);
 	});
 	it('does not open when the I screen, the colour picker or a freeze released the pointer', () => {
 		expect(shouldOpenOnUnlock({ ...idle, inventoryOpen: true })).toBe(false);

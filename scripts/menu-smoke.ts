@@ -5,7 +5,7 @@
 // Starts its OWN Vite dev server on --port (default 5173, --strictPort: if the port is busy it
 // stops and says so; it never reuses or stops a server it did not start) with
 // VITE_MINICRAFT_API_URL pointed at a dead local port, and drives a headless Chromium:
-// home (two big buttons, small Parents) → Multiplayer (name screen, sleeping server, automatic
+// home (Single Player, Multiplayer, a stone Parents button) → Multiplayer (name screen, sleeping server, automatic
 // recovery, the name-taken message) → Parents (rules with a saved message, multiplayer worlds) →
 // Single Player under a daily limit (status line) and without (duration control, New World →
 // Create → Play: the world loads) → reload (world and duration remembered) → Parents with a PIN
@@ -138,14 +138,13 @@ for (const sig of ['SIGINT', 'SIGTERM', 'SIGHUP'] as const) process.on(sig, () =
 		// 1. Home: three big buttons (two when the site has no multiplayer server).
 		await page.waitForSelector('#home-single');
 		if (MP_URL === '') {
-			check(await page.locator('.home-button').count() === 1, 'no multiplayer URL: home shows one big button');
+			check(await page.locator('.home-button').count() === 2, 'no multiplayer URL: home shows Single Player and Parents');
 			check(await page.locator('#home-multi').count() === 0, 'no multiplayer URL: the Multiplayer button is hidden');
 		} else {
-			check(await page.locator('.home-button').count() === 2, 'home shows two big buttons');
-			check(await text(page, '#home-single') === 'Single Player' && await text(page, '#home-multi') === 'Multiplayer', 'they read Single Player, Multiplayer');
+			check(await page.locator('.home-button').count() === 3, 'home shows three buttons');
+			check(await text(page, '#home-single') === 'Single Player' && await text(page, '#home-multi') === 'Multiplayer' && await text(page, '#home-parents') === 'Parents', 'they read Single Player, Multiplayer, Parents');
 		}
 		check(await page.locator('text=Grown-ups').count() === 0, 'no "Grown-ups" label left');
-		check(await text(page, '#home-parents') === 'Parents' && await page.locator('#home-parents.menu-small').count() === 1, 'Parents is a small button, not a big one');
 		check(await page.locator('#play-line').isHidden(), 'no rules: home has no status line');
 
 		if (MP_URL !== '') {

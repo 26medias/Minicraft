@@ -1,4 +1,5 @@
 import './ui/ui.css';
+import './ui/menu.css';
 import { World } from './engine/world/world';
 import { loadAtlas } from './engine/render/atlas';
 import { Renderer } from './engine/render/renderer';
@@ -511,6 +512,7 @@ async function main() {
 			inventoryOpen,
 			pickerOpen: colorPicker.isOpen,
 			frozen,
+			focused: document.hasFocus(),
 		});
 		const openPause = () => {
 			pauseOpen = true;
@@ -1086,12 +1088,17 @@ async function main() {
 			const p = canvas.requestPointerLock() as unknown;
 			if (p instanceof Promise) p.catch(() => {});
 		};
+		const UNLOCK_JUDGE_MS = 150;
 		document.addEventListener('pointerlockchange', () => {
 			if (document.pointerLockElement === canvas) {
 				if (!quitting) closePause();
 				return;
 			}
-			if (shouldOpenOnUnlock(pauseState())) openPause();
+			// Judged a moment later: the window's blur (PrintScreen's screenshot tool, alt-tab) may
+			// arrive just after the unlock, and a focus-loss unlock opens nothing.
+			setTimeout(() => {
+				if (document.pointerLockElement !== canvas && shouldOpenOnUnlock(pauseState())) openPause();
+			}, UNLOCK_JUDGE_MS);
 		});
 		// Capture phase (spec §5.2): runs before the I screen's and the colour picker's own Esc
 		// handlers, and still runs when the search box stops propagation — so the Esc that closes

@@ -44,8 +44,10 @@ During a game (after `startGame`), the pause menu opens when either:
 
 - **(a) unlock:** `pointerlockchange` with `document.pointerLockElement !== canvas`, and none of
   `inventoryOpen`, `colorPicker.isOpen`, `frozen`, `pauseOpen`, `quitting`. This is the real-Esc
-  path (M1). Alt-tab / focus loss unlocks too, so the kid comes back to a stopped world behind the
-  menu, as in Minecraft — intended.
+  path (M1). *Amended 2026-09-26:* an unlock that comes with the window losing focus
+  (`document.hasFocus()` false, judged 150 ms after the unlock) opens nothing — PrintScreen opens
+  GNOME's screenshot tool, which takes focus and the lock, and the screenshot must show the game.
+  Alt-tab behaves the same; a click on the game takes the mouse back.
 - **(b) Esc while unlocked:** an `Escape` keydown, not `e.repeat`, with the pointer not locked, and
   none of the flags above as they were **before any Esc handler of this event ran** (§5.2). This is
   the "I closed the I screen / clicked outside, now I press Esc" case. The Esc that closes the I

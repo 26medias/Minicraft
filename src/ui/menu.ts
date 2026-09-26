@@ -51,9 +51,9 @@ function peekSession(key: string): boolean {
 }
 
 /**
- * The main menu (spec §8): a home screen with Single Player and Multiplayer,
- * a line saying where the kid stands under the parent's rules, and small
- * Options and Parents buttons. Each screen replaces the card's content; Back
+ * The main menu (spec §8): a home screen with Single Player, Multiplayer and
+ * Parents, a line saying where the kid stands under the parent's rules, and
+ * Options. Each screen replaces the card's content; Back
  * returns home.
  */
 export class MainMenu {
@@ -234,12 +234,10 @@ export class MainMenu {
 		home.className = 'home-buttons';
 		this.button(home, 'Single Player', 'home-single', () => void this.renderSingle(), 'home-button');
 		if (this.mp) this.button(home, 'Multiplayer', 'home-multi', () => this.renderMulti(), 'home-button');
+		// Parents is styled as a quieter stone block (menu.css), not grass.
+		this.button(home, 'Parents', 'home-parents', () => this.renderParents(), 'home-button');
 		card.appendChild(home);
-		const small = document.createElement('div');
-		small.className = 'home-small';
-		this.button(small, 'Options', 'home-options', () => this.onAction?.({ type: 'options' }), 'menu-small');
-		this.button(small, 'Parents', 'home-parents', () => this.renderParents(), 'menu-small');
-		card.appendChild(small);
+		this.button(card, 'Options', 'home-options', () => this.onAction?.({ type: 'options' }), 'menu-small');
 		// "Play at 7:00 AM" turns into "45 minutes left today" without a reload.
 		this.refresh = setInterval(paintLine, 30_000);
 	}
@@ -400,10 +398,10 @@ export class MainMenu {
 		const card = this.newCard('New World', 'new');
 		const form = document.createElement('div');
 		form.innerHTML = `
-			<div style="margin: 12px 0;">
+			<div class="new-field">
 				<label>Name<br/><input type="text" id="w-name" value="My World" /></label>
 			</div>
-			<div style="margin: 12px 0;">
+			<div class="new-field">
 				<label>Seed<br/><input type="number" id="w-seed" value="${Math.floor(Math.random() * 1_000_000)}" /></label>
 			</div>
 			<label class="menu-check"><input type="checkbox" id="w-must-mine" /> Must mine blocks to build</label>
@@ -693,10 +691,10 @@ export class MainMenu {
 		const card = this.newCard('New World', 'mp-new');
 		const form = document.createElement('div');
 		form.innerHTML = `
-			<div style="margin: 12px 0;">
+			<div class="new-field">
 				<label>Name<br/><input type="text" id="mp-w-name" value="Our World" /></label>
 			</div>
-			<div style="margin: 12px 0;">
+			<div class="new-field">
 				<label>Seed<br/><input type="number" id="mp-w-seed" value="${Math.floor(Math.random() * 1_000_000)}" /></label>
 			</div>
 			<label class="menu-check"><input type="checkbox" id="mp-w-must-mine" /> Must mine blocks to build</label>

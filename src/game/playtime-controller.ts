@@ -1,31 +1,5 @@
 import { WARNING_SHOW_MS } from '../data/playtime.data';
 import { PlayTimer, type PlaytimeSession } from './playtime';
-import { sessionInForce, type Schedule } from './schedule';
-
-/**
- * The session for this game (spec §8.1, plan P1 re-gate):
- * - the stored session when it is in force, whatever `limitMin` is, so a
- *   frozen session is not escaped by picking "No limit";
- * - otherwise a new session when `limitMin !== null`;
- * - otherwise null: No limit, no controller.
- */
-export function resolveSession(
-	stored: PlaytimeSession | null,
-	limitMin: number | null,
-	now: number,
-	schedule: Schedule | null = null,
-): PlaytimeSession | null {
-	if (stored && sessionInForce(stored, schedule, now)) return stored;
-	if (limitMin === null) return null;
-	return {
-		limitMs: limitMin * 60_000,
-		breakMs: null,
-		playedMs: 0,
-		frozenAt: null,
-		startedAt: now,
-		updatedAt: now,
-	};
-}
 
 export type PlaytimeOverlayLike = {
 	warn(text: string, ms: number): void;
@@ -42,7 +16,7 @@ export type PlaytimeDeps = {
 	save(s: PlaytimeSession): void;
 	now(): number;
 	visible(): boolean;
-	/** Shown instead of ASK A PARENT on a freeze (schedule mode). */
+	/** Shown instead of ASK A PARENT on a freeze (under a daily limit). */
 	lockedText?: string;
 };
 

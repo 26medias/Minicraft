@@ -1,6 +1,6 @@
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 import {
-	clampDuration, defaultDuration, formatDuration, scheduleActive, sessionPolicy, stepDuration,
+	clampDuration, defaultDuration, formatDuration, sessionPolicy, stepDuration,
 } from './session-policy';
 import { DURATION_CHOICES_MIN } from '../data/playtime.data';
 import { DEFAULT_KEYBINDINGS } from '../data/keybindings.data';
@@ -42,17 +42,6 @@ describe('sessionPolicy (T12 truth table)', () => {
 		[true, true, true, 'keep'],
 	] as const)('pin=%s schedule=%s autojoin=%s → %s', (pin, sched, autojoin, want) => {
 		expect(sessionPolicy(pin, sched, autojoin)).toBe(want);
-	});
-});
-
-describe('scheduleActive', () => {
-	it('armed and broken are active (a broken schedule fails closed); none is not', () => {
-		expect(scheduleActive({ kind: 'none' })).toBe(false);
-		expect(scheduleActive({ kind: 'broken' })).toBe(true);
-		expect(scheduleActive({
-			kind: 'armed',
-			schedule: { worldId: 'w', seed: 1, name: 'n', limitMin: 45, startMin: 420 },
-		})).toBe(true);
 	});
 });
 
@@ -207,28 +196,5 @@ describe('session migration (T12: break field)', () => {
 		expect(loadSession()).toEqual({
 			limitMs: 1_800_000, breakMs: null, playedMs: 5, frozenAt: null, startedAt: 1, updatedAt: 1,
 		});
-	});
-});
-
-describe('schedule durations (T12)', () => {
-	const base = { worldId: 'w1', seed: 42, name: 'N', startMin: 420 };
-	it('limitMin: 25 (new) saves and loads', async () => {
-		const { loadSchedule, saveSchedule } = await import('../persistence/schedule');
-		expect(saveSchedule({ ...base, limitMin: 25 })).toBe(true);
-		expect(loadSchedule()).toEqual({ kind: 'armed', schedule: { ...base, limitMin: 25 } });
-	});
-	it('limitMin: 15 (old) saves and loads', async () => {
-		const { loadSchedule, saveSchedule } = await import('../persistence/schedule');
-		expect(saveSchedule({ ...base, limitMin: 15 })).toBe(true);
-		expect(loadSchedule()).toEqual({ kind: 'armed', schedule: { ...base, limitMin: 15 } });
-	});
-	it('limitMin: 120 loads; 125 and 7 are broken', async () => {
-		const { loadSchedule } = await import('../persistence/schedule');
-		store['minicraft:v1:schedule'] = JSON.stringify({ ...base, limitMin: 120 });
-		expect(loadSchedule().kind).toBe('armed');
-		store['minicraft:v1:schedule'] = JSON.stringify({ ...base, limitMin: 125 });
-		expect(loadSchedule()).toEqual({ kind: 'broken' });
-		store['minicraft:v1:schedule'] = JSON.stringify({ ...base, limitMin: 7 });
-		expect(loadSchedule()).toEqual({ kind: 'broken' });
 	});
 });

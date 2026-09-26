@@ -34,10 +34,10 @@ import { worldFromSave, applySave } from './game/apply-save';
 import { spawnV3 } from './engine/world/v3/spawn';
 import { resolveContinue, type LoadOutcome } from './game/continue-policy';
 import type { WorldSave } from './persistence/adapter';
-import { PlaytimeController, resolveSession } from './game/playtime-controller';
+import { PlaytimeController } from './game/playtime-controller';
 import { loadSession, saveSession } from './persistence/playtime';
-import { loadSchedule } from './persistence/schedule';
-import { activeLimits, canStartNow, formatStartTime } from './game/schedule';
+import { loadRules, loadToday } from './persistence/rules';
+import { playStatus, resolveSession } from './game/rules';
 import { PlaytimeOverlay } from './ui/playtime-overlay';
 import { TICK_MS } from './data/playtime.data';
 import { Inventory } from './ui/inventory';
@@ -142,11 +142,11 @@ async function main() {
 			options.show(() => showMenu());
 			return;
 		}
-		// Belt and braces under the menu model: never enter startGame (which
-		// hides the menu and registers listeners) when the schedule says no.
+		// Belt and braces under the menu: never enter startGame (which hides the
+		// menu and registers listeners) when the parent rules say no.
 		// Applies to 'new' too, so a re-added New World button cannot bypass it.
 		// Multiplayer too: a frozen timer that survives blocks rejoining (spec §7.4).
-		if (!canStartNow(loadSchedule(), loadSession(), Date.now())) {
+		if (!canPlayNow()) {
 			showMenu();
 			return;
 		}
@@ -164,12 +164,17 @@ async function main() {
 		else if (action.type === 'continue') startGame(action.id, action.seed, action.name, 'continue', false, action.duration);
 	}
 
+	function canPlayNow(): boolean {
+		const now = Date.now();
+		return playStatus({ rules: loadRules(), session: loadSession(), today: loadToday(now), now }).canPlay;
+	}
+
 	function showMenu(notice?: string) {
 		menu.show(onMenuAction, notice);
 	}
 
 	let mpUi: MpOverlays | null = null;
-	if (booted.kind === 'autojoin' && canStartNow(loadSchedule(), loadSession(), Date.now())) {
+	if (booted.kind === 'autojoin' && canPlayNow()) {
 		startMultiplayer(booted.args, true);
 	} else {
 		if (booted.kind === 'autojoin') clearAutojoin(sessionStorage);
@@ -811,12 +816,13 @@ async function main() {
 		// so the interval and listener below need no owner, like the window
 		// listeners above. The first tick runs before loop.start() on purpose:
 		// a session already in its break must freeze before the first frame.
-		const loadedSchedule = loadSchedule();
-		const schedule = loadedSchedule.kind === 'armed' ? loadedSchedule.schedule : null;
-		// Plan I1: the chosen duration (fitted to the parent's maximum) starts a new session unless
-		// one is already in force (P1's rule); a schedule's own duration wins over both.
-		const limits = activeLimits(schedule, clampDuration(duration, opts.maxDurationMin));
-		const session = resolveSession(loadSession(), limits.limitMin, Date.now(), schedule);
+		// Under a daily limit the day's session applies and the kid's choice is not asked;
+		// otherwise the chosen duration starts a new session unless one is in force.
+		const rulesNow = Date.now();
+		const loadedRules = loadRules();
+		const today = loadToday(rulesNow);
+		const session = resolveSession(loadSession(), clampDuration(duration, null), loadedRules, today, rulesNow);
+		const status = playStatus({ rules: loadedRules, session: loadSession(), today, now: rulesNow });
 		// Multiplayer: the leaver's countdown messages (spec §7.4).
 		const leaving = mp ? new LeavingCountdown((secondsLeft) => void mp.client.send({ t: 'leaving', secondsLeft })) : null;
 		let playtime: PlaytimeController | null = null;
@@ -824,7 +830,7 @@ async function main() {
 			saveSession(session);
 			playtime = new PlaytimeController(session, {
 				overlay: new PlaytimeOverlay(app),
-				lockedText: schedule ? `PLAY AGAIN AT ${formatStartTime(schedule.startMin, Date.now()).toUpperCase()} TOMORROW` : undefined,
+				lockedText: status.lockedText,
 				freeze: () => {
 					closeInventory();
 					if (!quitting) closePause();

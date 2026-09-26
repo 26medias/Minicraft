@@ -1,7 +1,7 @@
 import { describe, it, expect, vi } from 'vitest';
-import { PlaytimeController, resolveSession, type PlaytimeDeps } from './playtime-controller';
+import { PlaytimeController, type PlaytimeDeps } from './playtime-controller';
 import type { PlaytimeSession } from './playtime';
-import { STALE_SESSION_MS, WARNING_SHOW_MS } from '../data/playtime.data';
+import { WARNING_SHOW_MS } from '../data/playtime.data';
 
 const MIN = 60_000;
 const T0 = 1_700_000_000_000;
@@ -9,65 +9,6 @@ const T0 = 1_700_000_000_000;
 function session(over: Partial<PlaytimeSession> = {}): PlaytimeSession {
 	return { limitMs: 30 * MIN, breakMs: null, playedMs: 0, frozenAt: null, updatedAt: T0, startedAt: T0, ...over };
 }
-
-describe('resolveSession', () => {
-	const sched = { worldId: 'w', seed: 1, name: 'n', limitMin: 45, startMin: 420 };
-	it('creates a fresh no-break session from the chosen duration when nothing is stored', () => {
-		expect(resolveSession(null, 30, T0)).toEqual(session());
-		expect(resolveSession(null, 15, T0)).toEqual({
-			limitMs: 15 * MIN, breakMs: null, playedMs: 0, frozenAt: null, startedAt: T0, updatedAt: T0,
-		});
-	});
-	it('returns null (no controller) when nothing is in force and the duration is No limit', () => {
-		expect(resolveSession(null, null, T0)).toBeNull();
-		const stale = session({ playedMs: 5 * MIN });
-		expect(resolveSession(stale, null, T0 + STALE_SESSION_MS + 1)).toBeNull();
-	});
-	it('resumes a playing session unchanged, ignoring the chosen duration', () => {
-		const stored = session({ playedMs: 10 * MIN });
-		expect(resolveSession(stored, 15, T0 + MIN)).toEqual(stored);
-	});
-	it('an in-force session wins even over No limit', () => {
-		const stored = session({ playedMs: 10 * MIN });
-		expect(resolveSession(stored, null, T0 + MIN)).toEqual(stored);
-	});
-	it('a stored frozen session plus No limit → the frozen session', () => {
-		const stored = session({ playedMs: 30 * MIN, frozenAt: T0 });
-		expect(resolveSession(stored, null, T0 + 5 * MIN)).toEqual(stored);
-	});
-	it('keeps a frozen session long after (no break ever ends it), until it goes stale', () => {
-		const stored = session({ playedMs: 30 * MIN, frozenAt: T0 });
-		expect(resolveSession(stored, 30, T0 + 25 * MIN)).toEqual(stored);
-		expect(resolveSession(stored, 30, T0 + 3 * 60 * MIN)).toEqual(stored);
-	});
-	it('replaces a stale session', () => {
-		const stored = session({ playedMs: 5 * MIN });
-		const now = T0 + STALE_SESSION_MS + 1;
-		expect(resolveSession(stored, 30, now)).toEqual(session({ updatedAt: now, startedAt: now }));
-	});
-	it('stamps startedAt = now on a fresh session', () => {
-		expect(resolveSession(null, 30, T0 + 5)!.startedAt).toBe(T0 + 5);
-	});
-	it("with a schedule, keeps today's 13-hour-old playing session", () => {
-		const day = new Date(2026, 8, 7, 7, 10).getTime();
-		const stored = session({ startedAt: day, updatedAt: day, playedMs: 5 * MIN });
-		expect(resolveSession(stored, 45, day + 13 * 60 * MIN, sched)).toEqual(stored);
-	});
-	it('with a schedule, a frozen session from today stays locked', () => {
-		const day = new Date(2026, 8, 7, 7, 10).getTime();
-		const over = session({ startedAt: day, updatedAt: day + 45 * MIN, playedMs: 45 * MIN, frozenAt: day + 45 * MIN });
-		const got = resolveSession(over, 45, day + 2 * 60 * MIN, sched);
-		expect(got).toEqual(over);
-	});
-	it("with a schedule, discards yesterday's session", () => {
-		const yday = new Date(2026, 8, 6, 7, 10).getTime();
-		const now = new Date(2026, 8, 7, 7, 0).getTime();
-		const stored = session({ startedAt: yday, updatedAt: yday + 5 * MIN, playedMs: 5 * MIN });
-		expect(resolveSession(stored, 45, now, sched)).toEqual({
-			limitMs: 45 * MIN, breakMs: null, playedMs: 0, frozenAt: null, startedAt: now, updatedAt: now,
-		});
-	});
-});
 
 type Harness = {
 	ctl: PlaytimeController;

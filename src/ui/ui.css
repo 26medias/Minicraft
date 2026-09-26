@@ -342,9 +342,6 @@
 	border-radius: 4px;
 	box-sizing: border-box;
 }
-.playtime-row {
-	margin: 8px 0;
-}
 .playtime-status {
 	display: flex;
 	justify-content: space-between;
@@ -446,13 +443,11 @@
 	opacity: 0.4;
 	cursor: default;
 }
-.card-world {
-	font-size: 22px;
-	margin: 4px 0;
-}
 .play-line {
 	margin: 0 0 12px;
-	opacity: 0.85;
+	font-size: 19px;
+	font-weight: 600;
+	color: #f0d890;
 }
 .pin-row input {
 	width: 5em;
@@ -1098,4 +1093,50 @@
 .controls-keys {
 	font-weight: 600;
 	text-align: right;
+}
+
+/* Parents screen: rows of inline buttons, today's line, and messages that say what a press did. */
+.menu-card .home-small {
+	display: flex;
+	gap: 8px;
+}
+.menu-card .home-small button {
+	flex: 1;
+}
+.parents-today {
+	margin: 4px 0 8px;
+	font-size: 17px;
+}
+.parents-row {
+	display: flex;
+	flex-wrap: wrap;
+	align-items: center;
+	gap: 8px;
+	margin: 8px 0;
+}
+.menu-card .parents-row button {
+	display: inline-block;
+	width: auto;
+	margin: 0;
+	padding: 8px 14px;
+}
+.parents-row .menu-check {
+	margin: 0;
+}
+.menu-msg {
+	min-height: 1.2em;
+	margin: 4px 0 8px;
+	font-size: 15px;
+}
+.menu-msg.ok {
+	color: #8fe08f;
+}
+.menu-msg.bad {
+	color: #ff9070;
+}
+.menu-card #rules-save {
+	background: #3d6b3d;
+}
+.menu-card #rules-save:hover {
+	background: #4a804a;
 }

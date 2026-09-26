@@ -1,20 +1,18 @@
 import type { PersistenceAdapter, WorldSummary } from '../persistence/adapter';
 import { newWorldId } from '../persistence/uuid';
-import { loadOptions } from '../persistence/options';
 import { DURATION_CHOICES_MIN } from '../data/playtime.data';
-import { applyMaxDuration, clearSession, loadSession, saveSession } from '../persistence/playtime';
+import { clearSession, loadSession } from '../persistence/playtime';
 import { loadMenuState, saveMenuState, type MenuState } from '../persistence/menu-state';
 import { formatDuration } from '../game/session-policy';
-import { phaseOf } from '../game/playtime';
 import {
-	menuModel, newWorldFields, planSave, singleModel,
-	type CardModel, type CreatedWorld, type MenuAction, type SingleRow, type Staged,
+	newWorldFields, singleModel,
+	type CreatedWorld, type MenuAction, type SingleRow,
 } from './menu-model';
 import { DurationControl } from './duration-control';
 import {
-	clearPin, clearSchedule, loadPin, loadSchedule, savePin, saveSchedule,
-} from '../persistence/schedule';
-import { resolveWorld, sessionInForce } from '../game/schedule';
+	clearPin, clearToday, loadPin, loadRules, loadToday, savePin, saveRules, saveToday,
+} from '../persistence/rules';
+import { dayKey, playStatus, rulesSentence, todaySummary, type PlayStatus, type StatusInput } from '../game/rules';
 import { mpApiFromEnv, type MpApi, type MpWorldRow } from '../net/mp-api';
 import { loadMpPrefs, saveMpPrefs, type MpPrefs } from '../persistence/mp-prefs';
 import { SKINS, skinColor, skinOf, type SkinId } from '../data/skins.data';
@@ -53,16 +51,15 @@ function peekSession(key: string): boolean {
 }
 
 /**
- * The main menu (spec §8): a home screen with Single Player, Multiplayer and
- * Parents, or, under a schedule, the scheduled card. Each screen replaces the
- * card's content; Back returns home.
+ * The main menu (spec §8): a home screen with Single Player and Multiplayer,
+ * a line saying where the kid stands under the parent's rules, and small
+ * Options and Parents buttons. Each screen replaces the card's content; Back
+ * returns home.
  */
 export class MainMenu {
 	private root: HTMLDivElement;
 	private onAction: ((a: MenuAction) => void) | null = null;
 	private refresh: ReturnType<typeof setInterval> | null = null;
-	/** Staged schedule edits in Parents; written only by Schedule. */
-	private staged: Staged | null = null;
 	/** Bumped per render so an older, slower world-list fetch cannot paint over a newer screen. */
 	private renderGen = 0;
 	/** Shown once under the title on the next renderHome, then cleared so the refresh does not repeat it. */
@@ -88,23 +85,21 @@ export class MainMenu {
 
 	show(onAction: (a: MenuAction) => void, notice?: string) {
 		this.onAction = onAction;
-		this.staged = null;
 		this.notice = notice ?? null;
 		this.root.classList.remove('hidden');
 		// After a multiplayer reload that failed (a 4009, a 4008, a rejoin that timed out), main.ts
 		// leaves a reason or a world in sessionStorage: go straight to the Multiplayer screens.
 		const mpPending = peekSession(MP_ERROR_KEY) || peekSession(MP_PRESELECT_KEY);
-		if (this.mp && mpPending && loadSchedule().kind === 'none') this.renderMulti();
+		if (this.mp && mpPending) this.renderMulti();
 		else void this.renderHome();
 	}
 
 	/** Opens the Multiplayer screens directly (the autojoin failure path, Task I1). */
 	showMultiplayer(onAction: (a: MenuAction) => void): void {
 		this.onAction = onAction;
-		this.staged = null;
 		this.notice = null;
 		this.root.classList.remove('hidden');
-		if (this.mp && loadSchedule().kind === 'none') this.renderMulti();
+		if (this.mp) this.renderMulti();
 		else void this.renderHome();
 	}
 
@@ -176,102 +171,77 @@ export class MainMenu {
 		}
 	}
 
-	private cardModel(worlds: WorldSummary[] | null, offline: boolean) {
-		return menuModel({ schedule: loadSchedule(), session: loadSession(), worlds, offline, now: Date.now(), notice: this.notice });
+	private statusInput(): StatusInput {
+		const now = Date.now();
+		return { rules: loadRules(), session: loadSession(), today: loadToday(now), now };
+	}
+
+	/** Where the kid stands under the parent's rules, read fresh from storage. */
+	private status(): PlayStatus {
+		return playStatus(this.statusInput());
+	}
+
+	/**
+	 * The kid's play-time block on Single Player and Multiplayer: the duration
+	 * control when the kid picks, else the status line ("30 minutes left today").
+	 * Returns the duration getter (null under a daily limit: main.ts ignores it).
+	 */
+	private playTime(parent: HTMLElement, st: PlayStatus): () => number | null {
+		if (!st.kidPicks) {
+			const line = document.createElement('div');
+			line.className = 'play-line';
+			line.id = 'play-line';
+			line.textContent = st.line ?? '';
+			parent.appendChild(line);
+			return () => null;
+		}
+		let duration = loadMenuState(null).duration;
+		const dh = document.createElement('div');
+		dh.className = 'menu-section';
+		dh.textContent = 'Play time';
+		parent.appendChild(dh);
+		// The duration is shared by Single Player and Multiplayer and remembered in minicraft:v1:menu (spec §8).
+		new DurationControl(parent, duration, null, (v) => { duration = v; saveMenuState({ ...loadMenuState(null), duration: v }); });
+		return () => duration;
 	}
 
 	// --- Home ---------------------------------------------------------------
 
 	private async renderHome() {
-		const gen = ++this.renderGen;
+		this.renderGen++;
 		const card = this.newCard("Noah's Worlds");
 		const notice = this.notice;
 		// One-shot: the 30 s card refresh and any later render must not repeat it.
 		this.notice = null;
 
-		let model = menuModel({ schedule: loadSchedule(), session: loadSession(), worlds: null, offline: false, now: Date.now(), notice });
-		let worlds: WorldSummary[] = [];
-		let offline = false;
-		if (model.mode === 'card') {
-			// The card needs the list to find the scheduled world.
-			const loading = document.createElement('div');
-			loading.className = 'menu-loading';
-			loading.textContent = 'Loading worlds…';
-			card.appendChild(loading);
-			({ worlds, offline } = await this.fetchWorlds());
-			if (gen !== this.renderGen) return;
-			loading.remove();
-			model = menuModel({ schedule: loadSchedule(), session: loadSession(), worlds, offline, now: Date.now(), notice });
-		}
-		if (model.notice) {
+		if (notice) {
 			const n = document.createElement('div');
 			n.className = 'menu-warning';
-			n.textContent = model.notice;
+			n.textContent = notice;
 			card.appendChild(n);
 		}
-		if (model.mode === 'card') {
-			this.renderCard(card, model, worlds, offline);
-		} else {
-			const home = document.createElement('div');
-			home.className = 'home-buttons';
-			this.button(home, 'Single Player', 'home-single', () => void this.renderSingle(), 'home-button');
-			if (this.mp) this.button(home, 'Multiplayer', 'home-multi', () => this.renderMulti(), 'home-button');
-			this.button(home, 'Parents', 'home-parents', () => this.renderParents(), 'home-button');
-			card.appendChild(home);
-		}
-		this.button(card, 'Options', 'home-options', () => this.onAction?.({ type: 'options' }), 'menu-small');
-	}
-
-	/** The scheduled card (spec §8): today's card plus a Parents button that cancels the schedule. */
-	private renderCard(card: HTMLElement, first: CardModel, worlds: WorldSummary[], offline: boolean): void {
-		let current = first;
-		const title = document.createElement('div');
-		title.className = 'card-world';
-		title.textContent = current.title;
 		const line = document.createElement('div');
 		line.className = 'play-line';
 		line.id = 'play-line';
-		line.textContent = current.line;
-		const play = document.createElement('button');
-		play.id = 'play-button';
-		play.textContent = '▶ Play';
-		play.disabled = !current.playEnabled;
-		play.onclick = () => {
-			if (current.playEnabled && current.world) {
-				// Under a schedule the schedule's own duration applies (main.ts); the kid's choice is not asked.
-				this.onAction?.({ type: 'continue', id: current.world.id, seed: current.world.seed, name: current.world.name, duration: null });
-			}
+		const paintLine = () => {
+			const st = this.status();
+			line.textContent = st.line ?? '';
+			line.classList.toggle('hidden', st.line === null);
 		};
-		card.append(title, line, play);
-		this.renderCardParents(card);
-		// Only the line and the button change; a full re-render would wipe a PIN being typed.
-		this.stopRefresh();
-		this.refresh = setInterval(() => {
-			const m = this.cardModel(worlds, offline);
-			if (m.mode !== 'card') return;
-			current = m;
-			line.textContent = m.line;
-			play.disabled = !m.playEnabled;
-		}, 30_000);
-	}
-
-	/** Parents on the card: asks for the PIN when one is set, then cancels the schedule and goes home. */
-	private renderCardParents(card: HTMLElement): void {
-		const box = document.createElement('div');
-		card.appendChild(box);
-		const error = document.createElement('div');
-		error.className = 'menu-error';
-		error.id = 'card-parents-error';
-		const cancel = () => {
-			if (!clearSchedule()) { error.textContent = "Couldn't save — try again"; return; }
-			void this.renderHome();
-		};
-		const open = this.button(box, 'Parents', 'card-parents', () => {
-			if (loadPin() === null) { cancel(); return; }
-			open.remove();
-			this.pinGate(box, 'Parents PIN — cancels the schedule', cancel);
-		});
-		box.appendChild(error);
+		paintLine();
+		card.appendChild(line);
+		const home = document.createElement('div');
+		home.className = 'home-buttons';
+		this.button(home, 'Single Player', 'home-single', () => void this.renderSingle(), 'home-button');
+		if (this.mp) this.button(home, 'Multiplayer', 'home-multi', () => this.renderMulti(), 'home-button');
+		card.appendChild(home);
+		const small = document.createElement('div');
+		small.className = 'home-small';
+		this.button(small, 'Options', 'home-options', () => this.onAction?.({ type: 'options' }), 'menu-small');
+		this.button(small, 'Parents', 'home-parents', () => this.renderParents(), 'menu-small');
+		card.appendChild(small);
+		// "Play at 7:00 AM" turns into "45 minutes left today" without a reload.
+		this.refresh = setInterval(paintLine, 30_000);
 	}
 
 	/** A PIN row: calls `onOk` once the right PIN is entered. */
@@ -304,7 +274,10 @@ export class MainMenu {
 		};
 		input.onkeydown = (e) => { if (e.key === 'Enter') go.click(); };
 		label.appendChild(input);
-		row.append(label, go, err);
+		const forgot = document.createElement('div');
+		forgot.className = 'menu-hint';
+		forgot.textContent = "Forgot the PIN? On this computer press F12, open Console, type localStorage.removeItem('minicraft:v1:pin') and press Enter. Only the PIN is removed.";
+		row.append(label, go, err, forgot);
 		parent.appendChild(row);
 		input.focus();
 	}
@@ -322,12 +295,11 @@ export class MainMenu {
 		if (gen !== this.renderGen) return;
 		loading.remove();
 
-		const max = loadOptions().maxDurationMin;
-		const state: MenuState = loadMenuState(max);
-		const m = singleModel({ worlds, created: this.created, state, max });
+		const state: MenuState = loadMenuState(null);
+		const m = singleModel({ worlds, created: this.created, state, max: null });
 		let selectedId = m.selectedId;
-		let duration = m.duration;
-		const remember = () => saveMenuState({ selectedId, duration });
+		const st = this.status();
+		const remember = () => saveMenuState({ ...loadMenuState(null), selectedId });
 
 		this.button(card, 'New World', 'single-new', () => this.renderNew());
 		if (offline) {
@@ -347,7 +319,7 @@ export class MainMenu {
 			for (const el of Array.from(list.children) as HTMLElement[]) {
 				el.classList.toggle('selected', el.dataset.id === selectedId);
 			}
-			play.disabled = selectedId === null;
+			play.disabled = selectedId === null || !st.canPlay;
 		};
 		for (const w of m.worlds) {
 			const row = document.createElement('div');
@@ -371,25 +343,21 @@ export class MainMenu {
 			card.appendChild(empty);
 		}
 
-		const dh = document.createElement('div');
-		dh.className = 'menu-section';
-		dh.textContent = 'Play time';
-		card.appendChild(dh);
-		new DurationControl(card, duration, max, (v) => { duration = v; remember(); });
+		const duration = this.playTime(card, st);
 
 		play.id = 'single-play';
 		play.className = 'play-big';
 		play.textContent = '▶ Play';
 		play.onclick = () => {
 			const row = m.worlds.find((r) => r.id === selectedId);
-			if (!row) return;
+			if (!row || !this.status().canPlay) return;
 			remember();
 			if (row.badge === 'new' && this.created && this.created.id === row.id) {
 				const c = this.created;
 				this.created = null;
-				this.onAction?.({ type: 'new', id: c.id, seed: c.seed, name: c.name, mustMine: c.mustMine, duration });
+				this.onAction?.({ type: 'new', id: c.id, seed: c.seed, name: c.name, mustMine: c.mustMine, duration: duration() });
 			} else {
-				this.onAction?.({ type: 'continue', id: row.id, seed: row.seed, name: row.name, duration });
+				this.onAction?.({ type: 'continue', id: row.id, seed: row.seed, name: row.name, duration: duration() });
 			}
 		};
 		card.appendChild(play);
@@ -449,8 +417,7 @@ export class MainMenu {
 			});
 			// Create adds the world and selects it (spec §8.1); Play starts it.
 			this.created = { id: newWorldId(), seed: f.seed, name: f.name, mustMine: f.mustMine };
-			const max = loadOptions().maxDurationMin;
-			saveMenuState({ ...loadMenuState(max), selectedId: this.created.id });
+			saveMenuState({ ...loadMenuState(null), selectedId: this.created.id });
 			void this.renderSingle();
 		});
 		this.button(card, 'Back', 'menu-back', () => void this.renderSingle(), 'menu-back');
@@ -620,14 +587,8 @@ export class MainMenu {
 		empty.textContent = 'No worlds yet. Press New World.';
 		worldsBox.appendChild(empty);
 
-		const max = loadOptions().maxDurationMin;
-		let duration = loadMenuState(max).duration;
-		const dh = document.createElement('div');
-		dh.className = 'menu-section';
-		dh.textContent = 'Play time';
-		worldsBox.appendChild(dh);
-		// The duration is shared with Single Player and remembered in minicraft:v1:menu (spec §8).
-		new DurationControl(worldsBox, duration, max, (v) => { duration = v; saveMenuState({ ...loadMenuState(max), duration: v }); });
+		const st = this.status();
+		const duration = this.playTime(worldsBox, st);
 
 		let rows: MpWorldRow[] = [];
 		let selectedId: string | null = null;
@@ -637,10 +598,10 @@ export class MainMenu {
 		play.className = 'play-big';
 		play.textContent = '▶ Play';
 		play.onclick = () => {
-			if (selectedId === null || !rows.some((r) => r.uuid === selectedId)) return;
+			if (selectedId === null || !rows.some((r) => r.uuid === selectedId) || !this.status().canPlay) return;
 			const p = loadMpPrefs();
 			saveMpPrefs({ ...p, worldId: selectedId });
-			this.onAction?.({ type: 'mp', world: selectedId, name, skin, duration });
+			this.onAction?.({ type: 'mp', world: selectedId, name, skin, duration: duration() });
 		};
 		worldsBox.appendChild(play);
 
@@ -677,7 +638,7 @@ export class MainMenu {
 				list.appendChild(row);
 			}
 			empty.classList.toggle('hidden', rows.length > 0);
-			play.disabled = selectedId === null;
+			play.disabled = selectedId === null || !st.canPlay;
 		};
 
 		const showSleeping = () => {
@@ -771,189 +732,198 @@ export class MainMenu {
 	// --- Parents ------------------------------------------------------------
 
 	private renderParents(): void {
-		const gen = ++this.renderGen;
+		this.renderGen++;
 		const card = this.newCard('Parents', 'parents');
 		const body = document.createElement('div');
 		card.appendChild(body);
 		this.backButton(card);
-		const open = async () => {
-			const loading = document.createElement('div');
-			loading.className = 'menu-loading';
-			loading.textContent = 'Loading…';
-			body.appendChild(loading);
-			const { worlds } = await this.fetchWorlds();
-			if (gen !== this.renderGen) return;
-			this.staged = null;
-			this.renderParentsBody(body, worlds);
-		};
-		if (loadPin() === null) void open();
-		else this.pinGate(body, 'Parents PIN', () => void open());
+		if (loadPin() === null) this.renderParentsBody(body);
+		else this.pinGate(body, 'Parent PIN', () => this.renderParentsBody(body));
 	}
 
 	/**
-	 * Schedule, Maximum duration, Reset states and PIN, then the multiplayer
-	 * worlds container that Task P3 fills. Each section writes on its own button;
-	 * only a PIN change re-renders the body.
+	 * Today (what today looks like, and today-only buttons), Every day (the
+	 * rules, saved by Save rules), Parent PIN, then the multiplayer worlds.
+	 * Nothing is written by opening the screen: only a button press writes, and
+	 * every write says what it did right next to the button.
 	 */
-	private renderParentsBody(body: HTMLElement, worlds: WorldSummary[]): void {
+	private renderParentsBody(body: HTMLElement, flash?: { id: string; text: string }): void {
 		body.innerHTML = '';
 		const pin = loadPin();
-		const loaded = loadSchedule();
-		const armed = loaded.kind === 'armed' ? loaded.schedule : null;
-		if (this.staged === null) {
-			const pad = (n: number) => String(n).padStart(2, '0');
-			const startMin = armed?.startMin ?? 420;
-			this.staged = {
-				// A legacy world is re-listed under its adopted uuid after first play.
-				worldId: armed ? (resolveWorld(armed, worlds)?.id ?? armed.worldId) : '',
-				limitMin: armed ? armed.limitMin : 45,
-				startRaw: `${pad(Math.floor(startMin / 60))}:${pad(startMin % 60)}`,
-			};
-		}
-		const st = this.staged;
-		const rerender = () => this.renderParentsBody(body, worlds);
-		const error = document.createElement('div');
-		error.className = 'menu-error';
-		error.id = 'parents-error';
-		const fail = (msg: string) => { error.textContent = msg; };
+		const loaded = loadRules();
+		const rules = loaded.kind === 'set' ? loaded.rules : { startMin: null, dailyMin: null };
+		const rerender = (f?: { id: string; text: string }) => this.renderParentsBody(body, f);
 		const section = (text: string) => {
 			const h = document.createElement('div');
 			h.className = 'menu-section';
 			h.textContent = text;
 			body.appendChild(h);
 		};
+		const message = (id: string) => {
+			const m = document.createElement('div');
+			m.className = 'menu-msg';
+			m.id = id;
+			if (flash?.id === id) { m.textContent = flash.text; m.classList.add('ok'); }
+			return m;
+		};
+		const say = (m: HTMLElement, text: string, ok: boolean) => {
+			m.textContent = text;
+			m.classList.toggle('ok', ok);
+			m.classList.toggle('bad', !ok);
+		};
+		const row = () => {
+			const r = document.createElement('div');
+			r.className = 'parents-row';
+			body.appendChild(r);
+			return r;
+		};
+		const failText = "Couldn't save. Try again.";
 
-		// 1. Schedule: a solo world, a start time and a duration (not capped by the maximum).
-		section('Schedule');
-		const worldSel = document.createElement('select');
-		worldSel.id = 'sched-world';
-		const none = document.createElement('option');
-		none.value = '';
-		none.textContent = 'Pick a world';
-		worldSel.appendChild(none);
-		for (const w of worlds) {
-			if (w.degraded) continue;
-			const o = document.createElement('option');
-			o.value = w.id;
-			o.textContent = `${w.name} (${w.seed})`;
-			worldSel.appendChild(o);
+		// 1. Today: where things stand, and changes that end at midnight.
+		section('Today');
+		const summary = document.createElement('div');
+		summary.className = 'parents-today';
+		summary.id = 'today-summary';
+		summary.textContent = todaySummary(this.statusInput());
+		body.appendChild(summary);
+		const todayRow = row();
+		const now = Date.now();
+		const today = loadToday(now) ?? { day: dayKey(now), extraMin: 0, unlimited: false };
+		const writeToday = (t: typeof today, text: string) => {
+			if (!saveToday(t)) { say(todayMsg, failText, false); return; }
+			rerender({ id: 'today-msg', text });
+		};
+		if (rules.dailyMin !== null) {
+			this.button(todayRow, '+15 min today', 'today-plus', () =>
+				writeToday({ ...today, extraMin: today.extraMin + 15 }, '✓ Added 15 minutes, for today only.'));
+			if (today.unlimited) {
+				this.button(todayRow, 'Back to normal today', 'today-unlimited', () =>
+					writeToday({ ...today, unlimited: false }, '✓ The daily limit is back on for today.'));
+			} else {
+				this.button(todayRow, 'No limit today', 'today-unlimited', () =>
+					writeToday({ ...today, unlimited: true }, '✓ No time limit today. The usual rules are back tomorrow.'));
+			}
 		}
-		worldSel.value = worlds.some((w) => w.id === st.worldId) ? st.worldId : '';
-		worldSel.disabled = pin === null;
-		worldSel.onchange = () => { st.worldId = worldSel.value; };
-		body.appendChild(this.labelled('World', worldSel));
+		this.button(todayRow, "Reset today's time", 'today-reset', () => {
+			if (!clearToday()) { say(todayMsg, failText, false); return; }
+			clearSession();
+			rerender({ id: 'today-msg', text: "✓ Today's time starts over from zero." });
+		});
+		const todayHint = document.createElement('div');
+		todayHint.className = 'menu-hint';
+		todayHint.textContent = 'These change today only. The rules below and the worlds are never touched.';
+		body.appendChild(todayHint);
+		const todayMsg = message('today-msg');
+		body.appendChild(todayMsg);
+
+		// 2. Every day: the rules. Staged in the fields, written only by Save rules.
+		section('Every day');
+		if (loaded.kind === 'broken') {
+			const warn = document.createElement('div');
+			warn.className = 'menu-warning';
+			warn.textContent = 'The saved rules could not be read, so play is locked. Save the rules again to fix it.';
+			body.appendChild(warn);
+		}
+		const startRow = row();
+		const startOn = document.createElement('input');
+		startOn.type = 'checkbox';
+		startOn.id = 'rule-start-on';
+		startOn.checked = rules.startMin !== null;
+		const startLabel = document.createElement('label');
+		startLabel.className = 'menu-check';
+		startLabel.append(startOn, " Can't play before");
 		const time = document.createElement('input');
 		time.type = 'time';
-		time.id = 'sched-start';
-		time.value = st.startRaw;
-		time.disabled = pin === null;
-		time.onchange = () => { st.startRaw = time.value; };
-		body.appendChild(this.labelled('Not before', time));
-		const schedDur = this.durationSelect('sched-duration', false, st.limitMin);
-		schedDur.disabled = pin === null;
-		schedDur.onchange = () => { st.limitMin = schedDur.value === '' ? null : Number(schedDur.value); };
-		body.appendChild(this.labelled('Play for', schedDur));
-		if (pin === null) {
-			const hint = document.createElement('div');
-			hint.className = 'menu-hint';
-			hint.textContent = 'Set a PIN (below) to schedule';
-			body.appendChild(hint);
-		}
-		const save = this.button(body, 'Schedule', 'sched-save', () => {
-			st.startRaw = time.value;
-			if (st.worldId === '') { fail('Pick a world'); return; }
-			const plan = planSave(st, worlds, Date.now());
-			if (plan.kind === 'error') { fail(plan.message); return; }
-			if (plan.kind !== 'schedule') return;
-			// Fail-closed order: the schedule first, the session only once the schedule write is proven.
-			if (!saveSchedule(plan.schedule)) { fail("Couldn't save — try again"); return; }
-			if (plan.session) saveSession(plan.session); else clearSession();
-			this.staged = null;
-			void this.renderHome();
-		});
-		save.disabled = pin === null;
-
-		// 2. Maximum duration: caps the kid's duration control; saved on change.
-		section('Maximum play time');
-		const maxSel = this.durationSelect('max-duration', true, loadOptions().maxDurationMin);
-		const maxSaved = document.createElement('span');
-		maxSaved.className = 'menu-hint';
-		maxSaved.id = 'max-saved';
-		maxSel.onchange = () => {
-			applyMaxDuration(maxSel.value === '' ? null : Number(maxSel.value));
-			maxSaved.textContent = ' Saved';
-		};
-		const maxRow = this.labelled('Longest the kids can pick', maxSel);
-		maxRow.appendChild(maxSaved);
-		body.appendChild(maxRow);
-
-		// 3. Reset states: the schedule and the play session.
-		section('Reset');
-		const status = document.createElement('div');
-		status.className = 'menu-hint';
-		status.id = 'playtime-status';
-		const now = Date.now();
-		const session = loadSession();
-		if (session && sessionInForce(session, armed, now)) {
-			if (phaseOf(session, now) === 'playing') {
-				const left = Math.max(1, Math.ceil((session.limitMs - session.playedMs) / 60_000));
-				status.textContent = `Play time: ${left} minute${left === 1 ? '' : 's'} left`;
-			} else {
-				status.textContent = 'Play time is up (locked)';
+		time.id = 'rule-start';
+		const startMin = rules.startMin ?? 7 * 60;
+		const pad = (n: number) => String(n).padStart(2, '0');
+		time.value = `${pad(Math.floor(startMin / 60))}:${pad(startMin % 60)}`;
+		time.disabled = !startOn.checked;
+		startRow.append(startLabel, time);
+		const dailyRow = row();
+		const dailyLabel = document.createElement('label');
+		dailyLabel.textContent = 'Play time per day ';
+		const daily = this.durationSelect('rule-daily', true, rules.dailyMin);
+		dailyLabel.appendChild(daily);
+		dailyRow.appendChild(dailyLabel);
+		const rulesHint = document.createElement('div');
+		rulesHint.className = 'menu-hint';
+		rulesHint.textContent = 'Play time is counted for the whole day, in every world, and starts fresh at midnight. With "No limit" the kids pick how long before each game.';
+		body.appendChild(rulesHint);
+		const saveRow = row();
+		const rulesMsg = message('rules-msg');
+		const unsaved = () => say(rulesMsg, 'Not saved yet.', false);
+		startOn.onchange = () => { time.disabled = !startOn.checked; unsaved(); };
+		time.onchange = unsaved;
+		daily.onchange = unsaved;
+		this.button(saveRow, 'Save rules', 'rules-save', () => {
+			let start: number | null = null;
+			if (startOn.checked) {
+				const m = /^(\d{2}):(\d{2})$/.exec(time.value);
+				if (!m) { say(rulesMsg, 'Pick a time, or untick "Can\'t play before".', false); return; }
+				start = Number(m[1]) * 60 + Number(m[2]);
 			}
-		} else {
-			status.textContent = 'No play time running';
-		}
-		body.appendChild(status);
-		this.button(body, 'Reset states', 'reset-states', () => {
-			if (!clearSchedule()) { fail("Couldn't save — try again"); return; }
-			clearSession();
-			status.textContent = 'Reset done';
+			const next = { startMin: start, dailyMin: daily.value === '' ? null : Number(daily.value) };
+			if (!saveRules(next)) { say(rulesMsg, failText, false); return; }
+			rerender({ id: 'rules-msg', text: `✓ Saved. ${rulesSentence(next, Date.now())}` });
 		});
+		body.appendChild(rulesMsg);
+		if (pin === null) {
+			const warn = document.createElement('div');
+			warn.className = 'menu-warning';
+			warn.textContent = 'No PIN yet: anyone can open Parents and change this. Set a PIN below.';
+			body.appendChild(warn);
+		}
 
-		// 4. PIN: Set / Change with a New PIN field and Save PIN; Reset PIN removes it.
-		section('PIN');
-		const pinRow = document.createElement('div');
-		pinRow.className = 'pin-row';
-		const pinLabel = document.createElement('div');
-		pinLabel.className = 'menu-hint';
-		pinLabel.textContent = pin === null ? 'Set a PIN so only parents can change this' : 'PIN is set';
-		pinRow.appendChild(pinLabel);
-		const pinInput = document.createElement('input');
-		pinInput.type = 'password';
-		pinInput.inputMode = 'numeric';
-		pinInput.maxLength = 4;
-		pinInput.autocomplete = 'off';
-		pinInput.id = 'pin-set-input';
-		pinInput.placeholder = 'New PIN';
+		// 3. Parent PIN: typed twice; asked for when opening Parents.
+		section('Parent PIN');
+		const pinMsg = message('pin-msg');
+		const pinForm = document.createElement('div');
+		pinForm.className = 'pin-row';
+		const pinField = (id: string, placeholder: string) => {
+			const i = document.createElement('input');
+			i.type = 'password';
+			i.inputMode = 'numeric';
+			i.maxLength = 4;
+			i.autocomplete = 'off';
+			i.id = id;
+			i.placeholder = placeholder;
+			return i;
+		};
+		const pin1 = pinField('pin-set-input', 'New PIN');
+		const pin2 = pinField('pin-set-again', 'Again');
 		const savePinBtn = document.createElement('button');
 		savePinBtn.id = 'pin-save';
 		savePinBtn.textContent = 'Save PIN';
 		savePinBtn.onclick = () => {
-			if (!/^\d{4}$/.test(pinInput.value)) { fail('PIN must be 4 digits'); return; }
-			if (!savePin(pinInput.value)) { fail("Couldn't save — try again"); return; }
-			rerender();
+			if (!/^\d{4}$/.test(pin1.value)) { say(pinMsg, 'The PIN must be 4 digits.', false); return; }
+			if (pin1.value !== pin2.value) { say(pinMsg, "The two PINs don't match.", false); return; }
+			if (!savePin(pin1.value)) { say(pinMsg, failText, false); return; }
+			rerender({ id: 'pin-msg', text: '✓ PIN saved. It is asked for every time Parents is opened.' });
 		};
+		pinForm.append(pin1, pin2, savePinBtn);
 		if (pin === null) {
-			pinRow.append(pinInput, savePinBtn);
+			const hint = document.createElement('div');
+			hint.className = 'menu-hint';
+			hint.textContent = 'Set a 4-digit PIN so only parents can open this screen.';
+			body.append(hint, pinForm);
 		} else {
-			const change = document.createElement('button');
-			change.id = 'pin-change';
-			change.textContent = 'Change PIN';
-			change.onclick = () => {
-				change.replaceWith(pinInput, savePinBtn);
-				pinInput.focus();
-			};
-			const remove = document.createElement('button');
-			remove.id = 'pin-reset';
-			remove.textContent = 'Reset PIN';
-			remove.onclick = () => { if (!clearPin()) { fail("Couldn't save — try again"); return; } rerender(); };
-			pinRow.append(change, remove);
+			const state = document.createElement('div');
+			state.className = 'menu-hint';
+			state.textContent = 'A PIN is set.';
+			const pinRow = row();
+			pinRow.before(state);
+			this.button(pinRow, 'Change PIN', 'pin-change', () => {
+				pinRow.replaceWith(pinForm);
+				pin1.focus();
+			});
+			this.button(pinRow, 'Remove PIN', 'pin-reset', () => {
+				if (!clearPin()) { say(pinMsg, failText, false); return; }
+				rerender({ id: 'pin-msg', text: '✓ PIN removed. Anyone can open Parents now.' });
+			});
 		}
-		body.appendChild(pinRow);
-		body.appendChild(error);
-
-		// 5. Multiplayer worlds: shown only when the server is reachable (spec §8.3).
+		body.appendChild(pinMsg);
+		// 4. Multiplayer worlds: shown only when the server is reachable (spec §8.3).
 		const mp = document.createElement('div');
 		mp.id = 'parents-mp-worlds';
 		body.appendChild(mp);
@@ -969,7 +939,7 @@ export class MainMenu {
 		} catch {
 			return;
 		}
-		// The body was re-rendered (PIN change) or the screen left while this was in flight.
+		// The body was re-rendered (any Parents button) or the screen left while this was in flight.
 		if (!box.isConnected) return;
 		box.innerHTML = '';
 		const h = document.createElement('div');
@@ -1035,16 +1005,5 @@ export class MainMenu {
 		}
 		sel.value = value === null ? '' : String(value);
 		return sel;
-	}
-
-	private labelled(text: string, control: HTMLElement): HTMLElement {
-		const row = document.createElement('div');
-		row.className = 'playtime-row';
-		const label = document.createElement('label');
-		label.textContent = text;
-		label.appendChild(document.createElement('br'));
-		label.appendChild(control);
-		row.appendChild(label);
-		return row;
 	}
 }

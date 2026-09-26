@@ -122,25 +122,3 @@ describe('playtime session storage', () => {
 		expect(store[KEY]).toBeDefined();
 	});
 });
-
-describe('applyMaxDuration', () => {
-	it('saves the maximum and clears the session', async () => {
-		const { applyMaxDuration, saveSession } = await import('./playtime');
-		const { loadOptions } = await import('./options');
-		saveSession(valid());
-		const result = applyMaxDuration(30);
-		expect(result.maxDurationMin).toBe(30);
-		expect(loadOptions().maxDurationMin).toBe(30);
-		expect(store[KEY]).toBeUndefined();
-	});
-
-	it('No limit saves null and clears the session', async () => {
-		const { applyMaxDuration, saveSession } = await import('./playtime');
-		const { loadOptions } = await import('./options');
-		applyMaxDuration(30);
-		saveSession(valid());
-		applyMaxDuration(null);
-		expect(loadOptions().maxDurationMin).toBeNull();
-		expect(store[KEY]).toBeUndefined();
-	});
-});

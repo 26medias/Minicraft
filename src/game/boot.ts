@@ -7,7 +7,7 @@
 import { SKINS, type SkinId } from '../data/skins.data';
 import type { StorageLike } from '../net/mp-sync';
 import { clearSession, loadSession } from '../persistence/playtime';
-import { loadPin, loadSchedule } from '../persistence/schedule';
+import { loadPin, loadRules } from '../persistence/rules';
 import { MP_PRESELECT_KEY } from '../ui/menu';
 import { bootSession } from './boot-session';
 
@@ -78,7 +78,7 @@ export function boot(deps: BootDeps): BootResult {
 	}
 	// One-shot: this load is the rejoin; a later F5 in the rejoined game must go to the menu.
 	if (args) remove(deps.storage, AUTOJOIN_KEY);
-	bootSession({ pin: loadPin(), schedule: loadSchedule(), autojoin: args !== null }, loadSession, clearSession);
+	bootSession({ pin: loadPin(), rules: loadRules(), autojoin: args !== null }, loadSession, clearSession);
 	return args ? { kind: 'autojoin', args } : { kind: 'menu' };
 }
 

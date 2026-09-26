@@ -5,10 +5,11 @@
 // Starts its OWN Vite dev server on --port (default 5173, --strictPort: if the port is busy it
 // stops and says so; it never reuses or stops a server it did not start) with
 // VITE_MINICRAFT_API_URL pointed at a dead local port, and drives a headless Chromium:
-// home (three buttons) → Multiplayer (name screen, sleeping server, automatic recovery, the
-// name-taken message) → Parents (maximum, multiplayer worlds) → Single Player (duration control,
-// New World → Create → Play: the world loads) → reload (world and duration remembered) →
-// schedule → the card's Parents button asks for the PIN and cancels the schedule.
+// home (two big buttons, small Parents) → Multiplayer (name screen, sleeping server, automatic
+// recovery, the name-taken message) → Parents (rules with a saved message, multiplayer worlds) →
+// Single Player under a daily limit (status line) and without (duration control, New World →
+// Create → Play: the world loads) → reload (world and duration remembered) → Parents with a PIN
+// (typed twice): start time, today's buttons, reset → Parents behind the PIN; Remove PIN.
 // Exit 0 = every check passed, 1 = a check failed, 2 = the page tried to reach a non-localhost
 // host (aborted before it left the machine).
 // --mp-url sets VITE_MINICRAFT_MP_URL (default a dead local port, http://127.0.0.1:1). With
@@ -137,13 +138,15 @@ for (const sig of ['SIGINT', 'SIGTERM', 'SIGHUP'] as const) process.on(sig, () =
 		// 1. Home: three big buttons (two when the site has no multiplayer server).
 		await page.waitForSelector('#home-single');
 		if (MP_URL === '') {
-			check(await page.locator('.home-button').count() === 2, 'no multiplayer URL: home shows two big buttons');
+			check(await page.locator('.home-button').count() === 1, 'no multiplayer URL: home shows one big button');
 			check(await page.locator('#home-multi').count() === 0, 'no multiplayer URL: the Multiplayer button is hidden');
 		} else {
-			check(await page.locator('.home-button').count() === 3, 'home shows three big buttons');
-			check(await text(page, '#home-single') === 'Single Player' && await text(page, '#home-multi') === 'Multiplayer' && await text(page, '#home-parents') === 'Parents', 'they read Single Player, Multiplayer, Parents');
+			check(await page.locator('.home-button').count() === 2, 'home shows two big buttons');
+			check(await text(page, '#home-single') === 'Single Player' && await text(page, '#home-multi') === 'Multiplayer', 'they read Single Player, Multiplayer');
 		}
 		check(await page.locator('text=Grown-ups').count() === 0, 'no "Grown-ups" label left');
+		check(await text(page, '#home-parents') === 'Parents' && await page.locator('#home-parents.menu-small').count() === 1, 'Parents is a small button, not a big one');
+		check(await page.locator('#play-line').isHidden(), 'no rules: home has no status line');
 
 		if (MP_URL !== '') {
 			// 2. Multiplayer. Screen 1: a refused name shows the reason and Next refuses.
@@ -250,18 +253,29 @@ for (const sig of ['SIGINT', 'SIGTERM', 'SIGHUP'] as const) process.on(sig, () =
 		check(await text(page, '#duration-value') === '2 h', 'No limit − → 2 h');
 		await page.click('#menu-back');
 
-		// 4. Parents (no PIN): every section; set the maximum to 45 min.
+		// 4. Parents (no PIN): every section; Save rules with 45 min a day says so and stays.
 		await page.click('#home-parents');
-		await page.waitForSelector('#max-duration');
-		for (const sel of ['#sched-world', '#sched-start', '#sched-duration', '#sched-save', '#max-duration', '#reset-states', '#pin-set-input', '#pin-save', '#parents-mp-worlds']) {
+		await page.waitForSelector('#rules-save');
+		for (const sel of ['#today-summary', '#today-reset', '#rule-start-on', '#rule-start', '#rule-daily', '#rules-save', '#pin-set-input', '#pin-set-again', '#pin-save', '#parents-mp-worlds']) {
 			check(await page.locator(sel).count() === 1, `Parents has ${sel}`);
 		}
+		check(await page.locator('#today-plus').count() === 0, 'no daily limit: no +15 min button');
+		check(await page.locator('#rule-start').isDisabled(), "the start time is off until \"Can't play before\" is ticked");
 		await page.waitForTimeout(1_000);
 		check(await page.locator('#parents-mp-worlds .world-row').count() === 0, 'Parents lists no multiplayer worlds while the server is asleep');
-		await page.selectOption('#max-duration', '45');
-		const opts = JSON.parse((await ls(page, 'minicraft:v1:options')) ?? '{}');
-		check(opts.maxDurationMin === 45, `the maximum is saved (got ${opts.maxDurationMin})`);
+		await page.selectOption('#rule-daily', '45');
+		check(await text(page, '#rules-msg') === 'Not saved yet.', `a change says it is not saved yet (got ${await text(page, '#rules-msg')})`);
+		check(await ls(page, 'minicraft:v1:rules') === null, 'nothing is written before Save rules');
+		await page.click('#rules-save');
+		await page.waitForSelector('#rules-msg.ok');
+		check(await text(page, '#rules-msg') === '✓ Saved. Play 45 min a day, at any time.', `Save rules confirms in plain words (got ${await text(page, '#rules-msg')})`);
+		check(await page.locator('#rules-save').count() === 1, 'Save rules stays on the Parents screen');
+		const rules = JSON.parse((await ls(page, 'minicraft:v1:rules')) ?? '{}');
+		check(rules.dailyMin === 45 && rules.startMin === null, `the rules are saved (got ${JSON.stringify(rules)})`);
+		check(await page.locator('#today-plus').count() === 1 && await page.locator('#today-unlimited').count() === 1, 'a daily limit shows +15 min and No limit today');
+		check((await text(page, '#today-summary')).startsWith('Played 0 min of 45 min today'), `Today says what was played (got ${await text(page, '#today-summary')})`);
 		await page.click('#menu-back');
+		check(await text(page, '#play-line') === '45 minutes left today', `home says how much is left (got ${await text(page, '#play-line')})`);
 
 		if (MP_URL !== '') {
 			// 4b. Parents with the server awake: the multiplayer worlds, Delete (409 while occupied).
@@ -285,17 +299,29 @@ for (const sig of ['SIGINT', 'SIGTERM', 'SIGHUP'] as const) process.on(sig, () =
 			await page.click('#menu-back');
 		}
 
-		// 5. Single Player under a 45 max: the stored 2 h is clamped to 45; steps stop at 45.
+		// 5. Single Player under a daily limit: no duration control, the status line instead.
+		await page.click('#home-single');
+		await page.waitForSelector('#play-line');
+		check(await page.locator('#duration-value').count() === 0, 'a daily limit: the kid does not pick a duration');
+		check(await text(page, '#play-line') === '45 minutes left today', 'Single Player says how much is left');
+		await page.click('#menu-back');
+		// Back to No limit a day: the duration control returns.
+		await page.click('#home-parents');
+		await page.waitForSelector('#rule-daily');
+		await page.selectOption('#rule-daily', '');
+		await page.click('#rules-save');
+		await page.waitForSelector('#rules-msg.ok');
+		check(await text(page, '#rules-msg') === '✓ Saved. Play as long as they like, at any time.', `"No limit" saves (got ${await text(page, '#rules-msg')})`);
+		await page.click('#menu-back');
 		await page.click('#home-single');
 		await page.waitForSelector('#duration-value');
-		check(await text(page, '#duration-value') === '45 min', `a remembered 2 h is clamped to the 45 min maximum (got ${await text(page, '#duration-value')})`);
-		check(await page.locator('#duration-plus').isDisabled(), '+ is disabled at the maximum');
+		check(await text(page, '#duration-value') === '2 h', `the remembered 2 h is back (got ${await text(page, '#duration-value')})`);
 		await page.click('#duration-minus');
-		check(await text(page, '#duration-value') === '40 min', '− steps 5 minutes');
+		check(await text(page, '#duration-value') === '1 h 55 min', '− steps 5 minutes');
 		const menuState = JSON.parse((await ls(page, 'minicraft:v1:menu')) ?? '{}');
-		check(menuState.duration === 40, `the duration is remembered in minicraft:v1:menu (got ${menuState.duration})`);
+		check(menuState.duration === 115, `the duration is remembered in minicraft:v1:menu (got ${menuState.duration})`);
 		// Down to the 10-minute floor: Play must start a 10-minute session (plan I1 solo duration wiring).
-		for (let i = 0; i < 6; i++) await page.click('#duration-minus');
+		for (let i = 0; i < 25 && !(await page.locator('#duration-minus').isDisabled()); i++) await page.click('#duration-minus');
 		check(await text(page, '#duration-value') === '10 min', `− stops at 10 min (got ${await text(page, '#duration-value')})`);
 		check(await page.locator('#duration-minus').isDisabled(), '− is disabled at 10 min');
 
@@ -344,38 +370,85 @@ for (const sig of ['SIGINT', 'SIGTERM', 'SIGHUP'] as const) process.on(sig, () =
 		check(await text(page, '#duration-value') === '10 min', 'after a reload the duration is remembered');
 		await page.click('#menu-back');
 
-		// 8. Parents: set a PIN, schedule the world → the card; the card's Parents button asks for
-		// the PIN and cancels the schedule.
+		// 8. Parents: a PIN is typed twice; a start time; today's buttons; reset.
 		await page.click('#home-parents');
 		await page.waitForSelector('#pin-set-input');
 		await page.fill('#pin-set-input', '1234');
+		await page.fill('#pin-set-again', '1243');
 		await page.click('#pin-save');
+		check(await text(page, '#pin-msg') === "The two PINs don't match.", `a mistyped PIN is refused (got ${await text(page, '#pin-msg')})`);
+		check(await ls(page, 'minicraft:v1:pin') === null, 'a mistyped PIN is not stored');
+		await page.fill('#pin-set-again', '1234');
+		await page.click('#pin-save');
+		await page.waitForSelector('#pin-msg.ok');
 		check(await ls(page, 'minicraft:v1:pin') === '1234', 'Save PIN stores the PIN');
-		const worldId = await page.locator('#sched-world option').nth(1).getAttribute('value');
-		await page.selectOption('#sched-world', worldId!);
-		await page.fill('#sched-start', '00:00');
-		await page.click('#sched-save');
-		await page.waitForSelector('#card-parents');
-		check(await page.locator('#home-multi').count() === 0, 'the scheduled card replaces home: no Multiplayer');
-		check(await ls(page, 'minicraft:v1:schedule') !== null, 'the schedule is stored');
-		await page.click('#card-parents');
+		const late = new Date().getHours() === 23 && new Date().getMinutes() >= 58;
+		if (!late) {
+			await page.check('#rule-start-on');
+			await page.fill('#rule-start', '23:59');
+			await page.click('#rules-save');
+			await page.waitForSelector('#rules-msg.ok');
+			await page.click('#menu-back');
+			check((await text(page, '#play-line')).startsWith('Play at 11:59'), `before the start time home says when (got ${await text(page, '#play-line')})`);
+			await page.click('#home-single');
+			await page.waitForSelector('#single-play');
+			check(await page.locator('#single-play').isDisabled(), 'before the start time Play is disabled');
+			await page.click('#menu-back');
+			await page.click('#home-parents');
+			await page.fill('#pin-input', '1234');
+			await page.click('#pin-go');
+			await page.waitForSelector('#rule-start-on');
+		}
+		// Any time, 45 min a day, and today already used up (he played 45 minutes).
+		await page.uncheck('#rule-start-on');
+		await page.selectOption('#rule-daily', '45');
+		await page.click('#rules-save');
+		await page.waitForSelector('#rules-msg.ok');
+		await page.evaluate(() => {
+			const now = Date.now();
+			localStorage.setItem('minicraft:v1:playtime', JSON.stringify({ limitMs: 2_700_000, breakMs: null, playedMs: 2_700_000, frozenAt: now, startedAt: now, updatedAt: now }));
+		});
+		await page.click('#menu-back');
+		check(await text(page, '#play-line') === 'All done for today · play again tomorrow', `a used-up day says so on home (got ${await text(page, '#play-line')})`);
+		await page.click('#home-single');
+		await page.waitForSelector('#single-play');
+		check(await page.locator('#single-play').isDisabled(), 'a used-up day: Play is disabled (no Play that leads to TIME\'S UP)');
+		await page.click('#menu-back');
+		await page.click('#home-parents');
+		await page.fill('#pin-input', '1234');
+		await page.click('#pin-go');
+		await page.waitForSelector('#today-plus');
+		check((await text(page, '#today-summary')).includes('All done for today'), `Today says the day is used up (got ${await text(page, '#today-summary')})`);
+		await page.click('#today-plus');
+		await page.waitForSelector('#today-msg.ok');
+		check(await text(page, '#today-msg') === '✓ Added 15 minutes, for today only.', `+15 min confirms (got ${await text(page, '#today-msg')})`);
+		const rulesAfter = JSON.parse((await ls(page, 'minicraft:v1:rules')) ?? '{}');
+		check(rulesAfter.dailyMin === 45, '+15 min does not touch the rules');
+		await page.click('#menu-back');
+		check(await text(page, '#play-line') === '15 minutes left today', `+15 min gives 15 minutes (got ${await text(page, '#play-line')})`);
+		await page.click('#home-parents');
+		await page.fill('#pin-input', '1234');
+		await page.click('#pin-go');
+		await page.waitForSelector('#today-reset');
+		await page.click('#today-reset');
+		await page.waitForSelector('#today-msg.ok');
+		check(await ls(page, 'minicraft:v1:playtime') === null && await ls(page, 'minicraft:v1:today') === null, "Reset today's time clears today's time and extras");
+		check(await ls(page, 'minicraft:v1:rules') !== null && await ls(page, 'minicraft:v1:pin') === '1234', "Reset today's time leaves the rules and the PIN");
+		await page.click('#menu-back');
+		check(await text(page, '#play-line') === '45 minutes left today', `after the reset the day starts over (got ${await text(page, '#play-line')})`);
+
+		// 9. Parents behind the PIN; Remove PIN.
+		await page.click('#home-parents');
+		check(await page.locator('#rules-save').count() === 0, 'with a PIN set, Parents is gated');
 		await page.fill('#pin-input', '9999');
 		await page.click('#pin-go');
 		check(await text(page, '#pin-error') === 'Wrong PIN', 'a wrong PIN is refused');
-		check(await ls(page, 'minicraft:v1:schedule') !== null, 'a wrong PIN leaves the schedule');
-		await page.fill('#pin-input', '1234');
-		await page.click('#pin-go');
-		await page.waitForSelector('#home-single');
-		check(await ls(page, 'minicraft:v1:schedule') === null, 'the right PIN cancels the schedule and home is back');
-
-		// 9. Parents behind the PIN; Reset PIN removes it.
-		await page.click('#home-parents');
-		check(await page.locator('#max-duration').count() === 0, 'with a PIN set, Parents is gated');
 		await page.fill('#pin-input', '1234');
 		await page.click('#pin-go');
 		await page.waitForSelector('#pin-reset');
 		await page.click('#pin-reset');
-		check(await ls(page, 'minicraft:v1:pin') === null, 'Reset PIN removes it');
+		await page.waitForSelector('#pin-msg.ok');
+		check(await ls(page, 'minicraft:v1:pin') === null, 'Remove PIN removes it');
 	} catch (e) {
 		check(false, `run threw: ${(e as Error).message}`);
 	} finally {

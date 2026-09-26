@@ -1,6 +1,4 @@
 import type { PlaytimeSession } from '../game/playtime';
-import type { Options } from '../data/keybindings.data';
-import { loadOptions, saveOptions } from './options';
 
 export const PLAYTIME_KEY = 'minicraft:v1:playtime';
 
@@ -67,16 +65,4 @@ export function clearSession(): void {
 	} catch {
 		// Same as above.
 	}
-}
-
-/**
- * Parents screen: save the maximum play duration (null = No limit) and drop
- * any stored session, so "the parent changed something" always unlocks.
- */
-export function applyMaxDuration(max: number | null): Options {
-	const opts = loadOptions();
-	opts.maxDurationMin = max;
-	saveOptions(opts);
-	clearSession();
-	return opts;
 }

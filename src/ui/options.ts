@@ -33,16 +33,13 @@ export class OptionsMenu {
 		card.innerHTML = `<h1>Options</h1>`;
 
 		const kb = document.createElement('div');
-		kb.innerHTML = '<h2 style="font-size: 16px; margin: 16px 0 4px;">Keybindings</h2>';
+		kb.innerHTML = '<div class="menu-section">Keybindings</div>';
 		for (const action of ACTIONS) {
 			const row = document.createElement('div');
-			row.style.display = 'flex';
-			row.style.justifyContent = 'space-between';
-			row.style.padding = '4px 0';
+			row.className = 'keybinding-row';
 			const label = document.createElement('span');
 			label.textContent = ACTION_LABEL[action];
 			const btn = document.createElement('button');
-			btn.style.width = '120px';
 			btn.textContent = bindingLabel(this.current.keybindings[action]);
 			btn.onclick = () => {
 				btn.textContent = 'Press a key…';
@@ -61,7 +58,7 @@ export class OptionsMenu {
 		card.appendChild(kb);
 
 		const actions = document.createElement('div');
-		actions.style.marginTop = '16px';
+		actions.className = 'menu-actions';
 		const reset = document.createElement('button');
 		reset.textContent = 'Reset Keybindings';
 		reset.onclick = () => {
@@ -70,6 +67,7 @@ export class OptionsMenu {
 		};
 		const save = document.createElement('button');
 		save.textContent = 'Save & Back';
+		save.className = 'play-big';
 		save.onclick = () => {
 			saveOptions(this.current);
 			this.root.classList.add('hidden');

@@ -35,6 +35,13 @@ describe('shouldHandleKey', () => {
 		expect(shouldHandleKey(true, 'cyclePickaxe', free)).toBe(true);
 		expect(shouldHandleKey(false, 'cyclePickaxe', { ...free, pickerOpen: true })).toBe(true);
 	});
+	it('drops every keydown under the pause menu, keeps every keyup (pause menu spec §3.2)', () => {
+		const s = { ...free, pauseOpen: true };
+		for (const a of ['forward', 'jump', 'inventory', 'slot3', 'toggleFly', 'ignite', 'pickLightColor', 'cyclePickaxe'] as const) {
+			expect(shouldHandleKey(true, a, s)).toBe(false);
+			expect(shouldHandleKey(false, a, s)).toBe(true);
+		}
+	});
 });
 
 describe('buildKeyToAction', () => {
@@ -68,5 +75,12 @@ describe('sneakKeyChange (toys spec §4: Shift is the sneak key)', () => {
 			expect(sneakKeyChange('ShiftLeft', false, s)).toBe(false);
 		}
 		expect(sneakKeyChange('ShiftRight', true, { ...free, pickerOpen: true })).toBe(true); // movement keys work behind the picker too
+	});
+});
+
+describe('sneakKeyChange under the pause menu', () => {
+	it('ignores a Shift press under the pause menu, still clears on release', () => {
+		expect(sneakKeyChange('ShiftLeft', true, { ...free, pauseOpen: true })).toBe(null);
+		expect(sneakKeyChange('ShiftLeft', false, { ...free, pauseOpen: true })).toBe(false);
 	});
 });

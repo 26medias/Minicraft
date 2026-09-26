@@ -9,7 +9,7 @@ import { indexOf } from './coords';
 const uvFor = (id: number, face: string) => { const fi = { px: 0, nx: 1, py: 2, ny: 3, pz: 4, nz: 5 }[face as 'px']; const t = (id * 6 + fi) % 4096; const u = (t % 64) / 64, v = Math.floor(t / 64) / 64; return [u, v, u + 1 / 64, v + 1 / 64] as [number, number, number, number]; };
 
 function fnvBytes(a: ArrayBufferView): number { const b = new Uint8Array(a.buffer, a.byteOffset, a.byteLength); let h = 2166136261 >>> 0; for (let i = 0; i < b.length; i++) { h ^= b[i]; h = Math.imul(h, 16777619) >>> 0; } return h; }
-function hashMesh(m: ChunkMesh | null): number[] { return m ? [fnvBytes(m.positions), fnvBytes(m.normals), fnvBytes(m.uvs), fnvBytes(m.colors), fnvBytes(m.indices)] : [0, 0, 0, 0, 0]; }
+function hashMesh(m: ChunkMesh | null): number[] { return m ? [fnvBytes(m.positions), fnvBytes(m.normals), fnvBytes(m.uvs), fnvBytes(m.colors), fnvBytes(m.shade), fnvBytes(m.indices)] : [0, 0, 0, 0, 0, 0]; }
 
 /** Pinned construction (spec §6.1): ensure the 5×5 around each fixture chunk, brute-shadow every chunk, then mesh. */
 function fixture() {
@@ -24,11 +24,13 @@ function fixture() {
 	return { w, picks };
 }
 
-// Recorded ONCE at the perf base commit (step 0); never re-recorded. Empty until then.
+// Recorded at the perf base commit (step 0). Re-recorded for the sun/sky lighting split (colour hashes
+// only), and for cloud shadows (colours became raw light, the shade bytes were added; positions, normals,
+// uvs and indices unchanged both times). Re-record only for a deliberate change to mesh output.
 const EXPECTED: Record<string, number[]> = {
-	'21,12': [1825138057, 2252756709, 1685498389, 2789479881, 3335211883, 0, 0, 0, 0, 0, 2177329537, 2005287653, 3372884885, 810916311, 1551215527],
-	'23,11': [2316495125, 1803881189, 2551034517, 37597082, 3734501287, 3863247837, 3405197413, 278830597, 3427787501, 527418631, 0, 0, 0, 0, 0],
-	'20,15': [3986259953, 3648011237, 362083725, 2880651615, 1719258291, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0],
+	'21,12': [1825138057,  2252756709,  1685498389,  2182148685,  510925938,  3335211883,  0,  0,  0,  0,  0,  0,  2177329537,  2005287653,  3372884885,  763629601,  260512374,  1551215527],
+	'23,11': [2316495125,  1803881189,  2551034517,  975124156,  2347287006,  3734501287,  3863247837,  3405197413,  278830597,  3231486787,  1102038730,  527418631,  0,  0,  0,  0,  0,  0],
+	'20,15': [3986259953,  3648011237,  362083725,  200572560,  2987267675,  1719258291,  0,  0,  0,  0,  0,  0,  0,  0,  0,  0,  0,  0],
 };
 
 describe('meshChunk byte golden (spec §6.1)', () => {

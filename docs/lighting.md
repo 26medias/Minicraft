@@ -91,18 +91,30 @@ Typical mine/place touches tens to hundreds of voxels. Well under a millisecond 
 
 **Per-vertex sampling.** At each face corner, the mesher averages the 4 voxels that touch that corner on the outward side of the face. Cross-chunk boundaries are resolved through the `neighbors` argument. Diagonal chunk corners (where both X and Z are out of bounds simultaneously) fall through to 0 — we don't resolve across two chunk boundaries at once.
 
-**Colour computation.**
+**Colour computation: sun and sky.** Skylight is split into a cool fill from the blue sky and a warm direct sun. Every sky-lit face gets the fill, in shadow or not; only faces turned toward the sun and out of cast shadow get the sun. So cubes read in three tones (top brightest, the sun-facing sides next, the sides turned away darkest), and a shadow is blue rather than a grey darkening.
 
 ```
-SKY_COLOR = (0.9, 0.95, 1.0)       // slightly cool-tinted sun
+SKY_FILL  = (0.36, 0.42, 0.56)     // cool: all a shadow keeps
+SUN_COLOR = (0.78, 0.66, 0.40)     // warm; a top face in full sun sums to about white
 MIN_AMBIENT = 0.03                 // prevents pitch-black voxels
+skyView  = 1.0 up, 0.8 sides, 0.6 down      // share of the sky the face sees
+faceSun  = max(0, normal · sunDir)          // per face, from SUN_DIR_RAW
+sunlit   = averaged sunlit fraction (see Cast shadows)
 
 skyScale = averagedSkyLight / 15
-blockR/G/B = averagedBlockChannel / 15
+block    = (BLOCK_SHADOW_FLOOR + (1 - BLOCK_SHADOW_FLOOR) * sunlit) * averagedBlockRGB / 15
 
-vertexRGB = SKY_COLOR * skyScale + (blockR, blockG, blockB) + MIN_AMBIENT
-vertexRGB = clamp(vertexRGB, 0, 1) * aoFactor
+raw = SKY_FILL * skyScale * skyView + SUN_COLOR * skyScale * faceSun * sunlit + block + MIN_AMBIENT
+sun = skyScale * faceSun * sunlit
+
+// written to the mesh: colors = raw, shade = [sun, aoFactor] as bytes
+// drawn by the chunk shader (clouds.ts applyChunkShading):
+light = min(raw - SUN_COLOR * sun * cloudShadow, 1) * aoFactor
 ```
+
+With no cloud overhead (`cloudShadow = 0`) that is `clamp(raw) * aoFactor`, the same as clamping on the CPU, apart from the clamp now running per pixel instead of per vertex (at most 9/255 on a handful of pixels, measured).
+
+`BLOCK_SHADOW_FLOOR = 0.5` keeps block light (lamps, lava) exactly as before the split: halved where no sun reaches, which is every cave, so lit caves keep the brightness they were tuned at.
 
 **Ambient occlusion.** At each corner, the mesher inspects the same 4 outward-side voxels and counts how many of the "edge-adjacent" voxels are opaque (`lightFilter >= 15` AND `liquid === 'none'`). AO factors by tier: 0 edge-adjacent opaque → 1.0; 1 → 0.85; 2 without diag → 0.7; 2 with diag → 0.5. Classic Minecraft corner-inset look, with single-edge adjacency now producing visible darkening.
 
@@ -127,13 +139,21 @@ How it stays cheap (16 ms per 256-high chunk before the performance project, ≈
 
 **Load-order independence.** `ensureShadowNeighbourhood` loads the full 3×3 before a chunk is shadowed, so `sunlit` is a pure function of those nine chunks' blocks and never depends on which chunks happened to be loaded first. Only at the world edge do rays leave the map; they count as sunlit, deterministically. The stream-equivalence test compares a simulated nearest-first stream against a fully loaded reference.
 
-Mesher integration: `sampleCornerShadow` averages `sunlit` across the 4 voxels at each face corner (same geometry as `sampleCornerLight`), producing a 0..1 fraction. Each vertex RGB is multiplied by `SHADOW_FLOOR + (1 - SHADOW_FLOOR) * fraction`, with `SHADOW_FLOOR = 0.5`. The mesher reads the 4 axis neighbours' `sunlit` at chunk borders, which is why the chunk worker receives them (see `docs/performance.md`).
+Mesher integration: `cornerColor` averages `sunlit` across the 4 voxels at each face corner (the same voxels as the light sample), producing a 0..1 fraction that scales the direct-sun term (see "Colour computation" above): a shadow removes the sun and keeps the sky fill. The mesher reads the 4 axis neighbours' `sunlit` at chunk borders, which is why the chunk worker receives them (see `docs/performance.md`).
 
 Invalidation: a block change flags the containing chunk and its three SE neighbours `shadowsDirty`. A neighbour dirtied only by shadows is re-meshed only if its `sunlitHash` changed, so most edits re-mesh one chunk, not four. A chunk's shadows are also re-dirtied when a 3×3 neighbour arrives or is evicted.
 
 ## Renderer integration
 
-`MeshBasicMaterial({ map, vertexColors: true })` for both the opaque and liquid passes. No `DirectionalLight`, no `AmbientLight`, no shadow map. All illumination comes from the per-vertex `color` attribute that the mesher writes. The liquid material adds `transparent: true, depthWrite: false, side: DoubleSide` so water surfaces alpha-blend without occluding geometry behind them and are visible from both sides.
+`MeshBasicMaterial({ map, vertexColors: true })` for the opaque, liquid and translucent passes. No `DirectionalLight`, no `AmbientLight`, no shadow map. All illumination comes from the per-vertex `color` attribute that the mesher writes.
+
+**Sky and fog** (`src/engine/render/sky.ts`). `skyColor(dir)` (GLSL) gives the sky's colour along a world-space direction: deep blue overhead, paler at the horizon, pale gold haze low on the sun's side, and a glow around the sun. A `SkyDome` around the camera paints it in place of a flat background, and `installSkyFog` patches three's fog chunks so fog fades each fragment to `skyColor` along its view ray instead of to one flat colour: a distant hill melts into the sky behind it, warm toward the sun and blue away from it. The colours are sRGB and used after three's colour-space conversion, where fog is applied, so dome and fog match exactly. `scene.fog`'s own colour is unused.
+
+**Clouds** (`src/engine/render/clouds.ts`). Blocky clouds in 12-block cells, 5 or 10 blocks thick, from a fixed 96 × 96-cell repeating pattern (about 30% cover, no lone specks). The layer sits at y = 176 in a 256-high world (the tallest peaks poke through) and y = 100 in a 64-high one. It drifts toward +x at 0.6 blocks/s, timed from the wall clock (`Date.now()`), so two players in the same world see the same clouds. The mesh holds the cells within about 290 blocks of the camera and is rebuilt (≈ 0.6 ms) when the camera's cloud cell changes; clouds are opaque and fade out toward that edge.
+
+**Cloud shadows.** The chunk shader follows the sun ray from each pixel up to the cloud layer and reads the same pattern (a shared texture and drift offset, `CLOUD_UNIFORMS`). Under a cloud it takes away 85% of the direct sun, which is why the mesher passes the sun factor separately (`shade`): a cloud shadow looks exactly like a block's shadow, blue from the sky fill, and slides with the cloud. Nothing is re-baked.
+
+**Grade.** `applyGrade` adds a little saturation and a gentle S-curve to the three chunk materials, before fog, so fogged terrain still meets the sky. The liquid material adds `transparent: true, depthWrite: false, side: DoubleSide` so water surfaces alpha-blend without occluding geometry behind them and are visible from both sides.
 
 ## Code map
 
@@ -141,7 +161,9 @@ Invalidation: a block change flags the containing chunk and its three SE neighbo
 - `src/engine/world/lighting.test.ts` — coverage for column seeding, overhang attenuation, RGB blending, incremental updates.
 - `src/engine/world/shadows.ts` — per-voxel DDA sun raycast (`computeChunkShadows`, `rayHitsSolidInLoadedChunks`).
 - `src/engine/world/chunk.ts` — packed-nibble storage + accessors; `sunlit` byte array.
-- `src/engine/world/mesher.ts` — `sampleCornerLight`, `lightSampleToRGB`, `aoFactorForCorner`, `sampleCornerShadow`, and the opaque/liquid vertex pipelines.
+- `src/engine/world/mesher.ts` — `cornerColor` (light, sun/sky split, AO, shadow per face corner) and the opaque/liquid/translucent vertex pipelines.
+- `src/engine/render/sky.ts` — `skyColor`, `SkyDome`, `installSkyFog`, `applyGrade`.
+- `src/engine/render/clouds.ts` — the cloud pattern, `Clouds` (mesh and drift), `applyChunkShading` (cloud shadow + grade for the chunk materials).
 - `src/engine/render/renderer.ts` — `MeshBasicMaterial` setup, `mountChunkMesh` writing the `color` attribute.
 - `src/game/loop.ts` — `applyLightUpdate` wiring; called after every block edit.
 

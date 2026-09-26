@@ -19,7 +19,7 @@ Current catalog: 19 hand-written blocks (grass, dirt, stone, cobblestone, sand, 
 - **Persistence:** `localStorage` via a narrow `PersistenceAdapter` interface (Phase 2 will swap to a remote backend without touching callers). Chunks are RLE + deflate + base64 encoded.
 - **Compression:** [`pako`](https://github.com/nodeca/pako).
 - **Physics:** hand-rolled swept-AABB voxel collision with sub-stepping — no physics library.
-- **Textures:** Mojang's block PNGs atlased at build time via [`sharp`](https://sharp.pixelplumbing.com/). Select textures are biome-tinted in the build step (grass top: green; leaves: green; water: blue).
+- **Textures:** CC BY-SA 4.0 texture packs (Pixel Perfection CE, REFI, Bauniclonia, Mineclonia; see `CREDITS.md`), imported by `npm run import-textures` and atlased at build time via [`sharp`](https://sharp.pixelplumbing.com/). Grey grass and leaf masks are tinted in the build step.
 - **Tests:** [Vitest](https://vitest.dev/) — unit tests covering the mesher, physics, world generation determinism, block catalog, player state (including fly + swim mode), TNT detonation, the play-time timer, the light registry, voxel lighting propagation (sky + RGB block light, incremental updates, AO), and the liquid scheduler (fall rule, sideways spread, frontier decay, sponge absorption), and persistence (v1/v2 formats, cloud + dual adapters, autosave failure handling, and the worlds API).
 - **Lint / format:** ESLint + Prettier.
 
@@ -94,7 +94,7 @@ In fly or swim mode: pitch the camera up to ascend, down to descend — W moves 
 - **C** — open the light-color picker (20-tile pastel palette). If you're aimed at a lamp block when you press C, selecting a color recolors *that* lamp and sets the default for future placements. If you're not aimed at a lamp, the color becomes the default.
 
 ### Menu
-- **Esc** — exit pointer-lock (you leave the game to the browser but the world keeps running).
+- **Esc** — open the game menu: **Return to Game**, **Controls** (every key, read-only) and **Quit to Menu** (saves, then back to the main menu). Solo play stops while it is open; in multiplayer your friend's world keeps going. The play timer keeps counting. With the I screen or the color picker open, Esc closes that instead.
 - Back on the main menu you can create new worlds, continue existing ones, delete them, and remap keys via **Options**.
 
 ## Features
@@ -116,13 +116,13 @@ In fly or swim mode: pitch the camera up to ascend, down to descend — W moves 
 - **Block inventory** (I): every solid-cube block from Minecraft 1.21.6 (~350), grouped; click to fill the selected hotbar slot. Whole cubes only — no stairs, slabs, doors, flowers. 9-slot hotbar saved per world. See [docs/inventory.md](docs/inventory.md).
 - **Auto-save** every ~5s and on window blur / tab hide, to `localStorage`. Only modified chunks are persisted; untouched chunks regenerate from the seed. Lights are recomputed from blocks on load (not stored). Primed-TNT fuse state is intentionally not saved (resets to inert on reload).
 - **Rebindable keys** via the in-game Options menu. Unknown / deprecated keybindings in old save files are silently dropped at load time so stale mappings can't shadow current actions.
-- **Play-time limit and schedule** for grown-ups, in the menu's *Grown-ups* section, behind a 4-digit PIN once one is set. Either *Play for* 15–90 minutes with an optional *Then break for*, or lock the menu to one world with a daily *Play for* and *Not before* time: before that time the kid sees only `Play at 7:00` and a disabled button; after it, one session per day. Large `END IN 5 MINUTES` / `END IN 2 MINUTES` warnings, then `TIME'S UP`. Only visible play counts. Forgot the PIN: `localStorage.removeItem('minicraft:v1:pin')` in the browser console on the game's tab, then reload. See [`docs/playtime.md`](docs/playtime.md).
+- **Play time.** Free play: the kid picks how long before each game (10 min … No limit). A parent can press **Schedule** in Single Player or Multiplayer (behind a 4-digit PIN): pick the world (or let him choose), when it starts and for how long; the menu is then locked onto that one session — "Not yet · play at 7:00 AM", then "25 minutes left", then "All done! · your world is saved" — until a parent ends it (+15 min, Change and End schedule sit behind the PIN on the locked screen). Large `END IN 5 MINUTES` / `END IN 2 MINUTES` warnings. Only visible play counts. Forgot the PIN: `localStorage.removeItem('minicraft:v1:pin')` in the browser console on the game's tab. See [`docs/playtime.md`](docs/playtime.md).
 
 ## Project layout
 
 ```
 src/
-  assets/blocks/          # raw Mojang PNGs (source for the atlas build)
+  assets/blocks/          # CC BY-SA block PNGs + SOURCES.json (source for the atlas build)
   data/                   # pure-data modules — block catalog, keybindings, color palette
     blocks.base.data.ts   # hand-written base rows (ids 0-19, frozen)
     blocks.catalog.data.ts # generated Minecraft catalog (do not hand-edit)
@@ -172,8 +172,8 @@ Explicitly out of scope forever:
 
 ## Assets
 
-Block textures in `src/assets/blocks/` are Mojang's, extracted from a local Minecraft 1.21.6 install for personal/family use. They are not redistributed. If the project ever gains a public face, these will be replaced with original or properly-licensed art.
+Block textures in `src/assets/blocks/` are CC BY-SA 4.0 adaptations of free texture packs; authors, sources and changes are in `CREDITS.md` (also served in-game as `CREDITS.txt`). Player skins and menu art are not licensed for redistribution.
 
 ## License
 
-Source code: TBD. Assets: not licensed for redistribution (see above).
+Source code: TBD. Block textures: CC BY-SA 4.0 (see `CREDITS.md`; the licence covers the images only, not the code). Skins and menu art: not licensed for redistribution.

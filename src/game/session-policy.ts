@@ -1,22 +1,15 @@
-import type { LoadedSchedule } from './schedule';
-
 const MIN_DURATION = 10;
 const TOP_DURATION = 120;
 const STEP = 5;
 
 /**
- * Spec §8.1: keep the stored session across this page load? Without a PIN a
- * refresh discards it (honour system), except under an active schedule ("all
- * done for today" can't be refreshed away) and on a multiplayer reconnect
- * reload (a wifi blip must not reset the timer).
+ * Keep the stored session across this page load? Without a PIN a refresh
+ * discards it (honour system), except under a parent's plan ("all done" can't
+ * be refreshed away) and on a multiplayer reconnect reload (a wifi blip
+ * must not reset the timer).
  */
-export function sessionPolicy(pinSet: boolean, scheduleActive: boolean, autojoin: boolean): 'keep' | 'discard' {
-	return pinSet || scheduleActive || autojoin ? 'keep' : 'discard';
-}
-
-/** The `scheduleActive` input to sessionPolicy. A broken schedule counts as active: a parental control fails closed. */
-export function scheduleActive(loaded: LoadedSchedule): boolean {
-	return loaded.kind !== 'none';
+export function sessionPolicy(pinSet: boolean, planActive: boolean, autojoin: boolean): 'keep' | 'discard' {
+	return pinSet || planActive || autojoin ? 'keep' : 'discard';
 }
 
 /** The duration control's default (spec §8): No limit under No limit, else 30 min clamped to the maximum. */

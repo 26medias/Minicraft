@@ -2,10 +2,10 @@ import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 import { bootSession } from './boot-session';
 import { AUTOJOIN_KEY, beginSolo, boot, failRejoin, setAutojoin, type AutojoinArgs } from './boot';
 import { loadSession, saveSession, PLAYTIME_KEY } from '../persistence/playtime';
-import { PIN_KEY, SCHEDULE_KEY } from '../persistence/schedule';
+import { PIN_KEY, PLAN_KEY, SCHEDULE_KEY } from '../persistence/plan';
 import { MP_PRESELECT_KEY } from '../ui/menu';
 import type { PlaytimeSession } from './playtime';
-import type { LoadedSchedule } from './schedule';
+import type { LoadedPlan } from './plan';
 
 // T12b (spec §10, plan I1 + gate-2 amendments): the BOOT path, not just sessionPolicy. A stored
 // session is run through boot for each of no PIN / PIN / schedule / autojoin; only the first
@@ -54,14 +54,14 @@ afterEach(() => {
 });
 
 describe('bootSession (T12b, the function)', () => {
-	const none: LoadedSchedule = { kind: 'none' };
-	const armed: LoadedSchedule = { kind: 'armed', schedule: { worldId: 'w', seed: 1, name: 'W', limitMin: 30, startMin: 0 } };
+	const none: LoadedPlan = { kind: 'none' };
+	const armed: LoadedPlan = { kind: 'set', plan: { id: 'p', mode: 'solo', worldId: 'w', worldName: 'W', startAt: 1, limitMin: 30, extraMin: 0, createdAt: 1 } };
 	it.each([
-		['no PIN', { pin: null, schedule: none, autojoin: false }, true],
-		['PIN', { pin: '1234', schedule: none, autojoin: false }, false],
-		['schedule', { pin: null, schedule: armed, autojoin: false }, false],
-		['broken schedule (fails closed)', { pin: null, schedule: { kind: 'broken' } as LoadedSchedule, autojoin: false }, false],
-		['autojoin', { pin: null, schedule: none, autojoin: true }, false],
+		['no PIN', { pin: null, plan: none, autojoin: false }, true],
+		['PIN', { pin: '1234', plan: none, autojoin: false }, false],
+		['plan', { pin: null, plan: armed, autojoin: false }, false],
+		['broken plan (fails closed)', { pin: null, plan: { kind: 'broken' } as LoadedPlan, autojoin: false }, false],
+		['autojoin', { pin: null, plan: none, autojoin: true }, false],
 	])('%s → discarded: %s', (_n, st, discarded) => {
 		const clear = vi.fn();
 		bootSession(st, () => stored, clear);
@@ -70,7 +70,7 @@ describe('bootSession (T12b, the function)', () => {
 
 	it('no stored session: nothing to clear', () => {
 		const clear = vi.fn();
-		bootSession({ pin: null, schedule: none, autojoin: false }, () => null, clear);
+		bootSession({ pin: null, plan: none, autojoin: false }, () => null, clear);
 		expect(clear).not.toHaveBeenCalled();
 	});
 });
@@ -88,8 +88,14 @@ describe('boot() (T12b, boot-level)', () => {
 		expect(loadSession()?.playedMs).toBe(stored.playedMs);
 	});
 
-	it('schedule: the stored session is kept', () => {
+	it('an old schedule (migrated to a plan): the stored session is kept', () => {
 		armSchedule();
+		boot({ mpUrl: URL_, storage: session });
+		expect(loadSession()?.playedMs).toBe(stored.playedMs);
+	});
+
+	it('a plan: the stored session is kept', () => {
+		local.setItem(PLAN_KEY, JSON.stringify({ id: 'p', mode: 'solo', worldId: null, worldName: null, startAt: 1, limitMin: 45, extraMin: 0, createdAt: 1 }));
 		boot({ mpUrl: URL_, storage: session });
 		expect(loadSession()?.playedMs).toBe(stored.playedMs);
 	});

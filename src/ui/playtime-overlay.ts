@@ -37,12 +37,12 @@ export class PlaytimeOverlay {
 	}
 
 	/** No break time: the freeze lasts until a new session (spec §8.3); MENU is the way back. */
-	freeze(lockedText?: string): void {
+	freeze(lockedText?: string, titleText?: string): void {
 		this.hideWarning();
 		this.freezeEl.innerHTML = '';
 		const title = document.createElement('div');
 		title.className = 'playtime-title';
-		title.textContent = "TIME'S UP";
+		title.textContent = titleText ?? "TIME'S UP";
 		this.freezeEl.appendChild(title);
 
 		const line = document.createElement('div');

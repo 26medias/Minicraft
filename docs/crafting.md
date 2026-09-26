@@ -133,7 +133,7 @@ removed. The Flattening TNT clears from its own height up 12 blocks, so if he
 stands on a hill above one it drops him up to 12 blocks. That is harmless: there
 is no fall damage.
 
-Textures: the Slime Pad uses Mojang's `slime_block`; the others are derived in
+Textures: the Slime Pad uses the `slime_block` texture; the others are derived in
 `DERIVED_TEXTURES` (the Launch Pad is slime tinted red; the blast toys are TNT
 tinted green, cyan, blue, white and magenta).
 

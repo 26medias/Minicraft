@@ -118,7 +118,7 @@ split described here.
 
 ```
 src/
-    assets/blocks/            # raw Mojang PNGs (source for atlas build)
+    assets/blocks/            # CC BY-SA block PNGs (source for atlas build; see CREDITS.md)
     data/
         blocks.data.ts        # block catalog — one row per block
         recipes.data.ts       # Phase 2 — crafting recipes as data
@@ -199,7 +199,7 @@ docs/
 | `localStorage` quota | Persist only modified chunks; RLE + deflate; wrap in try/catch; UI warning on quota |
 | Non-determinism sneaks into generation | PRNG-only policy + committed-hash unit test |
 | Mesh rebuild stalls on block edit | Mesher is pure; dirty-flag a chunk and re-mesh next frame. Phase 1 main-thread is fine; Phase 3 worker migration is pre-designed |
-| Mojang asset licensing | Subdomain must be **gated (password or unlisted)** before any public DNS record. These textures are personal-use only |
+| Asset licensing | Block textures are CC BY-SA 4.0 packs with credits (2026-09 texture replacement). Player skins and menu art are still personal-use only, so the subdomain stays **gated (password or unlisted)** |
 | Scope creep | Non-goals list in §2 and `CLAUDE.md`; every new feature is checked against a phase |
 
 ## 9. Deployment
@@ -214,7 +214,7 @@ Cloud Function (`minicraft-api`) over a GCS bucket, deployed with `./deploy.sh`.
 The client reaches the API through `VITE_MINICRAFT_API_URL`, which is baked into
 the bundle and publicly readable; the API is unauthenticated by design.
 
-**Gate the subdomain.** Either HTTP basic auth at the Cloudflare edge, or an unlisted URL, until the Mojang textures are replaced with original or licensed art.
+**Gate the subdomain.** Either HTTP basic auth at the Cloudflare edge, or an unlisted URL, until the player skins and menu art are replaced with original or licensed art (block textures already are).
 
 ## 10. Coding Conventions
 

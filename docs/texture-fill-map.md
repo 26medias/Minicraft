@@ -1,5 +1,7 @@
 # Texture sources — decision and fill map (2026-09-24)
 
+> Historical: the research map that fed `src/data/texture-sources.data.ts`, which is now the source of truth. The artifact linked below contains Mojang tiles and stays private.
+
 Research record only; nothing is wired into the game yet. Background and rejected options are in
 `texture-replacement-research.md`.
 

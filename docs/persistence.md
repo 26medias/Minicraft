@@ -261,5 +261,7 @@ deployed by hand, separately.
 2. The site, by hand, with cache-control set on the objects. Upload `atlas.json`
    and the atlas image **before or with** the bundle: a new bundle with a stale
    atlas fails to start with `Atlas missing tile`.
+   Also upload the texture credits (CC BY-SA attribution, linked from the pause menu):
+   `CLOUDSDK_CORE_ACCOUNT=julien@leap-forward.ca gcloud storage cp --cache-control="no-cache, must-revalidate" dist/CREDITS.txt gs://noah.leap-forward.ca/minicraft/CREDITS.txt`
 3. Purge Cloudflare's `/minicraft/` cache.
 4. Hard-refresh on Noah's laptop.

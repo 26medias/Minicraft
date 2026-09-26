@@ -37,7 +37,7 @@ Key fields:
 - `lightFilter` — controls how much light is attenuated passing through. Water dims at 2/block (~7 blocks visibility underwater); lava attenuates slightly more.
 - `liquid: 'water' | 'lava'` — the discriminator used by `isLiquid()` and the scheduler.
 
-Water's source texture is greyish; the atlas builder multiplies it by plains-biome blue (`#3F76E4`) in `TEXTURE_TINTS`. Lava's texture is used unmodified.
+Water's texture comes coloured (blue-green) from the texture pack and is not tinted at build time. Lava's texture is used unmodified.
 
 Obsidian (id 19) is a regular solid block produced by the water+lava reaction. It has no liquid behaviour of its own — once placed it's just another mineable block.
 

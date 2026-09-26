@@ -77,6 +77,11 @@ export class ParticleSystem {
 			uv.needsUpdate = true;
 			// The shared chunk material multiplies by the vertex colour (baked light); a cube without one renders black.
 			geo.setAttribute('color', new THREE.Float32BufferAttribute(new Float32Array(uv.count * 3).fill(1), 3));
+			// It also multiplies by the per-vertex [sun, AO] shade (clouds.ts applyChunkShading): sun 0 so no
+			// cloud shadow applies, AO 1 (255, normalized) so the chip keeps its colour. Missing, it reads 0: black.
+			const shade = new Uint8Array(uv.count * 2);
+			for (let k = 1; k < shade.length; k += 2) shade[k] = 255;
+			geo.setAttribute('shade', new THREE.BufferAttribute(shade, 2, true));
 
 			const mesh = new THREE.Mesh(geo, this.material);
 			mesh.position.set(

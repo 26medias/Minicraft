@@ -1,16 +1,69 @@
 /**
  * Build-time texture derivations for scripts/build-atlas.ts (pure: no fs, no sharp,
  * so vitest can check them). Two kinds of tile are not files in src/assets/blocks:
- *   - DERIVED_TEXTURES: a Mojang tile turned to greyscale, then tinted (Big/Mega TNT, spec §6);
+ *   - DERIVED_TEXTURES: a block tile turned to greyscale, then tinted to a target luminance (Big/Mega TNT, the toys,
+ *     launch_pad; texture spec §5.6);
  *   - pickaxe icons: original 16×16 pixel art drawn from the templates below (spec §5).
  */
 
 export type Rgb = [number, number, number];
 
-/** Brightens the greyscale before tinting: TNT's mean luminance is ~100, a plain multiply would be muddy. */
-export const TINT_GAIN = 1.8;
+/** Mean luminance a derived tile is scaled to (texture spec §5.6). 180 is the only tried value where every derived tile passes the brightness assertions. */
+export const DEFAULT_TARGET_LUM = 180;
 
-export const DERIVED_TEXTURES: Record<string, { source: string; tint: Rgb }> = {
+/**
+ * Toy sides (user review 2026-09-26): the bomb crate with the bomb's eyes and fuse removed and a
+ * picture of what the toy does drawn on its dark plate. 7 rows × 8 cells, '#' = bright.
+ */
+export const TOY_ICONS: Record<string, string[]> = {
+	tunnel_tnt: [   // an arrow: a tunnel the way he faces
+		'........',
+		'....#...',
+		'.....#..',
+		'.######.',
+		'.....#..',
+		'....#...',
+		'........',
+	],
+	flatten_tnt: [  // a big arrow pressing down onto flat ground
+		'...##...',
+		'...##...',
+		'.######.',
+		'..####..',
+		'...##...',
+		'........',
+		'########',
+	],
+	lake_tnt: [     // a water drop
+		'...#....',
+		'..###...',
+		'.#####..',
+		'.#####..',
+		'.#####..',
+		'..###...',
+		'........',
+	],
+	block_bomb: [   // a glass dome over the ground
+		'..####..',
+		'.#....#.',
+		'#......#',
+		'#......#',
+		'#......#',
+		'########',
+		'........',
+	],
+	fireworks: [    // a burst of sparks
+		'#..#..#.',
+		'.#.#.#..',
+		'..###...',
+		'#######.',
+		'..###...',
+		'.#.#.#..',
+		'#..#..#.',
+	],
+};
+
+export const DERIVED_TEXTURES: Record<string, { source: string; tint: Rgb; targetLum?: number; icon?: string[] }> = {
 	big_tnt_top: { source: 'tnt_top', tint: [0xff, 0x8c, 0x1a] },
 	big_tnt_bottom: { source: 'tnt_bottom', tint: [0xff, 0x8c, 0x1a] },
 	big_tnt_side: { source: 'tnt_side', tint: [0xff, 0x8c, 0x1a] },
@@ -23,7 +76,7 @@ export const DERIVED_TEXTURES: Record<string, { source: string; tint: Rgb }> = {
 };
 
 /** Toys spec §2: each blast toy is TNT, greyed, then tinted. Block Bomb is white (achromatic), the rest ≥ 20° of hue apart. */
-function toyTints(): Record<string, { source: string; tint: Rgb }> {
+function toyTints(): Record<string, { source: string; tint: Rgb; targetLum?: number; icon?: string[] }> {
 	const tints: Record<string, Rgb> = {
 		tunnel_tnt: [0x3c, 0xdc, 0x3c],   // green
 		flatten_tnt: [0x28, 0xdc, 0xe6],  // cyan
@@ -31,14 +84,35 @@ function toyTints(): Record<string, { source: string; tint: Rgb }> {
 		block_bomb: [0xff, 0xff, 0xff],   // white
 		fireworks: [0xff, 0x3c, 0xc8],    // magenta
 	};
-	const out: Record<string, { source: string; tint: Rgb }> = {};
+	const out: Record<string, { source: string; tint: Rgb; targetLum?: number; icon?: string[] }> = {};
 	for (const [name, tint] of Object.entries(tints)) for (const face of ['top', 'bottom', 'side'])
-		out[`${name}_${face}`] = { source: `tnt_${face}`, tint };
+		out[`${name}_${face}`] = face === 'side' ? { source: 'tnt_side', tint, icon: TOY_ICONS[name] } : { source: `tnt_${face}`, tint };
 	return out;
 }
 
-/** RGBA in, RGBA out, same length: luminance (Rec. 601) × gain × tint / 255, clamped; alpha kept. */
-export function greyTint(raw: Uint8Array, tint: Rgb, gain = TINT_GAIN): Uint8Array {
+/** The crate's dark plate (the bomb body) in the 16×16 side tile, by row: [first, last] column. */
+const PLATE: Record<number, [number, number]> = { 5: [5, 10], 6: [4, 11], 7: [4, 11], 8: [4, 11], 9: [4, 11], 10: [4, 11], 11: [5, 10] };
+/** The bomb's fuse above the plate, repainted with the wood pixel to its left. */
+const FUSE: Array<[number, number]> = [[8, 3], [7, 4], [8, 4]];
+
+/** A tnt_side tile with the bomb replaced by `icon` on the plate (plate colour from (5,6), bright from the eye at (6,8)). */
+export function toySide(raw: Uint8Array, icon: string[]): Uint8Array {
+	const out = new Uint8Array(raw);
+	const px = (x: number, y: number) => (y * 16 + x) * 4;
+	const plate = raw.slice(px(5, 6), px(5, 6) + 4), bright = raw.slice(px(6, 8), px(6, 8) + 4);
+	for (const [x, y] of FUSE) out.set(raw.slice(px(x - 1, y), px(x - 1, y) + 4), px(x, y));
+	for (const [row, [x0, x1]] of Object.entries(PLATE)) {
+		const y = Number(row);
+		for (let x = x0; x <= x1; x++) out.set(icon[y - 5][x - 4] === '#' ? bright : plate, px(x, y));
+	}
+	return out;
+}
+
+/** RGBA in, RGBA out: luminance (Rec. 601) scaled so the tile's mean luminance (alpha > 0) is targetLum, × tint / 255, clamped; alpha kept. */
+export function greyTint(raw: Uint8Array, tint: Rgb, targetLum = DEFAULT_TARGET_LUM): Uint8Array {
+	let s = 0, n = 0;
+	for (let i = 0; i < raw.length; i += 4) if (raw[i + 3] > 0) { s += 0.299 * raw[i] + 0.587 * raw[i + 1] + 0.114 * raw[i + 2]; n++; }
+	const gain = n === 0 || s === 0 ? 0 : targetLum / (s / n);
 	const out = new Uint8Array(raw.length);
 	for (let i = 0; i < raw.length; i += 4) {
 		const l = (0.299 * raw[i] + 0.587 * raw[i + 1] + 0.114 * raw[i + 2]) * gain;

@@ -91,99 +91,6 @@
 .fly-pip.filled {
 	background: #fff;
 }
-#menu-root {
-	position: fixed;
-	inset: 0;
-	background: #1b1b1b url('../assets/menu/background.webp') center / cover no-repeat;
-	color: #fff;
-	display: flex;
-	flex-direction: column;
-	align-items: center;
-	overflow-y: auto;
-	z-index: 10;
-}
-/* The logo and the card sit together, centred; auto margins collapse when the menu scrolls. */
-.menu-logo {
-	display: block;
-	width: min(90vw, 760px);
-	height: auto;
-	margin: auto 0 -8px;
-	padding-top: 16px;
-	filter: drop-shadow(0 6px 16px rgba(0, 0, 0, 0.55));
-	pointer-events: none;
-	user-select: none;
-}
-.menu-logo + .menu-card {
-	margin-top: 0;
-}
-/* On the home screen the logo is the title. */
-.menu-logo + .menu-card[data-screen='home'] > h1 {
-	display: none;
-}
-#menu-root.hidden {
-	display: none;
-}
-.menu-card {
-	min-width: 360px;
-	max-width: 480px;
-	margin: auto;
-	background: rgba(42, 42, 42, 0.92);
-	padding: 24px;
-	border-radius: 8px;
-	box-shadow: 0 4px 24px rgba(0, 0, 0, 0.6);
-}
-.menu-card h1 {
-	margin: 0 0 16px;
-	font-size: 28px;
-	letter-spacing: 0.05em;
-}
-.menu-card button {
-	display: block;
-	width: 100%;
-	margin: 8px 0;
-	padding: 12px;
-	font-size: 16px;
-	background: #4a4a4a;
-	border: none;
-	color: #fff;
-	border-radius: 4px;
-	cursor: pointer;
-}
-.menu-card button:hover {
-	background: #5a5a5a;
-}
-.menu-card input[type='number'],
-.menu-card input[type='text'] {
-	width: 100%;
-	padding: 8px;
-	font-size: 14px;
-	background: #1b1b1b;
-	border: 1px solid #4a4a4a;
-	color: #fff;
-	border-radius: 4px;
-	box-sizing: border-box;
-}
-.world-row {
-	display: flex;
-	justify-content: space-between;
-	padding: 8px;
-	background: #1b1b1b;
-	margin: 4px 0;
-	border-radius: 4px;
-	cursor: pointer;
-}
-.world-row:hover {
-	background: #333;
-}
-.world-row .delete {
-	background: transparent;
-	color: #ff8888;
-	border: none;
-	cursor: pointer;
-	width: auto;
-	padding: 0 8px;
-	margin: 0;
-}
 #color-picker-root {
 	position: fixed;
 	inset: 0;
@@ -216,27 +123,6 @@
 	border-color: #fff;
 }
 
-.menu-section {
-	margin: 14px 0 4px;
-	font-size: 13px;
-	letter-spacing: 0.04em;
-	text-transform: uppercase;
-	opacity: 0.65;
-}
-
-.menu-loading {
-	margin: 12px 0;
-	opacity: 0.7;
-}
-
-.menu-warning {
-	margin: 8px 0;
-	padding: 6px 8px;
-	border-radius: 4px;
-	background: rgba(210, 140, 40, 0.18);
-	color: #f0c070;
-	font-size: 13px;
-}
 
 #save-status {
 	position: fixed;
@@ -308,59 +194,6 @@
 }
 #playtime-freeze.hidden {
 	display: none;
-}
-.playtime-title {
-	font: bold 12vw/1.05 system-ui, sans-serif;
-	max-width: 92vw;
-	letter-spacing: 0.04em;
-}
-.playtime-line {
-	font: bold 5vw/1.2 system-ui, sans-serif;
-	max-width: 92vw;
-	opacity: 0.9;
-}
-.playtime-button {
-	font: bold 6vw/1 system-ui, sans-serif;
-	padding: 3vh 8vw;
-	background: #3c9a3c;
-	color: #fff;
-	border: none;
-	border-radius: 16px;
-	cursor: pointer;
-	text-transform: uppercase;
-}
-.playtime-button:hover {
-	background: #4cb54c;
-}
-.menu-card select {
-	width: 100%;
-	padding: 8px;
-	font-size: 14px;
-	background: #1b1b1b;
-	border: 1px solid #4a4a4a;
-	color: #fff;
-	border-radius: 4px;
-	box-sizing: border-box;
-}
-.playtime-row {
-	margin: 8px 0;
-}
-.playtime-status {
-	display: flex;
-	justify-content: space-between;
-	align-items: center;
-	gap: 8px;
-	margin: 8px 0;
-	padding: 8px;
-	background: #1b1b1b;
-	border-radius: 4px;
-	color: #f0c070;
-	font-size: 13px;
-}
-.playtime-status button {
-	width: auto;
-	margin: 0;
-	padding: 6px 12px;
 }
 
 /* Block inventory (I). Above the HUD, below the colour picker (20) and the play-time freeze (30). */
@@ -441,40 +274,6 @@
 @keyframes slot-flash {
 	0% { transform: scale(1.25); filter: brightness(1.8); }
 	100% { transform: scale(1); filter: brightness(1); }
-}
-.menu-card button:disabled {
-	opacity: 0.4;
-	cursor: default;
-}
-.card-world {
-	font-size: 22px;
-	margin: 4px 0;
-}
-.play-line {
-	margin: 0 0 12px;
-	opacity: 0.85;
-}
-.pin-row input {
-	width: 5em;
-	font-size: 18px;
-	letter-spacing: 0.3em;
-	text-align: center;
-	margin-right: 8px;
-}
-.pin-row button {
-	display: inline-block;
-	width: auto;
-	margin: 0 8px 0 0;
-	padding: 6px 12px;
-}
-.menu-hint {
-	opacity: 0.6;
-	font-size: 13px;
-	margin: 4px 0 8px;
-}
-.menu-error {
-	color: #ff7070;
-	margin: 8px 0;
 }
 
 #perf-overlay {
@@ -754,17 +553,6 @@
 #hud-pickaxe .keycap.hidden {
 	display: none;
 }
-.menu-check {
-	display: flex;
-	align-items: center;
-	gap: 8px;
-	margin: 12px 0;
-	cursor: pointer;
-}
-.menu-check input {
-	width: 22px;
-	height: 22px;
-}
 
 .inventory-search {
 	display: block;
@@ -798,211 +586,6 @@
 	pointer-events: none;
 }
 
-/* Menu screens (multiplayer spec §8): home, Single Player, Parents. */
-.home-buttons {
-	margin: 8px 0 16px;
-}
-.menu-card .home-button {
-	padding: 20px;
-	font-size: 22px;
-	font-weight: 600;
-	margin: 12px 0;
-	background: #3d6b3d;
-}
-.menu-card .home-button:hover {
-	background: #4a804a;
-}
-.menu-card .menu-small,
-.menu-card .menu-back {
-	padding: 8px;
-	font-size: 14px;
-	background: #383838;
-}
-.world-list {
-	max-height: 40vh;
-	overflow-y: auto;
-	margin: 8px 0;
-}
-.world-row {
-	align-items: center;
-	gap: 8px;
-	border: 2px solid transparent;
-}
-.world-row.selected {
-	border-color: #6fbf6f;
-	background: #243424;
-}
-.world-row .world-name {
-	flex: 1;
-	overflow: hidden;
-	text-overflow: ellipsis;
-	white-space: nowrap;
-}
-.world-badge {
-	font-size: 11px;
-	padding: 2px 6px;
-	border-radius: 8px;
-	background: #3a3a3a;
-	color: #ccc;
-	white-space: nowrap;
-}
-.world-badge.badge-cloud {
-	background: #2d4560;
-	color: #bcd8f5;
-}
-.world-badge.badge-new {
-	background: #4d4020;
-	color: #f0d890;
-}
-.duration-control {
-	display: flex;
-	align-items: center;
-	justify-content: center;
-	gap: 16px;
-	margin: 8px 0 12px;
-}
-.menu-card .duration-step {
-	width: 56px;
-	height: 56px;
-	margin: 0;
-	padding: 0;
-	font-size: 28px;
-	border-radius: 50%;
-}
-.duration-value {
-	min-width: 150px;
-	text-align: center;
-	font-size: 30px;
-	font-weight: 700;
-}
-.menu-card .play-big {
-	padding: 18px;
-	font-size: 22px;
-	font-weight: 600;
-	background: #3d6b3d;
-}
-.menu-card .play-big:hover {
-	background: #4a804a;
-}
-
-/* Multiplayer screens (multiplayer spec §8.2). */
-.menu-card .hidden {
-	display: none;
-}
-.skin-swatches {
-	display: grid;
-	grid-template-columns: repeat(3, 1fr);
-	gap: 10px;
-	margin: 8px 0 16px;
-}
-.menu-card .skin-swatch {
-	display: flex;
-	flex-direction: column;
-	align-items: center;
-	gap: 4px;
-	width: auto;
-	height: auto;
-	margin: 0;
-	padding: 8px 4px;
-	background: #3a3a3a;
-	border: 3px solid transparent;
-	border-radius: 8px;
-}
-.menu-card .skin-swatch:hover {
-	background: #4a4a4a;
-	border-color: rgba(255, 255, 255, 0.5);
-}
-.menu-card .skin-swatch.selected {
-	background: #555;
-	border-color: #fff;
-	box-shadow: 0 0 0 2px #6fbf6f;
-}
-.skin-front {
-	width: 48px;
-	height: 96px;
-	image-rendering: pixelated;
-}
-.skin-name {
-	font-size: 13px;
-	line-height: 1.2;
-	text-align: center;
-	overflow-wrap: anywhere;
-}
-.mp-mini {
-	flex: none;
-	width: 20px;
-	height: 40px;
-	image-rendering: pixelated;
-}
-.mp-playing-as {
-	display: flex;
-	align-items: center;
-	gap: 8px;
-	margin: 0 0 12px;
-	font-size: 18px;
-}
-.menu-card .mp-change {
-	display: inline;
-	width: auto;
-	margin: 0 0 0 4px;
-	padding: 2px 10px;
-	font-size: 13px;
-	background: #383838;
-}
-.mp-dot {
-	display: inline-block;
-	width: 12px;
-	height: 12px;
-	border-radius: 50%;
-	border: 2px solid #fff;
-	flex: none;
-}
-.mp-online {
-	display: flex;
-	align-items: center;
-	gap: 4px;
-	font-size: 13px;
-	opacity: 0.9;
-}
-.mp-online-name {
-	margin-right: 6px;
-}
-
-/* Multiplayer overlays (plan I1): Reconnecting…, fatal screens, toasts, the leaver's 10…1. */
-.mp-screen {
-	position: fixed;
-	inset: 0;
-	background: rgba(0, 0, 0, 0.7);
-	color: #fff;
-	display: flex;
-	flex-direction: column;
-	align-items: center;
-	justify-content: center;
-	gap: 4vh;
-	text-align: center;
-	z-index: 50;
-	pointer-events: auto;
-}
-.mp-screen-title {
-	font: bold 7vw/1.1 system-ui, sans-serif;
-	max-width: 92vw;
-}
-.mp-screen-button {
-	font: bold 5vw/1 system-ui, sans-serif;
-	padding: 3vh 8vw;
-	background: #3c9a3c;
-	color: #fff;
-	border: none;
-	border-radius: 16px;
-	cursor: pointer;
-}
-.mp-screen-button:hover {
-	background: #4cb54c;
-}
-.mp-screen-link {
-	color: #ddd;
-	font: 18px system-ui, sans-serif;
-}
 #mp-toasts {
 	position: fixed;
 	top: 12px;
@@ -1056,3 +639,4 @@
 	text-overflow: ellipsis;
 	white-space: nowrap;
 }
+

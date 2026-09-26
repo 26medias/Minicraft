@@ -1,7 +1,7 @@
 import { describe, it, expect, vi } from 'vitest';
-import { PlaytimeController, resolveSession, type PlaytimeDeps } from './playtime-controller';
+import { PlaytimeController, type PlaytimeDeps } from './playtime-controller';
 import type { PlaytimeSession } from './playtime';
-import { STALE_SESSION_MS, WARNING_SHOW_MS } from '../data/playtime.data';
+import { WARNING_SHOW_MS } from '../data/playtime.data';
 
 const MIN = 60_000;
 const T0 = 1_700_000_000_000;
@@ -10,65 +10,6 @@ function session(over: Partial<PlaytimeSession> = {}): PlaytimeSession {
 	return { limitMs: 30 * MIN, breakMs: null, playedMs: 0, frozenAt: null, updatedAt: T0, startedAt: T0, ...over };
 }
 
-describe('resolveSession', () => {
-	const sched = { worldId: 'w', seed: 1, name: 'n', limitMin: 45, startMin: 420 };
-	it('creates a fresh no-break session from the chosen duration when nothing is stored', () => {
-		expect(resolveSession(null, 30, T0)).toEqual(session());
-		expect(resolveSession(null, 15, T0)).toEqual({
-			limitMs: 15 * MIN, breakMs: null, playedMs: 0, frozenAt: null, startedAt: T0, updatedAt: T0,
-		});
-	});
-	it('returns null (no controller) when nothing is in force and the duration is No limit', () => {
-		expect(resolveSession(null, null, T0)).toBeNull();
-		const stale = session({ playedMs: 5 * MIN });
-		expect(resolveSession(stale, null, T0 + STALE_SESSION_MS + 1)).toBeNull();
-	});
-	it('resumes a playing session unchanged, ignoring the chosen duration', () => {
-		const stored = session({ playedMs: 10 * MIN });
-		expect(resolveSession(stored, 15, T0 + MIN)).toEqual(stored);
-	});
-	it('an in-force session wins even over No limit', () => {
-		const stored = session({ playedMs: 10 * MIN });
-		expect(resolveSession(stored, null, T0 + MIN)).toEqual(stored);
-	});
-	it('a stored frozen session plus No limit → the frozen session', () => {
-		const stored = session({ playedMs: 30 * MIN, frozenAt: T0 });
-		expect(resolveSession(stored, null, T0 + 5 * MIN)).toEqual(stored);
-	});
-	it('keeps a frozen session long after (no break ever ends it), until it goes stale', () => {
-		const stored = session({ playedMs: 30 * MIN, frozenAt: T0 });
-		expect(resolveSession(stored, 30, T0 + 25 * MIN)).toEqual(stored);
-		expect(resolveSession(stored, 30, T0 + 3 * 60 * MIN)).toEqual(stored);
-	});
-	it('replaces a stale session', () => {
-		const stored = session({ playedMs: 5 * MIN });
-		const now = T0 + STALE_SESSION_MS + 1;
-		expect(resolveSession(stored, 30, now)).toEqual(session({ updatedAt: now, startedAt: now }));
-	});
-	it('stamps startedAt = now on a fresh session', () => {
-		expect(resolveSession(null, 30, T0 + 5)!.startedAt).toBe(T0 + 5);
-	});
-	it("with a schedule, keeps today's 13-hour-old playing session", () => {
-		const day = new Date(2026, 8, 7, 7, 10).getTime();
-		const stored = session({ startedAt: day, updatedAt: day, playedMs: 5 * MIN });
-		expect(resolveSession(stored, 45, day + 13 * 60 * MIN, sched)).toEqual(stored);
-	});
-	it('with a schedule, a frozen session from today stays locked', () => {
-		const day = new Date(2026, 8, 7, 7, 10).getTime();
-		const over = session({ startedAt: day, updatedAt: day + 45 * MIN, playedMs: 45 * MIN, frozenAt: day + 45 * MIN });
-		const got = resolveSession(over, 45, day + 2 * 60 * MIN, sched);
-		expect(got).toEqual(over);
-	});
-	it("with a schedule, discards yesterday's session", () => {
-		const yday = new Date(2026, 8, 6, 7, 10).getTime();
-		const now = new Date(2026, 8, 7, 7, 0).getTime();
-		const stored = session({ startedAt: yday, updatedAt: yday + 5 * MIN, playedMs: 5 * MIN });
-		expect(resolveSession(stored, 45, now, sched)).toEqual({
-			limitMs: 45 * MIN, breakMs: null, playedMs: 0, frozenAt: null, startedAt: now, updatedAt: now,
-		});
-	});
-});
-
 type Harness = {
 	ctl: PlaytimeController;
 	calls: string[];
@@ -76,7 +17,7 @@ type Harness = {
 	clock: { now: number; visible: boolean };
 };
 
-function harness(s: PlaytimeSession, now = T0, lockedText?: string): Harness {
+function harness(s: PlaytimeSession, now = T0, lockedText?: string, expired?: () => { title: string; text: string } | null, load?: () => PlaytimeSession | null): Harness {
 	const calls: string[] = [];
 	const saved: PlaytimeSession[] = [];
 	const clock = { now, visible: true };
@@ -84,7 +25,7 @@ function harness(s: PlaytimeSession, now = T0, lockedText?: string): Harness {
 	const deps: PlaytimeDeps = {
 		overlay: {
 			warn: (text, ms) => calls.push(`warn:${text}:${ms}`),
-			freeze: (t) => calls.push(`overlay.freeze:${t ?? ''}`),
+			freeze: (t, title) => calls.push(`overlay.freeze:${t ?? ''}${title ? `:${title}` : ''}`),
 			unfreeze: () => calls.push('unfreeze'),
 		},
 		freeze: () => calls.push('deps.freeze'),
@@ -93,6 +34,8 @@ function harness(s: PlaytimeSession, now = T0, lockedText?: string): Harness {
 		now: () => clock.now,
 		visible: () => clock.visible,
 		lockedText,
+		expired,
+		load,
 	};
 	h.ctl = new PlaytimeController(s, deps);
 	return h as Harness;
@@ -168,5 +111,44 @@ describe('PlaytimeController without break time', () => {
 	it('has no playAgain: nothing ends a freeze', () => {
 		const h = harness(session({ playedMs: 30 * MIN, frozenAt: T0 - 20 * MIN }));
 		expect('playAgain' in h.ctl).toBe(false);
+	});
+});
+
+describe('PlaytimeController expiry (the day changed)', () => {
+	it('freezes once with the expiry text, then does nothing more', () => {
+		let stop: { title: string; text: string } | null = null;
+		const h = harness(session({ playedMs: 0, limitMs: 24 * 60 * MIN }), T0, undefined, () => stop);
+		advance(h, 5_000);
+		expect(h.calls).toEqual([]);
+		stop = { title: 'TIME TO STOP', text: 'A PARENT CHANGED THE PLAN' };
+		advance(h, 1_000);
+		expect(h.calls).toEqual(['deps.freeze', 'overlay.freeze:A PARENT CHANGED THE PLAN:TIME TO STOP']);
+		h.calls.length = 0;
+		advance(h, 60_000);
+		expect(h.calls).toEqual([]);
+	});
+	it('a session already frozen by its limit is not frozen twice', () => {
+		const h = harness(session({ playedMs: 30 * MIN, frozenAt: T0 }), T0, undefined, () => ({ title: 'TIME TO STOP', text: 'X' }));
+		h.ctl.tick();
+		// The limit's own freeze (TIME'S UP, ASK A PARENT), not the new-day one.
+		expect(h.calls).toEqual(['deps.freeze', 'overlay.freeze:']);
+		h.calls.length = 0;
+		advance(h, 5_000);
+		expect(h.calls).toEqual([]);
+	});
+});
+
+describe('PlaytimeController two tabs', () => {
+	it("adopts another tab's higher played time for the same session, and freezes on it", () => {
+		const mine = session({ playedMs: 5 * MIN });
+		let stored: PlaytimeSession | null = { ...mine, playedMs: 30 * MIN };
+		const h = harness(mine, T0, undefined, undefined, () => stored);
+		h.ctl.tick();
+		expect(h.calls).toEqual(['deps.freeze', 'overlay.freeze:']);
+		// A different session in storage (another plan, a reset) is not adopted.
+		const h2 = harness(session({ playedMs: 5 * MIN }), T0, undefined, undefined, () => stored);
+		stored = session({ playedMs: 29 * MIN, startedAt: T0 + 1 });
+		h2.ctl.tick();
+		expect(h2.ctl.remainingMs()).toBe(25 * MIN);
 	});
 });

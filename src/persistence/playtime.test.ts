@@ -123,24 +123,17 @@ describe('playtime session storage', () => {
 	});
 });
 
-describe('applyMaxDuration', () => {
-	it('saves the maximum and clears the session', async () => {
-		const { applyMaxDuration, saveSession } = await import('./playtime');
-		const { loadOptions } = await import('./options');
-		saveSession(valid());
-		const result = applyMaxDuration(30);
-		expect(result.maxDurationMin).toBe(30);
-		expect(loadOptions().maxDurationMin).toBe(30);
-		expect(store[KEY]).toBeUndefined();
+describe('the plan a session belongs to', () => {
+	it('planId survives a save and a load (a reload keeps the plan\'s played time)', async () => {
+		const { loadSession, saveSession } = await import('./playtime');
+		saveSession(valid({ planId: 'p1', playedMs: 20 * 60_000 }));
+		expect(loadSession()).toMatchObject({ planId: 'p1', playedMs: 20 * 60_000 });
 	});
-
-	it('No limit saves null and clears the session', async () => {
-		const { applyMaxDuration, saveSession } = await import('./playtime');
-		const { loadOptions } = await import('./options');
-		applyMaxDuration(30);
+	it('a free-play session has no planId; a non-string one is dropped', async () => {
+		const { loadSession, saveSession } = await import('./playtime');
 		saveSession(valid());
-		applyMaxDuration(null);
-		expect(loadOptions().maxDurationMin).toBeNull();
-		expect(store[KEY]).toBeUndefined();
+		expect(loadSession()!.planId).toBeUndefined();
+		store[KEY] = JSON.stringify({ ...valid(), planId: 42 });
+		expect(loadSession()!.planId).toBeUndefined();
 	});
 });

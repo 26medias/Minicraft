@@ -16,7 +16,7 @@ import { SALIENCE } from '../data/salience.data.js';
 import { key, type Ownership } from '../ownership.js';
 import type { Patch } from '../store.js';
 import { anchorOf } from './build.js';
-import { boxMeetsKids, groundTop } from './site-search.js';
+import { boxMeetsKids, chunksWithin, groundTop } from './site-search.js';
 import { climbPath, exitOf, safeToMine, spiralStep, spiralsFor, stepAt, type Spiral, type Step } from './spiral.js';
 import type { Behaviour, BehaviourCtx, Next } from './behaviour.js';
 
@@ -55,6 +55,13 @@ export interface MinePlan {
 	 * too, or when no column qualifies.
 	 */
 	escape: { to: Vec3 | null; failed: boolean } | null;
+	/**
+	 * Ruling R24: the index into LIMITS.LEASH_STEPS being searched; `dead` = candidates whose every spiral failed on
+	 * a rule other than the leash (not retried at a wider radius); `rejections` = one entry per radius that found nothing.
+	 */
+	ri: number;
+	dead: Set<string>;
+	rejections: Array<{ radius: number; counts: Record<string, number> }>;
 }
 
 const CHUNK = 16;
@@ -115,18 +122,28 @@ function budget(sp: Spiral, from: number, ctx: BehaviourCtx): number {
 	return n;
 }
 
-/** Scope: the chunks overlapping the square of side 2 × LEASH around the anchor, in ring order from its chunk. */
-function chunksAround(a: Vec3): Array<[number, number]> {
-	const r = LIMITS.LEASH, c = (v: number) => Math.floor(v / CHUNK);
-	const ax = c(a.x), az = c(a.z);
-	const out: Array<[number, number]> = [];
-	for (let x = c(a.x - r); x <= c(a.x + r); x++) for (let z = c(a.z - r); z <= c(a.z + r); z++) out.push([x, z]);
-	const ring = (p: [number, number]) => Math.max(Math.abs(p[0] - ax), Math.abs(p[1] - az));
-	return out.sort((p, q) => ring(p) - ring(q) || Math.hypot(p[0] - ax, p[1] - az) - Math.hypot(q[0] - ax, q[1] - az));
+/** The inner radius of the scan at radius index `ri` (ruling R24): the columns within it were scanned already. */
+const innerOf = (ri: number): number => (ri === 0 ? -1 : LIMITS.LEASH_STEPS[ri - 1]);
+
+/**
+ * Scope at radius index `ri`: the chunks overlapping the square of side 2r around the anchor, in ring order from
+ * its chunk, less those wholly inside the previous radius (their columns were scanned already).
+ */
+function chunksAround(a: Vec3, ri: number): Array<[number, number]> {
+	const inner = innerOf(ri);
+	return chunksWithin(a, LIMITS.LEASH_STEPS[ri]).filter(([cx, cz]) => {
+		const fx = Math.max(Math.abs(cx * CHUNK - a.x), Math.abs((cx + 1) * CHUNK - 1 - a.x));
+		const fz = Math.max(Math.abs(cz * CHUNK - a.z), Math.abs((cz + 1) * CHUNK - 1 - a.z));
+		return Math.hypot(fx, fz) > inner;
+	});
 }
 
-/** The first spiral, over the candidates in order, whose pillar area qualifies (spec §6.2); null when none does. */
-function chooseSpiral(pl: MinePlan, ctx: BehaviourCtx): { target: Vec3; sp: Spiral } | null {
+/**
+ * The first spiral, over the candidates within radius `r` in order, whose pillar area qualifies (spec §6.2) with its
+ * pillar within `r` of the anchor; null when none does. `counts` tallies each refused spiral's first failed rule,
+ * the candidates within `r` (`targets`) and those not retried (`skipped`, refused at a smaller radius on other rules).
+ */
+function chooseSpiral(pl: MinePlan, ctx: BehaviourCtx, r: number, counts: Record<string, number>): { target: Vec3; sp: Spiral } | null {
 	const tops = new Map<string, number>();
 	const top = (x: number, z: number): number => {
 		const k = `${x},${z}`;
@@ -135,34 +152,56 @@ function chooseSpiral(pl: MinePlan, ctx: BehaviourCtx): { target: Vec3; sp: Spir
 		return v;
 	};
 	const a = pl.anchor;
-	const areaOk = (sp: Spiral): boolean => {
-		if (Math.hypot(sp.px - a.x, sp.pz - a.z) > LIMITS.LEASH) return false;
+	/** The first rule the pillar area fails, or null when it qualifies. */
+	const refusal = (sp: Spiral): string | null => {
+		if (Math.hypot(sp.px - a.x, sp.pz - a.z) > r) return 'leash';
 		for (let dx = -1; dx <= 1; dx++) {
 			for (let dz = -1; dz <= 1; dz++) {
 				const x = sp.px + dx, z = sp.pz + dz, s = top(x, z);
-				if (s < 0 || ctx.own.classify(x, s, z) !== 'natural' || ctx.world.isLiquid(ctx.world.getBlock(x, s + 1, z))) return false;
+				if (s < 0 || ctx.own.classify(x, s, z) !== 'natural') return 'not-natural';
+				if (ctx.world.isLiquid(ctx.world.getBlock(x, s + 1, z))) return 'liquid';
 				// Headroom: no trunk (or other solid) in the 2 cells above the surface, where the bot stands and walks.
-				if (ctx.world.isSolid(ctx.world.getBlock(x, s + 1, z)) || ctx.world.isSolid(ctx.world.getBlock(x, s + 2, z))) return false;
+				if (ctx.world.isSolid(ctx.world.getBlock(x, s + 1, z)) || ctx.world.isSolid(ctx.world.getBlock(x, s + 2, z))) return 'headroom';
 			}
 		}
-		return !ctx.own.kidCellWithin(sp.px, sp.pz, KID_DIST) && !pillarNearKids(sp, ctx);
+		if (ctx.own.kidCellWithin(sp.px, sp.pz, KID_DIST)) return 'kid-cells';
+		return pillarNearKids(sp, ctx) ? 'kid-position' : null;
 	};
+	const tally = (why: string) => (counts[why] = (counts[why] ?? 0) + 1);
 	for (const c of pl.cands) {
-		const sp = spiralsFor(c.cell, (x, z) => top(x, z) + 1).find(areaOk);
-		if (sp) return { target: c.cell, sp };
+		if (c.d > r) break;                                        // sorted by distance
+		tally('targets');
+		const ck = kv(c.cell);
+		if (pl.dead.has(ck)) {
+			tally('skipped');
+			continue;
+		}
+		let leash = false;
+		for (const sp of spiralsFor(c.cell, (x, z) => top(x, z) + 1)) {
+			const why = refusal(sp);
+			if (why === null) return { target: c.cell, sp };
+			tally(why);
+			leash ||= why === 'leash';
+		}
+		if (!leash) pl.dead.add(ck);
 	}
 	return null;
 }
 
-/** One chunk of the target scan per call; when the last chunk is done, chooses the target and spiral. */
+/**
+ * One chunk of the target scan per call; when the last chunk is done, chooses the target and spiral. Ruling R24:
+ * when nothing qualifies within the radius, the scan widens to the next of LIMITS.LEASH_STEPS (the new columns
+ * only); past the last it fails `no-entrance` with one `search-failed` log line.
+ */
 function scanStep(pl: MinePlan, ctx: BehaviourCtx): Next {
 	const s = pl.scan!, w = ctx.world, bid = blockId(pl.params.block)!;
+	const radius = LIMITS.LEASH_STEPS[pl.ri], inner = innerOf(pl.ri);
 	if (pl.scanned < s.chunks.length) {
 		const [cx, cz] = s.chunks[pl.scanned++];
 		for (let x = cx * CHUNK; x < (cx + 1) * CHUNK; x++) {
 			for (let z = cz * CHUNK; z < (cz + 1) * CHUNK; z++) {
 				const d = Math.hypot(x - pl.anchor.x, z - pl.anchor.z);
-				if (d > LIMITS.LEASH) continue;
+				if (d > radius || d <= inner) continue;
 				for (let y = WORLD_TOP; y >= 0; y--) {
 					if (w.getBlock(x, y, z) !== bid) continue;
 					if (ctx.own.classify(x, y, z) === 'natural') pl.cands.push({ cell: { x, y, z }, d });
@@ -175,13 +214,24 @@ function scanStep(pl: MinePlan, ctx: BehaviourCtx): Next {
 		s.best = pl.cands[0]?.cell ?? null;
 		if (pl.scanned < s.chunks.length) return { kind: 'wait', ms: 100 };
 	}
-	const pick = chooseSpiral(pl, ctx);
-	if (!pick) return { failed: 'no-entrance' };
+	const counts: Record<string, number> = {};
+	const pick = chooseSpiral(pl, ctx, radius, counts);
+	if (!pick) {
+		pl.rejections.push({ radius, counts });
+		if (pl.ri + 1 < LIMITS.LEASH_STEPS.length) {
+			pl.ri++;
+			s.chunks = chunksAround(pl.anchor, pl.ri);
+			pl.scanned = 0;
+			return { kind: 'wait', ms: 100 };
+		}
+		ctx.log?.('search-failed', { behaviour: 'mine', block: pl.params.block, anchor: pl.anchor, radii: pl.rejections });
+		return { failed: 'no-entrance' };
+	}
 	const sp = pick.sp;
 	pl.spiral = sp;
 	pl.dig = {
 		id: `dig-${ctx.now}-${ctx.state.digs.length}`, block: pl.params.block, entrance: { x: sp.px, y: sp.y0, z: sp.pz }, target: pick.target,
-		stepsDone: 0, cells: [], status: 'active', spiral: sp,
+		stepsDone: 0, cells: [], status: 'active', spiral: sp, leash: radius,
 	};
 	pl.phase = 'descend';
 	pl.stepIdx = 0;
@@ -262,8 +312,8 @@ function veinCell(pl: MinePlan, ctx: BehaviourCtx): Vec3 | null {
 }
 
 /**
- * Mine {block} (spec §6.2): resume a paused dig for the block (if its pillar is within the leash of the current
- * anchor), else scan for the nearest target and a qualifying spiral. plannedEdits = the next S steps' non-air cells
+ * Mine {block} (spec §6.2): resume a paused dig for the block (if its pillar is within the radius it was planned with,
+ * `Dig.leash`, of the current anchor), else scan for the nearest target and a qualifying spiral. plannedEdits = the next S steps' non-air cells
  * + their air floors + N. The dig is never left `active`: endPatch writes done, dropped (hazard, kid-liquid, kid-block) or paused.
  */
 export const mine: Behaviour<MineParams, MinePlan> = {
@@ -281,10 +331,11 @@ export const mine: Behaviour<MineParams, MinePlan> = {
 		const dropIds = ctx.state.digs.filter((d) => d.status === 'paused' && !intact(d)).map((d) => d.id);
 		const paused = ctx.state.digs.filter((d) => d.status === 'paused' && !dropIds.includes(d.id));
 		const resume = paused.find((d) => (p.digId ? d.id === p.digId : d.block === p.block)
-			&& Math.hypot(d.spiral.px - anchor.x, d.spiral.pz - anchor.z) <= LIMITS.LEASH && !pillarNearKids(d.spiral, ctx));
+			&& Math.hypot(d.spiral.px - anchor.x, d.spiral.pz - anchor.z) <= (d.leash ?? LIMITS.LEASH) && !pillarNearKids(d.spiral, ctx));
 		const pl: MinePlan = {
 			params: p, dig: null, spiral: null, scan: null, phase: 'scan', stepIdx: 0, mined: 0, episodeStart: null, planned: 0,
 			anchor, cands: [], scanned: 0, walkDown: 0, resumeTo: 0, dropIds, record: false, changed: false, seeds: [], exit: null, walkBlocked: 0, escape: null,
+			ri: 0, dead: new Set(), rejections: [],
 		};
 		if (resume) {
 			pl.dig = { ...resume, status: 'active' };
@@ -299,7 +350,7 @@ export const mine: Behaviour<MineParams, MinePlan> = {
 			return pl;
 		}
 		if (paused.length >= LIMITS.MAX_PAUSED_DIGS) return { failed: 'too many digs' };
-		pl.scan = { chunks: chunksAround(anchor), best: null };
+		pl.scan = { chunks: chunksAround(anchor, 0), best: null };
 		return pl;
 	},
 	planPatch(pl, ctx) {

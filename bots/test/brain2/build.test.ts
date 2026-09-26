@@ -72,6 +72,24 @@ const standingCount = (r: Rig) => r.store.state.builds.filter((b) => standing(b,
 const params = (p: Partial<BuildParams> & { template: string }): BuildParams => ({ variant: 'small', materials: { wall: 'stone' }, ...p });
 
 describe('Build (spec §6, §6.1)', () => {
+
+	// Ruling R24 diagnostics. Red if a failed search writes no `search-failed` line, more than one, or it lacks the
+	// per-radius rejection counts.
+	it('no site within 96 → failed no-site and one search-failed line with counts at each radius', async () => {
+		const r = buildRig();
+		// Kid cells (edited, nobody's) floating on a 16-grid over everything within 120 of spawn: no site clears them.
+		for (let dx = -128; dx <= 128; dx += 16) {
+			for (let dz = -128; dz <= 128; dz += 16) if (Math.hypot(dx, dz) <= 120) r.world.set(SPAWN.x + dx, 250, SPAWN.z + dz, 'dirt');
+		}
+		r.runner.start('build', params({ template: 'tower' }) as unknown as Record<string, unknown>);
+		expect(await r.runToEnd()).toMatchObject({ outcome: 'failed', why: 'no-site' });
+		const lines = r.logs.filter(([kind]) => kind === 'search-failed');
+		expect(lines).toHaveLength(1);
+		const d = lines[0][1] as { behaviour: string; radii: Array<{ radius: number; counts: Record<string, number> }> };
+		expect(d.behaviour).toBe('build');
+		expect(d.radii.map((x) => x.radius)).toEqual([32, 64, 96]);
+		for (const x of d.radii) expect(x.counts['kid-cells']).toBeGreaterThan(0);
+	});
 	// Red if a template cell is skipped or placed with the wrong block, the build isn't recorded/marked done, or
 	// the placed cells aren't owned.
 	it('builds a small tower to done from a stocked inventory', async () => {

@@ -19,8 +19,11 @@ export type WorldEventKind =
 	| 'line-started' | 'looking-at-me' | 'following-me' | 'found' | 'need' | 'stuck' | 'hazard' | 'outcome';
 export interface WorldEvent { id: number; kind: WorldEventKind; t: number; player?: string; cell?: Vec3; block?: string; detail?: string; salient: boolean }
 export interface Build { id: string; template: string; variant: 'small' | 'medium'; origin: Vec3; cells: Array<{ cell: Vec3; block: string }>; status: 'planned' | 'building' | 'done' | 'abandoned' | 'reverted' | 'dismantled' }
-/** cells: 'x,y,z' the dig broke or filled; spiral: the staircase geometry, persisted to resume (spec §6.2). */
-export interface Dig { id: string; block: string; entrance: Vec3; target: Vec3; stepsDone: number; cells: string[]; status: 'active' | 'paused' | 'done' | 'reverted' | 'dropped'; spiral: Spiral }
+/**
+ * cells: 'x,y,z' the dig broke or filled; spiral: the staircase geometry, persisted to resume (spec §6.2).
+ * leash: the search radius the dig was planned with (ruling R24; absent on older digs = LIMITS.LEASH), which its resume checks.
+ */
+export interface Dig { id: string; block: string; entrance: Vec3; target: Vec3; stepsDone: number; cells: string[]; status: 'active' | 'paused' | 'done' | 'reverted' | 'dropped'; spiral: Spiral; leash?: number }
 export type Action =
 	| { kind: 'place'; cell: Vec3; block: string; free?: boolean }
 	| { kind: 'break'; cell: Vec3 }

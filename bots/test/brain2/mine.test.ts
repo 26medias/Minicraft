@@ -659,3 +659,55 @@ describe('Stuck in a hole: the escape flight (ruling R19)', () => {
 		expect(escapeTarget(sp, r.world, r.own)).toBeNull();
 	});
 });
+
+// Ruling R24 (live: Mine ended 'no-entrance' within seconds near spawn, where the kid has built a lot). Kid cells
+// (edited, nobody's) float on a 16-grid out to `r` from the anchor (world spawn, TX/TZ), so every pillar within
+// the leash is within 13.5 of one.
+describe('Mine widens its search past the leash (ruling R24)', () => {
+	const kidGrid = (rig: Rig, r: number) => {
+		for (let dx = -128; dx <= 128; dx += 16) {
+			for (let dz = -128; dz <= 128; dz += 16) if (Math.hypot(dx, dz) <= r) rig.world.set(TX + dx, 250, TZ + dz, 'dirt');
+		}
+	};
+
+	// Red if the search stops at LEASH: 'no-entrance'. Red if the dig doesn't carry the radius it was planned with,
+	// or a resume checks LEASH instead: the far dig would not resume.
+	it('kid cells everywhere within 32 → an entrance beyond 32 (within 64); the far dig resumes', async () => {
+		const r = mineRig();
+		kidGrid(r, 44);
+		// A natural dirt tower 58 east of the anchor, with an iron_ore target 7 below its top.
+		const X0 = TX + 50;
+		for (let x = X0; x <= X0 + 16; x++) for (let z = TZ - 8; z <= TZ + 8; z++) for (let y = BOTTOM; y <= TOP; y++) r.world.setNatural(x, y, z, 'dirt');
+		r.world.setNatural(TX + 58, Y0 - 7, TZ, 'iron_ore');
+		r.start('iron_ore');
+		await r.until(() => r.store.state.digs.length === 1 || r.store.state.behaviour === null, 3000);
+		expect(r.store.state.memory.past[0]?.why).not.toBe('no-entrance');
+		const d = r.dig();
+		const dist = Math.hypot(d.spiral.px - TX, d.spiral.pz - TZ);
+		expect(dist).toBeGreaterThan(32);
+		expect(dist).toBeLessThanOrEqual(64);
+		expect(d.leash).toBe(64);
+		expect(r.own.kidCellWithin(d.spiral.px, d.spiral.pz, 13.5)).toBe(false);
+		r.runner.end('interrupted', 'test');
+		expect(r.dig().status).toBe('paused');
+		r.start('iron_ore');
+		expect(r.store.state.digs).toHaveLength(1);
+		expect(r.dig()).toMatchObject({ id: d.id, status: 'active' });
+	});
+
+	// Red if the widening goes past 96, 'no-entrance' is lost, or the failure writes no (or more than one) line.
+	it('nothing within 96 → failed no-entrance, one search-failed line with counts at 32, 64 and 96', async () => {
+		const r = mineRig();
+		kidGrid(r, 120);
+		shallowIron(r);
+		r.start('iron_ore');
+		expect(await r.runToEnd(3000)).toMatchObject({ outcome: 'failed', why: 'no-entrance' });
+		const lines = r.logs.filter(([kind]) => kind === 'search-failed');
+		expect(lines).toHaveLength(1);
+		const d = lines[0][1] as { behaviour: string; radii: Array<{ radius: number; counts: Record<string, number> }> };
+		expect(d.behaviour).toBe('mine');
+		expect(d.radii.map((x) => x.radius)).toEqual([32, 64, 96]);
+		expect(d.radii[0].counts['kid-cells']).toBeGreaterThan(0);
+		expect(d.radii[0].counts.targets).toBeGreaterThan(0);
+	});
+});

@@ -213,7 +213,11 @@ export const build: Behaviour<BuildParams, BuildPlan> = {
 		if (!pl.site) {
 			const r = pl.search!.step();
 			if (r === null) return { kind: 'wait', ms: 100 };
-			if (r === 'none') return { failed: 'no-site' };
+			if (r === 'none') {
+				// Ruling R24: one line per failed search, with the rejections by reason at each radius tried.
+				ctx.log?.('search-failed', { behaviour: 'build', template: pl.template.name, anchor: pl.search!.anchor, radii: pl.search!.rejections });
+				return { failed: 'no-site' };
+			}
 			setSite(pl, r);
 		}
 		if (pl.record) return { kind: 'wait', ms: 0 };

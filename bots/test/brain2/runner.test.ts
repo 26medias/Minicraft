@@ -413,10 +413,23 @@ describe('BehaviourRunner (spec §7)', () => {
 			r.runner.start('watch', {});
 			await r.steps(3);
 			expect(r.calls('walkTo')).toHaveLength(1);
-			const g = r.world.groundY(20, 20, Y + 16) ?? Y;
+			const g = r.world.surfaceY(20, 20) + 1;
 			expect(r.calls('flyTo').map((c) => c.args[0])).toEqual([{ x: 20.5, y: g, z: 20.5 }]);
 			expect(r.store.state.memory.past[0]).toMatchObject({ outcome: 'done' });
 			expect(r.store.state.memory.past[0]).not.toMatchObject({ why: expect.stringContaining('failed') });
+		});
+
+		// Fix (live, R24 batch). Red if the flight aims at groundY from pose.y + 16: in a cliff column taller than
+		// that, groundY lands in the cave inside it (a target under a roof, which flyTo refuses).
+		it('the fallback flight aims at the column\'s surface + 1, never a cave below it', async () => {
+			const r = rig();
+			for (let y = Y - 1; y <= Y + 30; y++) r.world.setNatural(20, y, 20, y === Y + 5 || y === Y + 6 ? 'air' : 'stone');
+			expect(r.world.groundY(20, 20, Y + 16)).toBe(Y + 5);          // the old target: the cave floor
+			r.body.walkImpl = blocked(r);
+			BEHAVIOURS.watch = scripted([{ kind: 'walk', to: { x: 20.5, z: 20.5 }, speed: 1 }, 'done']);
+			r.runner.start('watch', {});
+			await r.steps(3);
+			expect(r.calls('flyTo').map((c) => c.args[0])).toEqual([{ x: 20.5, y: Y + 31, z: 20.5 }]);
 		});
 
 		// Red if the fallback flight counts as the result when it is also blocked (no failure), or counts twice.

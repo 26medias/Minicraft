@@ -178,3 +178,49 @@ describe('site search (spec §6.1)', () => {
 		expect(r).not.toBe('none');
 	});
 });
+
+// Ruling R24 (live: every candidate within 32 of the anchor was within 12 of the kid's builds). A flat natural
+// platform at y 199 in open air around A; kid cells (edited, nobody's) on a 16-grid out to `r` from A, so no site
+// within `r` + 14.5 − 11.3 clears them.
+describe('site search widens past the leash (ruling R24)', () => {
+	const A = { x: 200, y: 200, z: 200 };
+	const FAR_SPAWN = { x: 500, y: 200, z: 500 };
+	function kidGrid(r: number): FakeWorld {
+		const world = new FakeWorld();
+		for (let x = A.x - 104; x <= A.x + 104; x++) for (let z = A.z - 104; z <= A.z + 104; z++) world.setNatural(x, 199, z, 'stone');
+		for (let dx = -112; dx <= 112; dx += 16) {
+			for (let dz = -112; dz <= 112; dz += 16) if (Math.hypot(dx, dz) <= r) world.set(A.x + dx, 200, A.z + dz, 'dirt');
+		}
+		return world;
+	}
+	const q: SiteQuery = { ...SMALL_HOUSE, anchor: A, avoid: [] };
+
+	// Red if the search stops at LEASH (32): 'none'. Also red if the widened site breaks the kid-cell rule.
+	it('kid cells everywhere within 32 → a site beyond 32 (within 64) is found, clear of kid cells', () => {
+		const world = kidGrid(44);
+		const own = new Ownership(world, () => ({}));
+		const s = new SiteSearch(q, { world, own, spawn: FAR_SPAWN });
+		let r: ReturnType<SiteSearch['step']> = null;
+		for (let i = 0; i < 2000 && r === null; i++) r = s.step();
+		if (r === null || r === 'none') throw new Error(`no site: ${String(r)}`);
+		const c = centre(r, q);
+		const d = Math.hypot(c.x - A.x, c.z - A.z);
+		expect(d).toBeGreaterThan(32);
+		expect(d).toBeLessThanOrEqual(64);
+		expect(s.radius).toBe(64);
+		expect(own.kidCellWithin(c.x, c.z, 14.5)).toBe(false);
+		expect(s.rejections.map((x) => x.radius)).toEqual([32]);
+		expect(s.rejections[0].counts['kid-cells']).toBeGreaterThan(0);
+	});
+
+	// Red if the widening goes past 96, or 'none' is lost. The rejections name every radius tried.
+	it('nothing within 96 → none, with rejection counts at 32, 64 and 96', () => {
+		const world = kidGrid(120);
+		const s = new SiteSearch(q, { world, own: new Ownership(world, () => ({})), spawn: FAR_SPAWN });
+		let r: ReturnType<SiteSearch['step']> = null;
+		for (let i = 0; i < 5000 && r === null; i++) r = s.step();
+		expect(r).toBe('none');
+		expect(s.rejections.map((x) => x.radius)).toEqual([32, 64, 96]);
+		for (const x of s.rejections) expect(x.counts['kid-cells']).toBeGreaterThan(0);
+	});
+});

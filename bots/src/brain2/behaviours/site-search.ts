@@ -1,8 +1,8 @@
 /**
  * The build-site search (spec §6.1): a ±1 site with levelling (dig the median + 1 bumps, fill the
  * median − 1 holes), clear of kid cells, the body buffers of the kids standing there now, spawn and other builds,
- * within the leash. Surfaces look through leaves and logs (a canopy is not the ground). The search is spread
- * over ticks: one chunk per `step()`.
+ * within the leash (widened per ruling R24: LIMITS.LEASH_STEPS). Surfaces look through leaves and logs (a canopy is not
+ * the ground). The search is spread over ticks: one chunk per `step()`.
  */
 import { KID_BUFFER_RADIUS, boxColumns } from '../../body/guard.js';
 import type { WorldView } from '../../port.js';
@@ -53,31 +53,43 @@ function grown(ox: number, oz: number, q: SiteQuery): { x0: number; x1: number; 
 	return { x0: ox - 1, x1: ox + q.w, z0: oz - 1, z1: oz + q.d };
 }
 
+/** Why a candidate failed the site rules (the `search-failed` log line counts them per radius). */
+export type SiteReject = 'spawn' | 'leash' | 'builds' | 'kid-position' | 'not-flat' | 'not-natural' | 'liquid' | 'headroom' | 'kid-cells';
+
 /** The site rules for ONE origin: the Site (with its digs and fills) if it qualifies, else null. SiteSearch.step uses it per candidate; tests use it on hand-made patches. */
-export function evaluateSite(originX: number, originZ: number, q: SiteQuery, ctx: SiteCtx, top: (x: number, z: number) => number = (x, z) => groundTop(ctx.world, x, z)): Site | null {
+export function evaluateSite(originX: number, originZ: number, q: SiteQuery, ctx: SiteCtx, top?: (x: number, z: number) => number): Site | null {
+	const r = siteOrReject(originX, originZ, q, ctx, top);
+	return typeof r === 'string' ? null : r;
+}
+
+/** evaluateSite with the first rule that refused the site; `leash` = the radius from the anchor (ruling R24). */
+export function siteOrReject(
+	originX: number, originZ: number, q: SiteQuery, ctx: SiteCtx,
+	top: (x: number, z: number) => number = (x, z) => groundTop(ctx.world, x, z), leash: number = LIMITS.LEASH,
+): Site | SiteReject {
 	const { world, own } = ctx;
 	const cx = originX + q.w / 2, cz = originZ + q.d / 2;
-	if (Math.hypot(cx - ctx.spawn.x, cz - ctx.spawn.z) < LIMITS.SITE_SPAWN_DIST) return null;
-	if (Math.hypot(cx - q.anchor.x, cz - q.anchor.z) > LIMITS.LEASH) return null;
+	if (Math.hypot(cx - ctx.spawn.x, cz - ctx.spawn.z) < LIMITS.SITE_SPAWN_DIST) return 'spawn';
+	if (Math.hypot(cx - q.anchor.x, cz - q.anchor.z) > leash) return 'leash';
 	const g = grown(originX, originZ, q);
 	for (const b of q.avoid) {
-		if (g.x0 <= b.max.x && g.x1 >= b.min.x && g.z0 <= b.max.z && g.z1 >= b.min.z) return null;
+		if (g.x0 <= b.max.x && g.x1 >= b.min.x && g.z0 <= b.max.z && g.z1 >= b.min.z) return 'builds';
 	}
-	if (boxMeetsKids(g.x0, g.x1, g.z0, g.z1, ctx.kids ?? [])) return null;
+	if (boxMeetsKids(g.x0, g.x1, g.z0, g.z1, ctx.kids ?? [])) return 'kid-position';
 	const surf: number[] = [];
 	for (let x = g.x0; x <= g.x1; x++) for (let z = g.z0; z <= g.z1; z++) surf.push(top(x, z));
 	const sorted = [...surf].sort((a, b) => a - b);
 	const median = sorted[Math.floor(sorted.length / 2)];
-	if (median < 0 || sorted[0] < median - 1 || sorted[sorted.length - 1] > median + 1) return null;
+	if (median < 0 || sorted[0] < median - 1 || sorted[sorted.length - 1] > median + 1) return 'not-flat';
 	let i = 0;
 	for (let x = g.x0; x <= g.x1; x++) {
 		for (let z = g.z0; z <= g.z1; z++) {
 			const s = surf[i++];
-			if (own.classify(x, s, z) !== 'natural') return null;
-			if (world.isLiquid(world.getBlock(x, s + 1, z))) return null;
+			if (own.classify(x, s, z) !== 'natural') return 'not-natural';
+			if (world.isLiquid(world.getBlock(x, s + 1, z))) return 'liquid';
 			// Nothing solid (a trunk, a stump) up to the template's layer 0; air above it, to the template's height.
-			for (let y = s + 1; y <= median + 1; y++) if (world.isSolid(world.getBlock(x, y, z))) return null;
-			for (let y = median + 2; y <= median + 1 + q.h; y++) if (world.getBlock(x, y, z) !== 0) return null;
+			for (let y = s + 1; y <= median + 1; y++) if (world.isSolid(world.getBlock(x, y, z))) return 'headroom';
+			for (let y = median + 2; y <= median + 1 + q.h; y++) if (world.getBlock(x, y, z) !== 0) return 'headroom';
 		}
 	}
 	// Levelling, over the footprint only: the template's layer 0 sits at median + 1, on ground at median.
@@ -89,36 +101,65 @@ export function evaluateSite(originX: number, originZ: number, q: SiteQuery, ctx
 			else if (s === median - 1) fills.push({ x, y: median, z });
 		}
 	}
-	if (own.kidCellWithin(cx, cz, LIMITS.SITE_KID_DIST + Math.max(q.w, q.d) / 2)) return null;
+	if (own.kidCellWithin(cx, cz, LIMITS.SITE_KID_DIST + Math.max(q.w, q.d) / 2)) return 'kid-cells';
 	return { origin: { x: originX, y: median + 1, z: originZ }, groundY: median, digs, fills };
 }
 
 const chunkOf = (v: number): number => Math.floor(v / CHUNK);
 
+/** The chunks overlapping the square of side 2r around `a`, in ring order from its chunk. */
+export function chunksWithin(a: Vec3, r: number): Array<[number, number]> {
+	const ax = chunkOf(a.x), az = chunkOf(a.z);
+	const out: Array<[number, number]> = [];
+	for (let x = chunkOf(a.x - r); x <= chunkOf(a.x + r); x++) for (let z = chunkOf(a.z - r); z <= chunkOf(a.z + r); z++) out.push([x, z]);
+	const ring = (c: [number, number]) => Math.max(Math.abs(c[0] - ax), Math.abs(c[1] - az));
+	return out.sort((p, q) => ring(p) - ring(q) || Math.hypot(p[0] - ax, p[1] - az) - Math.hypot(q[0] - ax, q[1] - az));
+}
+
+/** Rejections by reason at one search radius, for the `search-failed` log line (ruling R24). */
+export interface RadiusRejections { radius: number; counts: Record<string, number> }
+
+type Best = { site: Site; cost: number; dist: number };
+
+/**
+ * Ruling R24: the search scans the chunks within LIMITS.LEASH_STEPS[0] of the anchor; when no site qualifies there
+ * it widens to the next radius (only the new chunks are scanned), up to the last. Every candidate is judged once,
+ * against the widest radius; each radius keeps its own best (cost, then distance) among the sites within it and its
+ * own rejection counts (a site beyond the radius counts as `leash`).
+ */
 export class SiteSearch {
-	private readonly chunks: Array<[number, number]>;
+	private readonly radii: readonly number[] = LIMITS.LEASH_STEPS;
+	private ri = 0;
+	private chunks: Array<[number, number]>;
 	private readonly scanned = new Set<string>();
 	private readonly tops = new Map<string, number>();
 	private readonly done = new Set<string>();
-	private best: { site: Site; cost: number; dist: number } | null = null;
+	private readonly bests: Array<Best | null>;
+	private readonly counts: Array<Record<string, number>>;
 	private next = 0;
+	/** One entry per radius that found nothing, in order (read by Build's `search-failed` line). */
+	readonly rejections: RadiusRejections[] = [];
 
 	constructor(private readonly q: SiteQuery, private readonly ctx: SiteCtx) {
-		const r = LIMITS.LEASH;
-		const ax = chunkOf(q.anchor.x), az = chunkOf(q.anchor.z);
-		const out: Array<[number, number]> = [];
-		for (let x = chunkOf(q.anchor.x - r); x <= chunkOf(q.anchor.x + r); x++) {
-			for (let z = chunkOf(q.anchor.z - r); z <= chunkOf(q.anchor.z + r); z++) out.push([x, z]);
-		}
-		// Ring order from the anchor's chunk.
-		const ring = (c: [number, number]) => Math.max(Math.abs(c[0] - ax), Math.abs(c[1] - az));
-		this.chunks = out.sort((a, b) => ring(a) - ring(b) || Math.hypot(a[0] - ax, a[1] - az) - Math.hypot(b[0] - ax, b[1] - az));
+		this.chunks = chunksWithin(q.anchor, this.radii[0]);
+		this.bests = this.radii.map(() => null);
+		this.counts = this.radii.map(() => ({}));
+	}
+
+	get anchor(): Vec3 {
+		return this.q.anchor;
+	}
+
+	/** The radius being searched (or the one the result was found at). */
+	get radius(): number {
+		return this.radii[this.ri];
 	}
 
 	/**
-	 * Scans one chunk per call; returns the best site once every chunk in the leash is scanned, null while scanning, 'none' when nothing qualifies.
-	 * A call reads the world only in its own chunk: it caches that chunk's surfaces, then evaluates every candidate
-	 * origin whose grown area now lies wholly in scanned chunks (a site across a chunk border waits for its last chunk).
+	 * Scans one chunk per call; returns the best site once every chunk in the radius is scanned, null while scanning
+	 * (or widening), 'none' when nothing qualifies within the widest radius. A call reads the world only in its own
+	 * chunk: it caches that chunk's surfaces, then evaluates every candidate origin whose grown area now lies wholly in
+	 * scanned chunks (a site across a chunk border waits for its last chunk).
 	 */
 	step(): Site | null | 'none' {
 		if (this.next < this.chunks.length) {
@@ -133,7 +174,14 @@ export class SiteSearch {
 			}
 			if (this.next < this.chunks.length) return null;
 		}
-		return this.best ? this.best.site : 'none';
+		const best = this.bests[this.ri];
+		if (best) return best.site;
+		if (this.rejections.length <= this.ri) this.rejections.push({ radius: this.radius, counts: { ...this.counts[this.ri] } });
+		if (this.ri + 1 >= this.radii.length) return 'none';
+		this.ri++;
+		this.chunks = chunksWithin(this.q.anchor, this.radius).filter(([x, z]) => !this.scanned.has(`${x},${z}`));
+		this.next = 0;
+		return null;
 	}
 
 	private consider(ox: number, oz: number): void {
@@ -142,10 +190,17 @@ export class SiteSearch {
 		const g = grown(ox, oz, this.q);
 		for (let x = chunkOf(g.x0); x <= chunkOf(g.x1); x++) for (let z = chunkOf(g.z0); z <= chunkOf(g.z1); z++) if (!this.scanned.has(`${x},${z}`)) return;
 		this.done.add(k);
-		const site = evaluateSite(ox, oz, this.q, this.ctx, (x, z) => this.tops.get(`${x},${z}`)!);
-		if (!site) return;
-		const cost = site.digs.length + site.fills.length;
+		const r = siteOrReject(ox, oz, this.q, this.ctx, (x, z) => this.tops.get(`${x},${z}`)!, this.radii[this.radii.length - 1]);
 		const dist = Math.hypot(ox + this.q.w / 2 - this.q.anchor.x, oz + this.q.d / 2 - this.q.anchor.z);
-		if (!this.best || cost < this.best.cost || (cost === this.best.cost && dist < this.best.dist)) this.best = { site, cost, dist };
+		for (let i = this.ri; i < this.radii.length; i++) {
+			const why = r === 'spawn' ? r : dist > this.radii[i] ? 'leash' : r;
+			if (typeof why === 'string') {
+				this.counts[i][why] = (this.counts[i][why] ?? 0) + 1;
+				continue;
+			}
+			const cost = why.digs.length + why.fills.length;
+			const b = this.bests[i];
+			if (!b || cost < b.cost || (cost === b.cost && dist < b.dist)) this.bests[i] = { site: why, cost, dist };
+		}
 	}
 }

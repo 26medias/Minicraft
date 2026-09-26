@@ -17,6 +17,7 @@ import { BEHAVIOURS, type Behaviour, type BehaviourCtx } from './behaviours/beha
 import { SALIENCE } from './data/salience.data.js';
 import { RING, climbPath } from './behaviours/spiral.js';
 import { escapeTarget } from './behaviours/mine.js';
+import { topSolid } from './behaviours/site-search.js';
 
 export type FitFn = (a: Action, ctx: BehaviourCtx) => Promise<'yes' | 'wait' | 'no'>;
 export interface RunnerDeps {
@@ -271,6 +272,7 @@ export class BehaviourRunner {
 			rng: this.d.rng, spawn: this.d.spawn,
 			stopActive: (kid) => this.d.stop.activeFor(kid, now),
 			event: (ev) => this.eventPatch(ev),
+			log: (kind, data) => this.d.log(kind, data),
 		};
 	}
 
@@ -370,10 +372,12 @@ export class BehaviourRunner {
 						r = await body.walkTo(a.to, { speed: ctx.style.walkSpeed });
 					} catch (err) {
 						// walkTo is a straight line with no pathfinding: at a wall or a cliff, fly to the same column
-						// (the kids fly too). Never for a dig's step walks, which must stay in the staircase.
+						// (the kids fly too). Never for a dig's step walks, which must stay in the staircase. The target is
+						// on top of the column (its topmost solid block + 1): groundY from near the bot can land in a cave
+						// or under an overhang, which flyTo refuses (ruling R24 batch).
 						if (!isBlocked(err) || this.gen !== gen || this.inStaircase(a.to)) throw err;
-						const p = body.pose();
-						const to = { x: a.to.x, y: world.groundY(Math.floor(a.to.x), Math.floor(a.to.z), p.y + 16) ?? p.y, z: a.to.z };
+						const top = topSolid(world, Math.floor(a.to.x), Math.floor(a.to.z));
+						const to = { x: a.to.x, y: top >= 0 ? top + 1 : body.pose().y, z: a.to.z };
 						this.d.log('walk-fly', { to });
 						this.inFlight = 'fly';
 						r = await body.flyTo(to);                 // blocked too → the outer catch: one failure

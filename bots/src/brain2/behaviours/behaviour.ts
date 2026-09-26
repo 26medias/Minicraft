@@ -25,6 +25,8 @@ export interface BehaviourCtx {
 	stopActive: (kid: string) => boolean;
 	/** A patch that appends one world event (id and salience assigned), for planPatch/onResult/endPatch. */
 	event: (ev: Omit<WorldEvent, 'id' | 'salient' | 't'>) => Patch;
+	/** Writes one `event` line to the brain log (e.g. `search-failed`); absent in some tests. */
+	log?: (kind: string, data: unknown) => void;
 }
 export type Next = Action | 'done' | 'paused' | { failed: string };
 export interface Behaviour<P = Record<string, unknown>, PL = unknown> {

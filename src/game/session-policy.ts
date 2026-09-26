@@ -4,12 +4,12 @@ const STEP = 5;
 
 /**
  * Keep the stored session across this page load? Without a PIN a refresh
- * discards it (honour system), except under parent rules ("all done for today"
- * can't be refreshed away) and on a multiplayer reconnect reload (a wifi blip
+ * discards it (honour system), except under a parent's plan ("all done" can't
+ * be refreshed away) and on a multiplayer reconnect reload (a wifi blip
  * must not reset the timer).
  */
-export function sessionPolicy(pinSet: boolean, rulesActive: boolean, autojoin: boolean): 'keep' | 'discard' {
-	return pinSet || rulesActive || autojoin ? 'keep' : 'discard';
+export function sessionPolicy(pinSet: boolean, planActive: boolean, autojoin: boolean): 'keep' | 'discard' {
+	return pinSet || planActive || autojoin ? 'keep' : 'discard';
 }
 
 /** The duration control's default (spec §8): No limit under No limit, else 30 min clamped to the maximum. */

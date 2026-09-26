@@ -1,80 +1,79 @@
 # Play-time limit
 
-A parent sets two everyday rules in **Parents**: *Can't play before* (a start time, optional) and
-*Play time per day* (10 min to 2 h, or No limit). Play time is counted for the whole day, across
-every world, solo and multiplayer, and starts fresh at local midnight. Today-only buttons give
-more time or reset the day without touching the rules.
+Two modes:
 
-The game warns at 5 and 2 minutes of play time left (`END IN 5 MINUTES`, ten seconds,
-click-through), then freezes under `TIME'S UP`. There is no break time.
+- **Free play** (no schedule): the kid picks how long before each game with the −/+ control on
+  Single Player and Multiplayer (10 min … 2 h, or No limit). Honour system: without a PIN a
+  reload starts fresh.
+- **A scheduled session** (a *plan*): a parent presses **Schedule** in Single Player or
+  Multiplayer, picks the world (or "Let him choose"), when it starts (Now, or At a time) and how
+  long, and presses OK. The menu is then **locked onto that plan** until a parent ends it or
+  makes a new one. Design: `docs/superpowers/specs/2026-09-26-scheduled-session-design.md`.
 
-## What the kid sees
+The game warns at 5 and 2 minutes left (`END IN 5 MINUTES`, ten seconds, click-through), then
+freezes: `TIME'S UP` / `ASK A PARENT` in free play, `ALL DONE!` / `GREAT BUILDING · YOUR WORLD IS
+SAVED` under a plan. MENU reloads.
 
-`playStatus()` (`src/game/rules.ts`) decides, and the home screen, Single Player, Multiplayer and
-main.ts's belt-and-braces gate all read it. The home line refreshes every 30 s.
+## A plan
 
-| Situation | Line | Play |
+`minicraft:v1:plan`: `{ id, mode: 'solo' | 'mp', worldId | null, worldName | null, startAt,
+limitMin, extraMin, createdAt }`. One session only; it does not repeat.
+
+| Phase | When | The kid sees |
 |---|---|---|
-| no rules | none; the kid picks a duration | on |
-| before the start time | `Play at 7:00 AM` | off |
-| daily limit, time left | `15 minutes left today` (no duration control) | on |
-| daily limit, used up | `All done for today · play again tomorrow at 7:00 AM` | off |
-| No limit today | `No time limit today` | on |
-| no daily limit, a frozen sitting | `Time's up · ask a parent` | off |
-| unreadable rules | `Something's wrong · ask a parent` | off |
+| wait | before `startAt` | "Not yet · play at 7:00 AM · in 2 hours" (coarse: hours, then 5-minute steps, then minutes; never seconds), Play off |
+| play | started, time left, same local day | the plan's screen, "25 minutes left", Play on |
+| done | played ≥ limit + extra, or the start day is over | "All done! · your world is saved", Play off |
 
-Under a daily limit the freeze screen says `PLAY AGAIN TOMORROW AT 7:00 AM` (or
-`PLAY AGAIN TOMORROW`), otherwise `ASK A PARENT`. A Play button is never enabled when pressing it
-would go straight to `TIME'S UP`.
-
-## The Parents screen
-
-Behind the PIN once one is set. Opening it never writes anything: only a button does, and each
-button says what it did in a line next to it (`✓ Saved. Play 45 min a day, from 7:00 AM.`), and
-the screen stays open.
-
-1. **Today.** A summary (`Played 20 min of 45 min today. Play opens at 7:00 AM.`) and:
-   - **+15 min today** and **No limit today** (only under a daily limit). While No limit today
-     is on, the only button is **Back to normal today**, which also drops any +15. Stored in
-     `minicraft:v1:today` with the local date, read at the press (the screen may stay open past
-     midnight); a record from another day means nothing, so extras end at midnight on their own.
-   - **Reset today's time**: clears the play session and today's extras. Rules, PIN and worlds are
-     untouched.
-2. **Every day.** *Can't play before* (checkbox + time) and *Play time per day*. Changing a field
-   says `Not saved yet.`; **Save rules** writes `minicraft:v1:rules` and confirms in plain words.
-   Saving never uses up today's time; the time already played today counts against a new limit.
-   Lifting the daily limit (to No limit) clears today's session, which was made under the old
-   limit and would otherwise keep him locked. Without a PIN a warning says anyone can change the
-   rules. The saved message scrolls into view.
-3. **Parent PIN.** Four digits, typed twice. Change or Remove once set. The PIN prompt carries the
-   recovery hint: `localStorage.removeItem('minicraft:v1:pin')` in the browser console on the
-   game's tab; nothing else is lost.
-4. **Multiplayer worlds** with Delete, when the server is reachable.
+- **The lock is sticky.** Done stays done, the next day too: the next session needs the next plan
+  (or End schedule). So "not before 7 am" is: at night, schedule tomorrow 7:00.
+- **Unused minutes die with the start day**, so they are not playable at 5 am the next morning.
+- Under a plan the menu opens straight onto the plan's screen; home and the other mode are out of
+  reach and Back is a **Parents** button. Solo: Single Player without New World, Delete or the
+  duration control, only the locked world when there is one. Multiplayer: before and after its
+  time only the plaque (no name or skin: nothing to do early); in its time the usual name/skin and
+  worlds screens, filtered, without New World. A locked world that is not listed shows "Your
+  world isn't here · ask a parent". The plaque repaints every second, so Play lights up at the
+  start time without a reload.
+- **Parents on the lock** (PIN): the plan's state ("Starts tomorrow, 7:00 AM, for 45 min." /
+  "Played 20 min of 45 min."), **+15 min**, **Change** (the dialog, prefilled; keeps the plan's
+  played time), **End schedule** (removes the plan and its session: free play).
+- **Schedule needs a PIN.** With none, the button first asks to set one (typed twice).
+- The dialog's OK reads the plan back: "Lock: Big Crafting · tomorrow, 7:00 AM · 45 min". A time
+  at or before now means tomorrow; "Now" starts at once.
 
 ## Sessions
 
-At Play, `resolveSession(stored, chosen, rules, today, now)` decides:
+`resolveSession(stored, chosen, plan, now)` (`src/game/plan.ts`):
 
-- **Under a daily limit** the session is the day's. A stored session started today keeps its
-  played time; its limit is recomputed from today's rules (daily + extras), and it is frozen iff
-  played ≥ limit. A session from another day is ignored. No limit today → a day-long timer
-  (never reached), so the running game can still be stopped at midnight. The kid's duration is
-  not asked. Unreadable rules give an already-locked session, so they fail closed even past the
-  menu's gate.
-- **Without a daily limit** (no rules, or only a start time) the kid's duration applies per
-  sitting: the stored session if it is not stale (a frozen one is not escaped by picking "No
-  limit"), else a new one of the chosen duration, else no timer. The duration moves in 5-minute
-  steps from 10 min to 2 h, then No limit, and is remembered in `minicraft:v1:menu`.
+- **Under a plan** the play session is the plan's: a stored session counts iff its `planId` is
+  the plan's `id` (Change keeps the id; a new plan gets a new one). Its limit is recomputed from
+  the plan (+15 applies at the next Play); it is frozen iff played ≥ limit or the start day is
+  over. The kid's duration is ignored.
+- **Free play**: the stored session if it is not stale and not a plan's, else a new one of the
+  chosen duration, else no timer.
+- An unreadable plan record is **broken**: locked ("Something's wrong · ask a parent"), and
+  `resolveSession` returns an already-locked session.
+
+**Every way into a game is checked** by `planAllows({ mode, worldId }, …)`: phase play, the
+plan's mode, and its world when locked. It guards the menu actions (`new`, `continue`, `mp`) and
+the multiplayer autojoin reload.
+
+**A running game watches the plan.** Every game (free play with No limit included, through a
+day-long unsaved timer) compares `planKey` (id, start, limit, mode, world; not +15) each second:
+a different plan, or the plan's start day ending, freezes it (`TIME TO STOP` / `A PARENT CHANGED
+THE PLAN`, or `ALL DONE!`). Each tick also adopts a higher stored played time for the same session,
+so two tabs cannot double the time.
 
 ## The refresh rule
 
 At boot, before anything reads the stored session, `boot()` (`src/game/boot.ts`) calls
-`sessionPolicy(pinSet, rulesActive, autojoin)`. It **discards** the stored session only when all
+`sessionPolicy(pinSet, planActive, autojoin)`. It **discards** the stored session only when all
 three are false:
 
-- **No PIN and no rules → a reload starts fresh** (honour system).
-- **A PIN is set, or any rule is set → the session survives reloads.** Unreadable rules count as
-  set: parental controls fail closed.
+- **No PIN and no plan → a reload starts fresh** (honour system).
+- **A PIN is set, or a plan exists → the session survives reloads.** A broken plan counts:
+  parental controls fail closed.
 - **A multiplayer reconnect keeps it.** The reconnect is a page reload carrying
   `sessionStorage['mp:autojoin']`, and a wifi blip must not hand out a fresh timer. The flag
   never outlives its purpose: it is cleared when the site has no multiplayer server, when the
@@ -83,37 +82,23 @@ three are false:
   Minicraft…" (`docs/protocol.md` §5/§6) deliberately leaves `mp:autojoin` set before it reloads,
   so the boot after it reads exactly like the reconnect case above, not a fresh start.
 
-Without a daily limit the 12-hour stale rule still applies.
+## Parents (no plan)
 
-## Stored records and migration
+From home, behind the PIN once set: how to schedule, free play's timer with **Reset play time**
+when one is running or frozen, the Parent PIN (typed twice; change; remove; the "Forgot the
+PIN?" steps on the PIN prompt: `localStorage.removeItem('minicraft:v1:pin')` in the browser
+console), and the multiplayer worlds with Delete.
 
-- `minicraft:v1:rules`: `{ startMin: 0..1439 | null, dailyMin: 10..120 step 5 | null }`. Present
-  but invalid → broken (locks). Always written by Save rules, even "no rules", so the old records
-  below are never read again.
-- Until then, `loadRules()` migrates: an old per-world schedule (`minicraft:v1:schedule`) becomes
-  its start time and minutes per day (the world lock is dropped; an unreadable one stays broken);
-  otherwise an old per-sitting maximum (`maxDurationMin` in the options record) becomes minutes per
-  day. The old records are left in place, unused.
-- `minicraft:v1:today`: `{ day: 'YYYY-MM-DD', extraMin, unlimited }`. Unreadable or another day →
-  no extras.
-- `minicraft:v1:pin`: four digits.
+## Migration
 
-DST: the start gate is local wall-clock minutes. A start time inside the spring-forward gap opens
-when the clock reaches the next real minute; inside the fall-back repeated hour it opens on the
-first pass, closes during the second, and reopens.
+- The deployed daily schedule (`minicraft:v1:schedule`) becomes a solo plan on its world at the
+  next occurrence of its start time, for its minutes; the old record is removed once the plan is
+  written. Migrating after today's start time moves it to tomorrow. An unreadable one is broken.
+- The deployed per-sitting maximum (`maxDurationMin`) no longer applies: free play has no cap.
+- This branch's earlier `minicraft:v1:rules` / `minicraft:v1:today` were never deployed.
 
-**Midnight.** Under any rule, a running game stops when the local day changes (`TIME'S UP` /
-`A NEW DAY · PRESS MENU`); MENU then Play starts the new day under its start time and limit. So a
-tab left open overnight carries neither yesterday's minutes nor "No limit today" into the
-morning. Without rules nothing happens at midnight.
-
-Known limits, accepted for a family tool:
-
-- A game already running does not notice a change made in Parents from another tab; it keeps
-  its session until it reloads. Parents is only reachable from the menu, not during a game.
-- Two tabs playing at once each keep their own copy of the session (the last to save wins), so
-  they can together exceed the day. Pre-existing.
-- Setting the computer's clock back beats every rule. A browser-only game cannot prevent it.
+Known limits: the lock is per browser (another browser or device is not covered); setting the
+computer's clock back beats it.
 
 ## Semantics
 
@@ -121,10 +106,9 @@ Known limits, accepted for a family tool:
   sleeping laptop does not count. Each 1 s tick credits at most 2 s, so a throttled or slept
   interval cannot dump an hour into the count.
 - The session is **per browser**, not per world, and shared by solo and multiplayer.
-- Without a daily limit, a session untouched for 12 hours is discarded, so a lock from last night
-  clears itself. A session written under a clock that has since been set back is discarded too.
-  Under a daily limit, a session belongs to the local day it started on; a session running at
-  midnight keeps going.
+- In free play, a session untouched for 12 hours is discarded, so a lock from last night clears
+  itself. A session written under a clock that has since been set back is discarded too. Under a
+  plan, staleness does not apply: the session belongs to the plan.
 - **In multiplayer** the same timer runs. The player also sends `leaving` at 2 minutes,
   1 minute, 30 seconds and 0 left; friends see small toasts ("Noah has to go in 2 minutes" …
   "Noah went home") and the leaver sees a big 10 … 1. The timer is paused while the connection is
@@ -135,14 +119,14 @@ Known limits, accepted for a family tool:
 | File | Role |
 |---|---|
 | `src/data/playtime.data.ts` | the duration list, warning thresholds, the stale and tick limits |
-| `src/game/rules.ts` | pure rules: start gate, per-day sessions, today's extras, `resolveSession`, `playStatus`, the Parents summary |
+| `src/game/plan.ts` | pure plan rules: phases, `resolveSession`, `playStatus`, `planAllows`, `planKey`, countdown and sentences |
 | `src/game/session-policy.ts` | `sessionPolicy`, `defaultDuration`, `clampDuration`, `stepDuration`, `formatDuration` |
 | `src/game/boot.ts`, `src/game/boot-session.ts` | the boot decision: the refresh rule and the `mp:autojoin` flag |
 | `src/game/playtime.ts` | `PlayTimer` state machine; `phaseOf`, `isStale` |
 | `src/game/playtime-controller.ts` | `PlaytimeController` turns timer events into overlay and game calls |
 | `src/game/leaving.ts` | the multiplayer `leaving` countdown and its toast text |
 | `src/persistence/playtime.ts` | `minicraft:v1:playtime` load/save/clear |
-| `src/persistence/rules.ts` | `minicraft:v1:rules` (with migration), `minicraft:v1:today`, `minicraft:v1:pin`; fail-closed loader |
+| `src/persistence/plan.ts` | `minicraft:v1:plan` (with the old schedule's migration) and `minicraft:v1:pin`; fail-closed loader |
 | `src/ui/playtime-overlay.ts` | warning band and freeze overlay |
 | `src/ui/menu.ts` | home, Single Player, Multiplayer and Parents screens |
 | `src/ui/duration-control.ts` | the kid's duration control |

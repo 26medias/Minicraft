@@ -122,3 +122,18 @@ describe('playtime session storage', () => {
 		expect(store[KEY]).toBeDefined();
 	});
 });
+
+describe('the plan a session belongs to', () => {
+	it('planId survives a save and a load (a reload keeps the plan\'s played time)', async () => {
+		const { loadSession, saveSession } = await import('./playtime');
+		saveSession(valid({ planId: 'p1', playedMs: 20 * 60_000 }));
+		expect(loadSession()).toMatchObject({ planId: 'p1', playedMs: 20 * 60_000 });
+	});
+	it('a free-play session has no planId; a non-string one is dropped', async () => {
+		const { loadSession, saveSession } = await import('./playtime');
+		saveSession(valid());
+		expect(loadSession()!.planId).toBeUndefined();
+		store[KEY] = JSON.stringify({ ...valid(), planId: 42 });
+		expect(loadSession()!.planId).toBeUndefined();
+	});
+});

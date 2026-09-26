@@ -37,8 +37,8 @@ import { resolveContinue, type LoadOutcome } from './game/continue-policy';
 import type { WorldSave } from './persistence/adapter';
 import { PlaytimeController } from './game/playtime-controller';
 import { loadSession, saveSession } from './persistence/playtime';
-import { loadRules, loadToday } from './persistence/rules';
-import { dayChanged, dayKey, NEW_DAY_TEXT, playStatus, resolveSession } from './game/rules';
+import { loadPlan } from './persistence/plan';
+import { planAllows, planDayEnd, planKey, playStatus, resolveSession } from './game/plan';
 import { PlaytimeOverlay } from './ui/playtime-overlay';
 import { TICK_MS } from './data/playtime.data';
 import { Inventory } from './ui/inventory';
@@ -144,10 +144,12 @@ async function main() {
 			return;
 		}
 		// Belt and braces under the menu: never enter startGame (which hides the
-		// menu and registers listeners) when the parent rules say no.
-		// Applies to 'new' too, so a re-added New World button cannot bypass it.
-		// Multiplayer too: a frozen timer that survives blocks rejoining (spec §7.4).
-		if (!canPlayNow()) {
+		// menu and registers listeners) when the parent's plan says no: its phase,
+		// its mode and its world. Applies to 'new' too, so a re-added New World
+		// button cannot bypass it. Multiplayer too: a frozen timer that survives
+		// blocks rejoining (spec §7.4).
+		const target = action.type === 'mp' ? { mode: 'mp' as const, worldId: action.world } : { mode: 'solo' as const, worldId: action.id };
+		if (!canPlayNow(target)) {
 			showMenu();
 			return;
 		}
@@ -165,9 +167,9 @@ async function main() {
 		else if (action.type === 'continue') startGame(action.id, action.seed, action.name, 'continue', false, action.duration);
 	}
 
-	function canPlayNow(): boolean {
+	function canPlayNow(target: { mode: 'solo' | 'mp'; worldId: string }): boolean {
 		const now = Date.now();
-		return playStatus({ rules: loadRules(), session: loadSession(), today: loadToday(now), now }).canPlay;
+		return planAllows(target, { plan: loadPlan(now), session: loadSession(), now });
 	}
 
 	function showMenu(notice?: string) {
@@ -175,7 +177,7 @@ async function main() {
 	}
 
 	let mpUi: MpOverlays | null = null;
-	if (booted.kind === 'autojoin' && canPlayNow()) {
+	if (booted.kind === 'autojoin' && canPlayNow({ mode: 'mp', worldId: booted.args.world })) {
 		startMultiplayer(booted.args, true);
 	} else {
 		if (booted.kind === 'autojoin') clearAutojoin(sessionStorage);
@@ -818,24 +820,35 @@ async function main() {
 		// so the interval and listener below need no owner, like the window
 		// listeners above. The first tick runs before loop.start() on purpose:
 		// a session already in its break must freeze before the first frame.
-		// Under a daily limit the day's session applies and the kid's choice is not asked;
+		// Under a plan the plan's session applies and the kid's choice is not asked;
 		// otherwise the chosen duration starts a new session unless one is in force.
-		const rulesNow = Date.now();
-		const loadedRules = loadRules();
-		const today = loadToday(rulesNow);
-		const session = resolveSession(loadSession(), clampDuration(duration, null), loadedRules, today, rulesNow);
-		const status = playStatus({ rules: loadedRules, session: loadSession(), today, now: rulesNow });
-		const startDay = dayKey(rulesNow);
+		const planNow = Date.now();
+		const loadedPlan = loadPlan(planNow);
+		const planSession = resolveSession(loadSession(), clampDuration(duration, null), loadedPlan, planNow);
+		const status = playStatus({ plan: loadedPlan, session: planSession, now: planNow });
+		// Free play with No limit still gets a timer, a day long and never saved, so a plan made
+		// in another tab (or its day ending) can stop this game too.
+		const unlimited = planSession === null;
+		const session = planSession ?? { limitMs: 24 * 3_600_000, breakMs: null, playedMs: 0, frozenAt: null, startedAt: planNow, updatedAt: planNow };
+		const startKey = planKey(loadedPlan);
+		const planExpired = (): { title: string; text: string } | null => {
+			const now = Date.now();
+			const cur = loadPlan(now);
+			if (planKey(cur) !== startKey) return { title: 'TIME TO STOP', text: 'A PARENT CHANGED THE PLAN' };
+			if (cur.kind === 'set' && now >= planDayEnd(cur.plan)) return { title: 'ALL DONE!', text: 'GREAT BUILDING · YOUR WORLD IS SAVED' };
+			return null;
+		};
 		// Multiplayer: the leaver's countdown messages (spec §7.4).
 		const leaving = mp ? new LeavingCountdown((secondsLeft) => void mp.client.send({ t: 'leaving', secondsLeft })) : null;
 		let playtime: PlaytimeController | null = null;
-		if (session !== null) {
-			saveSession(session);
+		{
+			if (!unlimited) saveSession(session);
 			playtime = new PlaytimeController(session, {
 				overlay: new PlaytimeOverlay(app),
 				lockedText: status.lockedText,
-				// A tab left open overnight must not carry yesterday's time (or "No limit today") into today.
-				expired: () => (dayChanged(loadedRules, startDay, Date.now()) ? NEW_DAY_TEXT : null),
+				freezeTitle: status.freezeTitle,
+				expired: planExpired,
+				load: unlimited ? undefined : loadSession,
 				freeze: () => {
 					closeInventory();
 					if (!quitting) closePause();
@@ -870,7 +883,7 @@ async function main() {
 					const p = renderer.gl.domElement.requestPointerLock() as unknown;
 					if (p instanceof Promise) p.catch(() => {});
 				},
-				save: saveSession,
+				save: unlimited ? () => {} : saveSession,
 				now: () => Date.now(),
 				visible: () => document.visibilityState === 'visible',
 			});

@@ -17,7 +17,7 @@ type Harness = {
 	clock: { now: number; visible: boolean };
 };
 
-function harness(s: PlaytimeSession, now = T0, lockedText?: string, expired?: () => string | null): Harness {
+function harness(s: PlaytimeSession, now = T0, lockedText?: string, expired?: () => { title: string; text: string } | null, load?: () => PlaytimeSession | null): Harness {
 	const calls: string[] = [];
 	const saved: PlaytimeSession[] = [];
 	const clock = { now, visible: true };
@@ -25,7 +25,7 @@ function harness(s: PlaytimeSession, now = T0, lockedText?: string, expired?: ()
 	const deps: PlaytimeDeps = {
 		overlay: {
 			warn: (text, ms) => calls.push(`warn:${text}:${ms}`),
-			freeze: (t) => calls.push(`overlay.freeze:${t ?? ''}`),
+			freeze: (t, title) => calls.push(`overlay.freeze:${t ?? ''}${title ? `:${title}` : ''}`),
 			unfreeze: () => calls.push('unfreeze'),
 		},
 		freeze: () => calls.push('deps.freeze'),
@@ -35,6 +35,7 @@ function harness(s: PlaytimeSession, now = T0, lockedText?: string, expired?: ()
 		visible: () => clock.visible,
 		lockedText,
 		expired,
+		load,
 	};
 	h.ctl = new PlaytimeController(s, deps);
 	return h as Harness;
@@ -115,24 +116,39 @@ describe('PlaytimeController without break time', () => {
 
 describe('PlaytimeController expiry (the day changed)', () => {
 	it('freezes once with the expiry text, then does nothing more', () => {
-		let stop: string | null = null;
+		let stop: { title: string; text: string } | null = null;
 		const h = harness(session({ playedMs: 0, limitMs: 24 * 60 * MIN }), T0, undefined, () => stop);
 		advance(h, 5_000);
 		expect(h.calls).toEqual([]);
-		stop = 'A NEW DAY · PRESS MENU';
+		stop = { title: 'TIME TO STOP', text: 'A PARENT CHANGED THE PLAN' };
 		advance(h, 1_000);
-		expect(h.calls).toEqual(['deps.freeze', 'overlay.freeze:A NEW DAY · PRESS MENU']);
+		expect(h.calls).toEqual(['deps.freeze', 'overlay.freeze:A PARENT CHANGED THE PLAN:TIME TO STOP']);
 		h.calls.length = 0;
 		advance(h, 60_000);
 		expect(h.calls).toEqual([]);
 	});
 	it('a session already frozen by its limit is not frozen twice', () => {
-		const h = harness(session({ playedMs: 30 * MIN, frozenAt: T0 }), T0, undefined, () => 'A NEW DAY · PRESS MENU');
+		const h = harness(session({ playedMs: 30 * MIN, frozenAt: T0 }), T0, undefined, () => ({ title: 'TIME TO STOP', text: 'X' }));
 		h.ctl.tick();
 		// The limit's own freeze (TIME'S UP, ASK A PARENT), not the new-day one.
 		expect(h.calls).toEqual(['deps.freeze', 'overlay.freeze:']);
 		h.calls.length = 0;
 		advance(h, 5_000);
 		expect(h.calls).toEqual([]);
+	});
+});
+
+describe('PlaytimeController two tabs', () => {
+	it("adopts another tab's higher played time for the same session, and freezes on it", () => {
+		const mine = session({ playedMs: 5 * MIN });
+		let stored: PlaytimeSession | null = { ...mine, playedMs: 30 * MIN };
+		const h = harness(mine, T0, undefined, undefined, () => stored);
+		h.ctl.tick();
+		expect(h.calls).toEqual(['deps.freeze', 'overlay.freeze:']);
+		// A different session in storage (another plan, a reset) is not adopted.
+		const h2 = harness(session({ playedMs: 5 * MIN }), T0, undefined, undefined, () => stored);
+		stored = session({ playedMs: 29 * MIN, startedAt: T0 + 1 });
+		h2.ctl.tick();
+		expect(h2.ctl.remainingMs()).toBe(25 * MIN);
 	});
 });

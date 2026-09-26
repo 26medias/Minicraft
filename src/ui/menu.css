@@ -954,3 +954,51 @@
 .menu-credits:hover {
 	opacity: 1;
 }
+
+/* --- Scheduled plan: the locked world, the Schedule dialog ------------------------------------------ */
+
+/* The plan's world, big, on the locked screen: "his" world, not a missing list. */
+.plan-world {
+	margin: 0 0 12px;
+	text-align: center;
+	font: 30px/1.1 var(--mc-font-display);
+	color: var(--mc-cream);
+	text-shadow: 0 3px 0 var(--mc-outline);
+}
+.menu-card .sched-choice {
+	margin: 8px 0;
+	font-size: 18px;
+}
+.sched-at {
+	display: flex;
+	align-items: center;
+	gap: 12px;
+	flex-wrap: wrap;
+}
+.menu-card .sched-at input[type='time'] {
+	width: auto;
+	margin: 0;
+}
+.menu-card #sched-ok {
+	--lift: 8px;
+	margin-top: 18px;
+	padding: 14px 14px 12px;
+	font-size: 22px;
+	color: #fff;
+	text-shadow:
+		0 2px 0 var(--mc-moss-deep),
+		2px 0 0 var(--mc-moss-deep),
+		-2px 0 0 var(--mc-moss-deep),
+		0 -2px 0 var(--mc-moss-deep);
+	background:
+		linear-gradient(180deg, rgba(120, 190, 40, 0.25), rgba(30, 80, 10, 0.55)),
+		var(--mc-moss-tex) center / 140px;
+	box-shadow:
+		inset 0 3px 0 rgba(230, 255, 150, 0.55),
+		inset 0 -5px 0 rgba(20, 50, 0, 0.35),
+		0 var(--lift) 0 var(--mc-dirt),
+		0 var(--lift) 0 3px var(--mc-outline);
+}
+.menu-card button.danger {
+	color: #6b1d10;
+}

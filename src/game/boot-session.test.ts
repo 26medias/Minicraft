@@ -2,10 +2,10 @@ import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 import { bootSession } from './boot-session';
 import { AUTOJOIN_KEY, beginSolo, boot, failRejoin, setAutojoin, type AutojoinArgs } from './boot';
 import { loadSession, saveSession, PLAYTIME_KEY } from '../persistence/playtime';
-import { PIN_KEY, RULES_KEY, SCHEDULE_KEY } from '../persistence/rules';
+import { PIN_KEY, PLAN_KEY, SCHEDULE_KEY } from '../persistence/plan';
 import { MP_PRESELECT_KEY } from '../ui/menu';
 import type { PlaytimeSession } from './playtime';
-import type { LoadedRules } from './rules';
+import type { LoadedPlan } from './plan';
 
 // T12b (spec §10, plan I1 + gate-2 amendments): the BOOT path, not just sessionPolicy. A stored
 // session is run through boot for each of no PIN / PIN / schedule / autojoin; only the first
@@ -54,14 +54,14 @@ afterEach(() => {
 });
 
 describe('bootSession (T12b, the function)', () => {
-	const none: LoadedRules = { kind: 'none' };
-	const armed: LoadedRules = { kind: 'set', rules: { startMin: 0, dailyMin: 30 } };
+	const none: LoadedPlan = { kind: 'none' };
+	const armed: LoadedPlan = { kind: 'set', plan: { id: 'p', mode: 'solo', worldId: 'w', worldName: 'W', startAt: 1, limitMin: 30, extraMin: 0, createdAt: 1 } };
 	it.each([
-		['no PIN', { pin: null, rules: none, autojoin: false }, true],
-		['PIN', { pin: '1234', rules: none, autojoin: false }, false],
-		['rules', { pin: null, rules: armed, autojoin: false }, false],
-		['broken rules (fails closed)', { pin: null, rules: { kind: 'broken' } as LoadedRules, autojoin: false }, false],
-		['autojoin', { pin: null, rules: none, autojoin: true }, false],
+		['no PIN', { pin: null, plan: none, autojoin: false }, true],
+		['PIN', { pin: '1234', plan: none, autojoin: false }, false],
+		['plan', { pin: null, plan: armed, autojoin: false }, false],
+		['broken plan (fails closed)', { pin: null, plan: { kind: 'broken' } as LoadedPlan, autojoin: false }, false],
+		['autojoin', { pin: null, plan: none, autojoin: true }, false],
 	])('%s → discarded: %s', (_n, st, discarded) => {
 		const clear = vi.fn();
 		bootSession(st, () => stored, clear);
@@ -70,7 +70,7 @@ describe('bootSession (T12b, the function)', () => {
 
 	it('no stored session: nothing to clear', () => {
 		const clear = vi.fn();
-		bootSession({ pin: null, rules: none, autojoin: false }, () => null, clear);
+		bootSession({ pin: null, plan: none, autojoin: false }, () => null, clear);
 		expect(clear).not.toHaveBeenCalled();
 	});
 });
@@ -88,23 +88,16 @@ describe('boot() (T12b, boot-level)', () => {
 		expect(loadSession()?.playedMs).toBe(stored.playedMs);
 	});
 
-	it('an old schedule (migrated to rules): the stored session is kept', () => {
+	it('an old schedule (migrated to a plan): the stored session is kept', () => {
 		armSchedule();
 		boot({ mpUrl: URL_, storage: session });
 		expect(loadSession()?.playedMs).toBe(stored.playedMs);
 	});
 
-	it('rules with only a start time: the stored session is kept', () => {
-		local.setItem(RULES_KEY, JSON.stringify({ startMin: 420, dailyMin: null }));
+	it('a plan: the stored session is kept', () => {
+		local.setItem(PLAN_KEY, JSON.stringify({ id: 'p', mode: 'solo', worldId: null, worldName: null, startAt: 1, limitMin: 45, extraMin: 0, createdAt: 1 }));
 		boot({ mpUrl: URL_, storage: session });
 		expect(loadSession()?.playedMs).toBe(stored.playedMs);
-	});
-
-	it('rules saved as "no rules": a reload discards the session (honour system)', () => {
-		armSchedule(); // the old record must not come back once rules are saved
-		local.setItem(RULES_KEY, JSON.stringify({ startMin: null, dailyMin: null }));
-		boot({ mpUrl: URL_, storage: session });
-		expect(loadSession()).toBeNull();
 	});
 
 	it('autojoin flag plus an MP URL: session kept, autojoin with the args', () => {

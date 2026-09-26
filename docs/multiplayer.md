@@ -129,8 +129,8 @@ against `src/net/protocol.ts` and `server/internal/proto/proto.go` by
 
 ### Play time
 
-Multiplayer uses the same timer and the same parent rules as solo (the day's play time counts
-both). The player sends
+Multiplayer uses the same timer as solo, and a parent's scheduled session can be made from the
+Multiplayer screen (`docs/playtime.md`). The player sends
 `leaving {secondsLeft}` once for each threshold crossed (120, 60, 30), then at 0. Joining with less
 than 120 s left sends one immediate `leaving` with the real value. The leaver sees the usual
 warnings and a big 10 … 1. Everyone else gets a small toast with the leaver's colour dot:

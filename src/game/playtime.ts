@@ -22,6 +22,8 @@ export type PlaytimeSession = {
 	startedAt: number;
 	/** Wall clock of the last write; drives staleness. */
 	updatedAt: number;
+	/** The scheduled plan this session belongs to; absent in free play. */
+	planId?: string;
 };
 
 /** 'break' = frozen at the limit; it never ends by itself. */

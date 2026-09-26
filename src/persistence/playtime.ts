@@ -33,9 +33,10 @@ export function loadSession(): PlaytimeSession | null {
 	try {
 		const parsed: unknown = JSON.parse(raw);
 		if (!isSession(parsed)) return null;
-		const { limitMs, playedMs, frozenAt, updatedAt, startedAt } =
+		const { limitMs, playedMs, frozenAt, updatedAt, startedAt, planId } =
 			parsed as PlaytimeSession & { startedAt?: number };
 		return {
+			...(typeof planId === 'string' && planId !== '' ? { planId } : {}),
 			limitMs,
 			// An old record's numeric break is dropped: a freeze now lasts until a
 			// new session per the refresh rule (spec §8.1), or a Parents reset.

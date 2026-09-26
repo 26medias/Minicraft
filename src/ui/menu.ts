@@ -1,18 +1,19 @@
 import type { PersistenceAdapter, WorldSummary } from '../persistence/adapter';
 import { newWorldId } from '../persistence/uuid';
-import { DURATION_CHOICES_MIN } from '../data/playtime.data';
 import { clearSession, loadSession } from '../persistence/playtime';
+import { isStale } from '../game/playtime';
 import { loadMenuState, saveMenuState, type MenuState } from '../persistence/menu-state';
-import { formatDuration } from '../game/session-policy';
 import {
 	newWorldFields, singleModel,
 	type CreatedWorld, type MenuAction, type SingleRow,
 } from './menu-model';
 import { DurationControl } from './duration-control';
+import { clearPin, clearPlan, loadPin, loadPlan, newPlanId, savePin, savePlan } from '../persistence/plan';
 import {
-	clearPin, clearToday, loadPin, loadRules, loadToday, savePin, saveRules, saveToday,
-} from '../persistence/rules';
-import { dayKey, playStatus, rulesChangeClearsSession, rulesSentence, todaySummary, type PlayStatus, type StatusInput, type Today } from '../game/rules';
+	formatWhen, nextStartAt, planSentence, planSummary, playStatus,
+	type Plan, type PlayStatus, type StatusInput,
+} from '../game/plan';
+import { isLegacyId, seedFromLegacyId } from '../persistence/uuid';
 import { mpApiFromEnv, type MpApi, type MpWorldRow } from '../net/mp-api';
 import { loadMpPrefs, saveMpPrefs, type MpPrefs } from '../persistence/mp-prefs';
 import { SKINS, skinColor, skinOf, type SkinId } from '../data/skins.data';
@@ -81,6 +82,15 @@ function paintPlayLine(el: HTMLElement, st: PlayStatus): void {
 	}
 }
 
+/** The plan's locked world among the listed rows; a legacy id matches the world adopted from it by seed. */
+function findWorld(rows: SingleRow[], id: string): SingleRow | null {
+	const exact = rows.find((r) => r.id === id);
+	if (exact) return exact;
+	if (!isLegacyId(id)) return null;
+	const seed = seedFromLegacyId(id);
+	return rows.find((r) => r.seed === seed && r.badge === 'device') ?? null;
+}
+
 export class MainMenu {
 	private root: HTMLDivElement;
 	private onAction: ((a: MenuAction) => void) | null = null;
@@ -115,7 +125,8 @@ export class MainMenu {
 		// After a multiplayer reload that failed (a 4009, a 4008, a rejoin that timed out), main.ts
 		// leaves a reason or a world in sessionStorage: go straight to the Multiplayer screens.
 		const mpPending = peekSession(MP_ERROR_KEY) || peekSession(MP_PRESELECT_KEY);
-		if (this.mp && mpPending) this.renderMulti();
+		if (loadPlan().kind !== 'none') this.renderLocked();
+		else if (this.mp && mpPending) this.renderMulti();
 		else void this.renderHome();
 	}
 
@@ -124,7 +135,8 @@ export class MainMenu {
 		this.onAction = onAction;
 		this.notice = null;
 		this.root.classList.remove('hidden');
-		if (this.mp) this.renderMulti();
+		if (loadPlan().kind !== 'none') this.renderLocked();
+		else if (this.mp) this.renderMulti();
 		else void this.renderHome();
 	}
 
@@ -179,7 +191,12 @@ export class MainMenu {
 		return b;
 	}
 
+	/** Back to home; under a plan home is out of reach, so it is the parent's button instead. */
 	private backButton(card: HTMLElement): void {
+		if (loadPlan().kind !== 'none') {
+			this.button(card, 'Parents', 'plan-parents', () => this.renderPlanParents(), 'menu-back');
+			return;
+		}
 		this.button(card, 'Back', 'menu-back', () => void this.renderHome(), 'menu-back');
 	}
 
@@ -198,26 +215,35 @@ export class MainMenu {
 
 	private statusInput(): StatusInput {
 		const now = Date.now();
-		return { rules: loadRules(), session: loadSession(), today: loadToday(now), now };
+		return { plan: loadPlan(now), session: loadSession(), now };
 	}
 
-	/** Where the kid stands under the parent's rules, read fresh from storage. */
+	/** Where the kid stands under the parent's plan, read fresh from storage. */
 	private status(): PlayStatus {
 		return playStatus(this.statusInput());
 	}
 
 	/**
 	 * The kid's play-time block on Single Player and Multiplayer: the duration
-	 * control when the kid picks, else the status line ("30 minutes left today").
-	 * Returns the duration getter (null under a daily limit: main.ts ignores it).
+	 * control when the kid picks, else the status plaque ("25 minutes left"),
+	 * repainted every second so Play lights up at the start time without a
+	 * reload. Returns the duration getter (null under a plan: main.ts ignores it).
 	 */
-	private playTime(parent: HTMLElement, st: PlayStatus): () => number | null {
+	private playTime(parent: HTMLElement, st: PlayStatus, onTick?: (st: PlayStatus) => void): () => number | null {
 		if (!st.kidPicks) {
 			const line = document.createElement('div');
 			line.className = 'play-line';
 			line.id = 'play-line';
 			paintPlayLine(line, st);
 			parent.appendChild(line);
+			if (onTick) {
+				if (this.refresh !== null) clearInterval(this.refresh);
+				this.refresh = setInterval(() => {
+					const now = this.status();
+					paintPlayLine(line, now);
+					onTick(now);
+				}, 1_000);
+			}
 			return () => null;
 		}
 		let duration = loadMenuState(null).duration;
@@ -324,12 +350,18 @@ export class MainMenu {
 		loading.remove();
 
 		const state: MenuState = loadMenuState(null);
-		const m = singleModel({ worlds, created: this.created, state, max: null });
+		const loaded = loadPlan();
+		const plan = loaded.kind === 'set' && loaded.plan.mode === 'solo' ? loaded.plan : null;
+		const locked = loaded.kind !== 'none';
+		const all = singleModel({ worlds, created: locked ? null : this.created, state, max: null });
+		// Under a plan: only the plan's world when it is locked; no New World, no Delete.
+		const lockedRow = plan?.worldId ? findWorld(all.worlds, plan.worldId) : null;
+		const m = plan?.worldId ? { ...all, worlds: lockedRow ? [lockedRow] : [], selectedId: lockedRow?.id ?? null } : all;
 		let selectedId = m.selectedId;
-		const st = this.status();
+		let st = this.status();
 		const remember = () => saveMenuState({ ...loadMenuState(null), selectedId });
 
-		this.button(card, 'New World', 'single-new', () => this.renderNew());
+		if (!locked) this.button(card, 'New World', 'single-new', () => this.renderNew());
 		if (offline) {
 			const warn = document.createElement('div');
 			warn.className = 'menu-warning';
@@ -361,17 +393,18 @@ export class MainMenu {
 			badge.textContent = BADGE_TEXT[w.badge];
 			row.append(label, badge);
 			row.onclick = () => { selectedId = w.id; remember(); paintSelection(); };
-			row.appendChild(this.deleteButton(w, row));
+			if (!locked) row.appendChild(this.deleteButton(w, row));
 			list.appendChild(row);
 		}
 		if (m.worlds.length === 0) {
 			const empty = document.createElement('div');
-			empty.className = 'menu-hint';
-			empty.textContent = 'No worlds yet. Press New World.';
+			empty.className = plan?.worldId ? 'menu-warning' : 'menu-hint';
+			empty.id = 'single-empty';
+			empty.textContent = plan?.worldId ? "Your world isn't here · ask a parent" : locked ? 'No worlds yet · ask a parent' : 'No worlds yet. Press New World.';
 			card.appendChild(empty);
 		}
 
-		const duration = this.playTime(card, st);
+		const duration = this.playTime(card, st, (now) => { st = now; paintSelection(); });
 
 		play.id = 'single-play';
 		play.className = 'play-big';
@@ -390,6 +423,13 @@ export class MainMenu {
 		};
 		card.appendChild(play);
 		paintSelection();
+		if (!locked) {
+			const selected = () => m.worlds.find((r) => r.id === selectedId && r.badge !== 'new') ?? null;
+			this.button(card, 'Schedule', 'single-schedule', () => {
+				const w = selected();
+				this.renderScheduleGate('solo', w ? { id: w.id, name: w.name } : null, null);
+			}, 'menu-small');
+		}
 		this.backButton(card);
 	}
 
@@ -605,7 +645,10 @@ export class MainMenu {
 		const worldsBox = document.createElement('div');
 		worldsBox.className = 'hidden';
 		card.appendChild(worldsBox);
-		this.button(worldsBox, 'New World', 'mp-new', () => this.renderMultiNew());
+		const loadedPlan = loadPlan();
+		const locked = loadedPlan.kind !== 'none';
+		const lockedId = loadedPlan.kind === 'set' && loadedPlan.plan.mode === 'mp' ? loadedPlan.plan.worldId : null;
+		if (!locked) this.button(worldsBox, 'New World', 'mp-new', () => this.renderMultiNew());
 		const list = document.createElement('div');
 		list.className = 'world-list';
 		list.id = 'mp-worlds';
@@ -615,8 +658,8 @@ export class MainMenu {
 		empty.textContent = 'No worlds yet. Press New World.';
 		worldsBox.appendChild(empty);
 
-		const st = this.status();
-		const duration = this.playTime(worldsBox, st);
+		let st = this.status();
+		const duration = this.playTime(worldsBox, st, (now) => { st = now; play.disabled = selectedId === null || !st.canPlay; });
 
 		let rows: MpWorldRow[] = [];
 		let selectedId: string | null = null;
@@ -666,6 +709,10 @@ export class MainMenu {
 				list.appendChild(row);
 			}
 			empty.classList.toggle('hidden', rows.length > 0);
+			if (lockedId !== null) {
+				empty.textContent = "Your world isn't here · ask a parent";
+				empty.className = rows.length > 0 ? 'hidden' : 'menu-warning';
+			}
 			play.disabled = selectedId === null || !st.canPlay;
 		};
 
@@ -689,7 +736,8 @@ export class MainMenu {
 			if (fresh === null) {
 				showSleeping();
 			} else {
-				rows = sortRows(fresh);
+				// Under a plan with a locked world, only that world (matched on its uuid).
+				rows = sortRows(fresh).filter((r) => lockedId === null || r.uuid === lockedId);
 				// First list (or the selection vanished): pick per spec §8.2. After that the kid's click sticks.
 				if (!listed || selectedId === null || !rows.some((r) => r.uuid === selectedId)) {
 					const wanted = force !== null && rows.some((r) => r.uuid === force) ? force : null;
@@ -711,6 +759,12 @@ export class MainMenu {
 			void load();
 		});
 
+		if (!locked) {
+			this.button(worldsBox, 'Schedule', 'mp-schedule', () => {
+				const w = rows.find((r) => r.uuid === selectedId);
+				this.renderScheduleGate('mp', w ? { id: w.uuid, name: w.name } : null, null);
+			}, 'menu-small');
+		}
 		this.backButton(card);
 		void load();
 	}
@@ -759,6 +813,260 @@ export class MainMenu {
 
 	// --- Parents ------------------------------------------------------------
 
+	// --- Scheduled plan -------------------------------------------------------
+
+	/**
+	 * The menu under a plan: the plan's screen and nothing else. Solo: Single
+	 * Player (filtered, Play lit only in time). Multiplayer: in its playing time,
+	 * the usual name/skin then worlds screens; before and after it, only the
+	 * plaque (no name or skin: nothing to do early). Broken: the plaque.
+	 */
+	private renderLocked(): void {
+		const loaded = loadPlan();
+		if (loaded.kind === 'none') { void this.renderHome(); return; }
+		if (loaded.kind === 'set' && loaded.plan.mode === 'solo') { void this.renderSingle(); return; }
+		const st = this.status();
+		if (loaded.kind === 'set' && st.canPlay && this.mp) { this.renderMulti(); return; }
+		this.renderGen++;
+		const card = this.newCard(loaded.kind === 'set' ? 'Multiplayer' : "Noah's Worlds", 'locked');
+		if (loaded.kind === 'set' && loaded.plan.worldName) {
+			const w = document.createElement('div');
+			w.className = 'plan-world';
+			w.textContent = loaded.plan.worldName;
+			card.appendChild(w);
+		}
+		const line = document.createElement('div');
+		line.className = 'play-line';
+		line.id = 'play-line';
+		paintPlayLine(line, st);
+		card.appendChild(line);
+		this.button(card, 'Parents', 'plan-parents', () => this.renderPlanParents(), 'menu-back');
+		// At the start time the multiplayer flow opens by itself.
+		this.refresh = setInterval(() => {
+			const now = this.status();
+			if (now.canPlay) { this.renderLocked(); return; }
+			paintPlayLine(line, now);
+		}, 1_000);
+	}
+
+	/** Schedule is for parents: a PIN first (set one, typed twice, if there is none), then the dialog. */
+	private renderScheduleGate(mode: 'solo' | 'mp', world: { id: string; name: string } | null, existing: Plan | null): void {
+		this.renderGen++;
+		const card = this.newCard('Schedule', 'schedule');
+		const body = document.createElement('div');
+		card.appendChild(body);
+		const back = () => (mode === 'solo' ? void this.renderSingle() : this.renderMulti());
+		this.button(card, 'Cancel', 'sched-cancel', back, 'menu-back');
+		if (loadPin() !== null) {
+			this.pinGate(body, 'Type the parent PIN', () => this.renderSchedule(mode, world, existing));
+			return;
+		}
+		const hint = document.createElement('div');
+		hint.className = 'menu-hint';
+		hint.textContent = 'First, a 4-digit parent PIN, so only parents can change the schedule.';
+		body.appendChild(hint);
+		this.pinForm(body, () => this.renderSchedule(mode, world, existing));
+	}
+
+	/** A New PIN / Type it again form; `onSaved` once a PIN is stored. */
+	private pinForm(parent: HTMLElement, onSaved: () => void): void {
+		const form = document.createElement('div');
+		form.className = 'pin-form';
+		const field = (id: string, text: string) => {
+			const label = document.createElement('label');
+			label.className = 'pin-field';
+			label.textContent = text;
+			const i = document.createElement('input');
+			i.type = 'password';
+			i.inputMode = 'numeric';
+			i.maxLength = 4;
+			i.autocomplete = 'off';
+			i.id = id;
+			i.placeholder = '••••';
+			label.appendChild(i);
+			form.appendChild(label);
+			return i;
+		};
+		const pin1 = field('pin-set-input', 'New PIN');
+		const pin2 = field('pin-set-again', 'Type it again');
+		const msg = document.createElement('div');
+		msg.className = 'menu-msg';
+		msg.id = 'pin-msg';
+		msg.setAttribute('role', 'status');
+		const save = document.createElement('button');
+		save.id = 'pin-save';
+		save.textContent = 'Save PIN';
+		const bad = (text: string) => { msg.textContent = text; msg.className = 'menu-msg bad'; };
+		save.onclick = () => {
+			if (!/^\d{4}$/.test(pin1.value)) { bad('The PIN must be 4 digits.'); return; }
+			if (pin1.value !== pin2.value) { bad("The two PINs don't match."); return; }
+			if (!savePin(pin1.value)) { bad("Couldn't save. Try again."); return; }
+			onSaved();
+		};
+		form.appendChild(save);
+		parent.append(form, msg);
+		pin1.focus();
+	}
+
+	/**
+	 * The Schedule dialog: which world, when, how long. OK reads the plan back
+	 * and locks the menu onto it at once, so the parent sees what the kid sees.
+	 * `existing`: Change (keeps the plan's id, so played time is kept).
+	 */
+	private renderSchedule(mode: 'solo' | 'mp', world: { id: string; name: string } | null, existing: Plan | null): void {
+		this.renderGen++;
+		const card = this.newCard(existing ? 'Change the schedule' : 'Schedule', 'schedule');
+		const pad = (n: number) => String(n).padStart(2, '0');
+		const lockable = world ?? (existing?.worldId ? { id: existing.worldId, name: existing.worldName ?? 'this world' } : null);
+		let onlyWorld = existing ? existing.worldId !== null : lockable !== null;
+		let startsNow = false;
+		const startDefault = existing ? new Date(existing.startAt) : null;
+		let limitMin: number = existing?.limitMin ?? 45;
+
+		const section = (title: string) => {
+			const h = document.createElement('div');
+			h.className = 'menu-section';
+			h.textContent = title;
+			card.appendChild(h);
+		};
+		const choice = (parent: HTMLElement, name: string, id: string, text: string, checked: boolean, onPick: () => void) => {
+			const label = document.createElement('label');
+			label.className = 'menu-check sched-choice';
+			const r = document.createElement('input');
+			r.type = 'radio';
+			r.name = name;
+			r.id = id;
+			r.checked = checked;
+			r.onchange = () => { onPick(); paint(); };
+			label.append(r, ` ${text}`);
+			parent.appendChild(label);
+			return r;
+		};
+
+		section('World');
+		if (lockable) choice(card, 'sched-world', 'sched-only', `Only ${lockable.name}`, onlyWorld, () => { onlyWorld = true; });
+		choice(card, 'sched-world', 'sched-any', 'Let him choose', !onlyWorld || !lockable, () => { onlyWorld = false; });
+		if (!lockable) {
+			const h = document.createElement('div');
+			h.className = 'menu-hint';
+			h.textContent = 'To lock one world, select it in the list first.';
+			card.appendChild(h);
+		}
+
+		section('Starts');
+		choice(card, 'sched-start', 'sched-now', 'Now', false, () => { startsNow = true; });
+		const atRow = document.createElement('div');
+		atRow.className = 'sched-at';
+		const atRadio = choice(atRow, 'sched-start', 'sched-at', 'At', true, () => { startsNow = false; });
+		const time = document.createElement('input');
+		time.type = 'time';
+		time.id = 'sched-time';
+		time.value = startDefault ? `${pad(startDefault.getHours())}:${pad(startDefault.getMinutes())}` : '07:00';
+		time.oninput = () => { startsNow = false; atRadio.checked = true; paint(); };
+		atRow.appendChild(time);
+		card.appendChild(atRow);
+		const when = document.createElement('div');
+		when.className = 'menu-hint';
+		when.id = 'sched-when';
+		card.appendChild(when);
+
+		section('Play for');
+		new DurationControl(card, limitMin, 120, (v) => { limitMin = v ?? 120; paint(); });
+
+		const msg = document.createElement('div');
+		msg.className = 'menu-msg';
+		msg.id = 'sched-msg';
+		const draft = (): Plan | null => {
+			const now = Date.now();
+			const startAt = startsNow ? now : nextStartAt(time.value, now);
+			if (startAt === null) return null;
+			const w = onlyWorld && lockable ? lockable : null;
+			return {
+				id: existing?.id ?? newPlanId(),
+				mode,
+				worldId: w?.id ?? null,
+				worldName: w?.name ?? null,
+				startAt,
+				limitMin,
+				extraMin: existing?.extraMin ?? 0,
+				createdAt: existing?.createdAt ?? now,
+			};
+		};
+		const ok = this.button(card, 'OK', 'sched-ok', () => {
+			const p = draft();
+			if (!p) { msg.textContent = 'Pick a start time.'; msg.className = 'menu-msg bad'; return; }
+			if (!savePlan(p)) { msg.textContent = "Couldn't save. Try again."; msg.className = 'menu-msg bad'; return; }
+			this.renderLocked();
+		});
+		card.appendChild(msg);
+		const paint = () => {
+			const now = Date.now();
+			const at = nextStartAt(time.value, now);
+			when.textContent = startsNow ? 'Starts right away.' : at === null ? 'Pick a time.' : `That is ${formatWhen(at, now)}.`;
+			const p = draft();
+			ok.textContent = p ? `Lock: ${planSentence(p, now)}` : 'OK';
+		};
+		paint();
+		this.button(card, 'Cancel', 'sched-cancel', () => {
+			if (existing) this.renderPlanParents(true);
+			else if (mode === 'solo') void this.renderSingle();
+			else this.renderMulti();
+		}, 'menu-back');
+	}
+
+	/** Parents on the locked screen: how the plan stands, +15 min, Change, End schedule. */
+	private renderPlanParents(unlocked = false, flash?: string): void {
+		this.renderGen++;
+		const card = this.newCard('Parents', 'parents');
+		const body = document.createElement('div');
+		card.appendChild(body);
+		this.button(card, 'Back', 'menu-back', () => this.renderLocked(), 'menu-back');
+		const open = () => {
+			body.innerHTML = '';
+			const loaded = loadPlan();
+			const summary = document.createElement('div');
+			summary.className = 'parents-today';
+			summary.id = 'plan-summary';
+			summary.textContent = planSummary(loaded, loadSession(), Date.now());
+			body.appendChild(summary);
+			const msg = document.createElement('div');
+			msg.className = flash ? 'menu-msg ok' : 'menu-msg';
+			msg.id = 'plan-msg';
+			msg.setAttribute('role', 'status');
+			msg.textContent = flash ?? '';
+			const row = document.createElement('div');
+			row.className = 'parents-actions';
+			body.appendChild(row);
+			if (loaded.kind === 'set') {
+				const p = loaded.plan;
+				this.button(row, '+15 min', 'plan-plus', () => {
+					if (!savePlan({ ...p, extraMin: p.extraMin + 15 })) { msg.textContent = "Couldn't save. Try again."; msg.className = 'menu-msg bad'; return; }
+					this.renderPlanParents(true, '✓ Added 15 minutes.');
+				});
+				this.button(row, 'Change', 'plan-change', () => {
+					this.renderSchedule(p.mode, p.worldId ? { id: p.worldId, name: p.worldName ?? 'this world' } : null, p);
+				});
+			}
+			this.button(row, 'End schedule', 'plan-end', () => {
+				if (!clearPlan()) { msg.textContent = "Couldn't save. Try again."; msg.className = 'menu-msg bad'; return; }
+				// The plan's session goes with it: free play starts clean.
+				clearSession();
+				this.notice = 'Schedule ended · free play';
+				void this.renderHome();
+			});
+			body.appendChild(msg);
+			const hint = document.createElement('div');
+			hint.className = 'menu-hint';
+			hint.textContent = 'End schedule unlocks everything. A new schedule is made from Single Player or Multiplayer.';
+			body.appendChild(hint);
+		};
+		// Under a plan a PIN always exists (Schedule sets one first); fail open only if it was lost.
+		if (unlocked || loadPin() === null) open();
+		else this.pinGate(body, 'Type the parent PIN', open);
+	}
+
+	// --- Parents (no plan) ---------------------------------------------------
+
 	private renderParents(): void {
 		this.renderGen++;
 		const card = this.newCard('Parents', 'parents');
@@ -769,217 +1077,90 @@ export class MainMenu {
 		else this.pinGate(body, 'Type the parent PIN', () => this.renderParentsBody(body));
 	}
 
-	/**
-	 * Today (what today looks like, and today-only buttons), Every day (the
-	 * rules, saved by Save rules), Parent PIN, then the multiplayer worlds.
-	 * Nothing is written by opening the screen: only a button press writes, and
-	 * every write says what it did right next to the button.
-	 */
+	/** Free play's timer (with a Reset), the parent PIN, the multiplayer worlds. Schedules live in Single Player and Multiplayer. */
 	private renderParentsBody(body: HTMLElement, flash?: { id: string; text: string }): void {
 		body.innerHTML = '';
 		const pin = loadPin();
-		const loaded = loadRules();
-		const rules = loaded.kind === 'set' ? loaded.rules : { startMin: null, dailyMin: null };
 		const rerender = (f?: { id: string; text: string }) => this.renderParentsBody(body, f);
-		// Each part is its own tray, so "today only" and "every day" can't be mistaken for each other.
-		const panel = (title: string, note: string | null, kind: string) => {
+		const panel = (title: string) => {
 			const p = document.createElement('section');
-			p.className = `parents-panel parents-panel-${kind}`;
+			p.className = 'parents-panel';
 			const head = document.createElement('div');
 			head.className = 'parents-panel-head';
 			const h = document.createElement('h2');
 			h.textContent = title;
 			head.appendChild(h);
-			if (note !== null) {
-				const n = document.createElement('span');
-				n.className = 'parents-panel-note';
-				n.textContent = note;
-				head.appendChild(n);
-			}
 			p.appendChild(head);
 			body.appendChild(p);
 			return p;
 		};
-		const message = (id: string) => {
+		const message = (parent: HTMLElement, id: string) => {
 			const m = document.createElement('div');
 			m.className = 'menu-msg';
 			m.id = id;
 			m.setAttribute('role', 'status');
-			if (flash?.id === id) {
-				m.textContent = flash.text;
-				m.classList.add('ok');
-				// The message may be below the fold on a laptop: bring it into view.
-				requestAnimationFrame(() => m.scrollIntoView?.({ block: 'nearest' }));
-			}
+			if (flash?.id === id) { m.textContent = flash.text; m.classList.add('ok'); }
+			parent.appendChild(m);
 			return m;
 		};
-		const say = (m: HTMLElement, text: string, ok: boolean) => {
-			m.textContent = text;
-			m.classList.toggle('ok', ok);
-			m.classList.toggle('bad', !ok);
-		};
-		const row = (parent: HTMLElement, className: string) => {
-			const r = document.createElement('div');
-			r.className = className;
-			parent.appendChild(r);
-			return r;
-		};
-		const hint = (parent: HTMLElement, text: string) => {
-			const h = document.createElement('div');
-			h.className = 'menu-hint';
-			h.textContent = text;
-			parent.appendChild(h);
-			return h;
-		};
-		const failText = "Couldn't save. Try again.";
 
-		// 1. Today: where things stand, and changes that end at midnight.
-		const today = panel('Today', 'Only until midnight', 'today');
-		const summary = document.createElement('div');
-		summary.className = 'parents-today';
-		summary.id = 'today-summary';
-		summary.textContent = todaySummary(this.statusInput());
-		today.appendChild(summary);
-		const todayRow = row(today, 'parents-actions');
-		// Read at the press, not at the render: the screen may stay open past midnight.
-		const current = (): Today => {
-			const now = Date.now();
-			return loadToday(now) ?? { day: dayKey(now), extraMin: 0, unlimited: false };
-		};
-		const writeToday = (change: Partial<Today>, text: string) => {
-			if (!saveToday({ ...current(), ...change })) { say(todayMsg, failText, false); return; }
-			rerender({ id: 'today-msg', text });
-		};
-		if (rules.dailyMin !== null) {
-			if (current().unlimited) {
-				this.button(todayRow, 'Back to normal today', 'today-unlimited', () =>
-					writeToday({ unlimited: false, extraMin: 0 }, `✓ Back to the usual ${formatDuration(rules.dailyMin)} for today.`));
-			} else {
-				this.button(todayRow, '+15 min today', 'today-plus', () =>
-					writeToday({ extraMin: current().extraMin + 15 }, '✓ Added 15 minutes, for today only.'));
-				this.button(todayRow, 'No limit today', 'today-unlimited', () =>
-					writeToday({ unlimited: true }, '✓ No time limit today. The usual rules are back tomorrow.'));
-			}
-		}
-		this.button(todayRow, "Reset today's time", 'today-reset', () => {
-			if (!clearToday()) { say(todayMsg, failText, false); return; }
-			clearSession();
-			rerender({ id: 'today-msg', text: "✓ Today's time starts over from zero." });
-		});
-		const todayMsg = message('today-msg');
-		today.appendChild(todayMsg);
-		hint(today, 'These change today only. The everyday rules and the worlds are never touched.');
-
-		// 2. Every day: the rules. Staged in the fields, written only by Save rules.
-		const every = panel('Every day', 'Until you change them', 'every');
-		if (loaded.kind === 'broken') {
-			const warn = document.createElement('div');
-			warn.className = 'menu-warning';
-			warn.textContent = 'The saved rules could not be read, so play is locked. Save the rules again to fix it.';
-			every.appendChild(warn);
-		}
-		const startRow = row(every, 'parents-field');
-		const startOn = document.createElement('input');
-		startOn.type = 'checkbox';
-		startOn.id = 'rule-start-on';
-		startOn.checked = rules.startMin !== null;
-		const startLabel = document.createElement('label');
-		startLabel.className = 'menu-check';
-		startLabel.append(startOn, " Can't play before");
-		const time = document.createElement('input');
-		time.type = 'time';
-		time.id = 'rule-start';
-		const startMin = rules.startMin ?? 7 * 60;
-		const pad = (n: number) => String(n).padStart(2, '0');
-		time.value = `${pad(Math.floor(startMin / 60))}:${pad(startMin % 60)}`;
-		time.disabled = !startOn.checked;
-		startRow.append(startLabel, time);
-		const dailyRow = row(every, 'parents-field');
-		const dailyLabel = document.createElement('label');
-		dailyLabel.htmlFor = 'rule-daily';
-		dailyLabel.textContent = 'Play time per day';
-		const daily = this.durationSelect('rule-daily', true, rules.dailyMin);
-		dailyRow.append(dailyLabel, daily);
-		hint(every, 'Counted for the whole day, in every world, and starts fresh at midnight. With "No limit" the kids can still set their own timer before each game.');
-		const saveRow = row(every, 'parents-save');
-		const rulesMsg = message('rules-msg');
-		let saveBtn: HTMLButtonElement | null = null;
-		const unsaved = () => {
-			say(rulesMsg, 'Not saved yet.', false);
-			saveBtn?.classList.add('needs-save');
-		};
-		startOn.onchange = () => { time.disabled = !startOn.checked; unsaved(); };
-		time.onchange = unsaved;
-		daily.onchange = unsaved;
-		saveBtn = this.button(saveRow, 'Save rules', 'rules-save', () => {
-			let start: number | null = null;
-			if (startOn.checked) {
-				const m = /^(\d{2}):(\d{2})$/.exec(time.value);
-				if (!m) { say(rulesMsg, 'Pick a time, or untick "Can\'t play before".', false); return; }
-				start = Number(m[1]) * 60 + Number(m[2]);
-			}
-			const next = { startMin: start, dailyMin: daily.value === '' ? null : Number(daily.value) };
-			if (!saveRules(next)) { say(rulesMsg, failText, false); return; }
-			if (rulesChangeClearsSession(loaded, next)) clearSession();
-			rerender({ id: 'rules-msg', text: `✓ Saved. ${rulesSentence(next, Date.now())}` });
-		});
-		saveRow.appendChild(rulesMsg);
-
-		// 3. Parent PIN: typed twice; asked for when opening Parents.
-		const pinPanel = panel('Parent PIN', null, 'pin');
-		const pinMsg = message('pin-msg');
-		const pinForm = document.createElement('div');
-		pinForm.className = 'pin-form';
-		const pinField = (id: string, labelText: string) => {
-			const l = document.createElement('label');
-			l.className = 'pin-field';
-			const t = document.createElement('span');
-			t.textContent = labelText;
-			const i = document.createElement('input');
-			i.type = 'password';
-			i.inputMode = 'numeric';
-			i.maxLength = 4;
-			i.autocomplete = 'off';
-			i.id = id;
-			i.placeholder = '••••';
-			l.append(t, i);
-			pinForm.appendChild(l);
-			return i;
-		};
-		const pin1 = pinField('pin-set-input', 'New PIN');
-		const pin2 = pinField('pin-set-again', 'Type it again');
-		const savePinBtn = document.createElement('button');
-		savePinBtn.id = 'pin-save';
-		savePinBtn.textContent = 'Save PIN';
-		savePinBtn.onclick = () => {
-			if (!/^\d{4}$/.test(pin1.value)) { say(pinMsg, 'The PIN must be 4 digits.', false); return; }
-			if (pin1.value !== pin2.value) { say(pinMsg, "The two PINs don't match.", false); return; }
-			if (!savePin(pin1.value)) { say(pinMsg, failText, false); return; }
-			rerender({ id: 'pin-msg', text: '✓ PIN saved. It is asked for every time Parents is opened.' });
-		};
-		pinForm.appendChild(savePinBtn);
-		if (pin === null) {
-			const warn = document.createElement('div');
-			warn.className = 'menu-warning';
-			warn.textContent = 'No PIN yet: anyone can open Parents and change the rules. Set a 4-digit PIN so only parents can.';
-			pinPanel.append(warn, pinForm);
-		} else {
-			hint(pinPanel, 'A PIN is set. It is asked for every time Parents is opened.');
-			const pinRow = row(pinPanel, 'parents-actions');
-			this.button(pinRow, 'Change PIN', 'pin-change', () => {
-				pinRow.replaceWith(pinForm);
-				pin1.focus();
+		// 1. Play time: how to schedule, and free play's own timer.
+		const play = panel('Play time');
+		const how = document.createElement('div');
+		how.className = 'parents-today';
+		how.id = 'parents-how';
+		how.textContent = 'To plan a play session, open Single Player or Multiplayer and press Schedule.';
+		play.appendChild(how);
+		const s = loadSession();
+		const live = s && s.planId === undefined && !isStale(s, Date.now()) ? s : null;
+		const playMsg = message(play, 'play-msg');
+		if (live) {
+			const left = Math.max(0, Math.ceil((live.limitMs - live.playedMs) / 60_000));
+			const state = document.createElement('div');
+			state.className = 'menu-hint';
+			state.id = 'free-state';
+			state.textContent = live.frozenAt !== null ? "Free play: time's up." : `Free play: ${left} min left on his timer.`;
+			play.insertBefore(state, playMsg);
+			const row = document.createElement('div');
+			row.className = 'parents-actions';
+			play.insertBefore(row, playMsg);
+			this.button(row, 'Reset play time', 'reset-play', () => {
+				clearSession();
+				rerender({ id: 'play-msg', text: "✓ His timer is reset. He can pick a new one." });
 			});
-			this.button(pinRow, 'Remove PIN', 'pin-reset', () => {
-				if (!clearPin()) { say(pinMsg, failText, false); return; }
-				rerender({ id: 'pin-msg', text: '✓ PIN removed. Anyone can open Parents now.' });
-			}, 'is-danger');
 		}
-		pinPanel.appendChild(pinMsg);
-		// 4. Multiplayer worlds: shown only when the server is reachable (spec §8.3).
-		const mp = document.createElement('section');
+
+		// 2. Parent PIN.
+		const pinPanel = panel('Parent PIN');
+		if (pin === null) {
+			const hint = document.createElement('div');
+			hint.className = 'menu-hint';
+			hint.textContent = 'Set a 4-digit PIN so only parents can open this screen and change schedules.';
+			pinPanel.appendChild(hint);
+			this.pinForm(pinPanel, () => rerender({ id: 'pin-msg2', text: '✓ PIN saved. It is asked for every time Parents or Schedule is opened.' }));
+		} else {
+			const state = document.createElement('div');
+			state.className = 'menu-hint';
+			state.textContent = 'A PIN is set. It is asked for every time Parents or Schedule is opened.';
+			pinPanel.appendChild(state);
+			const row = document.createElement('div');
+			row.className = 'parents-actions';
+			pinPanel.appendChild(row);
+			this.button(row, 'Change PIN', 'pin-change', () => {
+				row.remove();
+				this.pinForm(pinPanel, () => rerender({ id: 'pin-msg2', text: '✓ PIN saved.' }));
+			});
+			const remove = this.button(row, 'Remove PIN', 'pin-reset', () => {
+				if (!clearPin()) { pinMsg.textContent = "Couldn't save. Try again."; pinMsg.className = 'menu-msg bad'; return; }
+				rerender({ id: 'pin-msg2', text: '✓ PIN removed. Anyone can open Parents now.' });
+			});
+			remove.classList.add('danger');
+		}
+		const pinMsg = message(pinPanel, 'pin-msg2');
+
+		// 3. Multiplayer worlds: shown only when the server is reachable (spec §8.3).
+		const mp = document.createElement('div');
 		mp.id = 'parents-mp-worlds';
-		mp.className = 'parents-panel';
 		body.appendChild(mp);
 		void this.fillParentsMp(mp);
 	}
@@ -1041,25 +1222,5 @@ export class MainMenu {
 			row.append(label, del);
 			box.append(row, msg);
 		}
-	}
-
-	/** A select over the 5-minute duration list, with "No limit" first when `withNoLimit`. */
-	private durationSelect(id: string, withNoLimit: boolean, value: number | null): HTMLSelectElement {
-		const sel = document.createElement('select');
-		sel.id = id;
-		if (withNoLimit) {
-			const off = document.createElement('option');
-			off.value = '';
-			off.textContent = 'No limit';
-			sel.appendChild(off);
-		}
-		for (const m of DURATION_CHOICES_MIN) {
-			const o = document.createElement('option');
-			o.value = String(m);
-			o.textContent = formatDuration(m);
-			sel.appendChild(o);
-		}
-		sel.value = value === null ? '' : String(value);
-		return sel;
 	}
 }

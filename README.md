@@ -19,7 +19,7 @@ Current catalog: 19 hand-written blocks (grass, dirt, stone, cobblestone, sand, 
 - **Persistence:** `localStorage` via a narrow `PersistenceAdapter` interface (Phase 2 will swap to a remote backend without touching callers). Chunks are RLE + deflate + base64 encoded.
 - **Compression:** [`pako`](https://github.com/nodeca/pako).
 - **Physics:** hand-rolled swept-AABB voxel collision with sub-stepping — no physics library.
-- **Textures:** Mojang's block PNGs atlased at build time via [`sharp`](https://sharp.pixelplumbing.com/). Select textures are biome-tinted in the build step (grass top: green; leaves: green; water: blue).
+- **Textures:** CC BY-SA 4.0 texture packs (Pixel Perfection CE, REFI, Bauniclonia, Mineclonia; see `CREDITS.md`), imported by `npm run import-textures` and atlased at build time via [`sharp`](https://sharp.pixelplumbing.com/). Grey grass and leaf masks are tinted in the build step.
 - **Tests:** [Vitest](https://vitest.dev/) — unit tests covering the mesher, physics, world generation determinism, block catalog, player state (including fly + swim mode), TNT detonation, the play-time timer, the light registry, voxel lighting propagation (sky + RGB block light, incremental updates, AO), and the liquid scheduler (fall rule, sideways spread, frontier decay, sponge absorption), and persistence (v1/v2 formats, cloud + dual adapters, autosave failure handling, and the worlds API).
 - **Lint / format:** ESLint + Prettier.
 
@@ -122,7 +122,7 @@ In fly or swim mode: pitch the camera up to ascend, down to descend — W moves 
 
 ```
 src/
-  assets/blocks/          # raw Mojang PNGs (source for the atlas build)
+  assets/blocks/          # CC BY-SA block PNGs + SOURCES.json (source for the atlas build)
   data/                   # pure-data modules — block catalog, keybindings, color palette
     blocks.base.data.ts   # hand-written base rows (ids 0-19, frozen)
     blocks.catalog.data.ts # generated Minecraft catalog (do not hand-edit)
@@ -172,8 +172,8 @@ Explicitly out of scope forever:
 
 ## Assets
 
-Block textures in `src/assets/blocks/` are Mojang's, extracted from a local Minecraft 1.21.6 install for personal/family use. They are not redistributed. If the project ever gains a public face, these will be replaced with original or properly-licensed art.
+Block textures in `src/assets/blocks/` are CC BY-SA 4.0 adaptations of free texture packs; authors, sources and changes are in `CREDITS.md` (also served in-game as `CREDITS.txt`). Player skins and menu art are not licensed for redistribution.
 
 ## License
 
-Source code: TBD. Assets: not licensed for redistribution (see above).
+Source code: TBD. Block textures: CC BY-SA 4.0 (see `CREDITS.md`; the licence covers the images only, not the code). Skins and menu art: not licensed for redistribution.

@@ -19,16 +19,17 @@ to the plain block.
 
 ## Regenerating after a Minecraft update
 
-1. Extract the new textures (skip `.mcmeta`):
-   `unzip -o -j ~/.minecraft/versions/<v>/<v>.jar 'assets/minecraft/textures/block/*.png' -d src/assets/blocks/`
+1. Add a row for each new texture to `src/data/texture-sources.data.ts` (never copy Mojang PNGs), then
+   `npm run import-textures` (`-- --sheet <name>` shows candidates from the pinned packs).
 2. `MINECRAFT_JAR=~/.minecraft/versions/<v>/<v>.jar npm run gen-catalog`.
    Ids are frozen in `src/data/blocks.catalog.ids.json`; a block that no
    longer resolves is a hard error. Retire it deliberately with
    `npm run gen-catalog -- --retire <name>`; its id becomes a tombstone that
    renders as nothing and is never reused.
 3. `npm test`, then `npm run build` (the atlas is rebuilt by `prebuild`).
-4. `git add` the three generated files (`blocks.catalog.data.ts`,
-   `blocks.catalog.ids.json`, and any new textures), update the version
+   gen-catalog still reads the jar for models and blockstates, and classifies transparency from the imported art.
+4. `git add` the generated files (`blocks.catalog.data.ts`,
+   `blocks.catalog.ids.json`, the texture data row and the imported PNGs + `SOURCES.json`), update the version
    string in README/CLAUDE.md, deploy the API, then the site by hand with
    cache-control (Cloudflare caches `/minicraft/` separately from
    `index.html`), then reload the game once on Noah's laptop.

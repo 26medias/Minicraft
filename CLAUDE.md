@@ -55,9 +55,9 @@ passed to the production build only. Never stop the live server with SIGKILL.
 
 ## Assets
 
-Block textures in `src/assets/blocks/` are Mojang's, extracted from the user's own Minecraft install for personal/family use. Do not redistribute, do not commit them to a public fork, and do not treat them as open-source assets. If the project later gains a public face, these need to be replaced with original or properly licensed art.
+Block textures in `src/assets/blocks/` (and the crack stages) are CC BY-SA 4.0 adaptations of Pixel Perfection CE, REFI, Bauniclonia and Mineclonia; see `CREDITS.md`, `src/assets/blocks/LICENSE.md` and `SOURCES.json`. They are written by `npm run import-textures` from `src/data/texture-sources.data.ts` (one row per file, packs pinned by commit). Never hand-edit a PNG there and never add Mojang art: swap a tile by editing its row and re-running the import (`npm run import-textures -- --sheet <name>` shows candidates). `npm run audit-textures` (needs the local Minecraft jar) is the pre-merge provenance check.
 
-The extraction source was `~/.minecraft/versions/1.21.6/1.21.6.jar` under `assets/minecraft/textures/block/`. `.mcmeta` animation files were intentionally skipped.
+Player skins in `src/assets/skins/` and the menu art in `src/assets/menu/` are still not licensed for redistribution.
 
 ## Extensibility Expectations
 

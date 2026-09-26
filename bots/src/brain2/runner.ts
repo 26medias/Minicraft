@@ -2,7 +2,7 @@
  * The behaviour runner (spec §7): one action in flight at a time, paced by style, and every action
  * judged by safety (§7.1 tier 1), sense (tier 2) and fit (tier 3, injected) before it runs.
  */
-import { CRAFTED_ONLY, WORLDGEN_BLOCKS, blockId, type WalkResult } from 'minicraft-bot';
+import { CRAFTED_ONLY, EYE_HEIGHT, WORLDGEN_BLOCKS, blockId, type WalkResult } from 'minicraft-bot';
 import { createFollowState, followTick, isBlocked, stopMoving, type FollowState } from '../body/act.js';
 import type { StopSignal } from '../body/stop-signal.js';
 import type { Body, WorldView } from '../port.js';
@@ -17,7 +17,7 @@ import { BEHAVIOURS, type Behaviour, type BehaviourCtx } from './behaviours/beha
 import { SALIENCE } from './data/salience.data.js';
 import { RING, climbPath } from './behaviours/spiral.js';
 import { escapeTarget } from './behaviours/mine.js';
-import { topSolid } from './behaviours/site-search.js';
+import { bodyTop, routeTop } from './behaviours/site-search.js';
 
 export type FitFn = (a: Action, ctx: BehaviourCtx) => Promise<'yes' | 'wait' | 'no'>;
 export interface RunnerDeps {
@@ -29,6 +29,10 @@ export interface RunnerDeps {
 }
 
 const CAUSE = { kind: 'behaviour', by: 'runner' } as const;
+/** The highest feet y a lift flight aims at (the world is 256 high, the body 1.8). */
+const WORLD_TOP_FEET = 254;
+/** flyTo climbs at most this far above where it starts (the SDK's FLY_CLIMB_MAX). */
+const FLY_CLIMB = 16;
 /** Fit is asked only when a kid is this close to the action's cell (spec §7.1 tier 3). */
 const FIT_RANGE = 8;
 const MAX_WAITS = 3;
@@ -67,6 +71,8 @@ export class BehaviourRunner {
 	private climb: { digId: string; path: Array<{ x: number; z: number }>; blocked: number; fly: Vec3 | null } | null = null;
 	/** Digs whose climb out failed this session: not retried, so a stuck bot can't loop on it. */
 	private climbFailed = new Set<string>();
+	/** The last `act` line and when, so an exact repeat within 5 s isn't logged again. */
+	private lastAct = { k: '', t: -Infinity };
 
 	constructor(private readonly d: RunnerDeps) {}
 
@@ -347,12 +353,40 @@ export class BehaviourRunner {
 		}
 	}
 
+	/**
+	 * One compact `act` line per executed action: what, where, the result and why it failed. Successful follow-ticks,
+	 * looks and waits are not logged, and neither is an exact repeat of the previous line within 5 s.
+	 */
+	private logAct(a: Action, ok: boolean, cancelled: boolean, before: number, err: string | undefined, via: string | undefined, late: boolean): void {
+		if (ok && (a.kind === 'follow-tick' || a.kind === 'look' || a.kind === 'wait')) return;
+		const r1 = (v: number) => Math.round(v * 10) / 10;
+		const pose = this.d.body.pose();
+		const line: Record<string, unknown> = { kind: a.kind, ok };
+		if ('cell' in a) {
+			line.cell = a.cell;
+			line.block = this.d.world.blockName(before) ?? before;
+			line.d = r1(Math.hypot(a.cell.x + 0.5 - pose.x, a.cell.y + 0.5 - (pose.y + EYE_HEIGHT), a.cell.z + 0.5 - pose.z));
+		}
+		if ('to' in a) line.to = { x: r1(a.to.x), ...('y' in a.to ? { y: r1(a.to.y as number) } : {}), z: r1(a.to.z) };
+		if (!ok) line.at = { x: r1(pose.x), y: r1(pose.y), z: r1(pose.z) };
+		if (cancelled) line.cancelled = true;
+		if (via) line.via = via;
+		if (err) line.err = err;
+		if (late) line.late = true;
+		const k = JSON.stringify(line), now = this.d.clock();
+		if (k === this.lastAct.k && now - this.lastAct.t < 5000) return;
+		this.lastAct = { k, t: now };
+		this.d.log('act', line);
+	}
+
 	private async execute(a: Action, ctx: BehaviourCtx, gen: number): Promise<void> {
 		const body = this.d.body, world = this.d.world;
 		const cell = cellOf(a);
 		const before = cell ? world.getBlock(cell.x, cell.y, cell.z) : 0;
 		let ok = false;
 		let cancelled = false;
+		let err: string | undefined;
+		let via: string | undefined;
 		try {
 			switch (a.kind) {
 				case 'place':
@@ -370,16 +404,34 @@ export class BehaviourRunner {
 					let r: WalkResult;
 					try {
 						r = await body.walkTo(a.to, { speed: ctx.style.walkSpeed });
-					} catch (err) {
+					} catch (walkErr) {
 						// walkTo is a straight line with no pathfinding: at a wall or a cliff, fly to the same column
 						// (the kids fly too). Never for a dig's step walks, which must stay in the staircase. The target is
 						// on top of the column (its topmost solid block + 1): groundY from near the bot can land in a cave
 						// or under an overhang, which flyTo refuses (ruling R24 batch).
-						if (!isBlocked(err) || this.gen !== gen || this.inStaircase(a.to)) throw err;
-						const top = topSolid(world, Math.floor(a.to.x), Math.floor(a.to.z));
+						if (!isBlocked(walkErr) || this.gen !== gen || this.inStaircase(a.to)) throw walkErr;
+						via = `fly (${walkErr instanceof Error ? walkErr.message : String(walkErr)})`;
+						const top = bodyTop(world, a.to.x, a.to.z);
 						const to = { x: a.to.x, y: top >= 0 ? top + 1 : body.pose().y, z: a.to.z };
-						this.d.log('walk-fly', { to });
+						// flyTo climbs at most 16 above where it starts: over a taller hill on the way (live: 18 up to a
+						// Mine pillar, "same action failed 3 times"), first straight up to clear the route's highest column.
+						const from = body.pose();
+						const top1 = routeTop(world, from, to) + 1;
+						const lift = top1 > from.y + FLY_CLIMB - 1 ? Math.min(top1, WORLD_TOP_FEET) : null;
+						this.d.log('walk-fly', { to, ...(lift !== null ? { lift } : {}) });
 						this.inFlight = 'fly';
+						if (lift !== null) {
+							try {
+								r = await body.flyTo({ x: from.x, y: lift, z: from.z });
+							} catch (liftErr) {
+								if (!isBlocked(liftErr)) throw liftErr;
+								r = 'arrived';                    // blocked overhead: the direct flight may still get there
+							}
+							if (r === 'cancelled' || this.gen !== gen) {
+								cancelled = true;
+								break;
+							}
+						}
 						r = await body.flyTo(to);                 // blocked too → the outer catch: one failure
 					}
 					cancelled = r === 'cancelled';
@@ -409,16 +461,22 @@ export class BehaviourRunner {
 					break;
 				}
 			}
-		} catch {
+		} catch (e) {
 			ok = false;                                       // BlockedError or a lost connection: a failure of this action
+			err = e instanceof Error ? e.message : String(e);
 		} finally {
 			this.inFlight = null;
 		}
+		this.logAct(a, ok, cancelled, before, err, via, this.gen !== gen);
 		if (this.gen !== gen) {
 			if (ok && cell) this.d.log('late-edit', { action: a });   // rule 6: discarded, no inventory or owned write
 			return;
 		}
 		if (cancelled) return;                                // rule 8: reissued on a later tick, not a failure
+		// A failed move that left the bot down in another dig's staircase (a straight walk drops into the hole, and the
+		// surface overhangs it, so every flight from there is refused): the climb out first (ruling R17), as at a start.
+		const act0 = this.active!;
+		if (!ok && (a.kind === 'walk' || a.kind === 'fly') && !this.climb) this.climb = this.climbFor(act0.beh, act0.plan, body.pose());
 		const now = this.d.clock();
 		const patch: Patch = [];
 		if (ok && cell) {

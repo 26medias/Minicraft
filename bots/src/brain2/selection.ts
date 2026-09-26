@@ -64,6 +64,9 @@ export function selectInputs(s: Readonly<State>, kids: KidInfo[], now: number, p
 	const typicalMaxMs = Object.fromEntries(ORDER.map((k) => [k, BEHAVIOURS[k]?.typicalMs[1] ?? DEFAULT_TYPICAL_MAX])) as SelectInputs['typicalMaxMs'];
 	const pausedDigs = s.digs.filter((d) => d.status === 'paused');
 	const recency = Object.fromEntries(ORDER.map((k) => {
+		// The running behaviour is scored by inertia, never by its own earlier episodes: a resumed Mine was penalised as
+		// 'recent' by the episode it resumed and lost to anything at the next trigger (brain2-productive).
+		if (k === s.behaviour?.kind) return [k, 'none'];
 		const last = s.memory.past.find((e) => e.behaviour === k);
 		const recent = !!last && now - last.endedT <= RECENT_MS;
 		const bad = recent && (last.outcome === 'abandoned' || last.outcome === 'failed');

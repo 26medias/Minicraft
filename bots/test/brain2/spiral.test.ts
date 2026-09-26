@@ -148,6 +148,12 @@ describe('spiral dig geometry (spec §6.2 rev 3.3)', () => {
 			expect(climbPath(c.sp, { x: exit.x + 0.5, y: Y0, z: exit.z + 0.5 })).toEqual([]);
 			expect(climbPath(c.sp, { x: c.sp.px + 0.5, y: Y0, z: c.sp.pz + 0.5 })).toEqual([]);
 			expect(climbPath(c.sp, { x: s0.x + 0.5, y: s0.y + 1, z: s0.z + 0.5 })).toEqual([]);
+			// brain2-productive: hovering 1 above a deeper step's feet (a blocked flight) is still on it, and climbs out.
+			if (c.steps.length > 2) {
+				const s2 = c.steps[2].feet;
+				expect(stepAt(c.sp, { x: s2.x + 0.5, y: s2.y + 1, z: s2.z + 0.5 }), c.name).toBe(2);
+				expect(climbPath(c.sp, { x: s2.x + 0.5, y: s2.y + 1, z: s2.z + 0.5 }), c.name).toHaveLength(3);
+			}
 			// Only the dug steps count (upTo = stepsDone).
 			const last = c.steps.at(-1)!.feet;
 			expect(stepAt(c.sp, { x: last.x + 0.5, y: last.y, z: last.z + 0.5 }, c.steps.length - 1)).toBe(-1);

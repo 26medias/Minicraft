@@ -9,7 +9,7 @@ import type { Patch } from '../store.js';
 import { SALIENCE } from '../data/salience.data.js';
 import { paramsExplore, waypointsAlong } from '../params.js';
 import { anchorOf } from './build.js';
-import { topSolid } from './site-search.js';
+import { bodyTop, topSolid } from './site-search.js';
 import type { Behaviour, BehaviourCtx, Next } from './behaviour.js';
 
 export interface ExploreParams { dir?: [number, number] }
@@ -60,7 +60,9 @@ function goTo(wp: Vec3, ctx: BehaviourCtx): Action {
 	const top = topSolid(w, x, z);
 	const ground = top >= 0 ? w.groundY(x, z, top + 1) : null;
 	const here = w.groundY(Math.floor(p.x), Math.floor(p.z), p.y) ?? p.y;
-	if (ground === null || ground > here + 1) return { kind: 'fly', to: { x: wp.x, y: ground ?? Math.max(p.y, top + 1), z: wp.z } };
+	// The flight lands above every column under the body: a waypoint on a column edge overlaps the neighbour (bodyTop).
+	const bt = bodyTop(w, wp.x, wp.z);
+	if (ground === null || ground > here + 1) return { kind: 'fly', to: { x: wp.x, y: Math.max(ground ?? Math.max(p.y, top + 1), bt + 1), z: wp.z } };
 	return { kind: 'walk', to: { x: wp.x, z: wp.z }, speed: ctx.style.walkSpeed };
 }
 

@@ -53,7 +53,10 @@ export function stepAt(sp: Spiral, pose: { x: number; y: number; z: number }, up
 	const fx = Math.floor(pose.x), fz = Math.floor(pose.z);
 	for (let i = 0; i < Math.min(upTo, sp.lastStep + 1); i++) {
 		const f = spiralStep(sp, i).feet;
-		if (f.x === fx && f.z === fz && Math.abs(pose.y - f.y) < 0.5) return i;
+		// Up to 1.5 above the step's feet while below the surface: the step is 3 high, and a blocked flight leaves the
+		// body hovering in it (brain2-productive: a bot 1 above a step's feet was never climbed out and sat in the hole
+		// for minutes). At surface height (y0) it is out already.
+		if (f.x === fx && f.z === fz && pose.y - f.y > -0.5 && pose.y - f.y < 1.5 && pose.y < sp.y0 - 0.5) return i;
 	}
 	return -1;
 }

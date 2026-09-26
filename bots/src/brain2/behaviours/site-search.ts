@@ -25,6 +25,33 @@ export function topSolid(world: WorldView, x: number, z: number): number {
 	return -1;
 }
 
+/** The body's half-width (the SDK's BODY_HALF): a pose on a column edge overlaps the next column too. */
+const BODY_HALF = 0.3;
+
+/**
+ * The highest topmost solid block under the body's box at (x, z), −1 if none. A fallback flight lands on it: a target
+ * on a column edge (Build's stand points, Explore's waypoints) overlaps the neighbour, and the flight is refused when
+ * that neighbour stands higher than the column the target is in (brain2-productive: "flyTo blocked (wall)").
+ */
+export function bodyTop(world: WorldView, x: number, z: number): number {
+	const e = 1e-6;
+	let top = -1;
+	for (let bx = Math.floor(x - BODY_HALF + e); bx <= Math.floor(x + BODY_HALF - e); bx++)
+		for (let bz = Math.floor(z - BODY_HALF + e); bz <= Math.floor(z + BODY_HALF - e); bz++) top = Math.max(top, topSolid(world, bx, bz));
+	return top;
+}
+
+/**
+ * The highest topmost solid block under the body along the straight line from `a` to `b` (every half block), −1 if
+ * none: a flight that starts at that height + 1 crosses the route without climbing.
+ */
+export function routeTop(world: WorldView, a: { x: number; z: number }, b: { x: number; z: number }): number {
+	const n = Math.max(1, Math.ceil(Math.hypot(b.x - a.x, b.z - a.z) * 2));
+	let top = -1;
+	for (let i = 0; i <= n; i++) top = Math.max(top, bodyTop(world, a.x + ((b.x - a.x) * i) / n, a.z + ((b.z - a.z) * i) / n));
+	return top;
+}
+
 /** Blocks that are solid but not the ground, by name suffix: trees. Build and Mine surfaces look through them. */
 export const NOT_GROUND_SUFFIXES: readonly string[] = ['_leaves', '_log'];
 

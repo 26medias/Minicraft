@@ -5,7 +5,7 @@
 import { CRAFTED_ONLY, WORLDGEN_BLOCKS, blockId, isLiquidId } from 'minicraft-bot';
 import type { KidInfo } from '../types.js';
 import type { BuildParams } from './behaviours/build.js';
-import { templateOf } from './behaviours/templates.data.js';
+import { TEMPLATES, templateOf, type Role, type Template } from './behaviours/templates.data.js';
 import { LIMITS } from './data/limits.data.js';
 import type { State, Vec3 } from './types.js';
 
@@ -131,25 +131,82 @@ export function standingBuilds(s: Readonly<State>): number {
 	return s.builds.filter((b) => b.status !== 'dismantled' && b.status !== 'reverted').length;
 }
 
+/** Held building blocks, most first (ties by name). */
+function heldMaterials(s: Readonly<State>): Array<[string, number]> {
+	return Object.entries(s.inventory)
+		.filter(([n, c]) => c > 0 && buildMaterial(n))
+		.sort((a, b) => b[1] - a[1] || (a[0] < b[0] ? -1 : a[0] > b[0] ? 1 : 0));
+}
+
+/** Cells per role in a template. */
+function roleCounts(t: Template): Partial<Record<Role, number>> {
+	const n: Partial<Record<Role, number>> = {};
+	for (const c of t.cells) n[c.role] = (n[c.role] ?? 0) + 1;
+	return n;
+}
+
+/** Whether `materials` covers every role's cells of `t` from `held` (roles sharing a block add up). */
+function covers(t: Template, materials: BuildParams['materials'], held: Array<[string, number]>): boolean {
+	const want: Record<string, number> = {};
+	for (const [role, n] of Object.entries(roleCounts(t)) as Array<[Role, number]>) {
+		const m = materials[role] ?? materials.wall;
+		if (!m) return false;
+		want[m] = (want[m] ?? 0) + n;
+	}
+	const have = Object.fromEntries(held);
+	return Object.entries(want).every(([m, n]) => (have[m] ?? 0) >= n);
+}
+
+/**
+ * Materials for `t` that the held blocks cover, or null. First the order by count (wall = the most held, roof, floor,
+ * accent = the least held); if that runs short, each role from the largest down takes the block that fits it most
+ * tightly (the fewest left that still covers it).
+ */
+function materialsFor(t: Template, held: Array<[string, number]>): BuildParams['materials'] | null {
+	if (held.length === 0) return null;
+	const wall = held[0][0];
+	const byCount: BuildParams['materials'] = { wall, roof: held[1]?.[0] ?? wall, floor: held[2]?.[0] ?? wall, accent: held.at(-1)?.[0] ?? wall };
+	if (covers(t, byCount, held)) return byCount;
+	const left = new Map(held);
+	const out: BuildParams['materials'] = {};
+	const roles = (Object.entries(roleCounts(t)) as Array<[Role, number]>).sort((a, b) => b[1] - a[1]);
+	for (const [role, n] of roles) {
+		const fits = [...left.entries()].filter(([, c]) => c >= n);
+		if (fits.length === 0) return null;
+		const [m, c] = fits.reduce((best, e) => (e[1] < best[1] ? e : best));
+		out[role] = m;
+		left.set(m, c - n);
+	}
+	out.wall ??= wall;
+	for (const role of ['roof', 'floor', 'accent'] as const) out[role] ??= out.wall;
+	return out;
+}
+
 /**
  * `params.build` (spec §5.4): the favourite template (else house), `medium` only with ≥ 1.2 × its cells held;
  * materials from the held building blocks by count (wall, roof, floor, accent = the least held); renew at the cap.
- * With no building block held, `materials` is empty (Build's plan would fail, so the selection masks Build).
+ * Only a build the held blocks can finish is offered (the mask's "not feasible", spec §5.3): the materials must
+ * cover every cell. When the favourite's small can't be covered, the largest other small template that can is
+ * offered instead, except at the cap (renew: the favourite only). When none can, `materials` is empty and the
+ * selection masks Build (Mine supplies the blocks).
  */
 export function paramsBuild(s: Readonly<State>): BuildParams {
-	const template = s.personality.favouriteTemplate ?? 'house';
-	const held = Object.entries(s.inventory)
-		.filter(([n, c]) => c > 0 && buildMaterial(n))
-		.sort((a, b) => b[1] - a[1] || (a[0] < b[0] ? -1 : a[0] > b[0] ? 1 : 0));
+	const favourite = s.personality.favouriteTemplate ?? 'house';
+	const renew = standingBuilds(s) >= LIMITS.MAX_STANDING_BUILDS;
+	const held = heldMaterials(s);
 	const total = held.reduce((n, [, c]) => n + c, 0);
-	const variant = total >= 1.2 * templateOf(template, 'medium').cells.length ? 'medium' : 'small';
-	const materials: BuildParams['materials'] = {};
-	if (held.length > 0) {
-		const wall = held[0][0];
-		materials.wall = wall;
-		materials.roof = held[1]?.[0] ?? wall;
-		materials.floor = held[2]?.[0] ?? wall;
-		materials.accent = held.at(-1)?.[0] ?? wall;
+	const medium = templateOf(favourite, 'medium');
+	if (total >= 1.2 * medium.cells.length) {
+		const m = materialsFor(medium, held);
+		if (m) return { template: favourite, variant: 'medium', materials: m, renew };
 	}
-	return { template, variant, materials, renew: standingBuilds(s) >= LIMITS.MAX_STANDING_BUILDS };
+	// At the cap a build renews (takes the oldest apart): only for the favourite, never to swap one small statue for
+	// another (brain2-productive: creepers dismantled and rebuilt every few minutes, the tower never reached).
+	const others = renew ? [] : TEMPLATES.filter((t) => t.variant === 'small' && t.name !== favourite).sort((a, b) => b.cells.length - a.cells.length);
+	const smalls = [templateOf(favourite, 'small'), ...others];
+	for (const t of smalls) {
+		const m = materialsFor(t, held);
+		if (m) return { template: t.name, variant: 'small', materials: m, renew };
+	}
+	return { template: favourite, variant: 'small', materials: {}, renew };
 }

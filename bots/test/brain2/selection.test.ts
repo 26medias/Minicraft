@@ -198,6 +198,23 @@ describe('scoring (spec §5.3)', () => {
 		expect(mineRow(2000).recency).toBeGreaterThan(0);
 	});
 
+	// brain2-productive. Red if the running behaviour is penalised as 'recent' by its own earlier episode: a resumed
+	// Mine (its dig active, not paused) scored −0.5 and lost to Rest at the first appraisal trigger, 20 s into every episode.
+	it('the running behaviour gets no recency penalty from its own earlier episode; others still do', () => {
+		const s = baseState();
+		s.inventory = { stone: 40 };
+		s.digs = [{ id: 'd1', block: 'stone', entrance: { x: 0, y: Y, z: 0 }, target: { x: 1, y: Y - 20, z: 0 }, stepsDone: 5, cells: [], status: 'active', spiral: { px: 0, pz: 0, y0: Y, phase: 7, lastStep: 19 } }];
+		s.memory.past = [
+			{ behaviour: 'mine', params: { block: 'stone' }, lastedMs: 20_000, outcome: 'paused', why: 'switch: appraisal', endedT: 1000 },
+			{ behaviour: 'explore', params: {}, lastedMs: 2000, outcome: 'done', why: 'done', endedT: 900 },
+		];
+		s.behaviour = { kind: 'mine', params: { block: 'stone' }, startedT: 1500, step: 3, rejections: 0, failures: 0, plannedEdits: 30, progress: '', lastResults: [] } as ActiveBehaviour;
+		const inputs = selectInputs(s, [], 21_500, null, false);
+		expect(inputs.recency.mine).toBe('none');
+		expect(inputs.recency.explore).toBe('recent');
+		expect(scoreRows(s, [], 21_500, null, false).find((r) => r.behaviour === 'mine')!.recency).toBe(0);
+	});
+
 	// Red if scoreRows drifts from scoreInputs over selectInputs (replay relies on it, Task 21).
 	it('scoreRows = scoreInputs(selectInputs(…)) with the live tables', () => {
 		const s = baseState();

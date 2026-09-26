@@ -4,6 +4,7 @@ import { COMPASS, paramsBuild, paramsExplore, paramsMine, paramsPlayer, resetCom
 import { initialState } from '../../src/brain2/store.js';
 import { PIP } from '../../src/brain2/data/personalities.data.js';
 import { LIMITS } from '../../src/brain2/data/limits.data.js';
+import { templateOf } from '../../src/brain2/behaviours/templates.data.js';
 import type { Build, Dig, Relation, State, WorldEvent } from '../../src/brain2/types.js';
 import type { KidInfo } from '../../src/types.js';
 
@@ -91,7 +92,7 @@ describe('params.build (spec §5.4)', () => {
 	// Red if a CRAFTED_ONLY, liquid, ore or leaves block becomes a material, or renew isn't set at the cap.
 	it('never a CRAFTED_ONLY, liquid or ore material; renew at 3 standing', () => {
 		const s = base();
-		s.inventory = { big_tnt: 99, water: 90, iron_ore: 80, oak_leaves: 70, stone: 30, dirt: 20, sand: 10, oak_log: 5, gravel: 0 };
+		s.inventory = { big_tnt: 99, water: 90, iron_ore: 80, oak_leaves: 70, stone: 50, dirt: 20, sand: 10, oak_log: 6, gravel: 0 };
 		const p = paramsBuild(s);
 		expect(p.materials).toEqual({ wall: 'stone', roof: 'dirt', floor: 'sand', accent: 'oak_log' });
 		for (const m of Object.values(p.materials)) {
@@ -112,3 +113,52 @@ describe('params.build (spec §5.4)', () => {
 		expect(paramsBuild(s).materials).toEqual({});
 	});
 });
+
+describe('params.build offers only a build the held blocks can finish (brain2-productive)', () => {
+	const need = (p: ReturnType<typeof paramsBuild>) => {
+		const t = templateOf(p.template, p.variant);
+		const want: Record<string, number> = {};
+		for (const c of t.cells) {
+			const m = p.materials[c.role] ?? p.materials.wall!;
+			want[m] = (want[m] ?? 0) + 1;
+		}
+		return want;
+	};
+
+	// Red if a role gets a block held too few times for its cells: live, the tower's floor went to the 1 stone held and
+	// Build failed `need stone` before placing anything, three times in a row.
+	it('every role is covered; with too few for the favourite, the largest small template that fits', () => {
+		const s = base();
+		s.inventory = { dirt: 55, stone: 9, grass_block: 2 };            // tower small: wall 44, floor 9, accent 6, roof 5
+		let p = paramsBuild(s);
+		expect(p.template).toBe('tower');
+		for (const [m, n] of Object.entries(need(p))) expect(s.inventory[m] ?? 0, `${m} for ${p.template}`).toBeGreaterThanOrEqual(n);
+		s.inventory = { dirt: 8, grass_block: 2, stone: 7 };             // live: tower (64), wall (21), heart (16, one block) and creeper don't fit
+		p = paramsBuild(s);
+		expect(p).toMatchObject({ template: 'person', variant: 'small' });
+		for (const [m, n] of Object.entries(need(p))) expect(s.inventory[m] ?? 0, `${m} for ${p.template}`).toBeGreaterThanOrEqual(n);
+	});
+
+	// brain2-productive: at the cap, statues were dismantled and rebuilt every few minutes and the tower never came.
+	// Red if a renew offers a smaller template than the favourite.
+	it('at the cap (renew) only the favourite is offered', () => {
+		const s = base();
+		s.inventory = { dirt: 22 };
+		expect(paramsBuild(s)).toMatchObject({ template: 'wall', renew: false });
+		const b = (id: string): Build => ({ id, template: 'creeper', variant: 'small', origin: { x: 0, y: 0, z: 0 }, cells: [], status: 'done' });
+		s.builds = [b('a'), b('b'), b('c')];
+		expect(paramsBuild(s).renew).toBe(true);
+		expect(paramsBuild(s).materials).toEqual({});
+		s.inventory = { dirt: 70 };
+		expect(paramsBuild(s)).toMatchObject({ template: 'tower', renew: true, materials: { wall: 'dirt' } });
+	});
+
+	// Red if Build is offered (materials set) with blocks that can't finish even the smallest template: the mask
+	// ("no materials, and Mine can't supply them", spec §5.3) must hide it so Mine supplies them.
+	it('nothing fits → no materials (Build masked)', () => {
+		const s = base();
+		s.inventory = { dirt: 5, stone: 3 };
+		expect(paramsBuild(s).materials).toEqual({});
+	});
+});
+

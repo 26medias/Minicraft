@@ -13,6 +13,7 @@
  *   and the brain file's inventory is lower by what the revert took back.
  * - `brain2-follow-watch`: a kid walks 20 blocks and stops: `follow` then `watch`, or `follow` held, within 60 s,
  *   and the bot ends within 6 blocks of him.
+ * - `brain2-productive`: the real CLI on a free port (`cli-at.ts`), alone for up to 15 min: ≥ 8 mined, a Build done.
  * - `brain2-cli`: the real CLI, `--brain v2 --personality pip`: joins, logs to `.state/logs`, writes its brain
  *   file, and exits by itself within 5 s of SIGTERM (then SIGINT on a second run), the brain file flushed.
  */
@@ -28,7 +29,7 @@ import { PERSONALITIES } from '../src/brain2/data/personalities.data.js';
 import { parseLog, type LogLine } from '../src/brain2/log.js';
 import { brainFilePath, type BrainFile } from '../src/brain2/persist.js';
 import { spiralStep } from '../src/brain2/behaviours/spiral.js';
-import type { Dig } from '../src/brain2/types.js';
+import type { Build, Dig } from '../src/brain2/types.js';
 import { generatedLookup, realPort, type Body } from '../src/port.js';
 import type { Vec3 } from '../src/types.js';
 import { Kid } from './kid-client.js';
@@ -444,4 +445,130 @@ export async function brain2CliLeg(c: Brain2Ctx, signal: 'SIGTERM' | 'SIGINT', r
 			}
 		}
 	}
+}
+
+/**
+ * `brain2-productive`: the real CLI (`companion --brain v2 --personality pip`, via `cli-at.ts` on our free port), no
+ * kid online (a kid-made dirt pillar, then he leaves), for up to BOTS_E2E_PRODUCTIVE_MIN minutes (default 15; it
+ * stops early once both goals are met, unless BOTS_E2E_PRODUCTIVE_FULL=1). Asserts it is productive alone: ≥ 8
+ * blocks mined into its inventory (the log's inventory increments), a Build that reached `done` (a finished build:
+ * "≥ 10 cells placed" alone passed on the old code with a 10/64 tower abandoned), and no edit on a kid cell. The
+ * seed is BOTS_E2E_SEED (default 12345), gen 3.
+ */
+export async function brain2ProductiveLeg(c: Brain2Ctx): Promise<void> {
+	const { check, info } = c;
+	const seed = Number(process.env.BOTS_E2E_SEED ?? 12345);
+	const minutes = Number(process.env.BOTS_E2E_PRODUCTIVE_MIN ?? 15);
+	const full = process.env.BOTS_E2E_PRODUCTIVE_FULL === '1';     // run all the minutes (no early stop), to watch it longer
+	const world = await c.server.createWorld(`e2e-brain2-productive-${seed}`, seed, 3);
+	const name = 'Pip';
+	// The kid's pillar, 20 blocks from spawn, then he leaves.
+	const kid = await Kid.connect({ url: c.server.url, token: TOKEN, world, name: 'Noah', skin: 'jj' });
+	const sp = kid.pose();
+	const kidCells: Vec3[] = [];
+	for (const [dx, dz] of [[20, 0], [0, 20], [-20, 0], [0, -20]]) {
+		const x = Math.floor(sp.x) + dx, z = Math.floor(sp.z) + dz;
+		const top = kid.world.surfaceY(x, z);
+		if (top > 0 && !kid.world.isLiquid(kid.world.getBlock(x, top, z))) {
+			await kid.walkTo({ x: x + 2.5, z: z + 0.5 });
+			for (let h = 1; h <= 3; h++) if (await kid.place({ x, y: top + h, z }, 'dirt')) kidCells.push({ x, y: top + h, z });
+			break;
+		}
+	}
+	check(kidCells.length === 3, `the kid's pillar: ${kidCells.map(cellStr).join(' ')}`);
+	await sleep(500);
+	kid.close();
+	// A fresh observer (a bot: not a kid to anyone) records every edit the bot sends.
+	const obs = new BotClient({ url: c.server.url, token: TOKEN });
+	await obs.connect({ world, name: 'Obs', skin: 'chip' });
+	const ops: Array<{ cell: Vec3; v: number; t: number }> = [];
+	obs.on('edit', (msg: EditOut) => {
+		const author = obs.players().find((p) => p.id === msg.by);
+		if (author?.name === name) for (const [x, y, z, v] of msg.ops) ops.push({ cell: { x, y, z }, v, t: Date.now() });
+	});
+	const stateRoot = join(c.stateRoot, 'productive');
+	const logDir = join(stateRoot, 'logs', 'local', world);
+	const brainPath = brainFilePath(stateRoot, 'local', world, name);
+	/** From the log so far: blocks mined into the inventory (every per-block increase of `inventory`), and the builds
+	 * (the newest `builds` value) with how many of their cells the bot placed (the observer's ops). */
+	const progress = () => {
+		const logs = existsSync(logDir) ? readdirSync(logDir).filter((f) => f.endsWith('.jsonl')).sort() : [];
+		const lines = logs.flatMap((f) => parseLog(readFileSync(join(logDir, f), 'utf8')));
+		let minedIn = 0;
+		let builds: Build[] = [];
+		for (const l of lines) {
+			if (l.k !== 'change') continue;
+			if (l.path === 'builds') builds = l.new as Build[];
+			if (l.path !== 'inventory') continue;
+			const o = (l.old ?? {}) as Record<string, number>, n = (l.new ?? {}) as Record<string, number>;
+			for (const [b, v] of Object.entries(n)) minedIn += Math.max(0, v - (o[b] ?? 0));
+		}
+		const placedAt = new Set(ops.filter((o) => o.v !== 0).map((o) => cellStr(o.cell)));
+		const counted = builds.map((b) => ({ b, placed: b.cells.filter((c) => placedAt.has(cellStr(c.cell))).length }));
+		// A finished build: "≥ 10 cells placed" alone passed on the old code with a 10/64 tower left abandoned (seed 2026).
+		const good = counted.find((x) => x.b.status === 'done');
+		const buildsText = counted.map((x) => `${x.b.template}/${x.b.variant} ${x.b.status} ${x.placed}/${x.b.cells.length}`).join(', ') || 'none';
+		return { lines, minedIn, good, buildsText };
+	};
+	let child: ReturnType<typeof spawn> | null = null;
+	let out = '';
+	const t0 = Date.now();
+	try {
+		child = spawn('npx', ['tsx', 'test/cli-at.ts', 'companion', '--target', 'local', '--world', world, '--name', name, '--brain', 'v2', '--personality', 'pip'], {
+			cwd: c.botsDir, detached: true, stdio: ['ignore', 'pipe', 'pipe'],
+			env: { ...process.env, BOTS_E2E_URL: c.server.url, BOTS_E2E_STATE: stateRoot },
+		});
+		child.stdout?.on('data', (d: Buffer) => (out += d.toString()));
+		child.stderr?.on('data', (d: Buffer) => (out += d.toString()));
+		const exited = new Promise<string>((r) => child!.once('exit', (code, sig) => r(`${code}/${sig}`)));
+		let lastReport = t0;
+		while (Date.now() - t0 < minutes * 60_000 && child.exitCode === null) {
+			await sleep(10_000);
+			const p = progress();
+			if (Date.now() - lastReport >= 60_000) {
+				lastReport = Date.now();
+				info(`${((Date.now() - t0) / 60_000).toFixed(1)} min: ${p.minedIn} mined in, ${ops.filter((o) => o.v !== 0).length} placed; builds ${p.buildsText}`);
+			}
+			if (p.minedIn >= 8 && p.good && !full) break;          // both goals met (re-checked after the stop)
+		}
+		check(child.exitCode === null, `the CLI ran for ${((Date.now() - t0) / 60_000).toFixed(1)} min`);
+		process.kill(-child.pid!, 'SIGTERM');
+		const code = await Promise.race([exited, sleep(8000).then(() => 'timeout' as const)]);
+		check(code !== 'timeout', `it stopped on SIGTERM: ${code}`);
+	} finally {
+		if (child && child.exitCode === null && child.signalCode === null) {
+			try {
+				process.kill(-child.pid!, 'SIGKILL');
+			} catch {
+				// gone
+			}
+		}
+		obs.close();
+	}
+	const p = progress();
+	const lines = p.lines;
+	const file: BrainFile | null = existsSync(brainPath) ? JSON.parse(readFileSync(brainPath, 'utf8')) : null;
+	const { minedIn, good } = p;
+	const kidKeys = new Set(kidCells.map(cellStr));
+	const onKid = ops.filter((o) => kidKeys.has(cellStr(o.cell)));
+	const ends: Record<string, number> = {};
+	for (const l of lines) {
+		if (l.k !== 'change' || l.path !== 'memory.past') continue;
+		const e = (l.new as Array<{ behaviour: string; outcome: string; why: string }>)[0];
+		if (e) ends[`${e.behaviour}:${e.outcome}(${e.why})`] = (ends[`${e.behaviour}:${e.outcome}(${e.why})`] ?? 0) + 1;
+	}
+	const acts: Record<string, number> = {};
+	for (const l of lines) {
+		if (l.k !== 'event' || l.kind !== 'act') continue;
+		const d = l.data as { kind: string; ok: boolean; err?: string };
+		const k = `${d.kind}:${d.ok ? 'ok' : `fail${d.err ? ` ${d.err.replace(/ at .*$/, '')}` : ''}`}`;
+		acts[k] = (acts[k] ?? 0) + 1;
+	}
+	info(`seed ${seed}: ${lines.length} log lines; ends ${JSON.stringify(ends)}`);
+	info(`acts ${JSON.stringify(acts)}`);
+	info(`inventory at the end ${JSON.stringify(file?.inventory ?? null)}; builds ${p.buildsText}; digs ${(file?.digs ?? []).map((d) => `${d.block} ${d.stepsDone} steps ${d.status}`).join(', ') || 'none'}`);
+	check(minedIn >= 8, `≥ 8 blocks mined into the inventory: ${minedIn} (the bot broke ${ops.filter((o) => o.v === 0).length} cells)`);
+	check(good !== undefined, `a Build reached done: ${good ? `${good.b.template}/${good.b.variant}, ${good.placed}/${good.b.cells.length} cells placed by the bot` : 'none'}; builds ${p.buildsText}`);
+	check(onKid.length === 0, `no edit on a kid cell (${onKid.length}${onKid.length ? `: ${onKid.map((o) => cellStr(o.cell)).join(' ')}` : ''})`);
+	info(`CLI output (last lines): ${out.trim().split('\n').slice(-6).map((l) => l.slice(0, 200)).join(' | ')}`);
 }

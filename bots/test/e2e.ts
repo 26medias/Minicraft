@@ -15,7 +15,7 @@
  * - `cli`: the real CLI (`npx tsx src/cli.ts --target local …`) on its own server on the `local`
  *   target's port (18090): after SIGINT the process group exits by itself within 5 s, and
  *   `--revert-on-exit` removed its block.
- * - `brain2-help`, `brain2-alone`, `brain2-mine`, `brain2-revert`, `brain2-follow-watch`, `brain2-cli`: brain v2,
+ * - `brain2-help`, `brain2-alone`, `brain2-mine`, `brain2-revert`, `brain2-follow-watch`, `brain2-cli`, `brain2-productive`: brain v2,
  *   code engines only (Task 17b), on one server on the `local` port; see `e2e-brain2.ts`.
  * - `builder`: the builder bot's CLI in-process on its own free-port server; see `e2e-builder.ts`.
  *
@@ -40,7 +40,7 @@ import type { Vec3 } from '../src/types.js';
 import { FakeWorld } from './fake-port.js';
 import { Kid } from './kid-client.js';
 import { removeBuild, scratchRoot, startServer, TOKEN } from './mcserver.js';
-import { brain2CliLeg, brain2Legs } from './e2e-brain2.js';
+import { brain2CliLeg, brain2Legs, brain2ProductiveLeg } from './e2e-brain2.js';
 import type { McServer } from './mcserver.js';
 import { builderLeg } from './e2e-builder.js';
 
@@ -757,7 +757,7 @@ async function main(): Promise<void> {
 			if (healthy) await leg('laya', 'companion, Laya brain', () => runLeg(server!, 'laya', laya, runDir));
 			else console.log(`\nSKIP laya: ${why} (${def.url}${def.health}); start it with \`npm run brains -- laya\``);
 		}
-		const B2 = ['brain2-help', 'brain2-alone', 'brain2-mine', 'brain2-revert', 'brain2-follow-watch', 'brain2-cli'];
+		const B2 = ['brain2-help', 'brain2-alone', 'brain2-mine', 'brain2-revert', 'brain2-follow-watch', 'brain2-cli', 'brain2-productive'];
 		if (B2.some(want)) {
 			// On the `local` target's port when a leg runs the real CLI (`revert`, `--brain v2`): it reaches the server by
 			// the committed config. The in-process legs alone take a free port (18090 may be another session's server).
@@ -766,6 +766,7 @@ async function main(): Promise<void> {
 			try {
 				const ctx = { server: b2, stateRoot: join(runDir, 'state'), botsDir: BOTS_DIR, want, leg, check, info };
 				await brain2Legs(ctx);
+				if (want('brain2-productive')) await leg('brain2-productive', 'the real CLI alone: mines ≥ 8 and finishes a Build, no kid cell touched', () => brain2ProductiveLeg(ctx));
 				if (want('brain2-cli')) {
 					await leg('brain2-cli', 'the real CLI, --brain v2: runs, logs, SIGTERM exits with the brain file flushed', () => brain2CliLeg(ctx, 'SIGTERM'));
 					await leg('brain2-cli-int', 'the same, SIGINT', () => brain2CliLeg(ctx, 'SIGINT', 20_000));

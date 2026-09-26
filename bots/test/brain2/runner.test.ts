@@ -429,7 +429,61 @@ describe('BehaviourRunner (spec §7)', () => {
 			BEHAVIOURS.watch = scripted([{ kind: 'walk', to: { x: 20.5, z: 20.5 }, speed: 1 }, 'done']);
 			r.runner.start('watch', {});
 			await r.steps(3);
-			expect(r.calls('flyTo').map((c) => c.args[0])).toEqual([{ x: 20.5, y: Y + 31, z: 20.5 }]);
+			// 31 up is past flyTo's 16-block climb: a lift straight up first (brain2-productive), then the target.
+			expect(r.calls('flyTo').map((c) => c.args[0])).toEqual([{ x: 0.5, y: Y + 31, z: 0.5 }, { x: 20.5, y: Y + 31, z: 20.5 }]);
+		});
+
+		// brain2-productive (live: a Mine pillar 18 above the bot, "same action failed 3 times"). Red if a route higher
+		// than flyTo's 16-block climb gets no lift, or a low one gets one.
+		it('a route more than 15 above the bot lifts straight up first; a lower one flies direct', async () => {
+			const r = rig();
+			for (let y = Y - 1; y <= Y + 19; y++) r.world.setNatural(10, y, 10, 'stone');   // a tall column on the way
+			r.body.walkImpl = blocked(r);
+			BEHAVIOURS.watch = scripted([{ kind: 'walk', to: { x: 20.5, z: 20.5 }, speed: 1 }, 'done']);
+			r.runner.start('watch', {});
+			await r.steps(3);
+			const g = r.world.surfaceY(20, 20) + 1;
+			expect(r.calls('flyTo').map((c) => c.args[0])).toEqual([{ x: 0.5, y: Y + 20, z: 0.5 }, { x: 20.5, y: g, z: 20.5 }]);
+			const low = rig();
+			for (let y = Y - 1; y <= Y + 10; y++) low.world.setNatural(10, y, 10, 'stone');
+			low.body.walkImpl = blocked(low);
+			BEHAVIOURS.watch = scripted([{ kind: 'walk', to: { x: 20.5, z: 20.5 }, speed: 1 }, 'done']);
+			low.runner.start('watch', {});
+			await low.steps(3);
+			expect(low.calls('flyTo')).toHaveLength(1);
+		});
+
+		// Fix (brain2-productive). Red if the flight's y reads only the target's own column: a target on a column edge
+		// puts the body over the neighbour too, and a higher neighbour makes flyTo refuse ("flyTo blocked (wall)").
+		it('the fallback flight lands above every column under the body at a column-edge target', async () => {
+			const r = rig();
+			for (let y = Y - 1; y <= Y + 3; y++) r.world.setNatural(19, y, 20, 'stone');   // the neighbour, 4 higher
+			r.body.walkImpl = blocked(r);
+			BEHAVIOURS.watch = scripted([{ kind: 'walk', to: { x: 20, z: 20.5 }, speed: 1 }, 'done']);
+			r.runner.start('watch', {});
+			await r.steps(3);
+			expect(r.calls('flyTo').map((c) => c.args[0])).toEqual([{ x: 20, y: Y + 4, z: 20.5 }]);
+		});
+
+		// brain2-productive (seed 2026): a straight walk dropped the bot into a finished dig's staircase, under the
+		// overhanging surface, where every flight is refused; it sat there for minutes. Red if a failed move that
+		// leaves the bot down in a dig doesn't start the climb out (ruling R17) before the behaviour's next action.
+		it('a failed walk that leaves the bot down in a dig climbs out along its steps first', async () => {
+			const r = rig();
+			withDig(r, 'done');
+			r.body.walkImpl = () => {
+				r.body.current = { x: 10.5, y: Y - 2, z: 11.5, yaw: 0, pitch: 0 };   // 1 above step 2's feet (10, Y − 3, 11)
+				return Promise.reject(new BlockedError(r.body.pose(), 'noGround'));
+			};
+			r.body.flyImpl = blocked(r);
+			BEHAVIOURS.watch = scripted([{ kind: 'walk', to: { x: 20.5, z: 20.5 }, speed: 1 }, 'done']);
+			r.runner.start('watch', {});
+			await r.step();
+			r.body.walkImpl = async () => 'arrived';
+			await r.steps(2);
+			// Step 1 is (11, 11), step 0 (11, 10); the climb walks them in order.
+			expect(r.calls('walkTo').slice(1, 3).map((c) => c.args[0])).toEqual([{ x: 11.5, z: 11.5 }, { x: 11.5, z: 10.5 }]);
+			expect(r.logs.some(([k, d]) => k === 'climb' && (d as { dig: string }).dig === 'd1')).toBe(true);
 		});
 
 		// Red if the fallback flight counts as the result when it is also blocked (no failure), or counts twice.
@@ -491,6 +545,39 @@ describe('BehaviourRunner (spec §7)', () => {
 				expect(r.calls('flyTo'), status).toHaveLength(1);
 				expect(r.store.state.memory.past[0]).toMatchObject({ outcome: 'done' });
 			}
+		});
+	});
+
+	describe('the act log (brain2-productive)', () => {
+		const acts = (r: ReturnType<typeof rig>) => r.logs.filter(([k]) => k === 'act').map(([, d]) => d as Record<string, unknown>);
+
+		// Red if an executed action writes no `act` line, or a failed one doesn't say what it was, where, and why.
+		it('one act line per executed action: kind, cell, block, ok and the error', async () => {
+			const r = rig();
+			r.world.setNatural(5, Y, 5, 'stone');
+			r.body.walkImpl = () => Promise.reject(new BlockedError(r.body.pose(), 'wall'));
+			r.body.flyImpl = () => Promise.reject(new BlockedError(r.body.pose(), 'wall', 'flyTo'));
+			BEHAVIOURS.watch = scripted([{ kind: 'mine', cell: { x: 5, y: Y, z: 5 } }, { kind: 'walk', to: { x: 20.5, z: 20.5 }, speed: 1 }, 'done']);
+			r.runner.start('watch', {});
+			await r.steps(3);
+			const [mine, walk] = acts(r);
+			expect(mine).toMatchObject({ kind: 'mine', ok: true, cell: { x: 5, y: Y, z: 5 }, block: 'stone' });
+			expect(walk).toMatchObject({ kind: 'walk', ok: false, to: { x: 20.5, z: 20.5 }, via: expect.stringContaining('walkTo blocked (wall)'), err: expect.stringContaining('flyTo blocked (wall)') });
+			expect(walk.at).toBeDefined();
+		});
+
+		// Red if successful follow-ticks, looks or waits are logged (one a tick: the log would flood), or an exact repeat
+		// within 5 s is written again.
+		it('no line for a successful follow-tick, look or wait; an exact repeat within 5 s is written once', async () => {
+			const r = rig();
+			r.noah(3, 3);
+			BEHAVIOURS.watch = scripted([{ kind: 'look', at: { x: 1, y: Y, z: 1 } }, { kind: 'wait', ms: 0 }, { kind: 'follow-tick', kid: 'Noah' }, { kind: 'place', cell: { x: 5, y: Y, z: 5 }, block: 'stone' }]);
+			r.body.placeImpl = async () => false;
+			r.runner.start('watch', {});
+			await r.steps(6, 700);
+			expect(r.calls('place')).toHaveLength(3);
+			expect(acts(r).map((a) => a.kind)).toEqual(['place']);
+			expect(acts(r)[0]).toMatchObject({ ok: false });
 		});
 	});
 });

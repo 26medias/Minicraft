@@ -102,4 +102,20 @@ describe('Explore (spec §6)', () => {
 		await r.ticks(20);
 		expect(r.store.state.memory.past[0]).toMatchObject({ behaviour: 'explore', outcome: 'done' });
 	});
+
+	// brain2-productive. Red if Explore's flight y reads only the waypoint's own column: a waypoint on a column edge
+	// puts the body over the neighbour too, and a higher neighbour makes flyTo refuse it.
+	it('a flight to a waypoint on a column edge lands above the higher neighbour', async () => {
+		const r = rig();
+		// The waypoint moved onto x 257, the edge of columns 256 and 257: its own column (257) 3 high, the neighbour 5 high.
+		for (let y = FEET; y <= FEET + 2; y++) r.world.setNatural(257, y, 244, 'stone');
+		for (let y = FEET; y <= FEET + 4; y++) r.world.setNatural(256, y, 244, 'stone');
+		r.runner.start('explore', { dir: [0, -1] });
+		const plan = (r.runner as unknown as { active: { plan: { waypoints: Array<{ x: number; z: number }> } } }).active.plan;
+		plan.waypoints[0] = { ...plan.waypoints[0], x: 257 } as never;          // on the edge between x 256 and 257
+		await r.ticks(3);
+		const fly = r.body.calls.find((c) => c.fn === 'flyTo')?.args[0] as { x: number; y: number; z: number } | undefined;
+		expect(fly).toEqual({ x: 257, y: FEET + 5, z: 244.5 });
+	});
 });
+

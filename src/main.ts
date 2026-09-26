@@ -1,4 +1,5 @@
 import './ui/ui.css';
+import './ui/menu.css';
 import { World } from './engine/world/world';
 import { loadAtlas } from './engine/render/atlas';
 import { Renderer } from './engine/render/renderer';

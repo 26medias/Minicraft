@@ -432,10 +432,10 @@ export class MainMenu {
 		const card = this.newCard('New World', 'new');
 		const form = document.createElement('div');
 		form.innerHTML = `
-			<div style="margin: 12px 0;">
+			<div class="new-field">
 				<label>Name<br/><input type="text" id="w-name" value="My World" /></label>
 			</div>
-			<div style="margin: 12px 0;">
+			<div class="new-field">
 				<label>Seed<br/><input type="number" id="w-seed" value="${Math.floor(Math.random() * 1_000_000)}" /></label>
 			</div>
 			<label class="menu-check"><input type="checkbox" id="w-must-mine" /> Must mine blocks to build</label>
@@ -732,10 +732,10 @@ export class MainMenu {
 		const card = this.newCard('New World', 'mp-new');
 		const form = document.createElement('div');
 		form.innerHTML = `
-			<div style="margin: 12px 0;">
+			<div class="new-field">
 				<label>Name<br/><input type="text" id="mp-w-name" value="Our World" /></label>
 			</div>
-			<div style="margin: 12px 0;">
+			<div class="new-field">
 				<label>Seed<br/><input type="number" id="mp-w-seed" value="${Math.floor(Math.random() * 1_000_000)}" /></label>
 			</div>
 			<label class="menu-check"><input type="checkbox" id="mp-w-must-mine" /> Must mine blocks to build</label>

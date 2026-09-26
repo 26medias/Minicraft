@@ -3,8 +3,8 @@ import { between, FIRST_TRACK_MS, nextTrack, TRACK_GAP_MS } from './rules';
 import { MUSIC_TRACKS } from './sounds.data';
 
 /**
- * Background music (sound spec §7): one track at a time, long silences between, shuffled, never the
- * same twice in a row. Each track streams through an <audio> element into the music bus.
+ * Background music (sound spec §7): a playlist that loops, one track after another with a few
+ * seconds between, shuffled, never the same twice in a row. Each track streams through an <audio> element into the music bus.
  */
 class MusicPlayer {
 	private timer: ReturnType<typeof setTimeout> | null = null;
@@ -20,6 +20,16 @@ class MusicPlayer {
 	/** A track is sounding right now (dev oracle for sound-smoke). */
 	get playing(): boolean {
 		return this.el !== null && !this.el.paused;
+	}
+
+	/** Which track is sounding, or null (dev oracle). */
+	get track(): number | null {
+		return this.playing ? this.prev : null;
+	}
+
+	/** Dev oracle: jump the current track to its last half second, to see the next one follow. */
+	skipToEnd(): void {
+		if (this.el && Number.isFinite(this.el.duration)) this.el.currentTime = this.el.duration - 0.5;
 	}
 
 	/**
@@ -67,9 +77,9 @@ class MusicPlayer {
 			this.schedule(2_000);
 			return;
 		}
-		// Music at 0 does not start tracks at all (spec §8); try again after a gap.
+		// Music at 0 does not start tracks at all (spec §8); look again soon, so turning it up starts it.
 		if (getAudioSettings().music === 0) {
-			this.schedule(between(TRACK_GAP_MS, Math.random));
+			this.schedule(5_000);
 			return;
 		}
 		const i = nextTrack(this.prev, MUSIC_TRACKS.length, Math.random);

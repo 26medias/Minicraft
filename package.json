@@ -25,6 +25,7 @@
 		"smoke:crafting": "tsx scripts/crafting-smoke.ts",
 		"smoke:menu": "tsx scripts/menu-smoke.ts",
 		"smoke:cheats": "tsx scripts/cheat-smoke.ts",
+		"smoke:sound": "tsx scripts/sound-smoke.ts",
 		"e2e:mp": "tsx scripts/mp-e2e.ts",
 		"format": "prettier --write .",
 		"bots:install": "npm run build:bot && npm --prefix bots install",

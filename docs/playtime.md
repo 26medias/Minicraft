@@ -37,7 +37,8 @@ limitMin, extraMin, createdAt }`. One session only; it does not repeat.
   start time without a reload.
 - **Parents on the lock** (PIN): the plan's state ("Starts tomorrow, 7:00 AM, for 45 min." /
   "Played 20 min of 45 min."), **+15 min**, **Change** (the dialog, prefilled; keeps the plan's
-  played time), **End schedule** (removes the plan and its session: free play).
+  played time; a plan that has already started opens on "Now", since its old start time has passed
+  and would read as tomorrow), **End schedule** (removes the plan and its session: free play).
 - **Schedule needs a PIN.** With none, the button first asks to set one (typed twice).
 - The dialog's OK reads the plan back: "Lock: Big Crafting · tomorrow, 7:00 AM · 45 min". A time
   at or before now means tomorrow; "Now" starts at once.
@@ -97,8 +98,15 @@ console), and the multiplayer worlds with Delete.
 - The deployed per-sitting maximum (`maxDurationMin`) no longer applies: free play has no cap.
 - This branch's earlier `minicraft:v1:rules` / `minicraft:v1:today` were never deployed.
 
-Known limits: the lock is per browser (another browser or device is not covered); setting the
-computer's clock back beats it.
+Known limits:
+
+- The lock is per browser: another browser or device is not covered.
+- Setting the computer's clock back beats it.
+- Two windows playing the same plan side by side use it up twice as fast (each adopts the other's
+  time, then adds its own). Tabs in one window are safe: a hidden tab does not count. It fails
+  closed.
+- A world created but never played cannot be locked (Schedule makes a "let him choose" plan), and
+  it is not listed under a plan until it has been played once.
 
 ## Semantics
 

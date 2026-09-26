@@ -30,7 +30,12 @@ export type BlockDef = {
 	tnt?: { radius: number; fuse: number; shape?: 'sphere' | 'tunnel' | 'flatten' | 'lake' | 'dome' | 'firework' };
 	// Present exactly on the two pads (toys spec §3.1–3.2): what landing on or standing on it does.
 	pad?: 'slime' | 'launch';
+	// What mining and placing it sounds like (sound spec §2). Absent: resolved by name from
+	// SOUND_RULES (block-sounds.data.ts), else 'stone'.
+	sound?: BlockSound;
 };
+
+export type BlockSound = 'stone' | 'dirt' | 'wood' | 'sand' | 'leaves' | 'glass';
 
 export const AIR: BlockId = 0;
 

@@ -151,4 +151,15 @@ describe('PlaytimeController two tabs', () => {
 		h2.ctl.tick();
 		expect(h2.ctl.remainingMs()).toBe(25 * MIN);
 	});
+	it("does not adopt another plan's session, and never past the limit", () => {
+		const mine = session({ playedMs: 5 * MIN, planId: 'p1' });
+		const other = { ...mine, playedMs: 20 * MIN, planId: 'p2' };
+		const h = harness(mine, T0, undefined, undefined, () => other);
+		h.ctl.tick();
+		expect(h.ctl.remainingMs()).toBe(25 * MIN);
+		const over = { ...mine, playedMs: 90 * MIN };
+		const h2 = harness({ ...mine }, T0, undefined, undefined, () => over);
+		h2.ctl.tick();
+		expect(h2.saved.at(-1)!.playedMs).toBe(30 * MIN);
+	});
 });

@@ -1,3 +1,4 @@
+import { buildAudioPanel } from './audio-panel';
 import type { PersistenceAdapter, WorldSummary } from '../persistence/adapter';
 import { newWorldId } from '../persistence/uuid';
 import { clearSession, loadSession } from '../persistence/playtime';
@@ -284,7 +285,11 @@ export class MainMenu {
 		// Parents is styled as a quieter stone block (menu.css), not grass.
 		this.button(home, 'Parents', 'home-parents', () => this.renderParents(), 'home-button');
 		card.appendChild(home);
-		this.button(card, 'Options', 'home-options', () => this.onAction?.({ type: 'options' }), 'menu-small');
+		const small = document.createElement('div');
+		small.className = 'home-small';
+		this.button(small, 'Options', 'home-options', () => this.onAction?.({ type: 'options' }), 'menu-small');
+		this.button(small, 'Audio', 'home-audio', () => this.renderAudio(), 'menu-small');
+		card.appendChild(small);
 		// "Play at 7:00 AM" turns into "45 minutes left today" without a reload.
 		this.refresh = setInterval(paintLine, 30_000);
 	}
@@ -461,6 +466,14 @@ export class MainMenu {
 			}
 		};
 		return del;
+	}
+
+	/** The Audio screen (sound spec §8): the same sliders as the Esc menu's Audio view. */
+	private renderAudio() {
+		this.renderGen++;
+		const card = this.newCard('Audio', 'audio');
+		buildAudioPanel(card);
+		this.button(card, 'Back', 'menu-back', () => void this.renderHome(), 'menu-back');
 	}
 
 	private renderNew() {
@@ -919,7 +932,9 @@ export class MainMenu {
 		const pad = (n: number) => String(n).padStart(2, '0');
 		const lockable = world ?? (existing?.worldId ? { id: existing.worldId, name: existing.worldName ?? 'this world' } : null);
 		let onlyWorld = existing ? existing.worldId !== null : lockable !== null;
-		let startsNow = false;
+		// Changing a plan that has already started keeps it going now; its old time has passed and
+		// would read as tomorrow, pushing the session a day (review finding).
+		let startsNow = existing !== null && existing.startAt <= Date.now();
 		const startDefault = existing ? new Date(existing.startAt) : null;
 		let limitMin: number = existing?.limitMin ?? 45;
 
@@ -954,10 +969,10 @@ export class MainMenu {
 		}
 
 		section('Starts');
-		choice(card, 'sched-start', 'sched-now', 'Now', false, () => { startsNow = true; });
+		choice(card, 'sched-start', 'sched-now', 'Now', startsNow, () => { startsNow = true; });
 		const atRow = document.createElement('div');
 		atRow.className = 'sched-at';
-		const atRadio = choice(atRow, 'sched-start', 'sched-at', 'At', true, () => { startsNow = false; });
+		const atRadio = choice(atRow, 'sched-start', 'sched-at', 'At', !startsNow, () => { startsNow = false; });
 		const time = document.createElement('input');
 		time.type = 'time';
 		time.id = 'sched-time';

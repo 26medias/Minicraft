@@ -180,10 +180,13 @@
 		"sha256": "c8726f5a7fc12bff51c736ff6c98f86bd0f653c3d41b1f98b59260adea2d2726"
 	},
 	"black_concrete": {
-		"pack": "ppce",
-		"file": "assets/minecraft/textures/block/black_concrete.png",
-		"commit": "28e38cab7c1f03f86364ef704f705bebcc13cb3d",
-		"sha256": "0b00f610cbf28e6ac2fde0d694d1a0212cf2fb234c3cd6f64319c93493d9b415"
+		"flat": [
+			0,
+			0,
+			0
+		],
+		"alpha": 255,
+		"sha256": "194b4f1f3dc7c6c2a1d5a11fb184f720074ff3c9f9d5a07133fe6d4e7ac5aede"
 	},
 	"black_concrete_powder": {
 		"pack": "ppce",

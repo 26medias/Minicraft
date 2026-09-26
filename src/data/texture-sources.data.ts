@@ -77,7 +77,7 @@ export const TEXTURE_SOURCES: Record<string, TextureSource> = {
 	birch_log: { pack: 'ppce', file: 'assets/minecraft/textures/block/birch_log.png' },
 	birch_log_top: { pack: 'ppce', file: 'assets/minecraft/textures/block/birch_log_top.png' },
 	birch_planks: { pack: 'ppce', file: 'assets/minecraft/textures/block/birch_planks.png' },
-	black_concrete: { pack: 'ppce', file: 'assets/minecraft/textures/block/black_concrete.png' },
+	black_concrete: { flat: [0, 0, 0], alpha: 255 }, // pure black, no texture (user decision 2026-09-26)
 	black_concrete_powder: {
 		pack: 'ppce',
 		file: 'assets/minecraft/textures/block/black_concrete_powder.png',

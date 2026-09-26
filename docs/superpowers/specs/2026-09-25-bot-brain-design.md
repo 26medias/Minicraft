@@ -1,74 +1,97 @@
 # Bot brain: emotions, behaviours and a blackboard of experts
 
-**Status:** design, rev 1, 2026-09-25. It has not been through gate 1 yet. It was brainstormed with Julien on 2026-09-25. Branch `bot-brain`, cut from `bots` at `b70cc3a`.
+**Status:** design, rev 2, 2026-09-25. It was brainstormed with Julien on 2026-09-25.
+- **Rev 1** (`193069b`) went through gate 1 with four reviewers: models, rigour, engine and sequencing, and consumer. All four ran probes.
+- **Rev 2** repairs every finding, and adds rulings R12–R15, which Julien made on the review's questions. The disposition of every finding is in §12.
+
+Branch `bot-brain`, cut from `bots` at `b70cc3a`.
 
 **It replaces:** the decision part of the companion bot (`docs/superpowers/specs/2026-09-25-companion-bot-design.md`), which is the 500 ms tick in `bots/src/bots/companion.ts` that picks one of `follow | watch | help_build | wander | idle`. The **body** stays: the `minicraft-bot` SDK, `bots/src/port.ts`, follow/fly/hop movement, the guard, the stop signal, config and safety refusals.
 
-**Why:** the one-shot companion's brain barely decides anything. Laya leans heavily toward `watch`, and so `follow` and `help_build` became hard rules (`bots/README.md:145-158`). Julien had too little say in its logic. This design is his model of the bot, made concrete.
+**Why:** the one-shot companion's brain barely decides anything. Laya leans heavily toward `watch`, so `follow` and `help_build` became hard rules (`bots/README.md:145-158`). Julien had too little say in its logic. This design is his model of the bot, made concrete.
 
-## 1. The rulings from brainstorming
-
-Each ruling is Julien's answer, with the alternatives he turned down.
+## 1. The rulings
 
 | # | Question | Ruling | Turned down |
 |---|---|---|---|
 | R1 | Models | **Laya + a small local generative LLM.** The LLM runs on events, never on every tick. Local only, no Jev. | Laya only; not tied to a model |
-| R2 | How the bot shows its state | **Body language only.** No game or server change, and no emote bubbles or speech in this project. | Emote bubbles; spoken lines |
-| R3 | Where the bot may edit on its own | **Any natural terrain.** It never touches a kid-placed or kid-modified block, and keeps a 1-block buffer around them. | Its own plot only; anywhere with the stop signal as the only brake |
-| R4 | Memory across sessions | **Relationships, inventory, builds, explored areas and personality persist** in a local file. Global emotions and the action log start fresh. | Nothing persists; everything persists |
+| R2 | How the bot shows its state | **Body language only.** No emote bubbles or speech. No game or server change (optional SDK additions are fine, §10). | Emote bubbles; spoken lines |
+| R3 | Where the bot may edit on its own | **Any natural terrain.** It never touches a kid's cell, and keeps a buffer around them (§4.5). | Its own plot only; anywhere with the stop signal as the only brake |
+| R4 | Memory across sessions | **Relationships, inventory, builds, digs and explored areas persist** in a local file. Global emotions and the action log start fresh. | Nothing persists; everything persists |
 | R5 | Behaviours in v1 | **Follow, Help-build, Build, Mine (including for no reason), Explore, Watch, Rest.** Greeting is a gesture. Show-off and Avoid are out. | — |
-| R6 | Materials | **The bot has an inventory in every world, fed only by mining.** | Kids' rules only in must-mine worlds; no inventory |
-| R7 | Architecture | **A blackboard with event-triggered experts** (§3). | An orchestrator LLM delegating to sub-agents; utility AI with models at the edges |
-| R8 | Laya prompts | **Short, single-purpose questions.** Laya gets less accurate as prompts grow, so split into many focused calls, never one big one. | — |
-| R9 | Selection merge | **Fixed weights.** The LLM's pick is one weighted vote, not the final call. (This is the default Julien didn't override.) | The LLM has the last word |
-| R10 | Build shapes | **Hand-made templates as data.** The LLM picks the template, the size and the materials. (Default, not overridden.) | LLM-designed shapes |
-| R11 | Edit limits | **No per-session cap.** Edits are bounded by the plan they belong to, plus a runaway tripwire (§7.2). | A 50 or 400 edit budget per session |
+| R6 | Materials | **The bot has an inventory in every world, fed only by mining.** Build and Mine live by it. Help-build is the exception (R12). | Kids' rules only in must-mine worlds; no inventory |
+| R7 | Architecture | **A blackboard with event-triggered experts** (§3). | An orchestrator LLM; utility AI with models at the edges |
+| R8 | Laya prompts | **Short, single-purpose questions.** Laya gets less accurate as prompts grow. Gate 1 confirmed it: a 113-word prompt biased every answer toward "up". | — |
+| R9 | Selection merge | **Fixed weights**; the LLM's pick is one weighted vote. | The LLM has the last word |
+| R10 | Build shapes | **Hand-made templates as data.** The LLM picks the template, the size and the materials. | LLM-designed shapes |
+| R11 | Edit limits | **No per-session cap.** Edits are bounded by their plan, plus a runaway tripwire (§7.2). | A per-session budget |
+| R12 | Help-build materials | **It copies the kid's block type from an unlimited supply, except in must-mine worlds**, where it draws from inventory like everything else. | Strict R6; free everywhere |
+| R13 | Negative feelings toward kids | **As designed:** the full range, persisted (halved between sessions), including the "turn away" gesture. | Floored at 0 for kids; mild and fast-fading |
+| R14 | What Mine may target | **Anything natural, ores and diamonds included.** Deep targets take several Mine episodes, which resume a persisted dig (§6.2). | No ores; common ores only |
+| R15 | Engines per question | **A benchmark picks.** Each model question's engine (Laya, LLM, or both-agree) and wording are config. A labelled benchmark (§9.2) picks them before the plan commits to the model experts. The keep-going check is code. | Laya reworded; the LLM for all appraisal |
 
-**Non-goals.** No chat or text, no emotes (R2), no game or server changes, no combat or mobs, no deployment: the bot runs on Julien's machine only. No pathfinding beyond what §6 needs; walking, flying and staircases stand in for it. This design leaves `CLAUDE.md`'s product non-goals alone. The bot's own building and mining is a companion feature, not a new game mechanic.
+**Non-goals:**
+- no chat or text, and no emotes (R2);
+- no game or server changes;
+- no combat or mobs;
+- no deployment: the bot runs on Julien's machine only;
+- no general pathfinding: walking, flying, staircases and site levelling stand in for it.
 
-**Scope changes compared with the companion spec, all explicit:** the bot now mines (companion spec: "no mining help"), keeps memory across sessions (companion spec: "no memory across sessions"), and has an inventory.
+`CLAUDE.md`'s product non-goals are untouched. The bot's own building and mining is a companion feature, not a game mechanic.
+
+**Scope changes compared with the companion spec, all explicit:**
+- the bot now mines (the companion spec said "no mining help");
+- it keeps memory across sessions (the companion spec said "no memory across sessions");
+- it has an inventory.
 
 ## 2. Success criteria
 
-The design has succeeded if all of these hold. The plan must turn each one into a test or a measured check.
+The plan must turn each one into a test or a measured check, and name the defect that turns each test red.
 
-1. **Behaviour reads as alive, not random.** Across a recorded 20-minute session with one kid:
-   - No behaviour lasts less than its minimum time (§5.4), unless an urgent trigger interrupts it.
-   - Every switch has a logged reason.
-2. **Emotions move the right way.** On a hand-labelled set of at least 40 (event, axis) cases, `appraise.detect` gets the direction (down, none or up) right in ≥ 80% of them. The set is committed as a fixture. It also runs against the live Laya as a measured benchmark, not in CI.
-3. **Different personalities behave differently.** Take two personalities, run them through the same replayed event stream, and compare the time they spend in each behaviour. At least 2 behaviours must differ by more than 20 points of share.
-4. **Kid safety holds.** No edit ever lands on a kid-modified cell or its buffer, in water or lava contact, or under a player. This is property-tested against the safety tier, and asserted in every end-to-end run.
+1. **Behaviour reads as alive, not random.** In a recorded 20-minute session with one kid, every switch has a logged reason. No switch happens before the 20 s minimum unless its cause is `done`, `failed`, or an urgent trigger (§5.3).
+2. **Emotions move the right way.** On the labelled appraisal set (§9.2), the chosen engine configuration gets the direction right in ≥ 80% of cases, and each class (down, stay, up) scores ≥ 60% recall. An always-`stay` baseline must fail the same bar. It's measured against live models, not in CI. If no configuration reaches 80%, the plan stops and the numbers go to Julien.
+3. **Different personalities behave differently, and it's the personality doing it.** Two personalities, the same scripted event stream, with model answers from a cache keyed by prompt hash. A cache miss calls the live model and records the answer, so personality differences reach the prompts. At least 2 behaviours must differ by more than 20 points of time share.
+4. **Kid safety holds.** No edit ever lands on a `kid` cell or inside its buffer (§4.5), in a cell touching liquid, or inside a kid's buffer. This is property-tested against the safety tier, and asserted in every end-to-end run.
 5. **It never freezes.** With Laya down, the LLM down, or both down, the bot keeps choosing behaviours and acting, using the code fallbacks.
-6. **The debug view explains any decision.** From the replay of a session you can reach, for any behaviour switch, the exact prompts and answers that caused it.
+6. **Any decision can be explained.** From the replay of a session, every behaviour switch shows its merge breakdown (§5.3) and links to the exact prompts and answers behind each input.
+7. **It's good company.** In a 20-minute session with a kid present:
+   - the bot spends ≥ 60% of its time within 16 blocks of the kid;
+   - on the recorded "kid lays a line" fixtures, Help-build wins in ≥ 80% of them, both with models up and with models down;
+   - the bot makes 0 edits within 12 blocks of a `kid` cell, Help-build excepted.
+
+   The 60% is a tuning target. If it's missed, the weights change; the design doesn't.
+8. **An ordinary session never trips the runaway tripwire.** A full medium house, a full tower, and a 3-minute stone staircase, each at the fastest pacing, all run without halting edits.
 
 ## 3. Architecture
 
 ```
-          SDK events (edits, fx, players, poses)
+          SDK events (edits with `by`, fx, players, poses)
                       │
    ┌──────────────────▼───────────────────┐
-   │ L0 perception (code, 500 ms)          │──► world events
+   │ L0 perception (code)                  │──► world events
    └──────────────────┬───────────────────┘
                       ▼
    ┌─────────────────────────────────────────────┐
    │              STORE (blackboard)              │◄── every write is store.apply(patch, cause)
    │ personality · emotions · relations · memory  │    and emits change events
-   │ events · inventory · builds · explored ·     │
-   │ body · active behaviour                      │
+   │ events · inventory · builds · digs ·         │
+   │ owned cells · explored · body · behaviour    │
    └──┬──────────┬───────────┬───────────┬───────┘
-      │ change   │           │           │
-      ▼ events   ▼           ▼           ▼
+      ▼          ▼           ▼           ▼
    L1 decay   L2 appraisal  L3 selection  L5 expression
-   (code)     (Laya+LLM)    (code+Laya+LLM) (code)
+   (code)     (engine per R15) (code+models) (code)
                                │
                                ▼
                      L4 active behaviour
                   plan → planner → judge → execute ──► SDK
 ```
 
-- **The store** is the single source of truth. Experts never call each other. They read a slice of the store and propose a patch. Only `store.apply` mutates state, and every mutation produces a **change event** `{path, old, new, cause, t}`.
-- **The scheduler** runs experts when their trigger matches. It gives Laya one call at a time (Laya has a single worker). LLM calls go through one priority queue: selection, then appraisal, then parameters. Each expert records the **state version** of the slice it read. If that slice has changed materially by the time the answer arrives, the answer is thrown away and the expert may run again.
-- **Model answers are proposals.** Each expert's `merge` step is code: it clamps, bounds and validates. A malformed or out-of-range answer counts as a failure and the expert's fallback is used.
+- **The store** is the single source of truth. Experts never call each other. They read a slice and propose a patch, and only `store.apply` mutates state. Every mutation produces a change event `{path, old, new, cause, t}`, including decay (§5.1), so a replay reproduces the live run exactly.
+- **The scheduler** runs experts when their trigger matches.
+  - **The Laya lane** takes one call at a time, by priority: fit, then social, then appraisal.
+  - **The LLM lane** is a single queue by priority: selection, then parameters, then appraisal. Each expert has at most **one** queued call; a newer request replaces the queued one (drop the oldest).
+- **Stale answers.** Each expert declares a `materialKey(slice)`: a string built only from what would change its answer. That's the behaviour kind, the ids of the salient events it read, and word bands (§4.1), never raw values. When an answer arrives, it's dropped if the expert's current `materialKey` differs from the one it read. `version` still goes up on every apply, but it's only used for ordering, never for staleness, so decay never makes an answer stale.
+- **Model answers are proposals.** Each expert's `merge` is code: it clamps, bounds and validates. An answer that is malformed, out of range or names something off its list counts as a failure, and the fallback is used.
 
 ### 3.1 The expert contract
 
@@ -76,50 +99,75 @@ The design has succeeded if all of these hold. The plan must turn each one into 
 interface Expert<S, P> {
 	name: string;
 	layer: 0 | 1 | 2 | 3 | 4 | 5;
-	trigger: Trigger;                       // every(ms) | on(pattern) | debounce(on(pattern), ms)
-	reads(state: State): S;                 // the only view the expert gets
-	engine: 'code' | 'laya' | 'llm';
+	trigger: Trigger;                       // every(ms) | on(pattern) | debounce(on(pattern), {quietMs, maxWaitMs})
+	reads(state: State): S;
+	materialKey(slice: S): string;
+	engine: EngineChoice;                   // 'code' | 'laya' | 'llm' | 'both-agree'; config for model experts (R15)
 	run(slice: S, signal: AbortSignal): Promise<P>;
-	merge(proposal: P, state: State): Patch;  // pure code: clamp, bound, validate
-	fallback(slice: S): P;                  // used when the model is down, slow or invalid
-	promptBudgetWords?: number;             // required for engine 'laya' (R8)
+	merge(proposal: P, state: State): Patch;  // pure code
+	fallback(slice: S): P;
+	promptBudgetWords?: number;             // required for any expert that can use Laya
 }
 ```
 
-- Every expert is tested on its own against fixed slices.
-- Every Laya expert has a **prompt-budget test**: its prompt is rendered from a deliberately busy state (8 players, 30 events, a long history) and must stay within `promptBudgetWords`. The test must fail if a renderer starts including the whole state. The plan must show that the test goes red on a renderer that leaks the state.
+- **Debounce** is trailing, with a maximum wait: the trigger fires `quietMs` after the last matching event, or at `maxWaitMs` at the latest.
+- `both-agree` asks Laya and the LLM, and keeps a direction only if both give it; otherwise the answer is `stay`.
+- **Prompt-budget test.** For every Laya-capable expert, the whole request (state text, instructions and option text) is rendered from a deliberately busy state: 8 players, 30 events, a long history. It must:
+  - stay under `promptBudgetWords`, counted as whitespace-separated words;
+  - contain no player name other than the ones the question is about.
+
+  The plan must show both assertions going red on a renderer that leaks the state.
 
 ### 3.2 Engines
 
-- **Laya:** today's `systemone` adapter (`bots/src/brain/systemone.ts`), unchanged. `choice` questions return probabilities over options. Timeout 400 ms. The confidence used is max(p), as today.
-- **LLM:** a 3–4B instruct model with JSON-schema-constrained output, served locally by Ollama or vLLM. Timeout 5 s. The first task in the plan is a **measurement**:
-  - Does it fit alongside Laya (about 5.7 GiB) on the 10 GB RTX 3080?
-  - What is its p50 and p95 latency on this design's three prompt shapes?
+- **Laya:** today's `systemone` adapter (`bots/src/brain/systemone.ts`), unchanged. `choice` questions return probabilities, and the answer is max(p). Timeout 400 ms. One warm-up call is sent at startup, because the first call measured 277 ms.
+- **Laya must run with `LAYA_MODELS=english`.** With all three checkpoints loaded, the LLM gets only 1.4 of its 3.6 GB on the GPU, and `appraise.size` takes p50 4.4 s. With English only, Laya uses about 1.9 GB, gives identical answers, and the LLM fits fully: GPU at 8.2 of 10 GB.
+- **LLM:** `llama3.2:3b` on Ollama is the measured default. The model and endpoint are config. It's asked with JSON-schema output, and the timeout is 5 s. Measured on this design's prompt shapes:
 
-  If it doesn't fit, try a smaller model, then Laya on CPU, and record the numbers either way. The model name and endpoint are config, not code.
-- **Code:** it is the default engine, and every model expert's fallback.
+  | Prompt shape | p50 | max |
+  |---|---|---|
+  | `appraise.size` | 584 ms | 740 ms |
+  | `select.situational` | 350 ms | 437 ms |
+
+  **Ollama doesn't enforce numeric schema bounds.** Every numeric field is re-validated in `merge` (§5.2).
+- **The health check** fails, and the bot runs on fallbacks for that engine, when:
+  - Laya's `/health` fails;
+  - Ollama's `/api/ps` shows `size_vram` smaller than the model's size, which means it's partly on the CPU and too slow.
+- **Code:** the default engine, and every model expert's fallback.
 
 ## 4. The state
 
 ```ts
 interface State {
-	personality: Personality;           // data, persisted
+	personality: Personality;           // from *.data.ts, never from the file
 	emotions: Record<GlobalAxis, AxisState>;
 	relations: Record<PlayerName, Relation>;   // persisted
 	memory: { current?: ActionEntry & { startedAgoS: number }; past: ActionEntry[] };  // last 20
 	events: WorldEvent[];               // last 60 s or 30 entries
 	inventory: Record<BlockName, number>;      // persisted
 	builds: Build[];                    // persisted
-	explored: Set<ChunkKey>;            // coarse, persisted
-	body: { pose: Pose; gesture?: Gesture };
+	digs: Dig[];                        // persisted (§6.2)
+	owned: Map<CellKey, BlockId>;       // persisted: the cells the bot wrote and still owns (§4.5)
+	explored: Set<ChunkKey>;            // coarse; persisted as a sorted array
+	body: { pose: Pose; gesture?: Gesture; editsHalted?: string };
 	behaviour?: ActiveBehaviour;
-	version: number;                    // incremented by every apply
+	version: number;                    // ordering only
 }
 ```
 
 ### 4.1 Global emotions
 
-These are Julien's axes. The value is in [−1, 1], and zero has a specific meaning on each axis.
+The value is in [−1, 1]. **Word bands**, used in prompts and in `materialKey`:
+
+| Value | Word |
+|---|---|
+| ≤ −0.6 | very low |
+| ≤ −0.2 | low |
+| < 0.2 | neutral |
+| < 0.6 | high |
+| ≥ 0.6 | very high |
+
+Each axis's words come from its poles.
 
 | Axis | −1 | +1 | What 0 means | Half-life, starting value |
 |---|---|---|---|---|
@@ -132,159 +180,209 @@ These are Julien's axes. The value is in [−1, 1], and zero has a specific mean
 | Outlook | discouraged | hopeful | realistic | 10 min |
 | Stimulation | bored | overstimulated | comfortably engaged | 1 min |
 
-`AxisState = { value, deltas: {amount, cause, agoS}[] }`. It keeps the last 10 deltas. **Decay** is exponential toward the personality's baseline, using that personality's half-life. Personality can override every baseline and half-life.
+`AxisState = { value, pendingDrift, deltas: {amount, cause, agoS}[] }`. It keeps the last 10 deltas.
+
+**Decay (repaired).** On every tick, decay adds `(baseline − value) · (1 − 2^(−dt/halfLife))` to `pendingDrift`. When |pendingDrift| ≥ 0.01, it's applied as one patch with `cause: 'decay'`, and `pendingDrift` resets. Every axis therefore decays at its true rate. For example, Mood at 1.0 with baseline 0 reaches 0.5 after 2 min, and there's a test for it. Decay events are never appraisal deltas: they don't count toward the selection trigger's Σ|Δ| (§5.3), and they aren't listed in `deltas`.
 
 ### 4.2 Relations (per player)
 
-These are Affection, Cooperation, Respect and Grievance (−1 resentful, +1 grateful), in [−1, 1]. Each has the same delta list, plus `metSessions`, `minutesTogether` and `lastSeenAgoS`.
+These are Affection, Cooperation, Respect and Grievance (−1 resentful, +1 grateful), in [−1, 1], with the full range allowed toward kids (R13). Each has the same fields as `AxisState`, plus `metSessions`, `minutesTogether` and `lastSeenAgoS`.
 
-- **Within a session**, they decay toward 0. Grievance has a 30 min half-life; the others have 4 h.
-- **Between sessions**, loading the file moves each axis halfway back to 0.
+- **Within a session:** decay as in §4.1. Grievance's half-life is 30 min; the others' is 4 h.
+- **Between sessions:** loading the file moves each axis halfway back to 0, but **only if the file's `lastSessionEnd` is more than 30 minutes ago**, so a crash or restart doesn't wipe feelings.
 - **Players are keyed by name.** Bots (🤖) never get a relation entry.
 
 ### 4.3 Action memory
 
-`ActionEntry = { behaviour, params, lastedS, outcome: 'done' | 'abandoned' | 'interrupted' | 'failed', why }`. Models never see timestamps (Julien's rule). A shared renderer prints the memory as text:
+`ActionEntry = { behaviour, params, lastedS, outcome: 'done' | 'abandoned' | 'interrupted' | 'failed' | 'paused', why }`. `paused` means a Mine episode that ended on its time budget with its dig saved (§6.2). Models never see timestamps. One shared renderer prints the memory line, for example:
 
 > Now: Explore, started 12 s ago. Before: Build tower 94 s (done). Follow Noah 40 s (interrupted: Noah flew away).
 
 ### 4.4 World events
 
-**Perception** writes these event kinds:
-- `placed`, `broke` (with the actor and the cell)
-- `player-near`, `player-left`, `player-arrived`, `player-gone`
-- `broke-my-block`, `added-to-my-build`
-- `following-me`, `looking-at-me` (≥ 2 s)
+**Perception** diffs today's `Snapshot` (`bots/src/body/perceive.ts`) and the SDK's `onBlockChange` (which carries `by`) into events:
+- `placed`, `broke` (these are **other players' edits only**; the bot's own edits aren't events);
+- `player-near`, `player-arrived`, `player-gone`;
+- `broke-my-block`, `added-to-my-build`;
+- `line-started` (a kid made 3 collinear same-block placements; today's detector);
+- `looking-at-me` (a kid within 8 blocks, looking at the bot for ≥ 2 s);
+- `following-me`.
 
-**Behaviours** write these:
-- `found`, `need`, `stuck`, `hazard` (liquid or a drop)
-- `outcome`
+**Behaviours** write:
+- `found` (a block type seen for the first time this session, or an ore uncovered);
+- `need`, `stuck`, `hazard`;
+- `outcome`, **once per behaviour, when it ends**.
 
-Every event has `agoS`, and a `salient` flag set by the `salience` expert (§5.1).
+Every event has `agoS`, and a `salient` flag set by `salience` (§5.1).
 
-### 4.5 Persistence (R4)
+### 4.5 Who owns a cell (repaired)
 
-The file is `bots/.state/brain/<target>/<world>/<bot>.json`. It holds `personality`, `relations`, `inventory`, `builds` and `explored`, plus a `schemaVersion`. It's written atomically (a temp file, then a rename) on every change to those fields, debounced to 5 s, and on exit. An unreadable file is renamed to `.bad-<ts>` and the bot starts fresh; it never crashes. Emotions, memory and events are never persisted.
+Every cell is one of three classes. Gate 1 showed that matching coordinates against `builds` or the journal lets a kid's block be mistaken for the bot's, so ownership is decided by the current block:
 
-**Natural vs. modified cells (R3).** The SDK runs the game's own world generator. A cell whose current block differs from the generator's output has been modified. A modified cell is the **kid's** unless it's in the bot's own persisted `builds` or journal. A pure `isNatural(cell)` in the body layer computes this from the world and the bot's records, so it also covers edits made before the bot ever joined.
+- **`bot`**: `owned` has the cell, **and** the world's current block equals the id the bot wrote. Any foreign `onBlockChange` on an owned cell (`by` ≠ the bot) deletes it from `owned` at once. `owned` is persisted in the brain file, not taken from the SDK journal, which is capped at 10,000 entries and cleared when the state file joins another world. When the file loads, every entry is checked against the world, and mismatches are dropped.
+- **`natural`**: not `bot`, and never edited. The check is the SDK overlay: `world.isEdited(x,y,z)`, a new read-only SDK accessor over the private `ChunkOverlay`, O(1). Gate 1 found 0 of 262,144 unedited cells differing from the generator. The overlay also catches a kid re-placing the same block, which comparing against the generator can't.
+- **`kid`**: everything else. That includes other bots' edits and liquid flows set off by edits. This is deliberately conservative.
+
+**The buffer applies to `kid` cells only:** 1 block for placing, 2 blocks for breaking next to a `kid` cell that is air (a dug base). Bot cells have no buffer, so the bot can build its second block and dig its next step.
+
+### 4.6 Persistence (R4)
+
+The file is `bots/.state/brain/<target>/<world-uuid>/<bot>.json`, keyed by world uuid as `bots/src/config.ts:204` does. It holds `relations`, `inventory`, `builds`, `digs`, `owned`, `explored`, `lastSessionEnd` and `schemaVersion`.
+
+- **Personality always comes from `*.data.ts`**, so tuning takes effect on the next run.
+- **Writes:** atomic (a temp file, then a rename), debounced to 5 s, and on exit.
+- **An older `schemaVersion`** runs its migration. With no migration, or an unreadable file, the file is renamed `.bad-<ts>` and the bot starts fresh; it never crashes.
+
+**Reconciling with `revert`.**
+- The bot's `revert` command must also:
+  - remove every reverted cell from `owned`;
+  - apply the journal's net inventory effect in reverse: return each placed block, and remove each mined block that `revert` put back, never below 0;
+  - mark affected builds and digs `reverted`.
+- `--revert-on-exit` does the same before the final write.
+- `revert --builds` reverts only cells in `builds` that are still `bot`.
+- Anything older than the SDK journal's 10,000 entries can't be reverted. The spec states that limit; it isn't fixed here.
 
 ## 5. The experts
 
-### 5.1 Layers 0–1: perception and drift (code)
+### 5.1 Layers 0–1 (code)
 
 | Expert | Trigger | What it does |
 |---|---|---|
-| `perceive` | every 500 ms, plus SDK edit and fx events | Turns SDK events and pose diffs into `WorldEvent`s. Reuses `bots/src/body/perceive.ts` where it fits. |
-| `salience` | on new events | Marks an event salient when it: involves the bot, its builds or its inventory; involves a player within 16 blocks; is a find, need, stuck, hazard or outcome; or is a player arriving or leaving. The rules are data. |
-| `decay` | every 500 ms | Exponential pull toward baselines (§4.1, §4.2). Writes no change event below 0.01 of movement, so decay alone never wakes the appraisal experts. |
+| `perceive` | every 500 ms, plus SDK edit and fx events | Diffs snapshots and edits into `WorldEvent`s (§4.4). Maintains `owned` on foreign edits. |
+| `salience` | on new events | Marks an event salient when it involves the bot's builds, digs or inventory (`broke-my-block`, `added-to-my-build`), or it is `line-started`, `looking-at-me`, `player-arrived`, `player-gone`, `found`, `need`, `stuck`, `hazard` or `outcome`, or another player's edit within 16 blocks. **The bot's own edits are never salient.** The rules are data. |
+| `decay` | every 500 ms | Accumulated drift (§4.1). |
 
-### 5.2 Layer 2: appraisal (R8: many short calls)
+### 5.2 Layer 2: appraisal (R8, R15)
 
-**`appraise.detect[axis]`** (Laya, one instance per axis). It's triggered by `debounce(on(salient event), 1 s)`.
+**`appraise.detect[axis]`** runs on `debounce(on(salient event), {quietMs: 1000, maxWaitMs: 3000})`.
 - It runs once for each of the 8 global axes, and once for each of the 4 relation axes of every player involved in the burst.
 - It sees only:
-  - that axis's name and its meaning at −1 and +1;
-  - the current value, as a word band plus the number;
+  - the axis name and its poles;
+  - the value as a word band;
   - its last 2 deltas;
   - the 1–3 salient events of the burst, as short sentences.
-- It is asked: **"Does my ‹axis› go down, stay, or go up?"**
-- Budget: **60 words**. Answers where max(p) < 0.5 count as `stay`.
-- A burst costs about (8 + 4k) × 14 ms, which is ≈ 0.3 s for k = 1.
+- Budget: 60 words.
+- **Engine and wording are config (R15).** The benchmark (§9.2) chooses between:
+  - the three-way question, "go down, stay, or go up?";
+  - two binary calls, "more ‹hi› now?" and "more ‹lo› now?". This scored 8/12 in gate 1, best among the Laya wordings;
+  - the LLM (9/12);
+  - `both-agree`.
+- An answer with max(p) < 0.5 counts as `stay`.
+- **Cost:** (8 + 4k) calls, measured at p50 12 ms and p95 19 ms each, even while the LLM is generating. That's about 0.2 s for k = 1.
 
-**`appraise.size`** (LLM, one call per burst). It covers all axes that `detect` flagged. Input: the flagged axes with their directions, the burst's events, the personality in one sentence, and the current values. Output (JSON schema): `{axis, amount ∈ [0.05, 0.4], because: string ≤ 12 words}[]`. The merge does three things:
-- It applies the direction from `detect`, not from the LLM.
-- It clamps each amount to 0.4.
-- It clamps each value to [−1, 1].
-
-Fallback: a code table, `event kind × axis → amount`. It's also the fallback for `detect`.
+**`appraise.size`** is one LLM call per burst, covering the axes `detect` flagged.
+- **Input:** the flagged axes with their directions, the burst's events, the personality in one sentence, and the word bands.
+- **Output schema:** `{axis: enum of flagged ids, e.g. "mood" | "rel.Noah.affection", amount: number, because: string}[]`.
+- **The merge is code:**
+  - amount = clamp(|amount|, 0.05, 0.4);
+  - the sign comes from `detect`, never from the LLM;
+  - an axis that wasn't flagged is dropped;
+  - `because` is cut to 12 words;
+  - the value is clamped to [−1, 1].
+- **Fallback:** a data table of event kind × axis → signed amount. The same table is the code fallback for `detect`.
 
 ### 5.3 Layer 3: selection
 
 **Triggers:**
-- The behaviour finishes, fails or is abandoned.
-- The emotions move a lot: Σ|Δ| > 0.5 within 10 s.
-- `player-arrived` or `player-gone`.
-- A stop signal.
-- `hazard`.
-- Every 30 s, a **keep-going check**: Laya is asked "Keep doing ‹behaviour›, or do something else?" with the memory line and at most 2 emotion lines (budget 50 words). A `keep` answer ends the check there.
+- **Normal triggers:**
+  - the behaviour ends (`done`, `failed`, `abandoned`, `paused`);
+  - appraisal deltas with Σ|Δ| > 0.5 within 10 s (decay excluded);
+  - `player-arrived` or `player-gone`.
+- **Urgent triggers**, which may interrupt within the 20 s minimum:
+  - a stop signal;
+  - `hazard`;
+  - the behaviour's target player gone;
+  - `line-started` by a kid within 16 blocks;
+  - `looking-at-me`.
+- **Keep-going (code, R15)** every 30 s: it triggers selection when:
+  - the behaviour has run past its `typicalS` upper bound, or
+  - Stimulation is "low" or "very low" and the behaviour has run ≥ 60 s, or
+  - the last 3 actions of the behaviour failed.
 
 **The three passes run in parallel:**
 
-1. **`select.emotional`** (code). A data table gives each behaviour weights over the emotions and relations, e.g. `Explore: +0.5·Curiosity −0.3·Stimulation +0.2·Confidence`. Output: a score per behaviour.
-2. **`select.social`** (Laya, split per R8). For each player present, it asks two questions:
-   - "Do I want to be near ‹name› right now?" (no / maybe / yes)
-   - "Does ‹name› seem to want help?" (no / maybe / yes)
+1. **`select.emotional`** (code): a data table of behaviour × emotion and relation weights. It outputs a score per behaviour.
+2. **`select.social`** (engine per R15, split per R8). For each player present, it asks two questions, each ≤ 60 words, about that player only:
+   - "Do I want to be near ‹name› right now?"
+   - "Does ‹name› seem to want help?"
 
-   Each prompt is ≤ 60 words and holds that player's 4 axes and ≤ 3 recent events involving them. Code turns the answers into scores for Follow, Watch and Help-build per player. **Laya is never shown the list of behaviours.**
-3. **`select.situational`** (LLM). The whole-state prose: the personality, the emotions as words, the relations, the memory line, the inventory and the last salient events. Output (JSON schema): `{behaviour, params, because}`. This is the only pass that sees everything.
+   Code maps the answers to scores for Follow, Watch and Help-build per player. Gate 1 measured "wants help?" at `no` 0.65 on a real line-laying scene, so this question is in the benchmark (§9.2). Help-build doesn't depend on it: `line-started` is urgent, and the emotional table gives Help-build a flat bonus while `line-started` is fresh (≤ 15 s).
+3. **`select.situational`** (LLM): the whole state as prose. It outputs `{behaviour: enum, params, because}`. It picked `watch` 22 out of 22 times on a line scene in gate 1, so its merge weight starts low (§11), and its prompt is benchmarked like the others.
 
-**`select.merge`** (code) adds four inputs with fixed weights (R9, in data): `emotional`, `social`, `situational` (a one-hot vote), and `inertia`.
-- **Inertia** favours the current behaviour in proportion to `startedAgoS`, up to its typical length.
-- It penalises behaviours done in the last 5 minutes, and especially ones that were `abandoned` or `failed`.
-- Behaviours that aren't feasible are masked out: no players means no Follow, and no materials means no Build unless Mine can supply them.
-- The winner takes its params from `situational` if the LLM picked it too. Otherwise `params.<behaviour>` fills them in (§5.4).
+**`select.merge`** (code) adds fixed weights (R9, from data):
+- The inputs are `emotional + social + situational` (a one-hot vote).
+- **Inertia** favours the current behaviour, in proportion to `startedAgoS` up to its `typicalS`.
+- The **recency penalty** covers behaviours done in the last 5 min; `abandoned` and `failed` ones are penalised more. A `paused` Mine gets a **resume bonus** instead.
+- A **mask** removes behaviours that aren't feasible:
+  - no kid present: no Follow, Watch or Help-build;
+  - no materials, and Mine can't supply them: no Build;
+  - edits halted: nothing that edits.
 
-**Minimum time in a behaviour:** 20 s. Only these interrupt sooner: a stop signal, `hazard`, `player-gone` for the behaviour's target, or a failed outcome.
+The full breakdown (behaviour × input × weight → total) is logged on every run and shown in the TUI (criterion 6). The winner takes its params from `situational` if the LLM picked the same behaviour, otherwise from `params.*`.
+
+**Minimum time in a behaviour:** 20 s. Only an ending outcome or an urgent trigger overrides it.
 
 ### 5.4 Parameter experts
 
 | Expert | Engine | Output |
 |---|---|---|
-| `params.build` | LLM | template, variant, role → block mapping, restricted to templates the inventory can cover once Mine is counted |
-| `params.mine` | LLM, or the `need` event | block type |
-| `params.player` | code | the player with the highest affection among those present, unless the LLM named one |
-| `params.explore` | code | the least-explored direction, leashed to 64 blocks from the nearest player |
+| `params.build` | LLM | Template, variant, and a role → block mapping. The blocks must be in `WORLDGEN_BLOCKS` (`src/data/crafting.data.ts:25`) and in the inventory, or be minable. Never liquids or `CRAFTED_ONLY`. The merge rejects anything else. |
+| `params.mine` | LLM, or the `need` event | A block type in `WORLDGEN_BLOCKS`, ores included (R14). A `paused` dig is offered first. |
+| `params.player` | code | The kid present whom the bot has spent the fewest minutes with in the last 10 minutes, unless the LLM named one or `line-started` or `looking-at-me` names one. |
+| `params.explore` | code | The least-explored direction within the leash (§6). |
 
 ### 5.5 Layer 5: expression (code, R2)
 
-**Style** is computed continuously from the emotions and applied by the body:
-- Walking speed and pauses come from Stimulation and Mood.
-- How often it looks around comes from Curiosity.
-- Its preferred distance from players comes from Confidence and Affection.
-- It hops between steps when Stimulation and Mood are both high, and walks slower with a lowered pitch when Mood < −0.4.
+**Style**, applied continuously:
+- walking speed comes from Stimulation and Mood (this needs the SDK's optional `walkTo` speed, §10);
+- how often it looks around comes from Curiosity;
+- its preferred distance from players comes from Confidence and Affection.
 
-**Gestures** are short reactions (≤ 2 s) that pause the behaviour and then resume it. They're triggered by emotion deltas, at most one every 5 s, and the table is data:
+**Gestures** are short reactions (≤ 2 s), triggered by appraisal deltas.
+- They fire **only when the bot is inside some kid's view**: within 20 blocks and within ±50° of that kid's yaw. Otherwise they're skipped, since nobody would see them.
+- At most one every 5 s.
+- A gesture moves with `move()`, which cancels a walk, so the behaviour reissues its current action afterwards.
+- Gate 1 measured that small head motions (look down, pause) don't read at distance, so positive gestures are big, and negative ones are distinct from them.
 
 | Change | Gesture |
 |---|---|
-| Mood +≥ 0.3 | double hop; a `firework` fx if the cause is a finished build |
-| Mood −≥ 0.2 | stop, look down 1.5 s |
-| Confidence −≥ 0.2 | back off 2 blocks from the event's cell or player |
-| Affection toward P +≥ 0.15 | turn to P, hop |
-| Grievance toward P −≥ 0.2 | turn away from P |
-| Curiosity +≥ 0.2 | turn toward the event, pause 1.5 s |
-| Patience < −0.5 and a failed outcome | 3 quick hops |
+| Mood +≥ 0.3 | a double hop, plus a `firework` fx if the cause is a finished build |
+| Mood −≥ 0.2 | stop and sink: crouch-look down for 1.5 s, then a slow turn |
+| Confidence −≥ 0.2, **not** caused by a kid approaching | back off 2 blocks from the cause |
+| Affection toward P +≥ 0.15 | turn to P and hop |
+| Grievance toward P −≥ 0.2 | turn away from P (R13) |
+| Curiosity +≥ 0.2, or `found` | turn toward the thing and pause 1.5 s; for uncovered ore, stand beside it facing it for 3 s |
+| Patience < −0.5 and a failed outcome | an abrupt 180° turn and a 3-block walk away from the failed spot (it has to differ from the happy double hop) |
 | `player-arrived` with Affection ≥ 0.3 (greeting) | turn, walk 2 blocks toward them, hop |
 
 ## 6. The behaviours
 
-Every behaviour is a module:
+**One leash for everything:** while any kid is present, every target (a site, a dig start, a waypoint, the Rest spot) must lie within **32 blocks** of the nearest kid. With no kid present, the leash is 32 blocks from the bot's latest build, or from world spawn if there are no builds.
 
 ```ts
 interface Behaviour<P> {
 	kind: BehaviourKind;
-	plan(params: P, state: State): Promise<Plan>;   // may use the LLM
-	next(plan: Plan, state: State): Action | 'done' | { failed: string };  // code
-	judgeFit?(action: Action, state: State): FitQuestion | null;  // null: no Laya fit check
+	plan(params: P, state: State): Promise<Plan>;
+	next(plan: Plan, state: State): Action | 'done' | { failed: string } | 'paused';
+	judgeFit?(action: Action, state: State): FitQuestion | null;
 	typicalS: [number, number];
+	plannedEdits(plan: Plan): number;           // for the tripwire (§7.2)
 }
 ```
 
-| Behaviour | Plan | Next action | Done | Failed |
-|---|---|---|---|---|
-| **Follow {P}** | none | today's standing-intent follow; the distance comes from style | selection moves on | P gone |
-| **Help-build {P}** | today's line detector | the next cell in the kid's line, from the bot's inventory | the kid stops (no placement in 15 s) | short of the block, which also writes `need` |
-| **Build {template}** | `params.build`, then a site search (code): flat natural ground whose footprint and 1-block margin are all natural, within 48 blocks of a player | the next template cell, bottom-up then in template order; walk or fly within reach first | every cell placed; the build is persisted | a site cell turns out modified, which triggers a replan; no site within 48 blocks; materials run out, which writes `need` |
-| **Mine {block}** | a target chosen with the world generator's knowledge (the nearest reachable one, but not through kid-modified cells); a walkable staircase toward it | the next staircase cell (break it), then the target | got N (default 8) of them, or 90 s passed | a hazard on the route; stuck 3 times |
-| **Explore** | a direction from `params.explore`; waypoints every ~12 blocks | walk or fly to the next waypoint; look at salient things | 60–120 s, or a `found` event | stuck 3 times |
-| **Watch {P}** | none | stay at the style distance, look at what P looks at or edits | 30–60 s | P gone |
-| **Rest** | the latest build, or where it stands | go there, idle, look around slowly; Stimulation drifts toward 0 twice as fast | 30–90 s | — |
+| Behaviour | Plan | Next action | Ends |
+|---|---|---|---|
+| **Follow {P}** | none | today's standing-intent follow; the distance comes from style | P gone (failed); otherwise at selection |
+| **Help-build {P}** | today's line detector | the next cell in the kid's line. The block is the kid's block type, free outside must-mine worlds (R12). In must-mine worlds it comes from inventory, and a shortage writes `need`. | done when the kid places nothing for 15 s |
+| **Build {template}** | `params.build`, then the site search (§6.1) | levelling cells first, then template cells bottom-up in template order. It walks or flies within reach first. | done when every cell is placed (persisted). Failed when a site cell turns `kid` (it replans once), or there's no site. Materials running out writes `need`. |
+| **Mine {block}** | resume a paused dig, or start one (§6.2) | the next staircase cell, with a floor check | done with N of the block (default 8); paused at 120 s; failed on a hazard or when stuck 3 times |
+| **Explore** | a direction and waypoints about 12 blocks apart | walk or fly to the next waypoint; look at salient things | 60–120 s, or on `found` |
+| **Watch {P}** | none | stay at the style distance; look at what P looks at or edits | 30–60 s; P gone |
+| **Rest** | the latest build within the leash, or where it stands | go there, idle, look around slowly; Stimulation's half-life is halved while resting | 30–90 s |
 
-Everything the bot breaks is added to its inventory. Every placement takes one from it.
+Everything the bot breaks goes into its inventory as the same block id (there are no drops or conversions, `onRemoved`). Every placement from inventory takes one. The bot never holds liquids or `CRAFTED_ONLY` blocks.
 
-**Builds** are recorded in `builds` as `{template, variant, origin, cells, status}`. A kid adding a block adjacent to a bot build, in the build's footprint box, produces `added-to-my-build`.
-
-**Templates** live in `bots/src/brain/templates.data.ts` (R10): cells relative to an origin, each with a role (`wall`, `roof`, `floor`, `accent`, `door-gap`). The first set:
+**Templates** live in `bots/src/brain/templates.data.ts` (R10): cells relative to an origin, each with a role (`wall`, `roof`, `floor`, `accent`, `door-gap`). Roles map only to `WORLDGEN_BLOCKS`. The first set:
 - house 5×5×4
 - wall 7×3
 - tower 3×3×8
@@ -292,40 +390,74 @@ Everything the bot breaks is added to its inventory. Every placement takes one f
 
 Each comes in small and medium.
 
+**Clutter limits** (data):
+- at most 3 standing builds per world; with 3, Build is masked unless it's adding to one of its own;
+- a site must be ≥ 12 blocks from any `kid` cell, and ≥ 16 blocks from world spawn;
+- a dig's entrance must be ≥ 12 blocks from any `kid` cell.
+
+### 6.1 The Build site search
+
+Gate 1 found that a strictly flat 7×7 site is missing within 48 blocks at 29 of 54 sampled positions. Allowing ±1 height, it's missing at only 2 of 54. So:
+
+- **What qualifies:** the footprint plus a 1-block margin is all `natural` and within ±1 of the median height, with the build's height clear above. It must meet the clutter limits and the leash.
+- **Levelling is part of the plan:** fill low cells from inventory, then dig high cells, whose blocks go to inventory. Those edits count in `plannedEdits`.
+- **The search is spread over ticks:** one chunk per slice, yielding between slices, because one 48-block search measured 75–312 ms of synchronous generation, which would stall the 100 ms pose ticks. The SDK's `region()` is capped at 32 per side, so the search walks chunks itself.
+- **No site within the leash** means Build fails with `no-site`, and the recency penalty keeps it from being picked again at once.
+
+### 6.2 Mine and digs (R14)
+
+- **The target** is the nearest cell of the block type that is reachable through `natural` and `bot` cells. The bot knows it from the generator: this is x-ray, accepted for v1.
+- **The route** is a walkable staircase, 1 wide and 2 high, going down one step at a time.
+- **A dig** is persisted as `{block, entrance, target, cells done, status}`. A Mine episode lasts at most 120 s. At the time budget it ends as `paused`, not `failed`, and the next Mine for the same block resumes the dig at its last step.
+- **Deep targets take several episodes.** The nearest deepslate diamond measured 98–101 steps down, about 9 minutes of stone digging.
+- **Floor check (sense tier):** before stepping, the cell under the next step must be solid. If it's air (a cave), the bot places a block from inventory, or re-routes when it has none.
+- **Hazards:** a route cell touching liquid ends the episode as `hazard`, and the dig is re-routed next time.
+- **Kids nearby:** a kid inside the staircase's buffer blocks it. That counts as `stuck`, not `hazard`.
+- **Uncovered ore:** when the staircase uncovers an ore on the way, the bot writes `found`, which triggers the stand-beside-it gesture. Ores that aren't the target are left in place.
+
 ## 7. The planner → judge → execute loop and safety
 
 ```
-plan once → loop { planner.next → judge → ok ? execute → result event : back to planner (with reason) }
-3 rejections in a row, or 3 failed executions of the same action → the behaviour fails
+plan once → loop { planner.next → judge → ok ? execute → result : back to planner (with reason) }
+3 rejections in a row, or 3 failed executions of one action → the behaviour fails
 ```
 
 ### 7.1 The judge, in three tiers
 
-1. **Safety** (code, a hard veto that nothing overrides). Today's rules stay, plus the new ones:
-   - no edit on a non-natural cell (`isNatural`, §4.5) or within 1 block of one, except Help-build, which works on the kid's line under today's rules;
-   - the 1-block buffer around every kid, and nothing inside a kid's body;
-   - no breaking a cell that touches water or lava, and no breaking under a player (any cell within 1 block horizontally and at or below their feet down to 3 below);
-   - the stop signal: after a kid breaks a bot block, no edits near that kid for 10 minutes;
-   - a minimum gap between edits, 0.6 s;
+1. **Safety** (code, a hard veto that nothing overrides):
+   - Help-build aside, no edit on a `kid` cell or inside its buffer (§4.5);
+   - the 1-block buffer around every kid's body, at every height (today's `guard.ts`);
+   - no breaking a cell that touches water or lava;
+   - **the stop signal, as today's code does it:** after a kid breaks a bot block, no edits within that kid's buffer, following the kid, for `STOP_SIGNAL_MS` = 10 min (`bots/src/body/stop-signal.ts`);
+   - a gap of `EDIT_GAP_MIN_MS` = 600 between edits;
    - `--no-edits`;
-   - placing needs inventory > 0;
-   - **plan-bound** (R11): every edit must be an action the active plan owns.
-2. **Sense** (code). Is the action still valid? The target must still be reachable, the cell still air (to place) or still the expected block (to break), and it must not be the same failed action a 3rd time.
-3. **Fit** (Laya, optional). It's asked only when a player is within 8 blocks, or when the action touches a cell a player is looking at. Question (≤ 60 words): "‹personality in ≤ 8 words, relevant emotion›. ‹P› is ‹d› blocks away, ‹doing›. I'm about to ‹action›. Should I?" The answers are **no** (reject), **wait** (pause 2–4 s, then retry) and **yes**.
+   - inventory > 0 to place, except for Help-build under R12;
+   - **plan-bound:** every edit must be an action the active plan owns, and within its `plannedEdits`.
+2. **Sense** (code):
+   - the target is still reachable;
+   - the cell is still air (to place) or still the expected block (to break);
+   - the floor check (§6.2);
+   - it isn't the same failed action a 3rd time.
+3. **Fit** (engine per R15, optional). It's asked only when a kid is within 8 blocks, or the action touches a cell a kid is looking at. It's ≤ 60 words.
+   - **no** rejects, but only if p(no) ≥ 0.6. Gate 1 saw "place stone on my own tower, Noah 7 blocks away" answered `no`.
+   - **wait** pauses 2–4 s, at most 3 times per action; after that the action goes ahead.
+   - **yes** goes ahead.
+   - Fit cases are in the benchmark.
 
-### 7.2 Runaway tripwire (R11)
+### 7.2 Runaway tripwire (repaired)
 
-Any of these **halts all edits for the rest of the session**:
-- more than 30 edits in 60 s;
-- the same cell edited 3 times;
-- an edit refused as not belonging to the plan.
+Edits for the rest of the session are **halted** (`body.editsHalted`) when either happens:
 
-The halt shows in the debug view and the log, and the bot keeps running with edits off. The SDK journal keeps every edit, so `revert` can still undo a session.
+- **Rate:** more edits in the last 60 s than `60 000 / EDIT_GAP_MIN_MS × 1.2` (120 at the 600 ms floor). Gate 1 measured normal pacing at 33–100 edits a minute, above rev 1's limit of 30. This limit sits above the fastest legal pace, so it catches pacing bugs, not work.
+- **Churn:** the same cell edited 3 times within 10 minutes. Levelling and help-build write a cell at most twice.
+- **Plan overrun:** a behaviour tries more edits than its `plannedEdits` + 10%.
+
+The halt is logged loudly and shown in the TUI. The bot keeps running with edits masked out. Criterion 8 checks that normal sessions never trip it.
 
 ### 7.3 Interruptions
 
-- A gesture pauses the loop and resumes it afterwards.
-- A selection switch stops the loop after the current action. A walk is cancelled with `move(pose())`, as today. The old behaviour's outcome is `interrupted`.
+- A gesture pauses the loop, then the current action is reissued.
+- A switch stops the loop after the current action. A walk is cancelled with `move(pose())` (`bots/src/body/act.ts:205`). The old behaviour ends `interrupted`, or `paused` for a Mine.
 
 ### 7.4 Pacing
 
@@ -333,51 +465,114 @@ The gap between actions comes from style: 0.6 s (excited) to 2 s (calm). The saf
 
 ## 8. The debug view, logs and replay
 
-- **`--tui`**: a live terminal view, plain ANSI redraw at 4 Hz with no UI framework. It shows:
-  - a header with the model health and latency, and the LLM queue depth;
-  - emotion bars with a baseline marker, the value, and the last delta with its cause and age;
+- **`--tui`**: a live terminal view, plain ANSI at 4 Hz with no UI framework. It shows:
+  - a header with the engine health, latency, the LLM queue, and any **edits halted** flag;
+  - emotion bars with a baseline marker, word band, value, and the last delta with its cause and age;
   - the relations table;
-  - the active behaviour with plan progress, the last judge verdict per tier, and the memory line;
-  - the inventory;
-  - the expert feed, newest first: expert, engine, latency, prompt word count, answer, and the patch it produced.
-- **The log** is one JSONL line per change event and per expert call. An expert-call line holds the exact prompt, the answer, latency, fallback use and the merged patch. It replaces today's per-tick log. The folder is `bots/.state/logs/…`, as today.
-- **`npm run bot:replay <log>`** renders a recorded session in the same view. Space pauses, ←/→ steps, and `e` shows the full prompt and answer of the highlighted call.
-- **Poke keys** (`--tui` only, refused when the target is the live server): set an emotion axis, or inject an event from a menu ("‹player› broke my block", "found diamond").
+  - the active behaviour with plan progress, the last verdict per judge tier, and the memory line;
+  - **the last selection's merge breakdown**;
+  - the inventory, and any paused digs;
+  - the expert feed: expert, engine, latency, prompt words, answer, fallback, patch.
+- **Logs:** one JSONL line per change event and per expert call. A call's line holds the exact prompt, answer, latency, fallback flag, `materialKey` and merged patch. The last 20 logs are kept per world, in `bots/.state/logs/…`.
+- **`npm run bot:replay <log>`** renders a recorded session. Space pauses, ←/→ steps, and `e` shows the full call behind the highlighted line.
+- **`npm run bot:replay <log> --data <override.ts>`** is counterfactual tuning. It re-runs the recorded event stream and model answers through changed data tables (weights, gestures, fallbacks), and lists every selection that flips. That's how Julien tunes the roughly 330 hand-set numbers without playing a new session each time.
+- **Poke keys** (`--tui` only, refused against the live target): set an emotion axis, or inject an event from a menu.
 
 ## 9. Testing
 
-- **Experts:** each is tested alone on fixed slices. The model engines are faked with recorded answers. Every Laya expert has a prompt-budget test (§3.1).
-- **Merge, decay, salience, safety, `isNatural`:** pure code. Safety is **property-tested**: random worlds, kid-modified sets and plans, asserting criterion 4.
-- **Scheduler:** replays a recorded event stream with recorded model answers, deterministically, with no GPU. It checks triggers, debounce, stale-answer discard and the fallbacks, with one engine and then both engines down (criterion 5).
-- **Personality divergence:** criterion 3, on a replayed stream.
-- **The appraisal benchmark:** the labelled set (criterion 2) is a fixture. The benchmark script runs it against the live Laya and prints the accuracy per axis. It's measured, not in CI.
-- **End-to-end:** the local `mcserver` on a temp database, as today (`bots/test/e2e.ts`). There's one scenario per behaviour, plus a mixed 5-minute session that asserts criteria 1 and 4.
-- **The instrument rule:** each test in the plan names the defect that turns it red and the build it was seen to fail on. A test that can't go red doesn't count.
+### 9.1 Tests
 
-## 10. Layout
+- **Experts:** each is tested alone on fixed slices, with the model engines faked, plus a prompt-budget test for each Laya-capable expert (§3.1).
+- **Pure code:** decay (including the half-life test in §4.1), merge, salience, ownership, safety and the tripwire. Ownership and safety are **property-tested** on random worlds, kid edits, foreign overwrites of bot cells and plans. They assert criterion 4, and that a kid overwriting a bot cell makes it `kid`.
+- **Scheduler:** a recorded event stream plus answers cached by prompt hash, deterministic with no GPU. It checks triggers, debounce `{quietMs, maxWaitMs}`, `materialKey` staleness (decay alone must never make an answer stale), queue replacement, lane priority, and the fallbacks with each engine down and both down (criterion 5).
+- **Criterion 3:** runs on the prompt-hash cache, which calls a live model on a miss.
+- **Criterion 8:** full plans at the fastest pacing against a fake port.
+- **End-to-end:** the local `mcserver` on a temp database, as today (`bots/test/e2e.ts`). There's one scenario per behaviour; a kid-lays-a-line scenario (criterion 7); a Mine that pauses and resumes; a `revert` that reconciles inventory and `owned`; and a mixed 5-minute session asserting criteria 1, 4 and 8.
+- **The instrument rule:** each test in the plan names the defect that turns it red and the build it was seen to fail on.
+
+### 9.2 The model benchmark (R15)
+
+`bots/bench/` holds labelled cases for every model question: appraisal direction, social near/help, fit, and situational. The appraisal set:
+- has ≥ 40 cases;
+- has classes balanced to at least ⅓ each;
+- includes the 12 gate-1 cases.
+
+`npm run bot:bench` runs every candidate engine and wording against live models. It reports accuracy, recall per class, and latency, and it runs an always-`stay` baseline to show that the bar rejects it.
+
+Julien reviews the labels, since they encode what he means by each axis. The chosen configuration is written to `engines.data.ts` with its numbers. This runs **before** the plan's model-expert tasks. It's measured, not run in CI.
+
+## 10. Layout and build order
 
 ```
 bots/src/brain2/
-	store.ts            state, apply, change events, versions
-	scheduler.ts        triggers, Laya lane, LLM priority queue, stale discard
-	engines/laya.ts     wraps brain/systemone.ts
-	engines/llm.ts      Ollama/vLLM JSON-schema client
-	experts/            perceive, salience, decay, appraise-detect, appraise-size,
-	                    select-*, params-*, react
-	behaviours/         follow, help-build, build, mine, explore, watch, rest
-	judge.ts            safety / sense / fit tiers, tripwire
-	render/             the shared text renderers for prompts (memory line, emotion words)
-	persist.ts          the memory file
-	tui.ts, replay.ts
-	*.data.ts           personalities, emotion→behaviour weights, gestures, salience rules,
-	                    templates, appraisal fallback table, merge weights
+	store.ts  scheduler.ts  judge.ts  ownership.ts  persist.ts  tui.ts  replay.ts
+	engines/  laya.ts (wraps brain/systemone.ts)  llm.ts (Ollama JSON-schema)  health.ts
+	experts/  perceive salience decay appraise-detect appraise-size select-* params-* react
+	behaviours/  follow help-build build mine explore watch rest  site-search.ts
+	render/   prompt renderers (memory line, word bands, event sentences)
+	*.data.ts personalities, emotional weights, merge weights, gestures, salience, templates,
+	          appraisal fallback, engines (R15 results), clutter limits
+bots/bench/   labelled cases and the bench runner
 ```
 
-It goes in `brain2/` so today's companion keeps working until the new brain passes its end-to-end runs. The companion switches over with `--brain v2`, and the old tick is removed in a later cleanup.
+**SDK additions** (`packages/minicraft-bot`, no game or server change):
+- `world.isEdited(x,y,z)`, a read-only accessor over the overlay;
+- an optional `speed` on `walkTo`, still ≤ 1 block per pose.
 
-## 11. Open items for the plan
+Everything else (`flyTo`, `mine`, `break`, `journal`, `revert`, `onBlockChange` with `by`) exists already.
 
-- The LLM model and whether it fits (§3.2): task 1 measures it.
-- The starting weights (merge, emotional table, gestures) are guesses. They get tuned against replays, and each tuning is logged with its before and after numbers.
-- The labelled appraisal set needs about 40 cases. Julien should look over the labels, since they encode what he means by each axis.
-- Mine's target choice uses the world generator's knowledge (x-ray). The staircase makes it look natural, but the kid can't do the same. That's accepted for v1 and flagged here for review.
+**Build order**, where each step is testable without the step after it:
+1. The store, persistence, ownership (with `isEdited`), and the safety judge with the tripwire, property-tested offline. The JSONL log format is frozen here.
+2. The behaviours with code-only selection and all the fallbacks, end to end on a local `mcserver`. That proves criteria 4, 5 and 8 with no model at all.
+3. The benchmark (§9.2): labels, then Julien's review, then the engine choice.
+4. The Laya experts, and then the LLM experts.
+5. The TUI and replay, including `--data`, and criteria 1, 3, 6 and 7.
+
+It all lives in `brain2/`, so today's companion keeps working. `--brain v2` switches over, and the old tick is removed in a later cleanup.
+
+## 11. Open items and starting numbers
+
+- **Starting weights are guesses**, tuned through `replay --data` and logged with their before and after numbers. `select.situational` starts at the lowest merge weight of the three passes because of its measured watch prior.
+- **The benchmark could fail** criterion 2 for every configuration. If so, the plan stops and Julien decides (criterion 2).
+- **Mine uses x-ray (R14).** It's accepted for v1. The staircase keeps it looking like a kid's digging.
+
+## 12. Gate 1 dispositions (rev 1 → rev 2)
+
+| Finding (lens) | Disposition |
+|---|---|
+| Tripwire trips on every build and staircase (rigour B1, engine B1) | Fixed §7.2, criterion 8 |
+| A kid's block can be taken as the bot's (rigour B2, engine M2) | Fixed §4.5 (`owned` checked against the current block, dropped on foreign edit) |
+| Decay rule freezes 7 of 8 axes (rigour B3) | Fixed §4.1 (accumulated drift, half-life test) |
+| "Changed materially" undefined (rigour M1) | Fixed §3 (`materialKey`) |
+| Decay triggers selection (rigour M2) | Fixed §4.1, §5.3 |
+| The bot appraises its own edits; unbounded queue (rigour M3) | Fixed §4.4, §5.1, §3 (one queued call per expert), §3.1 (debounce) |
+| Two meanings of "natural"; bot cells block the bot (rigour M4) | Fixed §4.5 (three classes, buffer on `kid` only) |
+| `revert` vs. inventory and builds (rigour M5) | Fixed §4.6 |
+| Stop-signal wording ≠ code (rigour M6) | Fixed §7.1 (matches the code) |
+| Rigour minors (criterion 1 wording, schema migration, personality source, restart halving, uuid key, no-player leash, unminable Help-build blocks, fit wait cap, churn window, Rest vs. decay, lane priority, other bots, log growth, `explored` serialisation, journal cap) | Fixed §2, §3, §4.2, §4.5, §4.6, §6, §7, §8, R12 |
+| `detect` fails criterion 2 (models B1) | R15: engine and wording chosen by benchmark §9.2; criterion 2 hardened |
+| Keep-going never switches (models M1) | R15: keep-going is code (§5.3) |
+| VRAM needs `LAYA_MODELS=english` (models M2) | Fixed §3.2, health check |
+| Ollama ignores schema bounds; ambiguous axis (models M3) | Fixed §5.2 |
+| Fit wrong 2 of 3 times (models M4) | Fixed §7.1 (p(no) ≥ 0.6, wait cap, benchmarked) |
+| Criterion 3 was near-vacuous (models M5) | Fixed §2 (prompt-hash cache, live on a miss) |
+| Watch prior in the LLM and `social` (models M6) | §5.3: urgent `line-started` and a flat bonus; criterion 7; benchmarked; low starting weight |
+| Models minors (balanced labels, prompt-budget leak test, warm-up) | Fixed §9.2, §3.1, §3.2 |
+| Mine's 90 s cap can't reach diamonds (engine M1) | R14 and §6.2 (persisted digs, `paused`) |
+| No flat sites (engine M3) | Fixed §6.1 (±1 plus levelling) |
+| The site search stalls pose ticks (engine M4) | Fixed §6.1 (spread over ticks) |
+| `isNatural` via the generator vs. the overlay (engine minor 1) | Adopted: SDK `isEdited` |
+| Only worldgen blocks; never TNT or liquids (engine minor 2) | Fixed §5.4, §6 |
+| Cave breakthroughs; dug kid bases (engine minor 3) | Fixed §6.2 floor check, §4.5 2-block breaking buffer |
+| Walk speed needs the SDK; gestures cancel walks (engine minor 4) | Fixed §10, §5.5 |
+| Help-build has no blocks (consumer B1) | R12 |
+| Punishing the kid's kill switch (consumer B2) | R13: **kept as designed** by Julien's ruling |
+| The bot takes his diamonds (consumer B3) | R14: **the bot may mine ores**, by Julien's ruling. It still shows uncovered ores it isn't after. |
+| Too little time with the kid (consumer M4) | §5.3 urgent triggers, criterion 7 |
+| No leash (consumer M5) | Fixed §6 (32 blocks) |
+| Clutter and spot-hogging (consumer M6) | Fixed §6 clutter limits, `revert --builds` |
+| Gestures invisible or confusable (consumer M7) | Fixed §5.5 (in-view only, distinct negatives) |
+| Favouritism between two kids (consumer M8) | Fixed §5.4 (the least recent company) |
+| About 330 hand-set numbers; no counterfactual (consumer 9) | §8 merge breakdown and `replay --data` |
+| Criteria miss what a parent cares about (consumer 10) | Criterion 7 added |
+| Backing off when the kid approaches (consumer 11) | Fixed §5.5 |

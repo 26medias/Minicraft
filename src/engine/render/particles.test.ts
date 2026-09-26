@@ -73,3 +73,19 @@ describe('spawnBreak chips are lit, not black', () => {
 		}
 	});
 });
+
+describe('spawnBreak chips carry the chunk shader\'s shade attribute', () => {
+	it('every chip has shade = [sun 0, AO 1]: the chunk material multiplies by AO, and a missing attribute reads 0 (black chips)', () => {
+		const { scene, ps } = system();
+		ps.spawnBreak(0, 0, 0, 1);
+		expect(scene.children.length).toBeGreaterThan(0);
+		for (const m of scene.children) {
+			const g = (m as THREE.Mesh).geometry;
+			const shade = g.getAttribute('shade');
+			expect(shade, 'chip has a shade attribute').toBeDefined();
+			expect(shade.count).toBe(g.getAttribute('position').count);
+			for (let i = 0; i < shade.count; i++) expect([shade.getX(i), shade.getY(i)]).toEqual([0, 1]);
+		}
+	});
+});
+

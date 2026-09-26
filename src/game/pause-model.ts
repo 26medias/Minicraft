@@ -10,6 +10,8 @@ export type PauseState = {
 	inventoryOpen: boolean;
 	pickerOpen: boolean;
 	frozen: boolean;
+	/** The browser window has keyboard focus (document.hasFocus()). */
+	focused: boolean;
 };
 
 /** The I screen, the colour picker, a freeze or a quit in progress owns the screen. */
@@ -17,9 +19,13 @@ function ownedElsewhere(s: PauseState): boolean {
 	return s.inventoryOpen || s.pickerOpen || s.frozen || s.quitting;
 }
 
-/** Rule (a): a pointer unlock nobody owns — the real Esc (M1), alt-tab — opens the menu. */
+/**
+ * Rule (a): a pointer unlock nobody owns — the real Esc (M1) — opens the menu. An unlock that
+ * came with the window losing focus (the PrintScreen screenshot tool, alt-tab) opens nothing: the
+ * screenshot shows the game, and a click on it takes the mouse back.
+ */
 export function shouldOpenOnUnlock(s: PauseState): boolean {
-	return !s.pauseOpen && !ownedElsewhere(s);
+	return s.focused && !s.pauseOpen && !ownedElsewhere(s);
 }
 
 export type EscapeAction = 'open' | 'back' | 'none';

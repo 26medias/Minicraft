@@ -14,7 +14,7 @@
  */
 import type { WalkResult } from 'minicraft-bot';
 import { isBlocked } from '../body/act.js';
-import { bodyTop, routeTop, topSolid } from '../brain2/behaviours/site-search.js';
+import { bodyTop, groundTop, routeTop, topSolid } from '../brain2/behaviours/site-search.js';
 import type { Body, WorldView } from '../port.js';
 import type { Vec3 } from '../types.js';
 
@@ -162,6 +162,19 @@ export function landingFor(world: WorldView, to: { x: number; y?: number; z: num
 export interface LegOpts {
 	alive?: () => boolean;
 	maxReissue?: number;
+	/** Called for a last-resort teleport-up inside flyHigh (see there); optional, for the caller's log. */
+	log?: (e: Record<string, unknown>) => void;
+}
+
+/** The feet cell on top of column (x, z) when a body fits there under open sky; null otherwise. Duplicates wander.ts's
+ * `standable` (kept free of a dependency on it) for flyHigh's own last-resort teleport. */
+function standableAbove(world: WorldView, x: number, z: number): Vec3 | null {
+	const bx = Math.floor(x), bz = Math.floor(z);
+	const g = groundTop(world, bx, bz);
+	if (g < 0) return null;
+	const y = g + 1;
+	if (!bodyFits(world, bx, y, bz) || !openSky(world, bx, bz, y)) return null;
+	return { x: bx + 0.5, y, z: bz + 0.5 };
 }
 
 /** One flight, reissued on 'cancelled' (a hop, an expression) while `alive()`. Rejects on a block. */
@@ -188,14 +201,24 @@ export async function ascend(body: Body, y: number, o: LegOpts = {}): Promise<Wa
 }
 
 /**
- * "Fly high": sideways to an open-sky column within SKY_SEARCH (the bot's own when open), straight up to the route's
- * highest surface + CRUISE_ABOVE, across, then down onto `landingFor(to)`. Rejects on a blocked leg.
+ * "Fly high": sideways to an open-sky column within SKY_SEARCH (the bot's own when open, widened to
+ * SUBMERGED_SKY_SEARCH when nothing turns up that close — submerged under a wide ice sheet, or simply boxed in under
+ * any ceiling), straight up to the route's highest surface + CRUISE_ABOVE, across, then down onto `landingFor(to)`.
+ * When even the wider search finds nothing, a last resort: straight up (a teleport, `body.move`) onto the first
+ * standable open-sky cell above this very column — standing on the ice, if that's what's overhead — logged as
+ * `unstick` level 3. Otherwise rejects on a blocked leg.
  */
 export async function flyHigh(body: Body, world: WorldView, to: { x: number; y?: number; z: number }, o: LegOpts = {}): Promise<WalkResult> {
 	const p = body.pose();
-	const skyR = isSubmerged(world, p) ? SUBMERGED_SKY_SEARCH : SKY_SEARCH;
-	const sky = nearestOpenSky(world, p.x, Math.floor(p.y), p.z, skyR);
-	if (!sky) throw new Error(`flyHigh: no open sky within ${skyR}`);
+	let sky = nearestOpenSky(world, p.x, Math.floor(p.y), p.z, SKY_SEARCH);
+	if (!sky) sky = nearestOpenSky(world, p.x, Math.floor(p.y), p.z, SUBMERGED_SKY_SEARCH);
+	if (!sky) {
+		const up = standableAbove(world, p.x, p.z);
+		if (!up) throw new Error(`flyHigh: no open sky within ${SUBMERGED_SKY_SEARCH}`);
+		body.move(up);
+		o.log?.({ k: 'unstick', level: 3, how: 'teleport-up', reason: 'no-open-sky', at: { x: Math.round(p.x * 10) / 10, y: Math.round(p.y * 10) / 10, z: Math.round(p.z * 10) / 10 } });
+		return 'arrived';
+	}
 	if (Math.floor(sky.x) !== Math.floor(p.x) || Math.floor(sky.z) !== Math.floor(p.z)) {
 		const r = await flyLeg(body, { x: sky.x, y: p.y, z: sky.z }, o);
 		if (r !== 'arrived') return r;

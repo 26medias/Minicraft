@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import { BlockedError } from 'minicraft-bot';
-import { airPathToSky, bodyFits, navigate, StuckWatchdog, walkOrFly } from '../../src/nav/navigate.js';
+import { airPathToSky, bodyFits, flyHigh, navigate, StuckWatchdog, walkOrFly } from '../../src/nav/navigate.js';
 import { pickWanderSpot, standable, wanderer } from '../../src/nav/wander.js';
 import { FakeBody, FakeWorld } from '../fake-port.js';
 import type { Vec3 } from '../../src/types.js';
@@ -111,6 +111,21 @@ describe('navigator', () => {
 		const body = physBody(world, { x: 300.5, y: Y, z: 300.5 });
 		await expect(walkOrFly(body, world, { x: 330.5, z: 300.5 }, { mayFly: false })).rejects.toThrow();
 		expect(body.calls.some((c) => c.fn === 'flyTo')).toBe(false);
+	});
+
+	it('flyHigh: a dry air pocket under an ice sheet wider than the search radius teleports up onto the ice', async () => {
+		const world = floorWorld();
+		// The kid mined out the water here, but never touched the ice above: a dry, enclosed pocket (feet and head
+		// both clear) under an unbroken ice ceiling that reaches well past SUBMERGED_SKY_SEARCH in every direction —
+		// SKY_SEARCH (6) finds nothing, and neither does the widened search.
+		world.fill({ x: 290, y: Y + 3, z: 290 }, { x: 329, y: Y + 3, z: 329 }, 'ice');
+		const body = physBody(world, { x: 309.5, y: Y, z: 309.5 }); // dead centre, well past 16 from any edge
+		const logs: Array<Record<string, unknown>> = [];
+		const r = await flyHigh(body, world, { x: 340.5, z: 340.5 }, { log: (e) => logs.push(e) });
+		expect(r).toBe('arrived');
+		expect(body.pose()).toMatchObject({ x: 309.5, y: Y + 4, z: 309.5 }); // straight up onto the ice, not toward the target
+		expect(body.calls.some((c) => c.fn === 'flyTo')).toBe(false); // no flight leg — the teleport alone
+		expect(logs.some((e) => e.k === 'unstick' && e.level === 3 && e.how === 'teleport-up' && e.reason === 'no-open-sky')).toBe(true);
 	});
 });
 

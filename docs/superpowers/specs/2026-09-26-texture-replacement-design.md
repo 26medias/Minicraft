@@ -1,156 +1,256 @@
-# Texture replacement: Mojang out, CC BY-SA in — design (2026-09-26)
+# Texture replacement: Mojang out, CC BY-SA in — design (rev 2, 2026-09-26)
 
-Status: draft, pre-gate-1. Branch `textures` (worktree off `main` @ 8c7aec3).
-Background: `docs/texture-replacement-research.md`. Sources and the per-tile fill map: `docs/texture-fill-map.md`.
+Status: **rev 2, gate-1 findings incorporated** (rigour, engine, boundary, player lenses). Branch `textures`
+(worktree off `main` @ 8c7aec3). Background: `docs/texture-replacement-research.md`. Candidate map:
+`docs/texture-fill-map.md` (historical; after this change `src/data/texture-sources.data.ts` is the truth).
 
-## 1. Goal
+## 1. Goal and scope
 
-Every image under `src/assets/blocks/` becomes free-licensed art with recorded provenance. No Mojang
-pixels ship in the bundle. The game's look changes. Nothing else does: block ids, catalog rows, saves,
-multiplayer protocol and gameplay stay untouched.
+Every block texture under `src/assets/blocks/` becomes free-licensed art with recorded provenance. The
+game's block look changes. Nothing else does: block ids, catalog rows and flags, saves, the multiplayer
+protocol and gameplay stay untouched.
 
-**Decided by the user (2026-09-24):** base pack **Pixel Perfection CE**, gaps filled from **Bauniclonia
-and/or REFI**. Rejected: generated/AI art, blockgen, Tiny Pixels. Standing rule: the user sees the new
-look before it merges.
+Scope is **block textures and the crack overlay only**. "No Mojang pixels" is a claim about `src/assets/blocks/`,
+not the whole bundle (§10 lists the skins and menu art).
+
+**User decisions:**
+- 2026-09-24: base pack **Pixel Perfection CE**, gaps from **Bauniclonia and/or REFI**. AI/generated art,
+  blockgen and Tiny Pixels rejected.
+- 2026-09-26: **the GitHub repo stays public**, and history is not rewritten. Old commits keep serving the Mojang
+  files. The new tree carries a licence notice (§4.5).
+- 2026-09-26: **TNT side is Pixel Perfection's bomb crate** (`tnt_side2`), not the X.
+- Standing rule: the user approves the look before merge (§8).
 
 ## 2. Non-goals
 
-- No new blocks, no removed blocks, no id or catalog-row changes, **no `gen-catalog` rerun**.
-- No animation (the atlas stays frame 0).
-- Player skins (`src/assets/skins/`, unlicensed fan skins incl. a mostly-Mojang Enderman) and
-  `src/assets/menu/{background,logo}.webp` (source unknown) are **out of scope**. They are listed in
-  §10 as follow-ups.
-- Git history still contains the Mojang PNGs. Rewriting history is **not** part of this work (§10).
+- No new or removed blocks, no id or catalog-row changes, **no `gen-catalog` rerun**.
+- No animation (the atlas stays frame 0, as today).
+- Skins, menu art, old bundles on the bucket, git history: §10.
 
-## 3. Inventory (measured, not estimated)
+## 3. Inventory (re-derived by the rigour reviewer)
 
-| Set | Count | Source |
-|---|---|---|
-| Textures referenced by `BLOCKS` (non-retired) | 448 | `faceTexture` names that exist as files |
-| Crack overlay `destroy_stage_0..9`, loaded directly by `src/engine/render/crack-overlay.ts` | 10 | Pixel Perfection CE has all 10 |
-| From Pixel Perfection CE, same name | 314 | its 337 minus 23 dropped as traced |
-| Fill from Bauniclonia/REFI (`docs/texture-fill-map.md`) | 121 | 71 clean in both, 48 REFI only, 2 flagged in both |
-| No source in any pack | 13 | derived, §5.3 |
-| Mojang files present but unused | 625 | deleted |
+| Set | Count |
+|---|---|
+| Textures referenced by non-retired `BLOCKS` | 448 |
+| Crack overlay `destroy_stage_0..9` (loaded by `crack-overlay.ts`; Pixel Perfection CE has all 10) | 10 |
+| Pixel Perfection CE, same name, kept | 314 (337 − 23 traced) |
+| Fill from Bauniclonia/REFI | 121 |
+| Derived (§5.4) | 13 + `copper_ore` |
+| Mojang files deleted (unused) | 625 |
 
-The 23 dropped Pixel Perfection tiles scored ≥ 0.81 on the traced-tile metric (§6): glazed terracotta ×7,
-loom ×4, smithing table ×3, bee nest ×4, beehive ×3, lodestone_side, tnt_bottom.
+None of the 314 kept Pixel Perfection tiles scores above 0.8 on the trace metric (§6), and the highest pixel
+identity is 0.39. Several rows move off Pixel Perfection for **looks** (§5.5), not provenance.
 
-## 4. Design overview
+## 4. Design
 
-1. A **data file** `src/data/texture-sources.data.ts` gives each output texture name one source:
-   - `{ pack: 'ppce' | 'bauniclonia' | 'refi' | 'mineclonia', file: string }` (a pack path, frame 0), or
-   - `{ derive: ... }` (§5.3), built from other entries.
-   Pure data, reviewable, one row per texture. Adding or changing a tile means editing a row.
-2. A **by-hand import script** `scripts/import-textures.ts` (same model as `gen-catalog`):
-   - Shallow-clones each pack at the **pinned commit** into a temp dir (a local checkout can be passed instead).
-   - Writes `src/assets/blocks/<name>.png` for every row: frame 0, 16×16, RGBA, alpha normalised (§5.2).
-   - Deletes every other PNG in `src/assets/blocks/`.
-   - Writes `src/assets/blocks/SOURCES.json` recording, per file: pack, commit, source path and sha256
-     of the written PNG.
-   - The PNGs are committed. The build never touches the network.
-3. **`build-atlas.ts` is unchanged except `TEXTURE_TINTS`** (§5.1).
-4. **Credits:** `CREDITS.md` at the repo root (authors, licence, pack URLs and commits), and a copy in the
-   built bundle at `/minicraft/CREDITS.txt` so the attribution travels with the published art.
-5. **Docs updated:** the CLAUDE.md Assets section, README (Textures line, licence section), `docs/specs.md`
-   (the "gate the subdomain until Mojang textures are replaced" risk is resolved), `docs/inventory.md`
-   (jar extraction procedure → import script), `docs/crafting.md` (Slime Pad wording), `docs/liquids.md`
-   (water tint), and the comments in `atlas-derive.ts` and `build-atlas.ts`.
+### 4.1 Source data — `src/data/texture-sources.data.ts`
+One typed row per output PNG, **including the 10 crack stages**:
+```ts
+type Pack = 'ppce' | 'bauniclonia' | 'refi' | 'mineclonia';
+type TextureSource =
+  | { pack: Pack; file: string; grey?: true; alpha?: 'keep' }  // file = pack-relative path, frame 0
+  | { over: string; pack: Pack; file: string }                   // overlay composited on another output row
+  | { derive: 'tint'; from: string; tint: Rgb; targetLum?: number };
+export const PACKS: Record<Pack, { repo: string; commit: string; licence: string; authors: string }>;
+```
+- `grey: true` desaturates before writing, for masks that the atlas tints (birch fallback).
+- `alpha: 'keep'` skips normalisation (liquids, crack stages).
+- Pinned commits: PP CE `28e38cab7c1f`, REFI `33f1f719930d`, Bauniclonia `77318ecabc04`,
+  **Mineclonia `c1898e3951de`** (4th source: `sculk_catalyst_bottom`, the suspicious overlay).
+
+### 4.2 Import script — `scripts/import-textures.ts` (by hand, like `gen-catalog`)
+- Obtains each pack at its pinned commit: a shallow fetch into a temp dir, or `--packs-dir <dir>` to reuse local
+  checkouts (no network).
+- Writes every row as a 16×16 RGBA PNG (frame 0) to `src/assets/blocks/`, applying §5.
+- Deletes every other `*.png` there.
+- Writes `src/assets/blocks/SOURCES.json` with pack, commit, source path and the sha256 of the written file.
+- **Refuses** (exits non-zero) when a row feeding an opaque block (`transparent: false`) has more than 5% of pixels
+  with alpha < 255 and no `over`. This catches overlay-style sources such as `copper_ore`.
+- `--sheet <name...>` renders `old | current | every pack candidate` for the named rows into a PNG, so a tile can
+  be swapped without a dev server. Candidates come from the Mineclonia/VoxeLibre `Conversion_Table.csv` name map.
+- PNGs and `SOURCES.json` are committed. The build never touches the network.
+
+### 4.3 Atlas build — `scripts/build-atlas.ts`
+- `TEXTURE_TINTS` changes per §5.2.
+- Derived game tiles (`greyTint`) change per §5.6.
+- The file-reading code is unchanged.
+
+### 4.4 Credits — `public/CREDITS.txt`, and `CREDITS.md` at the repo root (same text)
+- **Where it goes:** Vite copies `public/` into `dist/`. `public/atlas.*` stays git-ignored, and `CREDITS.txt` is
+  tracked. The deploy notes (`docs/persistence.md`, the deploy memory) gain "upload `CREDITS.txt`".
+- **Visible link:** the pause menu gets a small "Texture credits" link to `CREDITS.txt`, so attribution can be
+  reached from inside the game.
+- **Content:**
+  - each pack with its authors (XSSheep and the Pixel Perfection CE contributors; MysticTempest; Mirtilo;
+    Mineclonia contributors and Nova Wostra (Pixel Perfection Legacy)), its URL and pinned commit, and its licence
+    with URI (CC BY-SA 4.0; Mineclonia's non-PP files are BY-SA 3.0, which is adapted under 4.0);
+  - the warranty disclaimer;
+  - **a modification notice**: tiles were cropped to frame 0, alpha-normalised, some desaturated, tinted,
+    composited or recoloured (the list is generated from the data rows).
+
+### 4.5 Licence notice in the repo
+- `src/assets/blocks/LICENSE.md` states that the PNGs in that folder are adaptations under CC BY-SA 4.0, see
+  `CREDITS.md`.
+- The README licence section says the same.
+- `public/atlas.png` is a **collection** of those tiles. Share-alike attaches to the tiles, not to the atlas
+  arrangement or the game code, and the notice says so.
+
+### 4.6 Docs updated
+- The CLAUDE.md Assets section.
+- README: the Textures line, the tree comment and the licence section.
+- `docs/specs.md`: the Mojang risk is resolved for blocks, not for skins.
+- `docs/inventory.md`: the new add-a-block procedure — data row → `import-textures` → `gen-catalog` (which now
+  reads the new art's alpha).
+- `docs/crafting.md` (Slime Pad wording), `docs/liquids.md` (water is no longer tinted).
+- The "Mojang" comments in `atlas-derive.ts` and `build-atlas.ts`.
 
 ## 5. Rules
 
-### 5.1 Tints
-`TEXTURE_TINTS` multiplies a tile by a colour. That is right only for greyscale masks.
-- Keep a tint only where the new tile is near-grey: mean channel spread < 50 over opaque pixels.
-- Measured in Pixel Perfection CE: grass_block_top 28, oak/jungle/acacia/dark_oak/spruce leaves 27–41 → keep.
-  **water_still 91 and birch_leaves 113 → remove their tint entries.** mangrove_leaves (fill) 33 → keep.
-- A test enforces the rule both ways: every tinted texture is near-grey, and every near-grey leaf,
-  grass or water texture is tinted.
+### 5.1 Alpha, measured against what each tile is for
+The catalog's `transparent` and `translucent` flags are **not** a faithful description of pixels. On `main` today,
+water, lava and `slime_pad` already disagree with their tiles. The rule is per row:
+- **Liquids** (any block with `liquid !== 'none'`) and **crack stages**: `alpha: 'keep'`, as drawn. Water keeps
+  Pixel Perfection's 185; lava is opaque.
+- **Opaque blocks** (`transparent: false`): alpha forced to 255. Transparent pixels (≤ 5%, guarded by the §4.2
+  refusal) take their nearest opaque neighbour's colour. This fixes `slime_pad` (PP alpha 140), which also stops
+  its faded inventory icon.
+- **Cutout** (`transparent && !translucent`: leaves, grates, bars, flowers): alpha snapped to 0/255 at 128.
+- **Translucent** (stained glass, ice, tinted glass): kept, with at least one partial-alpha pixel required.
+- A texture shared by blocks with different flags: the importer fails loudly. None exist today.
 
-### 5.2 Alpha must agree with the committed catalog
-The catalog's `transparent` and `translucent` flags came from Mojang's alpha and are not regenerated.
-The renderer uses `alphaTest 0.5` for opaque and cutout blocks. The import normalises each tile against
-the flags of every block that uses it:
-- `transparent: false` → force alpha 255. Fully transparent pixels take the colour of their nearest
-  opaque neighbour.
-- `transparent: true, translucent: false` (cutout: leaves, grates, bars, flowers) → alpha snapped to 0/255
-  at 128.
-- `translucent: true` (stained glass, ice, tinted glass) → alpha kept as drawn. A test requires at
-  least one partial-alpha pixel, so `classifyAlpha` still says translucent.
-- Hand-written base blocks (glass, water, lava) follow their own flags the same way.
+**Test (`texture-alpha.test.ts`):**
+- For every non-retired, non-liquid block, `classifyAlpha` over its face files matches its flags.
+- Crack stages and liquids are skipped by name.
+- `DERIVED_TEXTURES` entries (no file) are checked through their source row.
 
-Test: for every non-retired block, `classifyAlpha` over its new face textures matches its committed flags.
+### 5.2 Tints: only grey masks get tinted
+- **Metric:** mean HSV saturation over pixels with alpha > 0. The masks measure 0.19–0.23 (oak, jungle, mangrove,
+  grass top); pre-coloured tiles measure 0.32 and up.
+- **Rule:** a texture may be in `TEXTURE_TINTS` only if its saturation is < 0.27.
+- **Expected result:**
+  - keep grass_block_top, oak, jungle and mangrove leaves;
+  - **remove** water_still (PP teal), dark_oak and spruce leaves (already green; tinting makes them near-black),
+    and acacia (olive, sat 0.35; confirmed at the look review);
+  - birch: take Bauniclonia's `mcl_core_leaves_birch`, a pale mask, and **keep** the birch tint. PP's birch is
+    autumn orange, which the kid would read as wrong.
 
-### 5.3 The 13 with no source: derived, not retired
-Retiring blocks would touch the catalog and players' inventories, so derive them from tiles we already import:
+**Test (`texture-tints.test.ts`):**
+- (a) Every tinted texture has saturation < 0.27.
+- (b) Every `*_leaves` and `grass_block_top` texture with saturation < 0.27 is tinted, **or** is on
+  `UNTINTED_GREY = ['pale_oak_leaves']` (grey by design).
+- (c) After tinting, every leaves texture has mean saturation > 0.25 and mean luminance > 40, so it is neither
+  grey nor near-black foliage.
 
-| Texture | Derivation |
+### 5.3 Ores must stay findable
+Every `*_ore` texture must have at least 12 pixels at CIE-Lab ΔE > 25 from its host stone's mean colour. The host
+is stone, deepslate or netherrack, by name.
+- Bauniclonia's `deepslate_coal_ore` has 0 such pixels, so that row takes **REFI**.
+- **Test:** `texture-ores.test.ts`.
+
+### 5.4 Overlays and derivations (14 rows)
+
+| Texture | Row |
 |---|---|
-| `muddy_mangrove_roots_side/top` | REFI `mcl_mangrove_roots_side/top` composited over the imported `mud` |
-| `suspicious_sand_0`, `suspicious_gravel_0` | Mineclonia `mcl_sus_nodes_suspicious_overlay` over the imported `sand` / `gravel` |
-| `sculk_catalyst_bottom` | Mineclonia `mcl_sculk_catalyst_bottom` (CC BY-SA 4.0, Pixel Perfection lineage) |
-| `ochre/verdant/pearlescent_froglight_side/top` | The imported `shroomlight` greyed and tinted (existing `greyTint`); side and top share one tile |
-| `creaking_heart_awake`, `creaking_heart_top_awake` | The imported `pale_oak_log` / `pale_oak_log_top` darkened (a tint), no new drawing |
+| `copper_ore` | `over: 'stone'`, Bauniclonia `mcl_copper_ore` (it is a Luanti overlay: 73 transparent pixels) |
+| `muddy_mangrove_roots_side/top` | `over: 'mud'`, **Bauniclonia** `mcl_mangrove_roots_side/top` (brown; REFI's are dark green) |
+| `suspicious_sand_0`, `suspicious_gravel_0` | `over: 'sand'/'gravel'`, Mineclonia `mcl_sus_nodes_suspicious_overlay`, overlay alpha ×3 (at its drawn max of 48 it is invisible) |
+| `sculk_catalyst_bottom` | Mineclonia `mcl_sculk_catalyst_bottom` (trace score 0.48) |
+| `ochre/verdant/pearlescent_froglight_side` (top = the same tile) | `derive: 'tint'` from `shroomlight`, saturated tints `#f2c14e` / `#7fd36b` / `#e4a6e8`, target luminance 150 (§5.6) |
+| `creaking_heart_awake`, `…_top_awake` | `derive: 'tint'` from `pale_oak_log` / `pale_oak_log_top`, darkened. Accepted as a plain dark log (the eye is lost). |
 
-Derived tiles are CC BY-SA too, since they are edits of CC BY-SA tiles. The user reviews them in §8.
+**Test:** every derived tile keeps a luminance standard deviation above 8, so no tile collapses to a flat swatch.
 
-### 5.4 Fill choice
-Where both packs have a clean candidate (71 tiles), take **Bauniclonia**: its palette sits closer to Pixel
-Perfection. Otherwise take the clean one. For the 2 flagged in both (`cherry_log_top`, `pale_oak_log_top`),
-take the lower-scoring one and flag it for the user's eye. Every choice is a data row the user can flip.
+### 5.5 Fill choice and look swaps
+**Default:**
+- When both fill candidates are clean (trace score ≤ 0.8), take Bauniclonia: its palette sits closer to Pixel
+  Perfection.
+- Otherwise take the clean one.
+- When both are flagged (`cherry_log_top`, `pale_oak_log_top`), take the lower score, and the audit records a
+  verdict (both are Mineclonia-lineage ring tiles).
 
-### 5.5 Derived game tiles
-`DERIVED_TEXTURES` (Big/Mega TNT, the toys, the Launch Pad) keep deriving from `tnt_*` and `slime_block`,
-which are now the new art. `TINT_GAIN = 1.8` assumes TNT's mean luminance is about 100. The new TNT's
-luminance is measured, and `TINT_GAIN` is re-derived if the hue tests or the look demand it.
+**Rows moved off Pixel Perfection for looks (player review):**
+
+| Texture | New source | Reason |
+|---|---|---|
+| `iron_block` | REFI `default_steel_block` | PP's is black, ΔE 6 from `coal_block` |
+| `clay` | Bauniclonia `default_clay` | PP's is brick-red, ΔE 8 from `bricks` |
+| `deepslate_coal_ore` | REFI | §5.3 |
+| `birch_leaves` | Bauniclonia mask | §5.2 |
+| `tnt_side` | PP `tnt_side2` (bomb, user choice) | — |
+| `tnt_top` | PP `tnt_top2` | matches the bomb crate |
+| `tnt_bottom` | PP `tnt_top1` | PP `tnt_bottom` is traced; Bauniclonia's reads as brick; REFI's breaks the TNT hue test (0.2°) |
+
+The TNT tiles are finalised against the §5.6 tests and the look review.
+
+### 5.6 Derived game tiles: gain from luminance, not a constant
+`greyTint` uses `TINT_GAIN = 1.8`, tuned for Mojang TNT at luminance ~100. On the new art it fails the existing
+hue tests (Big TNT bottom 199.5 ≤ 200, tunnel top 183) and flattens the froglights (shroomlight luminance 198
+clips 100%).
+- **Change:** the gain per source is `targetLum / meanLum(source)`, with `targetLum` defaulting to today's
+  effective 180.
+- **New test:** at most 10% of a derived tile's pixels clip (any channel at 255), and its luminance standard
+  deviation stays above 8.
+- The existing hue tests stay unchanged and must pass.
+
+### 5.7 Known look differences, recorded for the user
+- Spruce and dark oak planks are close (ΔE 6), and so are oak and jungle (7).
+- Glass is a window with a wooden cross.
+- Concrete shares wool's texture.
+- Stone, sand and gravel are warmer.
+
+These are shown at the look review, and each is a one-row swap.
 
 ## 6. Provenance checks
 
-- **Traced-tile metric:** correlation of mean-removed, alpha-weighted luminance against the Mojang tile of
-  the same name. Unrelated tiles stay below ~0.5, and above 0.8 is flagged.
-- A by-hand script `scripts/audit-textures.ts` reads the Minecraft jar when present and reports:
-  - the number of shipped tiles that are ≥ 95% pixel-identical to Mojang (**must be 0**);
-  - every tile scoring > 0.8, each with a reviewed verdict recorded in `docs/texture-fill-map.md`.
-  The jar is not in CI, so this is a pre-merge gate run by hand, with its output pasted into the PR / merge note.
-- **CI test (no jar needed):** the set of files in `src/assets/blocks/` equals the keys of
-  `texture-sources.data.ts` plus the 10 crack stages. So no unlisted file (e.g. a stray Mojang PNG) can
-  exist, and every file's sha256 matches `SOURCES.json`.
+**In `npm test`** (the repo has no CI, so this runs locally):
+- The set of `*.png` files in `src/assets/blocks/` equals the `texture-sources` rows, and each sha256 matches
+  `SOURCES.json`.
+- **No shipped tile equals Mojang:** `src/data/mojang-tile-hashes.json` holds sha256 hashes of Mojang's decoded
+  16×16 RGBA frame-0 tiles. These are hashes, not pixels. No shipped tile's decoded hash may match one.
+- **The 23 traced names** may never have `pack: 'ppce'`.
 
-## 7. Tests that must hold or change
+**Pre-merge gate, run by hand:**
+1. `scripts/audit-textures.ts` reads the local Minecraft jar and reports every shipped tile's trace score
+   (correlation of mean-removed, alpha-weighted luminance; unrelated tiles stay below ~0.5). Every tile above 0.8
+   needs a written verdict in the merge note. Tiles that are ≥ 95% pixel-identical must be 0.
+2. **Re-import reproducibility:** run `import-textures` from the pinned commits into a clean tree, then check that
+   `git diff --exit-code src/assets/blocks` passes. Only this proves the files came from the packs, since the
+   set/hash test cannot.
 
-- `atlas-derive.test.ts`: the TNT/toy/launch-pad hue assertions must pass on the new art. If one fails,
-  fix it by retuning a tint in data, not by weakening the assertion.
-- `blocks.catalog.test.ts:38`: every catalog texture exists. Still true.
-- `packages/minicraft-bot/test/guard.test.ts:36` uses `stone.png`. Still exists.
-- New: the tint rule (§5.1), the alpha agreement (§5.2) and the provenance set/hash (§6).
+## 7. Existing tests
 
-## 8. Verification before merge
+- `atlas-derive.test.ts`: the hue tests are unchanged and must pass after §5.6. A failure is fixed through the
+  source choice or the gain model, not by weakening the assertion.
+- `blocks.catalog.test.ts:38`: every catalog texture exists. Still holds.
+- `packages/minicraft-bot/test/guard.test.ts:36`: `stone.png` still exists.
 
-1. `npm test`, `tsc -b`, `npm run build` green.
-2. `scripts/audit-textures.ts` run with the jar: 0 identical, every flag reviewed.
-3. **In-game look** at `localhost:5173`, with Playwright headless and the production save API blocked (as
-   the existing smokes do). Screenshots of:
-   - the spawn area;
-   - a mine face with ores;
-   - a house of planks, glass, furnace and crafting table;
-   - leaves against the sky;
-   - the 13 derived tiles in the inventory;
-   - TNT variants.
-   The user approves the look **before** merge.
-4. Seam check: no new visible seams at block joins in the screenshots.
+## 8. Look approval before merge (concrete)
+
+1. **Old-vs-new sheet of all 458 tiles:** published as a **private** artifact, since it contains Mojang tiles for
+   reference.
+2. **In-game screenshots** at `localhost:5173`:
+   - Playwright headless, with the production save API blocked as in the existing smokes;
+   - never the production site, never a headed browser;
+   - saved to `scratchpad/look/`;
+   - scenes: spawn area, grassland, a birch forest, a deepslate mine face with ores, clay by water, a house of
+     planks, glass, furnace and crafting table, a glass wall, a TNT and toys row, a wall of all 16 wools, and the
+     14 derived tiles in the inventory.
+3. **Recording approval:** the user's approval, and any row swaps, go in the merge commit message.
+4. **Ordering:** the `lighting-look` worktree also changes the look. This texture look is approved first on
+   `main`'s lighting; lighting approves on top of it.
 
 ## 9. Risks
 
-- **Taste:** the user called Pixel Perfection "decent". The in-game look may still disappoint. Mitigation: §8.3
-  before merge; data rows make per-tile swaps cheap.
-- **Mixed-pack style clashes** (REFI's bright bamboo, olive bee nest). Mitigation: Bauniclonia-first rule,
-  user review.
-- **Alpha normalisation** may cut holes or fill edges oddly on a few tiles. Mitigation: the tests catch the
-  flag mismatch; the user checks the look.
-- **Transparent CREDITS path under Cloudflare's cache**: a new static file, no cache headers needed.
+- **Taste:** mitigated by §8, with one-row swaps and `--sheet`.
+- **Mixed-pack clashes:** mitigated by the Bauniclonia-first rule and §5.5.
+- **Alpha snapping at 128** may open holes in some cutout tile. §8 is the check; no automated test catches it.
+- **Rollback** is re-uploading the previous bundle, which restores Mojang art. That is acceptable (user-owned
+  deploy).
 
 ## 10. Follow-ups (not in this change)
 
-- Player skins and menu art provenance.
-- History: the Mojang PNGs remain in git history, and `main` is pushed to GitHub. If the repo is or becomes
-  public, a history rewrite is a separate, destructive decision for the user.
+- **Skins** (`src/assets/skins/`, fan skins, including a mostly-Mojang Enderman) and the menu art
+  (`src/assets/menu/*.webp`, source unknown).
+- **Old bundles on `gs://noah.leap-forward.ca`:** they still contain Mojang pixels (the crack stages are inlined
+  into old `index-*.js` files). Deleting old `assets/*` is the user's call.
+- **Git history:** the public repo keeps the Mojang PNGs in history (user decision 2026-09-26: leave it).

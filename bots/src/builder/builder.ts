@@ -22,11 +22,15 @@ import { candidateMoves, cellKey, describeMove, heuristicPick, planCells, type P
 import { palettesFor, type Palette } from './palettes.data.js';
 import type { SharedCells } from '../shared/bot-cells.js';
 import { capCount, capReached, countsTowardCap, DEFAULT_MAX_BUILDS } from '../shared/cap.js';
+import { claimLot, planAvoidBoxes, updateLot, type PlanLot } from '../foreman/plan-file.js';
+import { endLot, fitsLot, lotSite, rejectStatus, renewClaim } from '../foreman/join.js';
 
 export interface BuilderBuild {
 	id: string; template: string; variant: 'small' | 'medium'; palette: string; origin: Vec3; w: number; d: number; h: number;
 	cells: Array<{ cell: Vec3; block: string; role: Role; layer: number }>; placed: string[]; skipped: string[];
 	status: 'building' | 'done' | 'abandoned'; t: number; why?: string;
+	/** --join-plan: the foreman's lot this build stands on. */
+	lot?: string;
 }
 export interface BuilderFile { v: 1; builds: BuilderBuild[]; owned: Record<string, number> }
 
@@ -155,6 +159,10 @@ export interface BuilderOpts {
 	shared?: SharedCells | null;
 	/** Stop building after this many builds (counted from the persisted records, so across restarts; default 12). */
 	maxBuilds?: number;
+	/** The foreman's shared plan (experiment E7): its area is avoided by the own site search. */
+	planPath?: string;
+	/** --join-plan: claim the plan's next open lot first; the own site search only when none is left. */
+	joinPlan?: boolean;
 }
 export interface BuilderStats { placed: number; refused: number; failed: number; buildsDone: number; buildsAbandoned: number; asks: number; fallbacks: number; current: string }
 export interface BuilderHandle { stop(): Promise<void>; stats: BuilderStats; file: BuilderFile; done: Promise<void> }
@@ -203,15 +211,22 @@ export function runBuilder(o: BuilderOpts): BuilderHandle {
 		return best;
 	}
 
-	function avoidBoxes() {
+	function ownBoxes() {
 		return file.builds.map((b) => ({ min: b.origin, max: { x: b.origin.x + b.w - 1, y: b.origin.y + b.h - 1, z: b.origin.z + b.d - 1 } }));
 	}
+	function avoidBoxes() {
+		return [...ownBoxes(), ...planAvoidBoxes(o.planPath)];
+	}
 
-	async function pickProject(): Promise<BuilderBuild | null> {
+	const opt = (t: Template) => `${t.name}-${t.variant}`;
+	const usable = (t: Template) => palettes(t.name).length > 0;
+
+	/** The template (the model's pick, else random-weighted) and palette among `fit`, not one of the last two kinds built. */
+	async function chooseTemplate(fit: (t: Template) => boolean): Promise<{ t: Template; palette: Palette; picked: string | null } | null> {
 		const recent = file.builds.filter((b) => b.status === 'done').slice(-2).map((b) => b.template);
-		let pool = TEMPLATES.filter((t) => !recent.includes(t.name) && palettes(t.name).length > 0);
-		if (pool.length === 0) pool = TEMPLATES.filter((t) => palettes(t.name).length > 0);
-		const opt = (t: Template) => `${t.name}-${t.variant}`;
+		let pool = TEMPLATES.filter((t) => !recent.includes(t.name) && usable(t) && fit(t));
+		if (pool.length === 0) pool = TEMPLATES.filter((t) => usable(t) && fit(t));
+		if (pool.length === 0) return null;
 		const options = Object.fromEntries(pool.map((t) => [opt(t), `${t.variant === 'small' ? 'a small' : 'a bigger'} ${NICE[t.name].replace(/^an? /, '')} (${t.cells.length} blocks)`]));
 		const kid = nearestKid();
 		const p = o.body.pose();
@@ -230,7 +245,53 @@ export function runBuilder(o: BuilderOpts): BuilderHandle {
 			t = pool.find((x) => (r -= WEIGHT[x.name] ?? 1) < 0) ?? pool[pool.length - 1];
 		}
 		const pals = palettes(t.name);
-		const palette = pals[Math.floor(o.rng() * pals.length)];
+		return { t, palette: pals[Math.floor(o.rng() * pals.length)], picked };
+	}
+
+	/** --join-plan: a build on the foreman's next open lot; null (no plan, no lot left) or 'rejected' (the lot failed the rules now). */
+	async function pickLot(): Promise<BuilderBuild | null | 'rejected' | 'wait'> {
+		if (!o.planPath) return null;
+		let lot: PlanLot | null = null;
+		try {
+			lot = claimLot(o.planPath, o.name, clock(), (l) => TEMPLATES.some((t) => usable(t) && fitsLot(l, t)));
+		} catch (err) {
+			o.log({ k: 'lot-error', t: clock(), err: err instanceof Error ? err.message : String(err) });
+		}
+		if (!lot) return null;
+		const l = lot;
+		const c = await chooseTemplate((t) => fitsLot(l, t));
+		const site = c ? lotSite(l, c.t, { world: o.world, own, spawn: o.spawn, kids: kidsNow(), avoid: ownBoxes() }) : 'builds';
+		if (!c || typeof site === 'string') {
+			const status = c && typeof site === 'string' ? rejectStatus(site) : 'open';
+			updateLot(o.planPath, l.id, o.name, clock(), { status, why: typeof site === 'string' ? site : 'nothing fits' });
+			o.log({ k: 'lot-rejected', t: clock(), lot: l.id, why: typeof site === 'string' ? site : 'nothing fits', status });
+			return c && status === 'open' ? 'wait' : 'rejected';
+		}
+		const b: BuilderBuild = {
+			id: `${clock().toString(36)}`, template: c.t.name, variant: c.t.variant, palette: c.palette.name, origin: site.origin, w: c.t.w, d: c.t.d, h: c.t.h,
+			cells: planCells(c.t, site.origin, c.palette), placed: [], skipped: [], status: 'building', t: clock(), lot: l.id,
+		};
+		file.builds.push(b);
+		save();
+		updateLot(o.planPath, l.id, o.name, clock(), { design: opt(c.t), buildId: b.id });
+		o.log({ k: 'project', t: clock(), id: b.id, template: opt(c.t), palette: c.palette.name, origin: site.origin, lot: l.id, by: c.picked === opt(c.t) ? 'model' : 'fallback' });
+		return b;
+	}
+
+	async function pickProject(): Promise<BuilderBuild | null> {
+		// --join-plan: the plan's lots first (a dropped lot: the next one; a kid on it: wait); the own search when none is left.
+		for (let i = 0; o.joinPlan && i < 12 && !stopped; i++) {
+			const r = await pickLot();
+			if (r === 'rejected') continue;
+			if (r === 'wait') return null; // a kid is on the lot: try again after the pause
+			if (r) return r;
+			break;
+		}
+		if (stopped) return null;
+		const c = await chooseTemplate(() => true);
+		if (!c) return null;
+		const { t, palette, picked } = c;
+		const kid = nearestKid();
 		const anchor = kid ? { x: kid.x, y: kid.y, z: kid.z } : o.spawn;
 		stats.current = `searching a site for ${opt(t)}`;
 		const search = new SiteSearch({ w: t.w, d: t.d, h: t.h, anchor, avoid: avoidBoxes() }, { world: o.world, own, spawn: o.spawn, kids: kidsNow() });
@@ -257,15 +318,32 @@ export function runBuilder(o: BuilderOpts): BuilderHandle {
 	}
 
 	const edits = { lastEditT: null as number | null, lastRefusal: '' };
-	const construct = (b: BuilderBuild) => constructBuild(b, {
-		body: o.body, world: o.world, own, stop, trip, kidsNow, ask, log: o.log, save, sleep, clock, pace, noEdits: o.noEdits,
-		stopped: () => stopped, stats, edits,
-		onPlaced: (cell, id) => {
-			file.owned[cellKey(cell)] = id;
-			own.ownWrite(cell.x, cell.y, cell.z, id);
-			o.shared?.append(cell, id);
-		},
-	});
+	const construct = async (b: BuilderBuild) => {
+		// A lot build renews its claim while it runs (and at once: a restart resumes it), then ends the lot.
+		const plan = b.lot && o.planPath ? o.planPath : null;
+		if (plan) {
+			try {
+				updateLot(plan, b.lot!, o.name, clock(), {});
+			} catch {
+				// the renewal timer retries
+			}
+		}
+		const stopRenew = plan ? renewClaim(plan, b.lot!, o.name, clock, o.log) : null;
+		try {
+			await constructBuild(b, {
+				body: o.body, world: o.world, own, stop, trip, kidsNow, ask, log: o.log, save, sleep, clock, pace, noEdits: o.noEdits,
+				stopped: () => stopped, stats, edits,
+				onPlaced: (cell, id) => {
+					file.owned[cellKey(cell)] = id;
+					own.ownWrite(cell.x, cell.y, cell.z, id);
+					o.shared?.append(cell, id);
+				},
+			});
+		} finally {
+			stopRenew?.();
+		}
+		if (plan) endLot(plan, b.lot!, o.name, clock(), b.status, b.why, o.log);
+	};
 
 	/** Rests for `ms` while visibly alive: every few seconds a short hop beside the build or a look at it. */
 	async function restNear(b: BuilderBuild, ms: number): Promise<void> {
@@ -342,6 +420,7 @@ export function runBuilder(o: BuilderOpts): BuilderHandle {
 					b.status = 'abandoned';
 					b.why = 'error';
 					save();
+					if (b.lot && o.planPath) endLot(o.planPath, b.lot, o.name, clock(), b.status, b.why, o.log);
 				}
 				await sleep(5000);
 			}

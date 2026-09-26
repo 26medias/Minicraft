@@ -45,18 +45,20 @@ import { helperStatePath, runHelper, type HelperHandle } from './helper/helper.j
 import { runArchitect, type ArchitectHandle } from './architect/architect.js';
 import { ollamaProposer } from './architect/llm-params.js';
 import { builderDir, decoratorStatePath, runDecorator, saveDecoratorFile, type DecoratorHandle } from './decorator/decorator.js';
+import { foremanStatePath, runForeman, saveForemanFile, type ForemanHandle } from './foreman/foreman.js';
+import { planFilePath } from './foreman/plan-file.js';
 
 const BOTS_DIR = resolve(dirname(fileURLToPath(import.meta.url)), '..');
 const STATE_ROOT = resolve(BOTS_DIR, '.state');
 
-export type Command = 'companion' | 'revert' | 'builder' | 'decorator' | 'village' | 'helper' | 'architect';
+export type Command = 'companion' | 'revert' | 'builder' | 'decorator' | 'village' | 'helper' | 'architect' | 'foreman';
 
 /** Splits `<companion|revert> [flags]`; flags alone mean `companion`. */
 export function parseCommand(argv: readonly string[]): { command: Command; flags: string[] } {
 	const [first, ...rest] = argv;
-	if (first === 'companion' || first === 'revert' || first === 'builder' || first === 'decorator' || first === 'village' || first === 'helper' || first === 'architect') return { command: first, flags: rest };
+	if (first === 'companion' || first === 'revert' || first === 'builder' || first === 'decorator' || first === 'village' || first === 'helper' || first === 'architect' || first === 'foreman') return { command: first, flags: rest };
 	if (first === undefined || first.startsWith('--')) return { command: 'companion', flags: [...argv] };
-	throw new ConfigError(`unknown bot "${first}"; expected companion, revert, builder, decorator, village, helper or architect`);
+	throw new ConfigError(`unknown bot "${first}"; expected companion, revert, builder, decorator, village, helper, architect or foreman`);
 }
 
 /** Builds the real brain for `--brain laya|clm` (Task 6), or `null` for `--brain scripted` (the loop
@@ -116,6 +118,10 @@ export interface CliDeps {
 	onHelper?: (h: HelperHandle, client: BotClient) => void;
 	/** Test hook: the running architect bot and its client (the e2e stops it itself). */
 	onArchitect?: (h: ArchitectHandle, client: BotClient) => void;
+	/** Test hook: the running foreman and its client (the e2e stops it itself). */
+	onForeman?: (h: ForemanHandle, client: BotClient) => void;
+	/** Test hook: the foreman's pause between placements (default 800 ms). */
+	foremanPaceMs?: number;
 }
 
 const DEFAULT_DEPS: CliDeps = {
@@ -539,6 +545,7 @@ async function builderCommand(cfg: Config, deps: CliDeps): Promise<void> {
 	const handle = runBuilder({
 		name: cfg.name, body: port.body, world: port.world, spawn: { x: sp.x, y: 0, z: sp.z }, primary, secondary,
 		noEdits: cfg.noEdits, statePath, rng: seededRng(seed), known: new Set(blockNames()), restMs: deps.builderRestMs ?? cfg.restSec * 1000, maxBuilds: cfg.maxBuilds,
+		planPath: planFilePath(deps.stateRoot, cfg.target.name, uuid), joinPlan: cfg.joinPlan,
 		shared: new SharedCells(sharedCellsPath(deps.stateRoot, cfg.target.name, uuid), cfg.name),
 		log: (o) => {
 			try {
@@ -697,6 +704,7 @@ async function villageCommand(cfg: Config, deps: CliDeps): Promise<void> {
 		name: cfg.name, body: port.body, world: port.world, spawn: { x: sp.x, y: 0, z: sp.z }, primary, secondary,
 		noEdits: cfg.noEdits, statePath, builderDir: builderDir(deps.stateRoot, cfg.target.name, uuid), rng: seededRng(seed),
 		known: new Set(blockNames()), restMs: deps.builderRestMs ?? cfg.restSec * 1000,
+		planPath: planFilePath(deps.stateRoot, cfg.target.name, uuid),
 		shared: new SharedCells(sharedCellsPath(deps.stateRoot, cfg.target.name, uuid), cfg.name),
 		log: (o) => {
 			try {
@@ -859,6 +867,7 @@ async function architectCommand(cfg: Config, deps: CliDeps): Promise<void> {
 		name: cfg.name, body: port.body, world: port.world, spawn: { x: sp.x, y: 0, z: sp.z }, primary, secondary, proposer,
 		noEdits: cfg.noEdits, statePath, builderDir: builderDir(deps.stateRoot, cfg.target.name, uuid), rng: seededRng(seed),
 		known: new Set(blockNames()), restMs: deps.builderRestMs ?? cfg.restSec * 1000, maxBuilds: cfg.maxBuilds,
+		planPath: planFilePath(deps.stateRoot, cfg.target.name, uuid), joinPlan: cfg.joinPlan,
 		shared: new SharedCells(sharedCellsPath(deps.stateRoot, cfg.target.name, uuid), cfg.name),
 		log: (o) => {
 			try {
@@ -907,6 +916,76 @@ async function architectCommand(cfg: Config, deps: CliDeps): Promise<void> {
 	});
 }
 
+/**
+ * `foreman` (experiment E7): lays out one neighbourhood per world (6–10 lots on a road grid) in the shared plan
+ * `bots/.state/shared/<target>/<world>/plan.json`, then builds the roads and lamps itself. Builder and architect bots
+ * started with `--join-plan` build on its lots. No engine; same safety and signals as `builder`.
+ */
+async function foremanCommand(cfg: Config, deps: CliDeps): Promise<void> {
+	const prepared = await prepare(cfg, deps);
+	if (!prepared) return;
+	const client = await connect(cfg, prepared.listing, prepared.skin, deps);
+	const port = realPort(client, prepared.listing);
+	const uuid = prepared.listing.uuid;
+	const stamp = new Date().toISOString().replace(/[:.]/g, '-');
+	const logPath = resolve(deps.stateRoot, 'logs', cfg.target.name, uuid, `${cfg.name}-${stamp}.jsonl`);
+	mkdirSync(dirname(logPath), { recursive: true });
+	const statePath = foremanStatePath(deps.stateRoot, cfg.target.name, uuid, cfg.name);
+	const planPath = planFilePath(deps.stateRoot, cfg.target.name, uuid);
+	const sp = worldSpawn(client.world.seed, client.world.gen);
+	const seed = (Date.now() ^ (process.pid << 16)) >>> 0;
+	deps.print(`${cfg.name} joined "${prepared.listing.name}" as ${prepared.skin}; foreman${cfg.noEdits ? ' --no-edits' : ''}; plan ${planPath}; log ${logPath}; state ${statePath}`);
+	const handle = runForeman({
+		name: cfg.name, body: port.body, world: port.world, spawn: { x: sp.x, y: 0, z: sp.z },
+		noEdits: cfg.noEdits, statePath, planPath, builderDir: builderDir(deps.stateRoot, cfg.target.name, uuid), rng: seededRng(seed),
+		paceMs: deps.foremanPaceMs, shared: new SharedCells(sharedCellsPath(deps.stateRoot, cfg.target.name, uuid), cfg.name),
+		log: (o) => {
+			try {
+				appendFileSync(logPath, `${JSON.stringify(o)}\n`);
+			} catch {
+				// a full disk must not stop the bot
+			}
+		},
+		status: (line) => deps.print(`[${new Date().toISOString()}] ${line}`),
+	});
+	deps.onForeman?.(handle, client);
+	if (deps.onForeman) return;
+	const removeGuards = installCrashGuards({
+		event: (kind, data) => {
+			try {
+				appendFileSync(logPath, `${JSON.stringify({ k: kind, t: Date.now(), data })}\n`);
+			} catch {
+				// ignore
+			}
+		},
+		flush: () => saveForemanFile(statePath, handle.file),
+		print: deps.print,
+	});
+	let exiting = false;
+	const onSignal = (signal: string): void => {
+		if (exiting) {
+			deps.print(`${signal} again: exiting now`);
+			process.exit(130);
+		}
+		exiting = true;
+		deps.print(`${signal}: stopping`);
+		void Promise.race([handle.stop(), new Promise((r) => setTimeout(r, 5000))]).finally(() => {
+			client.close();
+			removeGuards();
+			deps.print('stopped');
+			armHardExit();
+		});
+	};
+	process.on('SIGINT', () => onSignal('SIGINT'));
+	process.on('SIGTERM', () => onSignal('SIGTERM'));
+	client.on('close', (code) => {
+		if (exiting) return;
+		exiting = true;
+		deps.print(`connection closed (${code})`);
+		void handle.stop().finally(() => process.exit(code === 1000 ? 0 : 1));
+	});
+}
+
 export async function main(argv: readonly string[], deps: CliDeps = DEFAULT_DEPS): Promise<void> {
 	const { command, flags } = parseCommand(argv);
 	const cfg = loadConfig({ argv: flags, env: deps.env, readFile: deps.readFile, homedir, stateRoot: deps.stateRoot });
@@ -916,6 +995,7 @@ export async function main(argv: readonly string[], deps: CliDeps = DEFAULT_DEPS
 	else if (command === 'village') await villageCommand(cfg, deps);
 	else if (command === 'helper') await helperCommand(cfg, deps);
 	else if (command === 'architect') await architectCommand(cfg, deps);
+	else if (command === 'foreman') await foremanCommand(cfg, deps);
 	else await companionCommand(cfg, deps);
 }
 

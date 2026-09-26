@@ -50,6 +50,7 @@ import { decoratorLeg } from './e2e-decorator.js';
 import { villageLeg } from './e2e-village.js';
 import { helperLeg } from './e2e-helper.js';
 import { architectLeg } from './e2e-architect.js';
+import { foremanLeg } from './e2e-foreman.js';
 
 /* eslint-disable @typescript-eslint/no-explicit-any */
 
@@ -788,6 +789,7 @@ async function main(): Promise<void> {
 		if (want('architect')) await leg('architect', 'the architect CLI, engines down: one design ≥ 30 cells, nothing within 3 of the kid pillar', () => architectLeg({ check, info }));
 		if (want('helper')) await leg('helper', 'the helper CLI, engines down: a matching build ≥ 6 cells, > 3 from the kid line, his block only', () => helperLeg({ check, info }));
 		if (want('decorator')) await leg('decorator', 'the decorator CLI, engines down: ≥ 10 decoration cells, nothing on the kid pillar', () => decoratorLeg({ check, info }));
+		if (want('foreman')) await leg('foreman', 'the foreman CLI + a builder --join-plan, engines down: roads done and ≥ 1 lot built, nothing on the kid pillar', () => foremanLeg({ check, info }));
 	} finally {
 		try {
 			await server?.stop();

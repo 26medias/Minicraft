@@ -16,13 +16,15 @@ import type { Vec3 } from '../types.js';
 import { Ownership } from '../brain2/ownership.js';
 import { Tripwire, type KidPos } from '../brain2/safety.js';
 import { LIMITS } from '../brain2/data/limits.data.js';
-import { SiteSearch, groundTop } from '../brain2/behaviours/site-search.js';
+import { SiteSearch, groundTop, type Site, type SiteReject } from '../brain2/behaviours/site-search.js';
 import { constructBuild, loadBuilderFile, makeAsk, saveBuilderFile, type BuilderBuild, type BuilderFile } from '../builder/builder.js';
 import type { ChoiceEngine } from '../builder/engines.js';
 import { cellKey } from '../builder/moves.js';
 import { readBuilderRecords } from '../decorator/decor.js';
 import type { SharedCells } from '../shared/bot-cells.js';
 import { capCount, capReached, countsTowardCap, DEFAULT_MAX_BUILDS } from '../shared/cap.js';
+import { claimLot, planAvoidBoxes, updateLot, type PlanLot } from '../foreman/plan-file.js';
+import { endLot, fitsLot, lotSite, rejectStatus, renewClaim } from '../foreman/join.js';
 import { clampParams, IDEAS, makeDesign, presetParams, THEMES, themeSlug, type Design, type DRole, type Idea, type Theme } from './designs.js';
 import type { ParamProposer } from './llm-params.js';
 
@@ -43,6 +45,10 @@ export interface ArchitectOpts {
 	shared?: SharedCells | null;
 	/** Stop building after this many builds (counted from the persisted records, so across restarts; default 12). */
 	maxBuilds?: number;
+	/** The foreman's shared plan (experiment E7): its area is avoided by the own site search. */
+	planPath?: string;
+	/** --join-plan: claim the plan's next open lot first (a design that fits it); the own site search when none is left. */
+	joinPlan?: boolean;
 }
 export interface ArchitectStats { placed: number; refused: number; failed: number; buildsDone: number; buildsAbandoned: number; asks: number; fallbacks: number; current: string }
 export interface ArchitectHandle { stop(): Promise<void>; stats: ArchitectStats; file: ArchitectFile; done: Promise<void> }
@@ -106,11 +112,19 @@ export function runArchitect(o: ArchitectOpts): ArchitectHandle {
 		const others = o.builderDir ? readBuilderRecords(o.builderDir).builds : [];
 		return [...mine, ...others].map(({ build: b }) => ({ min: b.origin, max: { x: b.origin.x + b.w - 1, y: b.origin.y + b.h - 1, z: b.origin.z + b.d - 1 } }));
 	};
+	/** Whether an idea has a preset size that fits `fit` (dimensions do not depend on the theme). */
+	const ideaFits = (i: Idea, fit: { w: number; d: number; h: number }) => i.sizes.some((s) => {
+		const r = makeDesign(i, themes[0], s.key, i.styles[0].key, presetParams(i, s, i.styles[0]), o.known);
+		return r.ok && fitsLot(fit, r.design!);
+	});
 
 	/** Designs the next build: idea → theme → (LLM numbers or) size + style → a validated design. */
-	async function design(state: string): Promise<{ d: Design; by: Record<string, string> } | null> {
+	async function design(state: string, fit?: { w: number; d: number; h: number }): Promise<{ d: Design; by: Record<string, string> } | null> {
 		const recent = file.builds.filter((b) => b.status === 'done').slice(-2).map((b) => b.idea);
-		const pool = IDEAS.filter((i) => !recent.includes(i.name));
+		const fitting: readonly Idea[] = fit ? IDEAS.filter((i) => ideaFits(i, fit)) : IDEAS;
+		let pool: readonly Idea[] = fitting.filter((i) => !recent.includes(i.name));
+		if (pool.length === 0) pool = fitting;
+		if (pool.length === 0) return null;
 		const ideaPick = await ask('idea', state, 'What should the architect robot design and build next, so a 7-year-old is delighted to find it?', Object.fromEntries(pool.map((i) => [i.name, i.nice])));
 		const idea: Idea = pool.find((i) => i.name === ideaPick) ?? pick(pool);
 		const themePick = await ask('theme', `${state} I will build ${idea.nice}.`, `Which colours would look best on ${idea.nice}?`, Object.fromEntries(themes.map((t) => [themeSlug(t), `${t.name}: ${t.description}`])));
@@ -123,18 +137,18 @@ export function runArchitect(o: ArchitectOpts): ArchitectHandle {
 				const params = clampParams(idea, raw, presetParams(idea, idea.sizes[0], idea.styles[0]));
 				const r = makeDesign(idea, theme, 'llm', 'llm', params, o.known);
 				o.log({ k: 'llm-params', t: clock(), engine: o.proposer.name, idea: idea.name, raw, params, ok: r.ok, errors: r.errors });
-				if (r.ok) return { d: r.design!, by: { ...by, params: 'llm' } };
+				if (r.ok && (!fit || fitsLot(fit, r.design!))) return { d: r.design!, by: { ...by, params: 'llm' } };
 			} catch (err) {
 				o.log({ k: 'llm-params', t: clock(), engine: o.proposer.name, idea: idea.name, ok: false, err: err instanceof Error ? err.message : String(err) });
 			}
 		}
 		// Size, then style: each among the 3 presets that validate, with their real dimensions stated.
 		const describe = (d: Design) => `${d.w} wide, ${d.d} deep, ${d.h} high, ${d.cells.length} blocks`;
-		const sizes = idea.sizes.map((s) => ({ s, r: makeDesign(idea, theme, s.key, idea.styles[0].key, presetParams(idea, s, idea.styles[0]), o.known) })).filter((x) => x.r.ok);
+		const sizes = idea.sizes.map((s) => ({ s, r: makeDesign(idea, theme, s.key, idea.styles[0].key, presetParams(idea, s, idea.styles[0]), o.known) })).filter((x) => x.r.ok && (!fit || fitsLot(fit, x.r.design!)));
 		if (sizes.length === 0) return null;
 		const sizePick = await ask('size', s2, `How big should ${idea.nice} be?`, Object.fromEntries(sizes.map(({ s, r }) => [s.key, `${s.label}: ${describe(r.design!)}`])));
 		const size = sizes.find((x) => x.s.key === sizePick)?.s ?? sizes[0].s; // fallback: the smallest
-		const styles = idea.styles.map((st) => ({ st, r: makeDesign(idea, theme, size.key, st.key, presetParams(idea, size, st), o.known) })).filter((x) => x.r.ok);
+		const styles = idea.styles.map((st) => ({ st, r: makeDesign(idea, theme, size.key, st.key, presetParams(idea, size, st), o.known) })).filter((x) => x.r.ok && (!fit || fitsLot(fit, x.r.design!)));
 		if (styles.length === 0) return null;
 		const stylePick = await ask('style', `${s2} It will be ${size.label}.`, `Which style of ${idea.nice} would a 7-year-old like most?`, Object.fromEntries(styles.map(({ st }) => [st.key, st.label])));
 		const style = styles.find((x) => x.st.key === stylePick) ?? pick(styles);
@@ -151,13 +165,41 @@ export function runArchitect(o: ArchitectOpts): ArchitectHandle {
 			kid ? `${kid.name} is ${Math.round(Math.hypot(kid.x - p.x, kid.z - p.z))} blocks away.` : 'No kid is online right now.',
 			last ? `Last I built ${IDEAS.find((i) => i.name === last.idea)?.nice ?? last.idea}.` : 'I have not built anything yet.',
 		].join(' ');
+		// --join-plan: the plan's lots first (a dropped lot: the next one; a kid on it: wait); the own search when none is left.
+		for (let i = 0; o.joinPlan && o.planPath && i < 12 && !stopped; i++) {
+			let lot: PlanLot | null = null;
+			try {
+				lot = claimLot(o.planPath, o.name, clock(), (l) => IDEAS.some((x) => ideaFits(x, l)));
+			} catch (err) {
+				o.log({ k: 'lot-error', t: clock(), err: err instanceof Error ? err.message : String(err) });
+			}
+			if (!lot) break;
+			stats.current = `designing for ${lot.id}`;
+			const r = await design(`${state} I build on a ${lot.w} by ${lot.d} lot in a new neighbourhood.`, lot);
+			const site: Site | string = r ? lotSite(lot, r.d, { world: o.world, own, spawn: o.spawn, kids: kidsNow(), avoid: file.builds.map((b) => ({ min: b.origin, max: { x: b.origin.x + b.w - 1, y: b.origin.y + b.h - 1, z: b.origin.z + b.d - 1 } })) }) : 'nothing fits';
+			if (!r || typeof site === 'string') {
+				const status = r && typeof site === 'string' ? rejectStatus(site as SiteReject) : 'open';
+				updateLot(o.planPath, lot.id, o.name, clock(), { status, why: String(site) });
+				o.log({ k: 'lot-rejected', t: clock(), lot: lot.id, why: site, status });
+				if (r && status === 'open') return null; // a kid is on the lot: try again after the pause
+				continue;
+			}
+			const b = designBuild(clock().toString(36), r.d, site.origin, r.by, clock());
+			b.lot = lot.id;
+			file.builds.push(b);
+			save();
+			updateLot(o.planPath, lot.id, o.name, clock(), { design: `${r.d.size} ${r.d.idea}`, buildId: b.id });
+			o.log({ k: 'project', t: clock(), id: b.id, idea: r.d.idea, theme: r.d.theme, size: r.d.size, style: r.d.style, params: r.d.params, dims: [r.d.w, r.d.d, r.d.h], cells: r.d.cells.length, origin: site.origin, lot: lot.id, by: r.by });
+			return b;
+		}
+		if (stopped) return null;
 		stats.current = 'designing';
 		const r = await design(state);
 		if (!r) return null;
 		const { d, by } = r;
 		const anchor = kid ? { x: kid.x, y: kid.y, z: kid.z } : o.spawn;
 		stats.current = `searching a site for the ${d.size} ${d.idea} (${d.w}×${d.d}, ${d.h} high)`;
-		const search = new SiteSearch({ w: d.w, d: d.d, h: d.h, anchor, avoid: avoidBoxes() }, { world: o.world, own, spawn: o.spawn, kids: kidsNow() });
+		const search = new SiteSearch({ w: d.w, d: d.d, h: d.h, anchor, avoid: [...avoidBoxes(), ...planAvoidBoxes(o.planPath)] }, { world: o.world, own, spawn: o.spawn, kids: kidsNow() });
 		for (;;) {
 			if (stopped) return null;
 			const s = search.step();
@@ -233,15 +275,29 @@ export function runArchitect(o: ArchitectOpts): ArchitectHandle {
 					await sleep(10_000);
 					continue;
 				}
-				await constructBuild(b, {
-					body: o.body, world: o.world, own, stop, trip, kidsNow, ask, log: o.log, save, sleep, clock, pace, noEdits: o.noEdits,
-					stopped: () => stopped, stats, edits,
-					onPlaced: (cell, id) => {
-						file.owned[cellKey(cell)] = id;
-						own.ownWrite(cell.x, cell.y, cell.z, id);
-						o.shared?.append(cell, id);
-					},
-				});
+				const plan = b.lot && o.planPath ? o.planPath : null;
+				if (plan) {
+					try {
+						updateLot(plan, b.lot!, o.name, clock(), {});
+					} catch {
+						// the renewal timer retries
+					}
+				}
+				const stopRenew = plan ? renewClaim(plan, b.lot!, o.name, clock, o.log) : null;
+				try {
+					await constructBuild(b, {
+						body: o.body, world: o.world, own, stop, trip, kidsNow, ask, log: o.log, save, sleep, clock, pace, noEdits: o.noEdits,
+						stopped: () => stopped, stats, edits,
+						onPlaced: (cell, id) => {
+							file.owned[cellKey(cell)] = id;
+							own.ownWrite(cell.x, cell.y, cell.z, id);
+							o.shared?.append(cell, id);
+						},
+					});
+				} finally {
+					stopRenew?.();
+				}
+				if (plan) endLot(plan, b.lot!, o.name, clock(), b.status, b.why, o.log);
 				if (b.status === 'building') continue; // stopped or halted: resume later
 				if (b.status === 'done') {
 					stats.buildsDone++;
@@ -254,6 +310,7 @@ export function runArchitect(o: ArchitectOpts): ArchitectHandle {
 					b.status = 'abandoned';
 					b.why = 'error';
 					save();
+					if (b.lot && o.planPath) endLot(o.planPath, b.lot, o.name, clock(), b.status, b.why, o.log);
 				}
 				await sleep(5000);
 			}

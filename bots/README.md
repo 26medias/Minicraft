@@ -209,6 +209,29 @@ npm --prefix bots run bot -- architect --target local|live --world <uuid|name> -
 	--brain laya|jev [--compare] [--llm-params] [--rest-sec N] [--no-edits] [--i-deployed-the-server]
 ```
 
+## The foreman and `--join-plan` (experiment E7)
+
+`bots/src/foreman/`: one neighbourhood per world, shared through a plan file
+`bots/.state/shared/<target>/<world>/plan.json`. The foreman lays it out near the nearest kid (else spawn): 2 rows of
+3–5 lots (7×7, room for 16 high; 10, then 8, then 6 lots), 4 columns apart, with a road grid in the gaps (a gravel main
+street between the rows, cobblestone cross streets, 1-wide verges) and lamps (oak post + lamp) at every crossing and
+at both ends of the main street. Every lot passes brain2's site rules (as the village: flat and natural, headroom,
+≥ 12 from kid cells), the whole area stays ≥ 16 from spawn and from every kid standing, and every road column is
+natural ground within 3 of the lots. It writes the plan, then builds the roads and the lamps itself (on top of the
+ground, only into air, `checkPlace` and a Tripwire), then strolls the streets with no more edits.
+
+Builder and architect bots started with **`--join-plan`** claim the next open lot that fits (an architect design,
+or a template, no larger than the lot), re-check the site rules there, build, and mark it built (dropped when the site
+fails or the build is abandoned; back to open when a kid stands on it). With no plan or no open lot they fall back to
+their own site search, which (like the village's) now avoids the plan's whole area. Claims are first come, first
+served, under a lock (a mkdir'd `plan.json.lock`, broken after 10 s) with atomic writes; a running bot renews its
+claim every minute, and a claim not renewed for 15 minutes (a crashed bot) expires. e2e leg: `foreman`.
+
+```bash
+npm --prefix bots run bot -- foreman --target local|live --world <uuid|name> --name <n> [--skin <s>] [--no-edits] [--i-deployed-the-server]
+npm --prefix bots run bot -- builder ... --join-plan      # or architect ... --join-plan
+```
+
 ## The build cap
 
 Builder, architect and helper stop building after `--max-builds N` builds (default 12); the decorator after

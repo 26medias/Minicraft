@@ -23,6 +23,7 @@ import type { ChoiceEngine } from '../builder/engines.js';
 import { cellKey, planCells } from '../builder/moves.js';
 import { readBuilderRecords } from '../decorator/decor.js';
 import type { SharedCells } from '../shared/bot-cells.js';
+import { planAvoidBoxes } from '../foreman/plan-file.js';
 import { boxOf, doorFronts, lampSpots, planPath, plazaGoal, VillageSearch, type Box, type Col, type LotSpec } from './plan.js';
 import { LAYOUTS, THEMES, themeBlocks, themeSlug, type Layout, type VillageTheme } from './themes.data.js';
 
@@ -69,6 +70,8 @@ export interface VillageOpts {
 	shared?: SharedCells | null;
 	/** The site search radius around the anchor (default 64). */
 	searchRadius?: number;
+	/** The foreman's shared plan (experiment E7): its area is avoided. */
+	planPath?: string;
 }
 export interface VillageStats { placed: number; refused: number; failed: number; lotsDone: number; lotsAbandoned: number; pathsDone: number; lampsDone: number; asks: number; fallbacks: number; current: string }
 export interface VillageHandle { stop(): Promise<void>; stats: VillageStats; file: VillageFile; done: Promise<void> }
@@ -138,7 +141,10 @@ export function runVillage(o: VillageOpts): VillageHandle {
 		const layouts = Object.keys(LAYOUTS) as Layout[];
 		const layout = layouts.find((l) => l === lPick) ?? layouts[Math.floor(o.rng() * layouts.length) % layouts.length];
 		// Other bots' builds are avoided (as the builder does).
-		const avoid = o.builderDir ? readBuilderRecords(o.builderDir).builds.map(({ build: b }) => ({ min: b.origin, max: { x: b.origin.x + b.w - 1, y: b.origin.y + b.h - 1, z: b.origin.z + b.d - 1 } })) : [];
+		const avoid = [
+			...(o.builderDir ? readBuilderRecords(o.builderDir).builds.map(({ build: b }) => ({ min: b.origin, max: { x: b.origin.x + b.w - 1, y: b.origin.y + b.h - 1, z: b.origin.z + b.d - 1 } })) : []),
+			...planAvoidBoxes(o.planPath),
+		];
 		stats.current = `searching a village site (${theme.name}, ${layout})`;
 		const search = new VillageSearch({ layout, theme, anchor, avoid, maxRadius: o.searchRadius ?? 64 }, { world: o.world, own, spawn: o.spawn, kids: kidsNow() });
 		for (;;) {

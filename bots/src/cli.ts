@@ -35,18 +35,21 @@ import { armHardExit, installCrashGuards } from './brain2/guards.js';
 import { applyPoke, startTui, type Poke } from './brain2/tui.js';
 import { SKIN_IDS } from './skins.js';
 import { forbiddenByKids } from './body/guard.js';
+import { blockNames, worldSpawn } from 'minicraft-bot';
+import { builderStatePath, runBuilder, saveBuilderFile, type BuilderHandle } from './builder/builder.js';
+import { jevEngine, layaEngine, parseJevKey, type ChoiceEngine } from './builder/engines.js';
 
 const BOTS_DIR = resolve(dirname(fileURLToPath(import.meta.url)), '..');
 const STATE_ROOT = resolve(BOTS_DIR, '.state');
 
-export type Command = 'companion' | 'revert';
+export type Command = 'companion' | 'revert' | 'builder';
 
 /** Splits `<companion|revert> [flags]`; flags alone mean `companion`. */
 export function parseCommand(argv: readonly string[]): { command: Command; flags: string[] } {
 	const [first, ...rest] = argv;
-	if (first === 'companion' || first === 'revert') return { command: first, flags: rest };
+	if (first === 'companion' || first === 'revert' || first === 'builder') return { command: first, flags: rest };
 	if (first === undefined || first.startsWith('--')) return { command: 'companion', flags: [...argv] };
-	throw new ConfigError(`unknown bot "${first}"; expected companion or revert`);
+	throw new ConfigError(`unknown bot "${first}"; expected companion, revert or builder`);
 }
 
 /** Builds the real brain for `--brain laya|clm` (Task 6), or `null` for `--brain scripted` (the loop
@@ -94,6 +97,10 @@ export interface CliDeps {
 	fetchImpl?: typeof fetch;
 	/** The pause between `revert --builds` writes (default: a real timer). */
 	sleep?: (ms: number) => Promise<void>;
+	/** Test hook: the running builder and its client (the e2e stops it itself). */
+	onBuilder?: (h: BuilderHandle, client: BotClient) => void;
+	/** Test hook: the builder's rest between builds (default 5 min). */
+	builderRestMs?: number;
 }
 
 const DEFAULT_DEPS: CliDeps = {
@@ -474,10 +481,94 @@ async function companionCommand(cfg: Config, deps: CliDeps): Promise<void> {
 	});
 }
 
+/** Where JEV_API_KEY lives: this checkout's .env, else the main Minicraft checkout's (worktrees have none). Read at
+ *  runtime only, never printed. */
+const JEV_ENV_FILES = [resolve(BOTS_DIR, '..', '.env'), resolve(homedir(), 'Projects', 'Minicraft', '.env')];
+
+/**
+ * `builder` (the builder bot): only builds, unlimited blocks. `--brain laya|jev` picks the primary engine (default
+ * laya); `--compare` also asks the other one. A down engine is not a refusal: every question falls back to the
+ * heuristic. Runs until SIGINT/SIGTERM or the connection closes.
+ */
+async function builderCommand(cfg: Config, deps: CliDeps): Promise<void> {
+	if (cfg.brain !== 'laya' && cfg.brain !== 'jev') throw new ConfigError(`builder: --brain must be laya or jev, not "${cfg.brain}"`);
+	const fetchImpl = deps.fetchImpl ?? fetch;
+	const laya = (): ChoiceEngine => layaEngine(cfg.brains.laya.url, fetchImpl, cfg.brains.laya.timeoutMs);
+	const jev = (): ChoiceEngine | null => {
+		const key = JEV_ENV_FILES.map((f) => parseJevKey(deps.readFile(f))).find((k) => k) ?? null;
+		if (!key) deps.print(`jev: no JEV_API_KEY in ${JEV_ENV_FILES.join(' or ')}; jev questions fall back`);
+		return key ? jevEngine(key, fetchImpl) : null;
+	};
+	const primary = cfg.brain === 'jev' ? jev() : laya();
+	const secondary = cfg.compare ? (cfg.brain === 'jev' ? laya() : jev()) : null;
+	const prepared = await prepare(cfg, deps);
+	if (!prepared) return;
+	const client = await connect(cfg, prepared.listing, prepared.skin, deps);
+	const port = realPort(client, prepared.listing);
+	const uuid = prepared.listing.uuid;
+	const stamp = new Date().toISOString().replace(/[:.]/g, '-');
+	const logPath = resolve(deps.stateRoot, 'logs', cfg.target.name, uuid, `${cfg.name}-${stamp}.jsonl`);
+	mkdirSync(dirname(logPath), { recursive: true });
+	const statePath = builderStatePath(deps.stateRoot, cfg.target.name, uuid, cfg.name);
+	const sp = worldSpawn(client.world.seed, client.world.gen);
+	const seed = (Date.now() ^ (process.pid << 16)) >>> 0;
+	deps.print(`${cfg.name} joined "${prepared.listing.name}" as ${prepared.skin}; builder (${primary?.name ?? 'no engine'}${secondary ? ` + ${secondary.name} compare` : ''})${cfg.noEdits ? ' --no-edits' : ''}; log ${logPath}; state ${statePath}`);
+	const handle = runBuilder({
+		name: cfg.name, body: port.body, world: port.world, spawn: { x: sp.x, y: 0, z: sp.z }, primary, secondary,
+		noEdits: cfg.noEdits, statePath, rng: seededRng(seed), known: new Set(blockNames()), restMs: deps.builderRestMs,
+		log: (o) => {
+			try {
+				appendFileSync(logPath, `${JSON.stringify(o)}\n`);
+			} catch {
+				// a full disk must not stop the bot
+			}
+		},
+		status: (line) => deps.print(`[${new Date().toISOString()}] ${line}`),
+	});
+	deps.onBuilder?.(handle, client);
+	const removeGuards = deps.onBuilder ? () => undefined : installCrashGuards({
+		event: (kind, data) => {
+			try {
+				appendFileSync(logPath, `${JSON.stringify({ k: kind, t: Date.now(), data })}\n`);
+			} catch {
+				// ignore
+			}
+		},
+		flush: () => saveBuilderFile(statePath, handle.file),
+		print: deps.print,
+	});
+	let exiting = false;
+	const onSignal = (signal: string): void => {
+		if (exiting) {
+			deps.print(`${signal} again: exiting now`);
+			process.exit(130);
+		}
+		exiting = true;
+		deps.print(`${signal}: stopping`);
+		void Promise.race([handle.stop(), new Promise((r) => setTimeout(r, 5000))]).finally(() => {
+			client.close();
+			removeGuards();
+			deps.print('stopped');
+			armHardExit();
+		});
+	};
+	if (!deps.onBuilder) {
+		process.on('SIGINT', () => onSignal('SIGINT'));
+		process.on('SIGTERM', () => onSignal('SIGTERM'));
+		client.on('close', (code) => {
+			if (exiting) return;
+			exiting = true;
+			deps.print(`connection closed (${code})`);
+			void handle.stop().finally(() => process.exit(code === 1000 ? 0 : 1));
+		});
+	}
+}
+
 export async function main(argv: readonly string[], deps: CliDeps = DEFAULT_DEPS): Promise<void> {
 	const { command, flags } = parseCommand(argv);
 	const cfg = loadConfig({ argv: flags, env: deps.env, readFile: deps.readFile, homedir, stateRoot: deps.stateRoot });
 	if (command === 'revert') await revertCommand(cfg, deps);
+	else if (command === 'builder') await builderCommand(cfg, deps);
 	else await companionCommand(cfg, deps);
 }
 

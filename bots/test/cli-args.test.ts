@@ -16,12 +16,13 @@ describe('parseArgs', () => {
 			personality: 'rex',
 			builds: true,
 			tui: true,
+			compare: false,
 		});
 	});
 
 	it('defaults booleans to false and leaves value flags undefined when absent', () => {
 		const args = parseArgs([]);
-		expect(args).toEqual({ noEdits: false, revertOnExit: false, iDeployedTheServer: false, builds: false, tui: false });
+		expect(args).toEqual({ noEdits: false, revertOnExit: false, iDeployedTheServer: false, builds: false, tui: false, compare: false });
 	});
 
 	it('throws on an unknown flag', () => {

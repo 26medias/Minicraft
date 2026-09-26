@@ -10,6 +10,8 @@ export interface SafetyCtx {
 	world: WorldView; own: Ownership; kids: KidPos[]; stop: StopSignal; now: number; lastEditT: number | null;
 	noEdits: boolean; inventory: Readonly<Record<string, number>>; halted: string | null;
 	helpBuild: boolean; planOwns: (a: Action) => boolean;
+	/** The builder bot (unlimited blocks): free places allowed outside Help-build. Default false. */
+	allowFree?: boolean;
 }
 export type Verdict = { ok: true } | { ok: false; tier: 'safety'; reason: string; planVeto: boolean };
 const no = (reason: string, planVeto = false): Verdict => ({ ok: false, tier: 'safety', reason, planVeto });
@@ -32,7 +34,7 @@ export function judgeSafety(a: Action, c: SafetyCtx): Verdict {
 		if (c.world.getBlock(x, y, z) !== 0) return no('cell not air');
 		if (!c.helpBuild && (cls === 'kid' || c.own.kidNeighbour(x, y, z, 1))) return no('kid cell buffer');
 		if (!(a as { free?: boolean }).free && (c.inventory[(a as { block: string }).block] ?? 0) <= 0) return no('nothing to place');
-		if ((a as { free?: boolean }).free && !c.helpBuild) return no('free blocks are Help-build only');
+		if ((a as { free?: boolean }).free && !c.helpBuild && !c.allowFree) return no('free blocks are Help-build only');
 	} else {
 		if (cls === 'kid' || c.own.kidNeighbour(x, y, z, 1) || c.own.kidNeighbour(x, y, z, 2, true)) return no('kid cell buffer');
 		for (const [dx, dy, dz] of FACES) if (c.world.isLiquid(c.world.getBlock(x + dx, y + dy, z + dz))) return no('touches liquid');

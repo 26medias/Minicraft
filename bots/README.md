@@ -112,6 +112,31 @@ npm run bot -- revert --target <target> --world <uuid|name> --name <bot's name>
 It connects with the bot's own saved state, calls `revert()`, prints how many cells it restored,
 and exits.
 
+## The builder bot
+
+A small, separate bot (`bots/src/builder/`): it only builds (never mines), with unlimited blocks. It loops: pick a
+project (a template × size, not one of the last two kinds built; the model chooses, else random-weighted) and a
+palette → find a flat site near the nearest online kid (else world spawn), widening 32 → 64 → 96, ≥ 12 from any kid
+cell and clear of its own builds → place one block at a time (the model picks among ≤ 3 supported cells, else lowest
+then nearest), ~0.8 s apart → a firework → rest 5 minutes → again.
+
+```bash
+npm --prefix bots run bot -- builder --target local|live --world <uuid|name> --name <n> [--skin <s>] \
+	--brain laya|jev [--compare] [--no-edits] [--i-deployed-the-server]
+```
+
+- **`--brain laya`** asks Laya (`npm run brains -- laya`, 400 ms timeout); **`--brain jev`** asks Jev (hosted, 3 s
+  timeout; `JEV_API_KEY` read from the repo's `.env`, never printed). A down engine is not a refusal: every question
+  falls back to the heuristic (an engine failing 3 times in a row is skipped for 60 s). **`--compare`** also asks the
+  other engine and logs both answers and whether they agree; the bot acts on `--brain`'s.
+- **Safety:** every placement goes through brain2's `judgeSafety`: only into air, never on or next to a kid-made
+  cell, never in a kid's body buffer, never within 16 blocks of a kid who broke one of its blocks in the last
+  10 minutes (the stop signal), and a Tripwire halts all edits on a runaway. A kid cell appearing at the site abandons
+  the build; a kid standing inside it pauses it (abandoned after 60 s).
+- **State:** `bots/.state/builder/<target>/<world>/<name>.json` (its builds and the cells it owns; a build in
+  progress resumes after a restart). **Log:** `bots/.state/logs/<target>/<world>/<name>-<stamp>.jsonl` (`decision`,
+  `project`, `place`, `refused`, `build-end`, `stop-signal`, …). A status line every 30 s; Ctrl-C/SIGTERM stops it.
+
 ## The live checklist
 
 Running against the kids' real world is the same command with `--target live`, plus:

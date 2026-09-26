@@ -67,7 +67,7 @@ export interface BotsConfigData {
 
 const DEFAULT_BOTS_CONFIG = defaultBotsConfig as BotsConfigData;
 
-export type BrainName = 'laya' | 'clm' | 'scripted' | 'v2';
+export type BrainName = 'laya' | 'clm' | 'scripted' | 'v2' | 'jev';
 
 export interface Config {
 	target: { name: string; url: string; token: string; live: boolean };
@@ -87,6 +87,8 @@ export interface Config {
 	revertBuilds: boolean;
 	/** `--tui` (brain v2): the live terminal view. */
 	tui: boolean;
+	/** `--compare` (builder): ask both engines, act on the primary. */
+	compare: boolean;
 	/** Where `.state` lives for this run (injected, defaulted in cli.ts only). */
 	stateRoot: string;
 	statePath(worldUuid: string): string;
@@ -176,7 +178,7 @@ function resolveToken(targetDef: TargetDef, env: Record<string, string | undefin
 	return new ConfigError(`no live token found for this target: set ${envKey}, put it in bots/${ENV_LIVE_TOKEN_FILE}, or deploy one to ${targetDef.tokenFile ?? '(no token file configured)'}`);
 }
 
-const BRAIN_NAMES: readonly BrainName[] = ['laya', 'clm', 'scripted', 'v2'];
+const BRAIN_NAMES: readonly BrainName[] = ['laya', 'clm', 'scripted', 'v2', 'jev'];
 
 /** Builds a `Config` from fully injected inputs. Throws `ConfigError` with a human message. */
 export function loadConfig(input: LoadConfigInput): Config {
@@ -225,6 +227,7 @@ export function loadConfig(input: LoadConfigInput): Config {
 		llm: botsConfig.llm,
 		revertBuilds: args.builds,
 		tui: args.tui,
+		compare: args.compare,
 		stateRoot,
 		statePath(worldUuid: string): string {
 			return `${stateRoot}/${targetName}/${worldUuid}/${name}.json`;

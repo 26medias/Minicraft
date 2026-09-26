@@ -46,6 +46,10 @@ export interface Brain2Handle {
 	stopSignal: StopSignal;
 	/** The world spawn used by Build and Mine as their anchor of last resort (spec §6). */
 	spawn: { x: number; y: number; z: number };
+	/** Writes one `event` line to the brain log (the CLI's crash guards). */
+	event(kind: string, data?: unknown): void;
+	/** Writes the brain file now, synchronously (an uncaught exception, before the process exits). */
+	flush(): void;
 }
 
 const BEAT_MS = 100;
@@ -242,7 +246,8 @@ export function runBrain2(d: Brain2Deps): Brain2Handle {
 	if (!d.manual) timer = setTimeout(() => void loop(), BEAT_MS);
 
 	return {
-		step, store, scheduler, runner, own, stopSignal: stop, spawn,
+		step, store, scheduler, runner, own, stopSignal: stop, spawn, event,
+		flush: () => saver.flush(store.state),
 		async stop() {
 			if (stopped) return;
 			stopped = true;

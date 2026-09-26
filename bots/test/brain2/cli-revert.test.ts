@@ -30,7 +30,7 @@ function brainFile(): BrainFile {
 	};
 }
 
-function fakeClient(o: { journal: JournalEntry[]; world: Map<string, number> }) {
+function fakeClient(o: { journal: JournalEntry[]; world: Map<string, number>; players?: () => Array<Record<string, unknown>> }) {
 	const calls: string[] = [];
 	let journal = o.journal.map((e) => ({ ...e }));
 	const getBlock = (x: number, y: number, z: number) => o.world.get(cellKey(x, y, z)) ?? 0;
@@ -38,6 +38,7 @@ function fakeClient(o: { journal: JournalEntry[]; world: Map<string, number> }) 
 		listWorlds: async () => [{ uuid: 'u-1', name: 'Home', mustMine: false, createdAt: 0, online: [] }],
 		connect: async () => ({}),
 		journal: () => journal.map((e) => ({ ...e })),
+		players: () => (o.players ? o.players() : []),
 		world: { getBlock, blockName: (v: number) => (v === STONE ? 'stone' : v === DIRT ? 'dirt' : v === 0 ? 'air' : null) },
 		revert: async (since = -Infinity) => {
 			calls.push(`revert ${since}`);
@@ -81,7 +82,7 @@ describe('revert on a v2 bot reconciles the brain file (spec §4.6)', () => {
 	});
 	afterEach(() => rmSync(root, { recursive: true, force: true }));
 
-	const scripted = () => {
+	const scripted = (players?: () => Array<Record<string, unknown>>) => {
 		const journal: JournalEntry[] = [
 			{ x: 1, y: 100, z: 1, oldId: 0, newId: STONE, t: 100 },
 			{ x: 2, y: 100, z: 1, oldId: 0, newId: STONE, t: 200 },
@@ -90,7 +91,7 @@ describe('revert on a v2 bot reconciles the brain file (spec §4.6)', () => {
 			{ x: 5, y: 100, z: 5, oldId: 0, newId: STONE, t: 500 },     // a kid replaced it with dirt since: not restored
 		];
 		const world = new Map<string, number>([['1,100,1', STONE], ['2,100,1', STONE], ['3,100,1', STONE], ['5,100,5', DIRT]]);
-		return fakeClient({ journal, world });
+		return fakeClient({ journal, world, players });
 	};
 	const run = async (argv: string[], client: ReturnType<typeof fakeClient>['client']) => {
 		const printed: string[] = [];
@@ -123,6 +124,51 @@ describe('revert on a v2 bot reconciles the brain file (spec §4.6)', () => {
 		expect(f.owned).toEqual({ '3,100,1': STONE, '5,100,5': STONE });
 		expect(f.builds.map((b) => b.status)).toEqual(['reverted', 'done']);
 		expect(f.digs[0].status).toBe('paused');
+	});
+});
+
+describe('revert --builds near an online kid', () => {
+	let root: string;
+	let path: string;
+	beforeEach(() => {
+		root = mkdtempSync(join(tmpdir(), 'bots-revert-'));
+		path = brainFilePath(root, 'local', 'u-1', 'Robo');
+		mkdirSync(dirname(path), { recursive: true });
+		writeFileSync(path, JSON.stringify(brainFile()));
+	});
+	afterEach(() => rmSync(root, { recursive: true, force: true }));
+	const journal = (): JournalEntry[] => [
+		{ x: 1, y: 100, z: 1, oldId: 0, newId: STONE, t: 100 },
+		{ x: 2, y: 100, z: 1, oldId: 0, newId: STONE, t: 200 },
+	];
+	const world = () => new Map<string, number>([['1,100,1', STONE], ['2,100,1', STONE], ['5,100,5', DIRT]]);
+	const kid = (x: number, z: number, hasPos = true) => ({ id: 7, name: 'Noah', skin: 's', bot: false, x, y: 101, z, yaw: 0, pitch: 0, hasPos });
+	const run = async (client: ReturnType<typeof fakeClient>['client']) => {
+		const printed: string[] = [];
+		await main(['revert', '--builds', '--target', 'local', '--world', 'Home', '--name', 'Robo'], {
+			makeClient: (_o: BotClientOptions) => client as unknown as BotClient, stateRoot: root, env: {}, readFile: () => null,
+			print: (l) => void printed.push(l), sleep: async () => undefined,
+		});
+		return printed;
+	};
+
+	// Red if --builds breaks a cell in the buffer of a kid online now (he may have re-placed that very block while
+	// the bot was offline: the journal can't tell), or skips cells outside it.
+	it('skips a build cell within an online kid\'s body buffer, and reverts the others', async () => {
+		const { client, calls } = fakeClient({ journal: journal(), world: world(), players: () => [kid(0.5, 1.5)] });
+		await run(client);
+		expect(calls).toEqual(['break 2,100,1', 'close']);
+		const f: BrainFile = JSON.parse(readFileSync(path, 'utf8'));
+		expect(f.owned['1,100,1']).toBe(STONE);
+		expect(f.owned['2,100,1']).toBeUndefined();
+	});
+
+	// Red if a kid whose position isn't known yet (just joined) is treated as far away.
+	it('writes nothing while an online kid has no position yet', async () => {
+		const { client, calls } = fakeClient({ journal: journal(), world: world(), players: () => [kid(0, 0, false)] });
+		const printed = await run(client);
+		expect(calls).toEqual(['close']);
+		expect(printed.join('\n')).toMatch(/Noah.*no position/);
 	});
 });
 

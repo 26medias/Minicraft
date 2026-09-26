@@ -216,9 +216,12 @@ npm --prefix bots run bot -- companion --target local|live --world <uuid|name> -
   file and exits. Without `--tui` it prints a status line every 30 s.
 - **The brain file**, `bots/.state/brain/<target>/<worldUuid>/<name>.json`, keeps inventory,
   builds, digs, `owned`, relations and explored chunks across sessions (written every 5 s).
-- **The log**, `bots/.state/logs/<target>/<worldUuid>/<name>-<timestamp>.jsonl` (the newest 20 are
-  kept): a `meta` line, the `initial` state, then every state change, every `select` (inputs and
-  rows), the model calls and notable events (`plan`, `stop-signal`, `reject`, `EDITS-HALTED`, …).
+- **The log**, `bots/.state/logs/<target>/<worldUuid>/<name>-<timestamp>.jsonl` (the newest 20
+  files are kept): a `meta` line, the `initial` state, then every state change, every `select`
+  (inputs and rows), the model calls and notable events (`plan`, `stop-signal`, `reject`,
+  `EDITS-HALTED`, …). Past 50 MB a session continues in `<name>-<timestamp>-2.jsonl`, `-3`, …, each
+  headed by the session's `meta` line with `part` and `prev` (the file before it). Replay starts
+  from the first file's `initial` state, so replay a continuation only with its earlier parts.
 - **`revert`** on a v2 bot also reconciles the brain file with what it undid (inventory, `owned`,
   builds and digs `reverted`). **`revert --builds`** takes the bot's standing builds apart instead
   (each cell still the bot's gets its old block back, one per 600 ms):
@@ -226,6 +229,35 @@ npm --prefix bots run bot -- companion --target local|live --world <uuid|name> -
 ```bash
 npm --prefix bots run bot -- revert --target <target> --world <uuid|name> --name <bot> [--builds]
 ```
+
+`revert --builds` can't tell a block the bot placed from the same block a kid put back in that
+cell while the bot was offline: the cell holds the bot's block either way. So it leaves alone
+every cell within the body buffer of a kid online at that moment (his columns and one around
+them), and it writes nothing while an online kid has no position yet. The note says how many
+cells it skipped; run it again once he has moved away. Those builds are still marked `reverted`
+in the brain file, and their skipped cells stay the bot's until a later run.
+
+### Running it live (overnight)
+
+```bash
+npm --prefix bots run bot -- companion --target live --world <uuid|name> --brain v2 --personality pip
+```
+
+The live checklist below applies too (the token, `--i-deployed-the-server` once per world).
+
+- **Stopping it.** Press Ctrl-C in its terminal, or `systemctl --user stop minicraft-bot` if you
+  run it as that systemd user unit (it sends SIGTERM). Either one stops the loop, flushes the
+  brain file and closes the connection. A second Ctrl-C exits at once without the flush. If
+  something still keeps the process up 5 s after the clean stop, it exits by itself.
+- **Stop the bot before you run `revert`.** A running bot writes its brain file every 5 s, so it
+  would overwrite the file that `revert` has just reconciled.
+- **Unattended safety.** A stray promise rejection is logged as an `unhandled-rejection` event and
+  the bot keeps running. An uncaught exception is logged as `uncaught-exception`, the brain file
+  is flushed, and the process exits with code 1. A unit with `Restart=on-failure` restarts it
+  then; a clean stop exits 0.
+- **Stuck in a hole.** When a climb out of a dig is blocked (for example, a kid filled a step),
+  the bot flies to the surface just outside the dig's pillar area. It drops the dig only if that
+  flight is blocked too.
 
 ### The live view (`--tui`)
 

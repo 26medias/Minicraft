@@ -13,7 +13,7 @@
  */
 import { appendFileSync, existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
 import { homedir } from 'node:os';
-import { dirname, join, resolve } from 'node:path';
+import { dirname, resolve } from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 import { BotClient } from 'minicraft-bot';
 import type { BotClientOptions, JournalEntry, WorldListing } from 'minicraft-bot';
@@ -30,9 +30,11 @@ import { LIMITS } from './brain2/data/limits.data.js';
 import { BrainSaver, brainFilePath, loadBrainFile, reconcileRevert, type BrainFile } from './brain2/persist.js';
 import { Store, initialState, type Patch } from './brain2/store.js';
 import type { State } from './brain2/types.js';
-import type { LogLine } from './brain2/log.js';
+import { logFileWriter, type LogLine } from './brain2/log.js';
+import { armHardExit, installCrashGuards } from './brain2/guards.js';
 import { applyPoke, startTui, type Poke } from './brain2/tui.js';
 import { SKIN_IDS } from './skins.js';
+import { forbiddenByKids } from './body/guard.js';
 
 const BOTS_DIR = resolve(dirname(fileURLToPath(import.meta.url)), '..');
 const STATE_ROOT = resolve(BOTS_DIR, '.state');
@@ -225,14 +227,25 @@ export async function revertAndReconcile(client: BotClient, path: string, meta: 
 	return { n, note };
 }
 
+/** How long `revert --builds` waits for an online kid's first position (he may have just joined). */
+const KID_POSE_WAIT_MS = 3000;
+
 /**
  * `revert --builds` (spec §4.6): every cell of the brain file's builds that is still the bot's (it holds the block
  * the bot wrote) gets its journal `oldId` back, one write per edit gap; then the file is reconciled and those builds
- * are `reverted`. Cells with no journal entry are left alone (their old block is unknown).
+ * are `reverted`. Cells with no journal entry are left alone (their old block is unknown). A cell within an online
+ * kid's body buffer (read again before each cell) is skipped: a kid who re-placed the same block there while the bot
+ * was offline can't be told apart from the bot's. An online kid with no position yet (waited for up to 3 s) stops
+ * it before any write.
  */
 async function revertBuilds(client: BotClient, path: string, meta: { worldUuid: string; bot: string }, sleep: (ms: number) => Promise<void>): Promise<{ n: number; note: string }> {
 	const { file, note } = loadBrainFile(path, meta, Date.now());
 	if (!file) return { n: 0, note };
+	const unposed = () => client.players().filter((p) => !p.bot && !p.hasPos);
+	for (let waited = 0; unposed().length > 0 && waited < KID_POSE_WAIT_MS; waited += 100) await sleep(100);
+	const still = unposed();
+	if (still.length > 0) return { n: 0, note: `untouched: ${still.map((p) => p.name).join(', ')} online with no position yet; try again` };
+	const kids = () => client.players().filter((p) => !p.bot).map((p) => ({ x: p.x, y: p.y, z: p.z }));
 	const journal = client.journal();
 	const latest = (x: number, y: number, z: number) => {
 		for (let i = journal.length - 1; i >= 0; i--) if (journal[i].x === x && journal[i].y === y && journal[i].z === z) return journal[i];
@@ -241,6 +254,7 @@ async function revertBuilds(client: BotClient, path: string, meta: { worldUuid: 
 	const w = client.world;
 	const done: JournalEntry[] = [];
 	const visited = new Set<string>();
+	let skipped = 0;
 	for (const b of file.builds) {
 		for (const { cell: c } of b.cells) {
 			const key = `${c.x},${c.y},${c.z}`;
@@ -249,6 +263,10 @@ async function revertBuilds(client: BotClient, path: string, meta: { worldUuid: 
 			const mine = file.owned[key];
 			const e = latest(c.x, c.y, c.z);
 			if (mine === undefined || w.getBlock(c.x, c.y, c.z) !== mine || !e || e.newId !== mine) continue;
+			if (forbiddenByKids(c, kids())) {
+				skipped++;
+				continue;
+			}
 			if (done.length > 0) await sleep(LIMITS.EDIT_GAP_MIN_MS);
 			let ok = await client.break(c.x, c.y, c.z);
 			const old = e.oldId !== 0 ? w.blockName(e.oldId) : null;
@@ -259,7 +277,8 @@ async function revertBuilds(client: BotClient, path: string, meta: { worldUuid: 
 			if (ok) done.push({ x: c.x, y: c.y, z: c.z, oldId: e.oldId, newId: mine, t: Date.now() });
 		}
 	}
-	return { n: done.length, note: rewriteBrainFile(path, meta, (s) => reconcileRevert(s, done, (v) => w.blockName(v))) };
+	const reconciled = rewriteBrainFile(path, meta, (s) => reconcileRevert(s, done, (v) => w.blockName(v)));
+	return { n: done.length, note: skipped > 0 ? `${reconciled}; ${skipped} cell(s) beside an online kid left alone` : reconciled };
 }
 
 async function revertCommand(cfg: Config, deps: CliDeps): Promise<void> {
@@ -303,7 +322,9 @@ async function companionV2(cfg: Config, deps: CliDeps): Promise<void> {
 	const seed = (Date.now() ^ (process.pid << 16)) >>> 0;
 	const stamp = new Date().toISOString().replace(/[:.]/g, '-');
 	const logDir = resolve(deps.stateRoot, 'logs', cfg.target.name, uuid);
-	const logPath = join(logDir, `${cfg.name}-${stamp}.jsonl`);
+	// Past 50 MB the session continues in <bot>-<stamp>-<n>.jsonl (rotation keeps the newest 20 files).
+	const logFile = logFileWriter({ dir: logDir, base: `${cfg.name}-${stamp}` });
+	const logPath = logFile.path;
 	const brainFile = brainPathOf(cfg, uuid);
 	const meta = { worldUuid: uuid, bot: cfg.name };
 	deps.print(`${cfg.name} joined "${prepared.listing.name}" as ${prepared.skin}; brain v2 (${cfg.personality}, code engines); log ${logPath}; brain file ${brainFile}`);
@@ -319,7 +340,7 @@ async function companionV2(cfg: Config, deps: CliDeps): Promise<void> {
 		meta: { ...meta, target: cfg.target.name, live: cfg.target.live }, world: { seed: client.world.seed, gen: client.world.gen },
 		engines: () => ({ laya: null, llm: null }), noEdits: cfg.noEdits,
 		logWrite: (line) => {
-			appendFileSync(logPath, `${line}\n`);
+			logFile.write(line);
 			if (cfg.tui && (line.startsWith('{"k":"select"') || line.startsWith('{"k":"call"'))) {
 				const l = JSON.parse(line) as LogLine;
 				if (l.k === 'select') lastSelect = l;
@@ -329,6 +350,9 @@ async function companionV2(cfg: Config, deps: CliDeps): Promise<void> {
 		// With the TUI up, status lines would scroll it away: the view shows the same.
 		status: cfg.tui ? undefined : (line) => deps.print(`[${new Date().toISOString()}] ${line}`),
 	});
+	// An unattended night: a stray rejection is logged and the bot goes on; an uncaught exception is logged, the brain
+	// file flushed, and the process exits 1. Both are removed on a normal stop.
+	const removeGuards = installCrashGuards({ event: (kind, data) => handle.event(kind, data), flush: () => handle.flush(), print: deps.print });
 	let stopTui: (() => void) | null = null;
 	if (cfg.tui) {
 		stopTui = startTui({
@@ -354,7 +378,14 @@ async function companionV2(cfg: Config, deps: CliDeps): Promise<void> {
 		}
 	};
 	let exiting = false;
-	const onSignal = (signal: string): void => {
+	const onSigint = (): void => onSignal('SIGINT');
+	const onSigterm = (): void => onSignal('SIGTERM');
+	const unhook = (): void => {
+		removeGuards();
+		process.off('SIGINT', onSigint);
+		process.off('SIGTERM', onSigterm);
+	};
+	function onSignal(signal: string): void {
 		if (exiting) {
 			deps.print(`${signal} again: exiting now`);
 			process.exit(130);
@@ -363,22 +394,33 @@ async function companionV2(cfg: Config, deps: CliDeps): Promise<void> {
 		stopTui?.();
 		stopTui = null;
 		deps.print(`${signal}: stopping`);
+		// Once the clean stop is done (armed then, not at the signal: --revert-on-exit can take longer than 5 s),
+		// something (a socket, a timer) may still keep the event loop alive: exit anyway after 5 s.
 		stopAll().then(
-			() => deps.print('stopped; brain file flushed'),
+			() => {
+				deps.print('stopped; brain file flushed');
+				unhook();
+				armHardExit();
+			},
 			(err: unknown) => {
 				deps.print(`stop failed: ${err instanceof Error ? err.message : String(err)}`);
 				process.exitCode = 1;
+				unhook();
+				armHardExit(undefined, () => process.exit(1));
 			},
 		);
-	};
-	process.on('SIGINT', () => onSignal('SIGINT'));
-	process.on('SIGTERM', () => onSignal('SIGTERM'));
+	}
+	process.on('SIGINT', onSigint);
+	process.on('SIGTERM', onSigterm);
 	client.on('close', (code) => {
 		if (exiting) return;
 		exiting = true;
 		stopTui?.();
 		deps.print(`connection closed (${code})`);
-		void handle.stop().finally(() => process.exit(code === 1000 ? 0 : 1));
+		void handle.stop().finally(() => {
+			unhook();
+			process.exit(code === 1000 ? 0 : 1);
+		});
 	});
 }
 

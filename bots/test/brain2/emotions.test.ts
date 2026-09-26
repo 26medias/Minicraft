@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { bandOf, decayPatch, decayStep, nextBand } from '../../src/brain2/emotions.js';
+import { bandOf, bandsPatch, decayPatch, decayStep, nextBand } from '../../src/brain2/emotions.js';
 import { initialState } from '../../src/brain2/store.js';
 import { PIP } from '../../src/brain2/data/personalities.data.js';
 import type { Personality, State } from '../../src/brain2/types.js';
@@ -82,5 +82,19 @@ describe('bands with ±0.03 hysteresis (spec §4.1)', () => {
 		expect(nextBand('neutral', 0.58)).toBe('high');
 		expect(nextBand('very high', 0.21)).toBe('high');
 		expect(nextBand('neutral', -0.58)).toBe('low');
+	});
+});
+
+describe('bandsPatch (spec §4.1)', () => {
+	// Red if bandsPatch stops computing nextBand per axis (e.g. always returns []): this is the only test
+	// here that requires a non-empty patch, so it is the one that catches that defect.
+	it('one axis crossing an edge produces exactly one band patch op', () => {
+		const s0 = initialState(PIP, pose);
+		const state: State = { ...s0, emotions: { ...s0.emotions, mood: { ...s0.emotions.mood, value: 0.23, band: 'neutral' } } };
+		expect(bandsPatch(state)).toEqual([{ path: ['emotions', 'mood', 'band'], value: 'high' }]);
+	});
+	it('no axis crossing an edge produces an empty patch', () => {
+		const s0 = initialState(PIP, pose);
+		expect(bandsPatch(s0)).toEqual([]);
 	});
 });

@@ -455,6 +455,23 @@ Then it switches to the nearest other kid, at any distance, and stays on him for
 only one kid online, or if every kid is idle, nothing changes; among several idle kids it rotates
 round-robin. A switch is logged (`target` event) and shown on the status line.
 
+## The control panel
+
+`npm --prefix bots run panel` (from the worktree root) serves a small local page at
+http://127.0.0.1:7777/ (`-- --port N` to change; it refuses any non-loopback `--host`). No auth:
+localhost only, and it rejects foreign `Host` headers and non-JSON POSTs.
+
+- **Start** runs `systemd-run --user --unit=mcbot-<slug-of-name> … npm --prefix bots run bot -- <type> …`
+  (Restart=on-failure every 60 s, at most 5 starts an hour). Every field is whitelisted server-side
+  and the argv is executed without a shell. Bot types the CLI does not offer are hidden; `--when` is
+  greyed out until the CLI has it.
+- **Stop** runs `systemctl --user stop` + `reset-failed`, and only on `mcbot-*` units or legacy
+  `minicraft-*` bot units. `minicraft-server` and `minicraft-tunnel` are refused.
+- Clicking an instance shows its status, journal tail, and a summary of its newest log under
+  `.state/logs/<target>/<world>/` (the last 2 MB): brain2 behaviour, emotions, relations, inventory,
+  selections and events; or builder-family project, placed count, cap, decisions and movement trouble.
+- `-- --dry-run` makes Start/Stop print the argv instead of running it (use this for development).
+
 ## Adding a bot
 
 Everything companion-specific lives in `bots/src/bots/companion.ts`; the pieces it's built from are

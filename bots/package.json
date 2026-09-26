@@ -11,7 +11,8 @@
 		"brains": "tsx src/brains-cli.ts",
 		"e2e": "tsx test/e2e.ts",
 		"replay": "tsx src/brain2/replay.ts",
-		"bench": "tsx bench/bench.ts"
+		"bench": "tsx bench/bench.ts",
+		"panel": "tsx panel/server.ts"
 	},
 	"dependencies": {
 		"minicraft-bot": "file:../packages/minicraft-bot"

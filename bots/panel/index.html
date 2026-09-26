@@ -1,0 +1,238 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Bot Panel</title>
+<style>
+	:root { --bg: #f5f4f0; --panel: #fff; --ink: #222; --mute: #777; --line: #ddd; --ok: #2e8b57; --bad: #c0392b; --warn: #d68910; --accent: #3a6ea5; }
+	@media (prefers-color-scheme: dark) { :root { --bg: #1b1c1e; --panel: #25272a; --ink: #e6e6e6; --mute: #999; --line: #3a3c40; --accent: #6fa0d8; } }
+	* { box-sizing: border-box; }
+	body { margin: 0; font: 14px/1.4 system-ui, sans-serif; background: var(--bg); color: var(--ink); }
+	header { display: flex; gap: 16px; align-items: center; padding: 10px 16px; border-bottom: 1px solid var(--line); background: var(--panel); }
+	header h1 { font-size: 16px; margin: 0; }
+	.pill { padding: 2px 8px; border-radius: 10px; font-size: 12px; border: 1px solid var(--line); }
+	.pill.ok { color: var(--ok); border-color: var(--ok); } .pill.bad { color: var(--bad); border-color: var(--bad); } .pill.warn { color: var(--warn); border-color: var(--warn); }
+	main { display: grid; grid-template-columns: minmax(300px, 380px) 1fr; gap: 16px; padding: 16px; }
+	@media (max-width: 800px) { main { grid-template-columns: 1fr; } }
+	section { background: var(--panel); border: 1px solid var(--line); border-radius: 6px; padding: 12px; margin-bottom: 16px; }
+	h2 { font-size: 14px; margin: 0 0 8px; } h3 { font-size: 13px; margin: 12px 0 4px; color: var(--mute); }
+	label { display: block; margin: 6px 0 2px; font-size: 12px; color: var(--mute); }
+	input, select, button { font: inherit; padding: 4px 6px; border: 1px solid var(--line); border-radius: 4px; background: var(--bg); color: var(--ink); }
+	input[type=text], input[type=number], select { width: 100%; }
+	.row { display: flex; gap: 8px; } .row > * { flex: 1; }
+	.check { display: flex; gap: 6px; align-items: center; margin-top: 6px; font-size: 13px; color: var(--ink); }
+	button { cursor: pointer; } button.primary { background: var(--accent); color: #fff; border-color: var(--accent); } button.stop { color: var(--bad); border-color: var(--bad); }
+	table { width: 100%; border-collapse: collapse; font-size: 13px; }
+	td, th { padding: 4px 6px; border-bottom: 1px solid var(--line); text-align: left; vertical-align: top; }
+	tr.inst { cursor: pointer; } tr.inst:hover, tr.sel { background: rgba(58,110,165,.12); }
+	.mute { color: var(--mute); } .mono { font-family: ui-monospace, monospace; font-size: 12px; white-space: pre-wrap; word-break: break-word; }
+	.bar { display: inline-block; width: 120px; height: 8px; background: var(--line); position: relative; vertical-align: middle; border-radius: 4px; }
+	.bar i { position: absolute; top: 0; bottom: 0; background: var(--accent); border-radius: 4px; }
+	.bar b { position: absolute; left: 50%; top: -2px; bottom: -2px; width: 1px; background: var(--mute); }
+	#msg { margin-top: 8px; } .err { color: var(--bad); }
+	.grid2 { display: grid; grid-template-columns: 1fr 1fr; gap: 12px; } @media (max-width: 1100px) { .grid2 { grid-template-columns: 1fr; } }
+</style>
+</head>
+<body>
+<header>
+	<h1>Minicraft bots</h1>
+	<span id="laya" class="pill">Laya ?</span>
+	<span id="dry" class="pill warn" hidden>dry run</span>
+	<span class="mute" id="clock"></span>
+</header>
+<main>
+	<div>
+		<section>
+			<h2>Start a bot</h2>
+			<form id="start">
+				<label>Type</label><select name="type" id="type"></select>
+				<div class="row">
+					<div><label>Name</label><input type="text" name="name" maxlength="16" pattern="[A-Za-z0-9 ]{1,16}" required></div>
+					<div><label>Skin</label><select name="skin" id="skin"></select></div>
+				</div>
+				<div class="row">
+					<div><label>Target</label><select name="target" id="target"><option value="live">live</option><option value="local">local</option></select></div>
+					<div><label>When</label><select name="when" id="when"><option value="">(default)</option><option value="always">always</option><option value="players">players</option></select></div>
+				</div>
+				<label>World</label><select name="world" id="world"></select>
+				<div id="f-companion">
+					<label>Personality</label><select name="personality"><option value="pip">pip</option><option value="rex">rex</option></select>
+					<label class="check"><input type="checkbox" name="jev"> Jev answers social/situational (--jev)</label>
+				</div>
+				<div id="f-brain">
+					<label>Brain</label><select name="brain"><option value="jev">jev</option><option value="laya">laya</option></select>
+					<label class="check"><input type="checkbox" name="compare" checked> compare (ask both, log both)</label>
+				</div>
+				<div id="f-max"><label id="max-label">Max builds</label><input type="number" name="max" min="1" max="9999" placeholder="no cap"></div>
+				<div id="f-join"><label class="check"><input type="checkbox" name="joinPlan"> join the foreman's plan (--join-plan)</label></div>
+				<p><button class="primary" type="submit">Start</button></p>
+				<div id="msg" class="mono"></div>
+			</form>
+		</section>
+	</div>
+	<div>
+		<section>
+			<h2>Instances</h2>
+			<table><thead><tr><th>Unit</th><th>Bot</th><th>State</th><th>Restarts</th><th>Since</th><th></th></tr></thead><tbody id="insts"></tbody></table>
+		</section>
+		<section id="detail" hidden>
+			<h2 id="d-title"></h2>
+			<div id="d-body"></div>
+		</section>
+	</div>
+</main>
+<script>
+const $ = (s) => document.querySelector(s);
+const esc = (v) => String(v ?? '').replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
+const ago = (t) => { if (typeof t !== 'number') return ''; const s = Math.round((Date.now() - t) / 1000); return s < 60 ? `${s}s ago` : s < 3600 ? `${Math.round(s / 60)}m ago` : `${(s / 3600).toFixed(1)}h ago`; };
+let meta = null, selected = null;
+
+async function api(path, body) {
+	const res = await fetch(path, body ? { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify(body) } : {});
+	const data = await res.json();
+	if (!res.ok) throw new Error(data.error || data.out || res.status);
+	return data;
+}
+
+async function loadMeta() {
+	meta = await api('/api/meta');
+	$('#laya').textContent = meta.laya ? 'Laya up' : 'Laya down';
+	$('#laya').className = 'pill ' + (meta.laya ? 'ok' : 'bad');
+	$('#dry').hidden = !meta.dryRun;
+	const cur = $('#type').value;
+	$('#type').innerHTML = meta.types.map((t) => `<option value="${esc(t.id)}">${esc(t.id)}</option>`).join('');
+	if (cur && meta.types.some((t) => t.id === cur)) $('#type').value = cur;
+	if (!$('#skin').options.length) $('#skin').innerHTML = meta.skins.map((s) => `<option>${esc(s)}</option>`).join('');
+	$('#when').disabled = !meta.whenSupported;
+	$('#when').title = meta.whenSupported ? '' : 'the CLI has no --when flag yet';
+	typeChanged();
+}
+
+function typeChanged() {
+	const t = meta.types.find((x) => x.id === $('#type').value);
+	if (!t) return;
+	$('#f-companion').hidden = t.family !== 'companion';
+	$('#f-brain').hidden = !t.brain;
+	$('#f-max').hidden = !t.maxFlag;
+	$('#max-label').textContent = t.maxFlag === '--max-decorations' ? 'Max decorations' : 'Max builds';
+	$('#f-join').hidden = !t.joinPlan;
+}
+
+async function loadWorlds() {
+	$('#world').innerHTML = '<option>loading…</option>';
+	try {
+		const r = await api('/api/worlds?target=' + $('#target').value);
+		$('#world').innerHTML = r.worlds.length ? r.worlds.map((w) => `<option value="${esc(w.uuid)}">${esc(w.name)} — online: ${esc(w.online)}</option>`).join('') : `<option value="">${esc(r.error || 'no worlds')}</option>`;
+	} catch (e) { $('#world').innerHTML = `<option value="">${esc(e.message)}</option>`; }
+}
+
+$('#type').addEventListener('change', typeChanged);
+$('#target').addEventListener('change', loadWorlds);
+$('#start').addEventListener('submit', async (ev) => {
+	ev.preventDefault();
+	const f = new FormData(ev.target);
+	const t = meta.types.find((x) => x.id === f.get('type'));
+	const body = { type: f.get('type'), name: f.get('name'), skin: f.get('skin'), target: f.get('target'), world: f.get('world') };
+	if (f.get('when')) body.when = f.get('when');
+	if (t.family === 'companion') { body.personality = f.get('personality'); body.jev = f.get('jev') === 'on'; }
+	if (t.brain) { body.brain = f.get('brain'); body.compare = f.get('compare') === 'on'; }
+	if (t.maxFlag && f.get('max')) body.max = f.get('max');
+	if (t.joinPlan) body.joinPlan = f.get('joinPlan') === 'on';
+	$('#msg').className = 'mono';
+	$('#msg').textContent = 'starting…';
+	try {
+		const r = await api('/api/start', body);
+		$('#msg').textContent = (r.dryRun ? 'DRY RUN — would run:\n' : 'started:\n') + r.argv.map((a) => /[\s"']/.test(a) ? JSON.stringify(a) : a).join(' ') + (r.out ? '\n' + r.out : '');
+		refresh();
+	} catch (e) { $('#msg').className = 'mono err'; $('#msg').textContent = e.message; }
+});
+
+async function stop(unit) {
+	if (!confirm(`Stop ${unit}?`)) return;
+	try { const r = await api('/api/stop', { unit }); if (r.dryRun) alert('DRY RUN — would run:\n' + r.argv.map((a) => a.join(' ')).join('\n')); } catch (e) { alert(e.message); }
+	refresh();
+}
+
+function stateClass(i) { return i.active === 'active' ? 'ok' : i.active === 'failed' ? 'bad' : 'warn'; }
+
+async function refresh() {
+	$('#clock').textContent = new Date().toLocaleTimeString();
+	try {
+		const list = await api('/api/instances');
+		list.sort((a, b) => (a.kind === b.kind ? a.unit.localeCompare(b.unit) : a.kind === 'panel' ? -1 : 1));
+		$('#insts').innerHTML = list.map((i) => `<tr class="inst ${i.unit === selected ? 'sel' : ''}" data-unit="${esc(i.unit)}">
+			<td>${esc(i.unit)}${i.kind === 'legacy' ? ' <span class="pill warn">legacy</span>' : ''}</td>
+			<td>${esc(i.cmd.type || '?')} · ${esc(i.cmd.name || '?')} <span class="mute">${esc(i.cmd.target)}</span></td>
+			<td><span class="pill ${stateClass(i)}">${esc(i.active)}/${esc(i.sub)}</span></td>
+			<td>${esc(i.restarts)}</td><td class="mute">${esc(i.since)}</td>
+			<td>${i.active !== 'inactive' ? `<button class="stop" data-stop="${esc(i.unit)}">Stop</button>` : ''}</td></tr>`).join('') || '<tr><td colspan="6" class="mute">no bot units</td></tr>';
+	} catch (e) { $('#insts').innerHTML = `<tr><td colspan="6" class="err">${esc(e.message)}</td></tr>`; }
+	if (selected) loadDetail();
+}
+
+$('#insts').addEventListener('click', (ev) => {
+	const s = ev.target.closest('[data-stop]');
+	if (s) { ev.stopPropagation(); stop(s.dataset.stop); return; }
+	const tr = ev.target.closest('tr.inst');
+	if (tr) { selected = tr.dataset.unit; document.querySelectorAll('tr.inst').forEach((r) => r.classList.toggle('sel', r.dataset.unit === selected)); loadDetail(); }
+});
+
+function bar(v) {
+	if (typeof v !== 'number') return '<span class="bar"></span>';
+	const x = Math.max(-1, Math.min(1, v));
+	const left = x >= 0 ? 50 : 50 + x * 50, w = Math.abs(x) * 50;
+	return `<span class="bar"><b></b><i style="left:${left}%;width:${w}%"></i></span>`;
+}
+const axesTable = (o) => `<table>${Object.entries(o).map(([k, a]) => `<tr><td>${esc(k)}</td><td>${bar(a.value)}</td><td>${a.value == null ? '' : a.value.toFixed(2)}</td><td class="mute">${esc(a.band || '')}</td></tr>`).join('')}</table>`;
+
+function renderBrain2(s) {
+	const b = s.behaviour;
+	return `<div class="grid2"><div>
+		<h3>Behaviour</h3>${b ? `<b>${esc(b.kind)}</b> <span class="mono">${esc(JSON.stringify(b.params))}</span><br>step ${esc(b.step)} · failures ${esc(b.failures)} · ${esc(b.progress)} <span class="mute">${ago(b.startedT)}</span>` : '<span class="mute">idle</span>'}
+		<h3>Emotions</h3>${axesTable(s.emotions)}
+		<h3>Inventory</h3><span class="mono">${esc(Object.entries(s.inventory).map(([k, v]) => `${k} ×${v}`).join(', ') || 'empty')}</span>
+		<h3>Relations</h3>${Object.entries(s.relations).map(([who, ax]) => `<b>${esc(who)}</b>${axesTable(ax)}`).join('') || '<span class="mute">none</span>'}
+	</div><div>
+		<h3>Last selections</h3><table>${s.selections.map((x) => `<tr><td class="mute">${ago(x.t)}</td><td><b>${esc(x.winner)}</b></td><td>${esc(x.trigger)}${x.urgent ? ' (urgent)' : ''}</td><td class="mute">${esc(x.player || '')}</td></tr>`).join('')}</table>
+		<h3>Last events</h3><table>${s.events.map((x) => `<tr><td class="mute">${ago(x.t)}</td><td>${esc(x.kind)}</td><td class="mono">${esc(x.data)}</td></tr>`).join('')}</table>
+	</div></div>`;
+}
+
+function renderBuilder(s) {
+	const p = s.project, st = s.start;
+	return `<div class="grid2"><div>
+		<h3>Session</h3>${st ? `${esc(st.bot || '')} · primary <b>${esc(st.primary)}</b>${st.secondary ? ` · compare ${esc(st.secondary)}` : ''} · ${st.builds != null ? `builds at start ${esc(st.builds)}` : st.decorations != null ? `decorations at start ${esc(st.decorations)}` : ''} <span class="mute">${ago(st.t)}</span>` : '<span class="mute">start line not found</span>'}
+		<h3>Current project / lot</h3>${p ? `<b>${esc(p.k)}</b> <span class="mono">${esc(JSON.stringify(p).slice(0, 300))}</span><br>placed ${esc(s.placed)} <span class="mute">${ago(p.t)}</span>` : '<span class="mute">none in the log tail</span>'}
+		<h3>Builds (log tail)</h3>done ${s.buildEnds.done} · abandoned ${s.buildEnds.abandoned}${s.buildEnds.last ? ` · last: ${esc(s.buildEnds.last.status)} (${esc(s.buildEnds.last.why)})` : ''}
+		<h3>Cap</h3>${s.cap ? `<span class="pill warn">reached ${esc(s.cap.builds)}/${esc(s.cap.max)}</span> <span class="mute">${ago(s.cap.t)}</span>` : '<span class="mute">not reached</span>'}
+		${s.stop ? `<h3>Stopped</h3><span class="mono">${esc(JSON.stringify(s.stop.stats))}</span>` : ''}
+		<h3>Movement trouble</h3><table>${s.movement.map((x) => `<tr><td class="mute">${ago(x.t)}</td><td>${esc(x.k)}</td><td class="mono">${esc(x.detail)}</td></tr>`).join('') || '<tr><td class="mute">none</td></tr>'}</table>
+	</div><div>
+		<h3>Last decisions</h3><table>${s.decisions.map((d) => `<tr><td class="mute">${ago(d.t)}</td><td><b>${esc(d.what)}</b><br><span class="mute">${esc(d.question)}</span></td><td>${esc(d.choice)}<br><span class="mute">${esc(d.option)}</span></td><td>${esc(d.engine)} ${esc(d.ms)}ms${d.fallback ? ' <span class="pill bad">fallback</span>' : ''}${d.other ? `<br><span class="mute">${esc(d.other)}${d.agree === false ? ' ≠' : ''}</span>` : ''}</td></tr>`).join('')}</table>
+	</div></div>`;
+}
+
+async function loadDetail() {
+	if (!selected) return;
+	const unit = selected;
+	try {
+		const d = await api('/api/instance?unit=' + encodeURIComponent(unit));
+		if (unit !== selected) return;
+		$('#detail').hidden = false;
+		$('#d-title').textContent = `${d.unit} — ${d.cmd.type || '?'} ${d.cmd.name || ''}`;
+		$('#d-body').innerHTML = `<div class="mute">${esc(d.active)}/${esc(d.sub)} · restarts ${esc(d.restarts)} · ${esc(d.since)}</div>
+			<div class="mono mute">${esc(d.description)}</div>
+			<h3>Journal</h3><div class="mono">${esc(d.journal.join('\n'))}</div>
+			<h3>Log</h3><div class="mono mute">${esc(d.logPath || 'no log found')}</div>
+			${d.summary ? (d.summary.kind === 'brain2' ? renderBrain2(d.summary) : renderBuilder(d.summary)) : ''}`;
+	} catch (e) { $('#d-body').innerHTML = `<span class="err">${esc(e.message)}</span>`; }
+}
+
+loadMeta().then(loadWorlds).catch((e) => { $('#msg').className = 'mono err'; $('#msg').textContent = e.message; });
+refresh();
+setInterval(refresh, 3000);
+setInterval(() => loadMeta().catch(() => {}), 30000);
+</script>
+</body>
+</html>

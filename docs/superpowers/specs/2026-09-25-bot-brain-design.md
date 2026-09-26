@@ -1,10 +1,11 @@
 # Bot brain: emotions, behaviours and a blackboard of experts
 
-**Status:** design, rev 3.1, 2026-09-25. It was brainstormed with Julien on 2026-09-25.
+**Status:** design, rev 3.2, 2026-09-25. It was brainstormed with Julien on 2026-09-25.
 - **Rev 1** (`193069b`) went through gate 1 with four reviewers: models, rigour, engine and sequencing, and consumer. All four ran probes.
 - **Rev 2** (`e7b20dd`) repaired every finding and added rulings R12–R15, which Julien made on the review's questions.
 - **Rev 3** (`e1cddce`) repaired the re-gate of rev 2, where the same four reviewers re-ran their probes.
-- **Rev 3.1** repairs a fresh reviewer's check of rev 3.
+- **Rev 3.1** (`183a02d`) repaired a fresh reviewer's check of rev 3.
+- **Rev 3.2** repairs a narrow check of rev 3.1.
 
 The disposition of every finding is in §12.
 
@@ -218,8 +219,8 @@ Each axis's words come from its poles.
 Every axis decays at its true rate. Tests:
 - Mood at 1.0 with baseline 0 is 0.5 ± 0.01 after 2 min.
 - An axis whose baseline sits on a band edge changes band at most twice while it settles.
-- While an axis settles, `value − baseline` **never changes sign**. That turns red on the rev 2 formula, which crossed the baseline 617 times.
-- Settling from a distance d emits at most ⌈d / 0.01⌉ + 1 decay patches. Decay events are never appraisal deltas: they don't count toward the selection trigger's Σ|Δ| (§5.3), and they aren't listed in `deltas`.
+- While an axis settles, `value − baseline` **never changes sign**, and settling from a distance d emits at most ⌈d / 0.01⌉ + 1 decay patches. Both tests also run on the drift formula **with the snap disabled**. That's the only setting in which the rev 2 formula's overshoot shows (108 sign changes). Without it, these tests couldn't go red on the old formula.
+- From d = 0.0105, the axis snaps within one half-life. This is the test that goes red on the rev 3 snap, which got stuck at 0.0105. Decay events are never appraisal deltas: they don't count toward the selection trigger's Σ|Δ| (§5.3), and they aren't listed in `deltas`.
 
 ### 4.2 Relations (per player)
 
@@ -294,7 +295,7 @@ The file is `bots/.state/brain/<target>/<world-uuid>/<bot>.json`, keyed by world
 | Expert | Trigger | What it does |
 |---|---|---|
 | `perceive` | every 500 ms, plus SDK edit and fx events | Diffs snapshots and edits into `WorldEvent`s (§4.4). Maintains `owned` on foreign edits. |
-| `salience` | on new events | Marks an event salient when it involves the bot's builds, digs or inventory (`broke-my-block`, `added-to-my-build`), or it is `line-started`, `looking-at-me`, `player-arrived`, `player-gone`, `found`, `need`, `stuck`, `hazard` or `outcome`, or another player's edits within 16 blocks. **Those plain edits are salient only when that player's count in the last 10 s moves to a different bucket (0, 1–3, 4+).** Without that rule, a kid building steadily set off about 20 appraisal bursts a minute and pushed Mood to 0.99. **The bot's own edits are never salient.** The rules are data. |
+| `salience` | on new events | Marks an event salient when it involves the bot's builds, digs or inventory (`broke-my-block`, `added-to-my-build`), or it is `line-started`, `looking-at-me`, `player-arrived`, `player-gone`, `found`, `need`, `stuck`, `hazard` or `outcome`, or another player's edits within 16 blocks. **Those plain edits, and `added-to-my-build`, are salient only when that player's count in the last 10 s moves to a different bucket (0, 1–3, 4+).** Without that rule, a kid building steadily set off about 20 appraisal bursts a minute and pushed Mood to 0.99. **The bot's own edits are never salient.** The rules are data. |
 | `decay` | every 500 ms | Accumulated drift (§4.1). |
 
 ### 5.2 Layer 2: appraisal (R8, R15)
@@ -351,7 +352,11 @@ The file is `bots/.state/brain/<target>/<world-uuid>/<bot>.json`, keyed by world
   - `line-started` by a kid within 16 blocks;
   - `looking-at-me`.
 
-  **Limits on urgent triggers:** at most one per trigger kind per player every 20 s. An urgent trigger never interrupts a behaviour that already serves the same player: a `line-started` from Noah doesn't interrupt Help-build {Noah}. **The urgent governor:** at most **one urgent switch every 20 s in total**, across all players and kinds. A later urgent trigger in that window becomes a normal trigger. That stops two kids laying lines from bouncing the bot between them. Criterion 1's two-kid fixture tests it.
+  **Limits on urgent triggers:** at most one per trigger kind per player every 20 s. An urgent trigger never interrupts a behaviour that already serves the same player: a `line-started` from Noah doesn't interrupt Help-build {Noah}. **The urgent governor**, a runtime rule, allows an urgent switch only if:
+- there has been no urgent switch in the last 30 s, across all players and kinds, **and**
+- there have been fewer than 9 switches of any kind in the last 5 minutes.
+
+Otherwise the trigger becomes a normal one. **Stop signals and hazards are exempt**: they always interrupt at once. That stops two kids laying lines from bouncing the bot between them. Criterion 1's two-kid fixture tests it at 3, 4, 5 and 7 s alternation. Without the governor it produced 30 switches.
 - **Keep-going (code, R15)** every 30 s: it triggers selection when:
   - the behaviour has run past its `typicalS` upper bound, or
   - Stimulation is "low" or "very low" and the behaviour has run ≥ 60 s, or
@@ -434,7 +439,7 @@ interface Behaviour<P> {
 | Behaviour | Budget |
 |---|---|
 | Build | levelling cells + template cells. A replan (at most one) replaces the budget with the new plan's count. |
-| Mine | the breaks of the episode's next S steps, where S = ⌈120 s / (3 × 0.6 s)⌉ = 67 steps (the most a 120 s episode can do at the fastest pace), plus exactly the floor fills those steps need. The generator already knows where the cave cells are, so they're counted, not estimated. |
+| Mine | the breaks of the episode's next S steps, where S = ⌈120 s / (3 × 0.6 s)⌉ = 67 steps (the most a 120 s episode can do at the fastest pace), plus exactly the floor fills those steps need, plus the target cells (up to N). The generator already knows where the cave cells are, so they're counted, not estimated. |
 | Help-build | recomputed each time the kid extends the line: the remaining cells of the detected line + 1 |
 | Explore, Follow, Watch, Rest | 0 |
 
@@ -529,7 +534,7 @@ Edits for the rest of the session are **halted** (`body.editsHalted`) when eithe
 
 - **Rate:** more edits in the last 60 s than `60 000 / EDIT_GAP_MIN_MS × 1.2` (120 at the 600 ms floor). Gate 1 measured normal pacing at 33–100 edits a minute, above rev 1's limit of 30. This limit sits above the fastest legal pace, so it catches pacing bugs, not work.
 - **Churn:** the same cell edited 3 times within 10 minutes. Levelling and help-build write a cell at most twice.
-- **Plan overrun:** a behaviour **attempts** more edits than its `plannedEdits` (as computed in §6) + 10%. Attempts are counted **before** the judge. The plan-bound veto rejects the edit itself, but without counting attempts the tripwire would never see an overrun.
+- **Plan overrun:** a behaviour **attempts** more edits than its `plannedEdits` (as computed in §6) + 10%. What counts is the edits the **plan-bound veto** rejects, meaning edits outside the plan. Other rejections don't count: a kid in the way, a cell the kid filled first, and so on. Counting them would halt a normal Help-build whenever the kid stands at the end of his line. The count resets whenever `plannedEdits` is recomputed.
 
 The halt is logged loudly and shown in the TUI. The bot keeps running with edits masked out. Criterion 8 checks that normal sessions never trip it.
 
@@ -693,3 +698,13 @@ It all lives in `brain2/`, so today's companion keeps working. `--brain v2` swit
 | The decay tests pass on the rev 2 formula | Fixed §4.1: sign test and patch-count test |
 | Kid edits start appraisal bursts every ~3 s and saturate emotions | Fixed §5.1: plain edits salient only on a bucket change |
 | Snap edge case; renew churn; overrun can't fire; R13 fixture loose; criterion 4 vs Help-build; cache hit rate; Mine budget; `EngineChoice` | Fixed §4.1, §6, §7.2, criteria 3, 4, 7 and 8, the §6 table, §3.1 |
+
+### Narrow check of rev 3.1 → rev 3.2
+
+| Finding | Disposition |
+|---|---|
+| A 20 s governor still allows 15 switches in 5 min | Fixed §5.3: a 30 s window plus a runtime limit of < 9 switches in 5 min; fixture at 4 cadences |
+| Counting every rejected attempt halts Help-build | Fixed §7.2: count only plan-bound vetoes; reset on recompute |
+| The decay tests can't go red on the old formula; the snap fix is untested | Fixed §4.1: snap-disabled variants and a d = 0.0105 test |
+| The governor downgrades stop signals | Fixed §5.3: stop signals and hazards exempt |
+| Mine's budget left out the target; `added-to-my-build` could still saturate | Fixed §6 table, §5.1 |

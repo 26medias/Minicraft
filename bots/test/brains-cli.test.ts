@@ -4,6 +4,7 @@ import { describe, expect, it } from 'vitest';
 import { expandHome, refusePort8080, resolveBrain, runBrainsCli } from '../src/brains-cli.js';
 import type { BrainsCliDeps } from '../src/brains-cli.js';
 import type { BotsConfigData, BrainDef } from '../src/config.js';
+import botsConfig from '../bots.config.js';
 
 /**
  * Task 6: the brains launcher (spec §4). `npm run brains -- laya|clm` spawns the configured start
@@ -13,7 +14,7 @@ import type { BotsConfigData, BrainDef } from '../src/config.js';
 
 function brainsConfig(overrides: Partial<Record<'laya' | 'clm', BrainDef>> = {}): BotsConfigData['brains'] {
 	return {
-		laya: { url: 'http://127.0.0.1:8000', health: '/health', home: '~/Projects/AI/laya', start: ['env', 'LAYA_PORT=8000', '.venv/bin/laya-serve'], timeoutMs: 400 },
+		laya: { url: 'http://127.0.0.1:8000', health: '/health', home: '~/Projects/AI/laya', start: ['env', 'LAYA_PORT=8000', 'LAYA_MODELS=english', '.venv/bin/laya-serve'], timeoutMs: 400 },
 		clm: { url: 'http://127.0.0.1:8701', health: '/health', home: '~/Projects/AI/clm', start: ['env', 'CLM_PORT=8701', '.venv/bin/clm-serve'], timeoutMs: 400, experimental: true },
 		...overrides,
 	};
@@ -109,7 +110,7 @@ describe('runBrainsCli', () => {
 			return child;
 		};
 		const running = runBrainsCli(['laya'], deps);
-		expect(spawned).toEqual([{ command: 'env', args: ['LAYA_PORT=8000', '.venv/bin/laya-serve'], cwd: '/home/fake/Projects/AI/laya' }]);
+		expect(spawned).toEqual([{ command: 'env', args: ['LAYA_PORT=8000', 'LAYA_MODELS=english', '.venv/bin/laya-serve'], cwd: '/home/fake/Projects/AI/laya' }]);
 		child!.emit('exit', 0, null);
 		expect(await running).toBe(0);
 	});
@@ -157,7 +158,7 @@ describe('runBrainsCli', () => {
 	});
 
 	it('refuses port 8080 without spawning anything', async () => {
-		const { deps, spawned } = testDeps({ config: { targets: {}, brains: brainsConfig({ laya: { url: 'http://127.0.0.1:8080', health: '/health', home: '~/Projects/AI/laya', start: ['laya-serve'], timeoutMs: 400 } }), companion: {} as BotsConfigData['companion'] } });
+		const { deps, spawned } = testDeps({ config: { targets: {}, brains: brainsConfig({ laya: { url: 'http://127.0.0.1:8080', health: '/health', home: '~/Projects/AI/laya', start: ['env', 'LAYA_MODELS=english', 'laya-serve'], timeoutMs: 400 } }), companion: {} as BotsConfigData['companion'] } });
 		await expect(runBrainsCli(['laya'], deps)).rejects.toThrow(/8080/);
 		expect(spawned).toHaveLength(0);
 	});
@@ -169,3 +170,33 @@ describe('runBrainsCli', () => {
 	});
 });
 
+
+describe('Laya runs English-only (spec §3.2, Task 18)', () => {
+	// Red if `brains start laya` launches Laya with all three checkpoints: the LLM then gets 1.4 of its 3.6 GB on
+	// the GPU and appraise.size takes p50 4.4 s.
+	it('`brains start laya` refuses a start argv without LAYA_MODELS=english, spawning nothing', async () => {
+		const { deps, spawned } = testDeps({ config: { targets: {}, brains: brainsConfig({ laya: { url: 'http://127.0.0.1:8000', health: '/health', home: '~/Projects/AI/laya', start: ['env', 'LAYA_PORT=8000', 'LAYA_PRELOAD=1', '.venv/bin/laya-serve'], timeoutMs: 400 } }), companion: {} as BotsConfigData['companion'] } });
+		await expect(runBrainsCli(['start', 'laya'], deps)).rejects.toThrow(/LAYA_MODELS=english/);
+		await expect(runBrainsCli(['laya'], deps)).rejects.toThrow(/LAYA_MODELS=english/);
+		expect(spawned).toHaveLength(0);
+	});
+
+	it('`brains start laya` spawns the configured argv when it sets LAYA_MODELS=english', async () => {
+		const { deps, spawned } = testDeps();
+		let child: ReturnType<typeof fakeChild> | null = null;
+		deps.spawnProcess = (command, args, options) => {
+			spawned.push({ command, args, cwd: options.cwd });
+			child = fakeChild();
+			return child;
+		};
+		const running = runBrainsCli(['start', 'laya'], deps);
+		expect(spawned[0].args).toContain('LAYA_MODELS=english');
+		child!.emit('exit', 0, null);
+		expect(await running).toBe(0);
+	});
+
+	it('the committed bots.config.ts starts Laya with LAYA_MODELS=english', () => {
+		expect(() => resolveBrain('laya', (botsConfig as BotsConfigData).brains)).not.toThrow();
+		expect((botsConfig as BotsConfigData).brains.laya!.start).toContain('LAYA_MODELS=english');
+	});
+});

@@ -11,12 +11,13 @@ export default {
 	brains: {
 		// Verified working end-to-end (~/Projects/AI/BRAINS.md, 2026-09-25). `env NAME=value ... laya-serve`
 		// is the exact start command from BRAINS.md, spawned with no shell (brains-cli.ts): `env` sets the
-		// vars and execs the real binary, so BrainDef needs no separate `env` field.
+		// vars and execs the real binary, so BrainDef needs no separate `env` field. LAYA_MODELS=english is required
+		// (spec §3.2; brains-cli.ts refuses without it): all three checkpoints push the LLM partly off the GPU.
 		laya: {
 			url: 'http://127.0.0.1:8000',
 			health: '/health',
 			home: '~/Projects/AI/laya',
-			start: ['env', 'LAYA_HOST=127.0.0.1', 'LAYA_PORT=8000', 'LAYA_DEVICE=cuda', 'LAYA_PRELOAD=1', '.venv/bin/laya-serve'],
+			start: ['env', 'LAYA_HOST=127.0.0.1', 'LAYA_PORT=8000', 'LAYA_DEVICE=cuda', 'LAYA_PRELOAD=1', 'LAYA_MODELS=english', '.venv/bin/laya-serve'],
 			timeoutMs: 400,
 		},
 		// experimental: true — clm-serve itself runs fine, but its required Qwen3-8B vLLM pooling

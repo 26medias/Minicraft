@@ -1,5 +1,5 @@
 /**
- * The brains launcher (spec §4; Task 6): `npm run brains -- laya|clm` starts the configured local
+ * The brains launcher (spec §4; Task 6): `npm run brains -- [start] laya|clm` starts the configured local
  * decision-model server from `bots.config.ts`'s `brains` entry — e.g. `laya-serve` per
  * `~/Projects/AI/BRAINS.md` — with its exact start argv, on 127.0.0.1. It spawns that argv directly
  * (no shell): a start entry like `['env', 'LAYA_HOST=127.0.0.1', ..., '.venv/bin/laya-serve']` sets
@@ -48,13 +48,24 @@ export function refusePort8080(def: BrainDef): void {
  *  otherwise. */
 export function resolveBrain(arg: string | undefined, brains: BotsConfigData['brains']): { key: BrainKey; def: BrainDef } {
 	if (!arg || !BRAIN_KEYS.includes(arg as BrainKey)) {
-		throw new Error(`usage: npm run brains -- <${BRAIN_KEYS.join('|')}>`);
+		throw new Error(`usage: npm run brains -- [start] <${BRAIN_KEYS.join('|')}>`);
 	}
 	const key = arg as BrainKey;
 	const def = brains[key];
 	if (!def) throw new Error(`no brain config for "${key}"`);
 	if (def.start.length === 0) throw new Error(`brain "${key}" has an empty start argv`);
+	if (key === 'laya') requireLayaEnglish(def);
 	return { key, def };
+}
+
+/**
+ * Laya must run English-only (spec §3.2): with all three checkpoints loaded, the LLM gets only 1.4 of its 3.6 GB on
+ * the GPU and `appraise.size` takes p50 4.4 s; with `LAYA_MODELS=english`, Laya uses about 1.9 GB and the LLM fits.
+ */
+export function requireLayaEnglish(def: BrainDef): void {
+	if (!def.start.includes('LAYA_MODELS=english')) {
+		throw new Error(`laya must start with LAYA_MODELS=english (spec §3.2: all checkpoints push the LLM off the GPU); add it to its start argv in bots.config.ts`);
+	}
 }
 
 export interface BrainsCliDeps {
@@ -86,7 +97,8 @@ const DEFAULT_DEPS: BrainsCliDeps = {
  * 1, if it died to a signal) once it exits.
  */
 export async function runBrainsCli(argv: readonly string[], deps: BrainsCliDeps = DEFAULT_DEPS): Promise<number> {
-	const { key, def } = resolveBrain(argv[0], deps.config.brains);
+	const args0 = argv[0] === 'start' ? argv.slice(1) : argv;   // `brains start laya` and `brains laya` are the same
+	const { key, def } = resolveBrain(args0[0], deps.config.brains);
 	refusePort8080(def);
 	const [command, ...args] = def.start;
 	const cwd = expandHome(def.home, deps.homedir);

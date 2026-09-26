@@ -5,7 +5,7 @@ import { exit } from 'node:process';
 import sharp from 'sharp';
 import { BLOCKS } from '../src/data/blocks.data.js';
 import { textureNames } from '../src/data/catalog-rules.js';
-import { DERIVED_TEXTURES, PICKAXE_TIERS, greyTint, pickaxeIcon, pickaxeIconName } from '../src/data/atlas-derive.js';
+import { DERIVED_TEXTURES, PICKAXE_TIERS, greyTint, pickaxeIcon, pickaxeIconName, toySide } from '../src/data/atlas-derive.js';
 import { TEXTURE_TINTS } from './build-atlas-tints.js';
 
 const ATLAS_SIZE = 1024;
@@ -73,7 +73,7 @@ async function main() {
 			const raw = await readTile(derived ? derived.source : name);
 			// Derived tiles (Big/Mega TNT): greyscale then tint, from the source's untinted pixels.
 			const tint = TEXTURE_TINTS[name];
-			pixels = derived ? greyTint(raw, derived.tint, derived.targetLum) : tint ? applyTint(raw, tint) : raw;
+			pixels = derived ? greyTint(derived.icon ? toySide(raw, derived.icon) : raw, derived.tint, derived.targetLum) : tint ? applyTint(raw, tint) : raw;
 		}
 
 		const padded = padEdgeReplicate(pixels, TILE, PADDING);

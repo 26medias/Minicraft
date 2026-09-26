@@ -1,5 +1,5 @@
 // Headless look screenshots for the texture review (texture replacement spec §8). Not deployed.
-//   npx tsx scripts/texture-look.ts --port <free port> --out <dir outside the repo>
+//   npx tsx scripts/texture-look.ts --port <free port> --out <dir outside the repo> [--only 09,12]
 // Starts its OWN Vite dev server on --port (--strictPort) with VITE_MINICRAFT_API_URL pointed at a dead
 // local port, refuses to shoot unless that server serves this worktree's CREDITS.txt, builds each scene
 // in the air next to spawn with world.setBlock, and saves one PNG per scene. Stops its server by port only.
@@ -163,7 +163,8 @@ async function main() {
 			const p = (window as unknown as { __mc: { player: { position: number[] } } }).__mc.player.position;
 			return [Math.floor(p[0]), Math.floor(p[1]) + 40, Math.floor(p[2])];
 		});
-		for (const scene of SCENES) {
+		const only = arg('--only', '');
+		for (const scene of SCENES.filter((sc) => !only || only.split(',').some((o) => sc.file.startsWith(o)))) {
 			const puts = scene.puts.map(([dx, dy, dz, n]) => [anchor[0] + dx, anchor[1] + dy, anchor[2] + dz, id(n)]);
 			await page.evaluate(({ a, puts, eye, yaw, pitch }) => {
 				const w = window as unknown as { __lookPrev?: number[][]; __mc: {

@@ -4,9 +4,12 @@
  * re-routing), the hazard check, the 3 cells top-down, then a walk onto the step. At the bottom it mines the target
  * and its vein (only cells `safeToMine`), up to N. Uncovered ores that aren't the target write `found`. Ruling R17:
  * on `paused` and `done` it climbs back out (step by step, then beside the pillar) before ending; a resume goes on from
- * the step the bot stands on; a resume or climb walk failing twice ends `stuck (climb)` and drops the dig.
+ * the step the bot stands on; a resume or climb walk failing twice ends `stuck (climb)` and drops the dig. Ruling
+ * R19: a climb out blocked twice first flies to the surface just outside the pillar area (`escapeTarget`); only a
+ * blocked flight too ends `stuck (climb)`.
  */
 import { blockId } from 'minicraft-bot';
+import type { WorldView } from '../../port.js';
 import type { Dig, Vec3, WorldEvent } from '../types.js';
 import { LIMITS } from '../data/limits.data.js';
 import { SALIENCE } from '../data/salience.data.js';
@@ -14,7 +17,7 @@ import { key, type Ownership } from '../ownership.js';
 import type { Patch } from '../store.js';
 import { anchorOf } from './build.js';
 import { boxMeetsKids, groundTop } from './site-search.js';
-import { climbPath, safeToMine, spiralStep, spiralsFor, stepAt, type Spiral, type Step } from './spiral.js';
+import { climbPath, exitOf, safeToMine, spiralStep, spiralsFor, stepAt, type Spiral, type Step } from './spiral.js';
 import type { Behaviour, BehaviourCtx, Next } from './behaviour.js';
 
 export interface MineParams { block: string; digId?: string }
@@ -47,6 +50,11 @@ export interface MinePlan {
 	exit: { outcome: 'paused' | 'done'; path: Array<{ x: number; z: number }> } | null;
 	/** Failed walks in a row on the resume walk-down or the climb out: 2 → `stuck (climb)`, the dig dropped (R17). */
 	walkBlocked: number;
+	/**
+	 * Ruling R19: the escape flight once the climb out is blocked twice (`escapeTarget`); `failed` once it is blocked
+	 * too, or when no column qualifies.
+	 */
+	escape: { to: Vec3 | null; failed: boolean } | null;
 }
 
 const CHUNK = 16;
@@ -193,9 +201,43 @@ function exitStep(pl: MinePlan, ctx: BehaviourCtx, outcome?: 'paused' | 'done'):
 		pl.exit = { outcome: outcome!, path: climbPath(pl.spiral, ctx.pose, pl.dig.stepsDone) };
 		pl.walkBlocked = 0;
 	}
-	if (pl.walkBlocked >= MAX_WALK_BLOCKED) return { failed: 'stuck (climb)' };
+	if (pl.walkBlocked >= MAX_WALK_BLOCKED) {
+		// Ruling R19: fly out before giving up; only a blocked flight (or no column to fly to) drops the dig.
+		if (!pl.escape) {
+			const to = escapeTarget(pl.spiral!, ctx.world, ctx.own);
+			pl.escape = { to, failed: to === null };
+		}
+		return pl.escape.failed || !pl.escape.to ? { failed: 'stuck (climb)' } : { kind: 'fly', to: pl.escape.to };
+	}
 	const to = pl.exit.path[0];
 	return to ? { kind: 'walk', to, speed: ctx.style.walkSpeed } : pl.exit.outcome;
+}
+
+/**
+ * Ruling R19: where a bot whose climb out of `sp` is blocked flies to. A column just outside the 3×3 pillar area
+ * (Chebyshev distance 2 from the pillar), with natural ground whose top is at most 3 below the surface y0 − 1 and
+ * no higher than it, and air from above that ground up to y0 + 2 (the body at feet y0 + 1). The nearest such column to
+ * the exit beside step 0 wins; the target is its centre at feet y0 + 1. Null when none qualifies.
+ */
+export function escapeTarget(sp: Spiral, world: WorldView, own: Ownership): Vec3 | null {
+	const e = exitOf(sp);
+	const cols: Array<{ x: number; z: number; d: number }> = [];
+	for (let dx = -2; dx <= 2; dx++) {
+		for (let dz = -2; dz <= 2; dz++) {
+			if (Math.max(Math.abs(dx), Math.abs(dz)) !== 2) continue;
+			const x = sp.px + dx, z = sp.pz + dz;
+			cols.push({ x, z, d: Math.hypot(x - e.x, z - e.z) });
+		}
+	}
+	cols.sort((a, b) => a.d - b.d);
+	for (const { x, z } of cols) {
+		const top = groundTop(world, x, z);
+		if (top < sp.y0 - 4 || top > sp.y0 - 1 || own.classify(x, top, z) !== 'natural') continue;
+		let clear = true;
+		for (let y = top + 1; y <= sp.y0 + 2 && clear; y++) clear = world.getBlock(x, y, z) === 0;
+		if (clear) return { x: x + 0.5, y: sp.y0 + 1, z: z + 0.5 };
+	}
+	return null;
 }
 
 /** Writes the plan's dig (with `fields`) into state.digs. */
@@ -242,7 +284,7 @@ export const mine: Behaviour<MineParams, MinePlan> = {
 			&& Math.hypot(d.spiral.px - anchor.x, d.spiral.pz - anchor.z) <= LIMITS.LEASH && !pillarNearKids(d.spiral, ctx));
 		const pl: MinePlan = {
 			params: p, dig: null, spiral: null, scan: null, phase: 'scan', stepIdx: 0, mined: 0, episodeStart: null, planned: 0,
-			anchor, cands: [], scanned: 0, walkDown: 0, resumeTo: 0, dropIds, record: false, changed: false, seeds: [], exit: null, walkBlocked: 0,
+			anchor, cands: [], scanned: 0, walkDown: 0, resumeTo: 0, dropIds, record: false, changed: false, seeds: [], exit: null, walkBlocked: 0, escape: null,
 		};
 		if (resume) {
 			pl.dig = { ...resume, status: 'active' };
@@ -342,6 +384,14 @@ export const mine: Behaviour<MineParams, MinePlan> = {
 		if (a.kind === 'wait' && pl.record && pl.dig) {
 			pl.record = false;
 			return [{ path: ['digs'], value: [...ctx.state.digs, pl.dig] }];
+		}
+		// Ruling R19: the escape flight. Arrived → out of the hole: the exit is done and the outcome follows.
+		if (a.kind === 'fly' && pl.exit && pl.escape) {
+			if (ok) {
+				pl.exit.path = [];
+				pl.walkBlocked = 0;
+			} else pl.escape.failed = true;
+			return [];
 		}
 		// Ruling R17: the climb out and the resume walk-down, one step per walk; failures in a row are counted.
 		if (a.kind === 'walk' && pl.exit) {

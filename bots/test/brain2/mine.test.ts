@@ -4,6 +4,7 @@ import { BlockedError } from 'minicraft-bot';
 import { LIMITS } from '../../src/brain2/data/limits.data.js';
 import { exitOf, spiralStep, spiralsFor, type Spiral } from '../../src/brain2/behaviours/spiral.js';
 import { BEHAVIOURS, type Behaviour } from '../../src/brain2/behaviours/behaviour.js';
+import { escapeTarget } from '../../src/brain2/behaviours/mine.js';
 import { createPerceiver } from '../../src/brain2/perception.js';
 import { Ownership } from '../../src/brain2/ownership.js';
 import { Tripwire } from '../../src/brain2/safety.js';
@@ -456,6 +457,23 @@ async function withProbe(fn: (seen: Pose[]) => Promise<void>): Promise<void> {
 		BEHAVIOURS.rest = orig;
 	}
 }
+/** The flyTo targets in body calls from index `from` on. */
+const fliesFrom = (r: Rig, from: number) => r.body.calls.slice(from).filter((c) => c.fn === 'flyTo').map((c) => c.args[0] as Vec3);
+/**
+ * R19's escape target, checked independently: a column just outside the 3×3 pillar area (Chebyshev distance 2 from
+ * the pillar), face-adjacent to the exit column, at its centre, feet y0 + 1.
+ */
+const expectEscape = (sp: Spiral, to: Vec3) => {
+	const cx = Math.floor(to.x), cz = Math.floor(to.z), e = exitOf(sp);
+	expect(Math.max(Math.abs(cx - sp.px), Math.abs(cz - sp.pz))).toBe(2);
+	expect(Math.abs(cx - e.x) + Math.abs(cz - e.z)).toBe(1);
+	expect(to).toEqual({ x: cx + 0.5, y: sp.y0 + 1, z: cz + 0.5 });
+};
+const blockAllFlights = (r: Rig) => {
+	r.body.flyImpl = async () => {
+		throw new BlockedError(r.body.pose(), 'wall');
+	};
+};
 const blockAllWalks = (r: Rig) => {
 	r.body.walkImpl = async () => {
 		throw new BlockedError(r.body.pose(), 'wall');
@@ -545,15 +563,17 @@ describe('Mine climbs out (ruling R17)', () => {
 	});
 
 	// Red if a blocked climb isn't bounded (the runner retries it at every start: a loop), or doesn't drop the dig.
-	it('a runner climb blocked twice → the new behaviour fails \'stuck (climb)\', the dig dropped, never retried', async () => {
+	it('a runner climb blocked twice, and its escape flight too → the new behaviour fails \'stuck (climb)\', the dig dropped, never retried', async () => {
 		const r = mineRig();
 		await deepAndInterrupted(r);
 		blockAllWalks(r);
+		blockAllFlights(r);
 		await withProbe(async (seen) => {
 			const from = r.body.calls.length;
 			r.runner.start('rest', {});
 			expect(await r.runToEnd(100)).toMatchObject({ behaviour: 'rest', outcome: 'failed', why: 'stuck (climb)' });
 			expect(walksFrom(r, from)).toHaveLength(2);
+			expect(fliesFrom(r, from)).toHaveLength(1);
 			expect(seen).toEqual([]);
 			expect(r.dig().status).toBe('dropped');
 			expect(r.store.state.events.filter((e) => e.kind === 'stuck')).toEqual([expect.objectContaining({ detail: 'stuck (climb)' })]);
@@ -563,5 +583,79 @@ describe('Mine climbs out (ruling R17)', () => {
 			expect(walksFrom(r, again)).toEqual([]);
 			expect(seen).toHaveLength(1);
 		});
+	});
+});
+
+describe('Stuck in a hole: the escape flight (ruling R19)', () => {
+	// Red if a blocked climb out of the episode ends stuck down in the hole (no flight), flies somewhere other than
+	// the surface just outside the pillar area, or drops a dig whose flight worked.
+	it('Mine: the climb out blocked twice → flyTo the surface beside the pillar area; the episode still ends paused, the dig kept', async () => {
+		const r = mineRig();
+		const t = deep(r, 'stone');
+		const sp = expected(t);
+		r.start('stone');
+		await r.until(() => (r.store.state.digs[0]?.stepsDone ?? 0) >= 12);
+		blockAllWalks(r);
+		r.clock.advance(LIMITS.MINE_EPISODE_MS);
+		const from = r.body.calls.length;
+		expect(await r.runToEnd(500)).toMatchObject({ outcome: 'paused' });
+		const flights = fliesFrom(r, from);
+		expect(flights).toHaveLength(1);
+		expectEscape(sp, flights[0]);
+		expect(r.body.pose()).toMatchObject(flights[0]);
+		expect(r.dig().status).toBe('paused');
+		expect(r.store.state.events.filter((e) => e.kind === 'stuck')).toEqual([]);
+	});
+
+	// Red if a blocked flight is retried forever, or if the dig isn't dropped once the flight is blocked too.
+	it('Mine: the climb out and the flight both blocked → failed \'stuck (climb)\', the dig dropped', async () => {
+		const r = mineRig();
+		deep(r, 'stone');
+		r.start('stone');
+		await r.until(() => (r.store.state.digs[0]?.stepsDone ?? 0) >= 12);
+		blockAllWalks(r);
+		blockAllFlights(r);
+		r.clock.advance(LIMITS.MINE_EPISODE_MS);
+		const from = r.body.calls.length;
+		expect(await r.runToEnd(500)).toMatchObject({ outcome: 'failed', why: 'stuck (climb)' });
+		expect(fliesFrom(r, from)).toHaveLength(1);
+		expect(r.dig().status).toBe('dropped');
+		expect(r.store.state.events.filter((e) => e.kind === 'stuck')).toEqual([expect.objectContaining({ detail: 'stuck (climb)' })]);
+	});
+
+	// Red if the runner's blocked climb gives up without the flight (the bot stays in the hole all night), or drops
+	// the dig although the bot got out.
+	it('runner: a climb blocked twice → flyTo the surface beside the pillar area, then the new behaviour runs from there', async () => {
+		const r = mineRig();
+		const { sp } = await deepAndInterrupted(r);
+		blockAllWalks(r);
+		await withProbe(async (seen) => {
+			const from = r.body.calls.length;
+			r.runner.start('rest', {});
+			expect(await r.runToEnd(100)).toMatchObject({ behaviour: 'rest', outcome: 'done' });
+			const flights = fliesFrom(r, from);
+			expect(flights).toHaveLength(1);
+			expectEscape(sp, flights[0]);
+			expect(seen[0]).toMatchObject(flights[0]);
+		});
+		expect(r.dig().status).toBe('paused');
+		expect(r.store.state.events.filter((e) => e.kind === 'stuck')).toEqual([]);
+	});
+
+	// Red if the escape column ignores what stands on it (a tree trunk, the kid's block) or a kid-built ground.
+	it('escapeTarget skips a column with no headroom or with non-natural ground, and is null when none qualifies', () => {
+		const r = mineRig();
+		const sp = expected(shallowIron(r));
+		const first = escapeTarget(sp, r.world, r.own)!;
+		const fx = Math.floor(first.x), fz = Math.floor(first.z);
+		r.world.setNatural(fx, Y0 + 1, fz, 'oak_log');                          // a trunk where the body would be
+		const second = escapeTarget(sp, r.world, r.own)!;
+		expect(second).not.toEqual(first);
+		expect(second.y).toBe(sp.y0 + 1);
+		expect(Math.max(Math.abs(Math.floor(second.x) - sp.px), Math.abs(Math.floor(second.z) - sp.pz))).toBe(2);
+		r.world.set(Math.floor(second.x), TOP, Math.floor(second.z), 'dirt');   // a player's block, not natural ground
+		expect(escapeTarget(sp, r.world, r.own)).not.toEqual(second);
+		for (let dx = -2; dx <= 2; dx++) for (let dz = -2; dz <= 2; dz++) r.world.setNatural(sp.px + dx, Y0 + 1, sp.pz + dz, 'oak_log');
+		expect(escapeTarget(sp, r.world, r.own)).toBeNull();
 	});
 });

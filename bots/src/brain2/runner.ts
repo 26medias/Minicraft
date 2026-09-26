@@ -16,6 +16,7 @@ import { EDIT_KINDS, type Action, type ActionEntry, type ActiveBehaviour, type B
 import { BEHAVIOURS, type Behaviour, type BehaviourCtx } from './behaviours/behaviour.js';
 import { SALIENCE } from './data/salience.data.js';
 import { climbPath } from './behaviours/spiral.js';
+import { escapeTarget } from './behaviours/mine.js';
 
 export type FitFn = (a: Action, ctx: BehaviourCtx) => Promise<'yes' | 'wait' | 'no'>;
 export interface RunnerDeps {
@@ -62,7 +63,7 @@ export class BehaviourRunner {
 	private inFlight: 'walk' | 'fly' | 'mine' | null = null;
 	private arrivalT = -Infinity;
 	/** Ruling R17: the climb out of a dig's staircase, walked before the new behaviour's first action. */
-	private climb: { digId: string; path: Array<{ x: number; z: number }>; blocked: number } | null = null;
+	private climb: { digId: string; path: Array<{ x: number; z: number }>; blocked: number; fly: Vec3 | null } | null = null;
 	/** Digs whose climb out failed this session: not retried, so a stuck bot can't loop on it. */
 	private climbFailed = new Set<string>();
 
@@ -198,18 +199,22 @@ export class BehaviourRunner {
 			const path = climbPath(d.spiral, pose, d.stepsDone);
 			if (path.length === 0) continue;
 			this.d.log('climb', { dig: d.id, walks: path.length });
-			return { digId: d.id, path, blocked: 0 };
+			return { digId: d.id, path, blocked: 0, fly: null };
 		}
 		return null;
 	}
 
-	/** One climb walk per tick; a cancelled walk is reissued; blocked twice in a row → the dig dropped, `stuck (climb)`. */
+	/**
+	 * One climb walk per tick; a cancelled walk is reissued. Blocked twice in a row → ruling R19's escape flight to
+	 * the surface just outside the pillar area; only if that is blocked too (or no column qualifies) → the dig
+	 * dropped, `stuck (climb)`.
+	 */
 	private async climbTick(ctx: BehaviourCtx): Promise<void> {
 		const c = this.climb!, gen = this.gen, body = this.d.body;
 		let r: 'arrived' | 'cancelled' | 'failed' = 'failed';
-		this.inFlight = 'walk';
+		this.inFlight = c.fly ? 'fly' : 'walk';
 		try {
-			r = await body.walkTo(c.path[0], { speed: ctx.style.walkSpeed });
+			r = c.fly ? await body.flyTo(c.fly) : await body.walkTo(c.path[0], { speed: ctx.style.walkSpeed });
 		} catch {
 			r = 'failed';                                     // BlockedError or a lost connection
 		} finally {
@@ -217,16 +222,24 @@ export class BehaviourRunner {
 		}
 		if (this.gen !== gen || this.climb !== c || r === 'cancelled') return;
 		if (r === 'arrived') {
-			this.arrivalT = this.d.clock();
+			if (!c.fly) this.arrivalT = this.d.clock();
 			c.path.shift();
 			c.blocked = 0;
-			if (c.path.length === 0) {
+			if (c.fly || c.path.length === 0) {
 				this.climb = null;
-				this.d.log('climb', { dig: c.digId, out: true });
+				this.d.log('climb', { dig: c.digId, out: true, ...(c.fly ? { flew: c.fly } : {}) });
 			}
 			return;
 		}
-		if (++c.blocked < MAX_CLIMB_BLOCKED) return;
+		if (!c.fly) {
+			if (++c.blocked < MAX_CLIMB_BLOCKED) return;
+			const sp = this.d.store.state.digs.find((d) => d.id === c.digId)?.spiral;
+			c.fly = sp ? escapeTarget(sp, this.d.world, this.d.own) : null;
+			if (c.fly) {
+				this.d.log('climb', { dig: c.digId, fly: c.fly });
+				return;
+			}
+		}
 		this.climb = null;
 		this.climbFailed.add(c.digId);
 		this.apply([{ path: ['digs'], value: this.d.store.state.digs.map((d) => (d.id === c.digId ? { ...d, status: 'dropped' as const } : d)) }]);

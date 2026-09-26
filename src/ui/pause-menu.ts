@@ -98,6 +98,16 @@ export class PauseMenu {
 			this.button(card, 'pause-resume', 'Return to Game', () => this.onResume?.(), 'home-button');
 			this.button(card, 'pause-controls', 'Controls', () => this.showControls());
 			this.button(card, 'pause-quit', this.quitting ? 'Saving…' : 'Quit to Menu', () => this.onQuit?.(), 'pause-quit');
+			if (!this.quitting) {
+				const credits = document.createElement('a');
+				credits.id = 'pause-credits';
+				credits.className = 'menu-credits';
+				credits.href = 'CREDITS.txt'; // relative: next to index.html at any subpath (vite base './')
+				credits.target = '_blank';
+				credits.rel = 'noopener';
+				credits.textContent = 'Texture credits';
+				card.appendChild(credits);
+			}
 		}
 		this.root.appendChild(card);
 	}

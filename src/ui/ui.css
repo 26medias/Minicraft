@@ -1078,6 +1078,17 @@
 .menu-card button.pause-quit {
 	margin-top: 28px;
 }
+.menu-credits {
+	display: block;
+	margin-top: 12px;
+	font-size: 13px;
+	opacity: 0.7;
+	color: inherit;
+	text-align: center;
+}
+.menu-credits:hover {
+	opacity: 1;
+}
 .controls-row {
 	display: flex;
 	justify-content: space-between;

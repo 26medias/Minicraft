@@ -322,6 +322,12 @@ for (const sig of ['SIGINT', 'SIGTERM', 'SIGHUP'] as const) process.on(sig, () =
 		check(pt.limitMs === 600_000, `Play with 10 min starts a 10-minute session (limitMs ${pt.limitMs})`);
 		check(await page.evaluate(() => sessionStorage.getItem('mp:autojoin')) === null, 'starting a solo game clears mp:autojoin');
 		check(await page.evaluate(() => (window as unknown as { __mc: { mp: unknown } }).__mc.mp) === null, 'solo: no multiplayer session objects');
+		// Pause card: the texture credits link (texture replacement spec §4.4) opens CREDITS.txt next to index.html.
+		await page.keyboard.press('Escape');
+		await page.waitForSelector('#pause-credits');
+		check(await page.locator('#pause-credits').getAttribute('href') === 'CREDITS.txt', 'the pause card links "Texture credits" to CREDITS.txt (relative)');
+		check((await page.request.get(new URL('CREDITS.txt', page.url()).toString())).status() === 200, 'CREDITS.txt is served next to index.html');
+		await page.click('#pause-resume');
 		// A new world is saved on its first change: mark it dirty and wait for its record.
 		const createdId = JSON.parse((await ls(page, 'minicraft:v1:menu')) ?? '{}').selectedId as string;
 		await page.evaluate(() => (window as unknown as { __mc: { loop: { onWorldMutated: () => void } } }).__mc.loop.onWorldMutated());

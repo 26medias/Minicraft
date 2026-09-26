@@ -11,7 +11,7 @@ import type { Clock } from './clock.js';
 import { GESTURES as G } from './data/gestures.data.js';
 import type { Change, Store } from './store.js';
 import { styleOf } from './style.js';
-import type { State, Vec3, WorldEvent } from './types.js';
+import type { Delta, State, Vec3, WorldEvent } from './types.js';
 
 export type GestureName = 'double-hop' | 'slow-turn' | 'back-off' | 'turn-hop' | 'turn-away' | 'look-at' | 'stomp-off' | 'greeting';
 export interface GestureCue { name: GestureName; target?: Vec3; player?: string; firework?: boolean; holdMs?: number }
@@ -34,37 +34,51 @@ export function inView(bot: Vec3, kid: { pose: Pose }): boolean {
 	return Math.abs(Math.atan2(v.y, Math.hypot(v.x, v.z)) - k.pitch) <= G.VIEW_PITCH_DEG * DEG;
 }
 
+/** Tolerance on the table's thresholds: an appraisal amount of exactly 0.3 is ≥ 0.3. */
+const EPS = 1e-9;
 const centre = (c: Vec3): Vec3 => ({ x: c.x + 0.5, y: c.y + 0.5, z: c.z + 0.5 });
 
 /** The gesture table (spec §5.5, rev 3), first match wins; only changes caused by an appraisal count. */
 export function gestureFor(changes: Change[], s: Readonly<State>): GestureCue | null {
 	const app = changes.filter((c) => c.cause.kind === 'appraisal');
 	if (app.length === 0) return null;
-	const delta = (path: string): number => app.filter((c) => c.path === path && typeof c.new === 'number' && typeof c.old === 'number')
-		.reduce((n, c) => n + (c.new as number) - (c.old as number), 0);
+	// The appraisal's own amount for an axis (`<axis>.value` → the entries its `<axis>.deltas` change added), not the
+	// value's change: the [−1, 1] clamp and float rounding would otherwise lose e.g. Mood +0.3 near the top.
+	const delta = (path: string): number => {
+		const base = path.slice(0, -'.value'.length);
+		const ds = app.filter((c) => c.path === `${base}.deltas` && Array.isArray(c.new));
+		if (ds.length > 0) {
+			return ds.reduce((n, c) => n + (c.new as Delta[]).filter((d) => d.appraisalId === c.cause.appraisalId)
+				.reduce((m, d) => m + d.amount, 0), 0);
+		}
+		return app.filter((c) => c.path === path && typeof c.new === 'number' && typeof c.old === 'number')
+			.reduce((n, c) => n + (c.new as number) - (c.old as number), 0);
+	};
+	const atLeast = (x: number, t: number): boolean => x >= t - EPS;
+	const atMost = (x: number, t: number): boolean => x <= t + EPS;
 	// The burst, as the appraise expert writes it in the cause: `kind[:detail]#id` per event.
 	const burst = [...new Set(app.map((c) => c.cause.why ?? ''))].join(' ').match(/\S+#\d+/g) ?? [];
 	const keys = burst.map((b) => b.slice(0, b.lastIndexOf('#')));
 	const events = burst.map((b) => s.events.find((e) => e.id === Number(b.slice(b.lastIndexOf('#') + 1)))).filter((e): e is WorldEvent => !!e);
 	const has = (k: string): boolean => keys.includes(k);
-	const relDeltas = (axis: string) => [...new Set(app.map((c) => new RegExp(`^relations\\.(.+)\\.axes\\.${axis}\\.value$`).exec(c.path)?.[1]).filter((p): p is string => !!p))]
+	const relDeltas = (axis: string) => [...new Set(app.map((c) => new RegExp(`^relations\\.(.+)\\.axes\\.${axis}\\.(?:value|deltas)$`).exec(c.path)?.[1]).filter((p): p is string => !!p))]
 		.map((p) => ({ player: p, d: delta(`relations.${p}.axes.${axis}.value`) }));
 
-	if (delta('emotions.mood.value') >= G.MOOD_UP) {
+	if (atLeast(delta('emotions.mood.value'), G.MOOD_UP)) {
 		const done = events.find((e) => e.kind === 'outcome' && e.detail === 'done');
 		const entry = done ? (s.memory.past.find((p) => p.outcome === 'done' && p.endedT === done.t) ?? s.memory.past[0]) : undefined;
 		return { name: 'double-hop', firework: entry?.behaviour === 'build' && entry.outcome === 'done' };
 	}
-	if (delta('emotions.mood.value') <= G.MOOD_DOWN) return { name: 'slow-turn' };
-	if (delta('emotions.confidence.value') <= G.CONFIDENCE_DOWN && !has('player-near') && !has('player-arrived')) {
+	if (atMost(delta('emotions.mood.value'), G.MOOD_DOWN)) return { name: 'slow-turn' };
+	if (atMost(delta('emotions.confidence.value'), G.CONFIDENCE_DOWN) && !has('player-near') && !has('player-arrived')) {
 		const cause = events.find((e) => e.cell) ?? events.find((e) => e.player);
 		return { name: 'back-off', target: cause?.cell ? centre(cause.cell) : undefined, player: cause?.cell ? undefined : cause?.player };
 	}
-	const fond = relDeltas('affection').find((x) => x.d >= G.AFFECTION_UP);
+	const fond = relDeltas('affection').find((x) => atLeast(x.d, G.AFFECTION_UP));
 	if (fond) return { name: 'turn-hop', player: fond.player };
-	const hurt = relDeltas('grievance').find((x) => x.d <= G.GRIEVANCE_DOWN);
+	const hurt = relDeltas('grievance').find((x) => atMost(x.d, G.GRIEVANCE_DOWN));
 	if (hurt) return { name: 'turn-away', player: hurt.player, holdMs: G.TURN_AWAY_MS };
-	if (delta('emotions.curiosity.value') >= G.CURIOSITY_UP || has('found')) {
+	if (atLeast(delta('emotions.curiosity.value'), G.CURIOSITY_UP) || has('found')) {
 		const thing = events.find((e) => e.kind === 'found' && e.cell) ?? events.find((e) => e.cell);
 		if (thing?.cell) return { name: 'look-at', target: centre(thing.cell), holdMs: thing.block?.endsWith('_ore') ? G.ORE_LOOK_MS : G.LOOK_MS };
 	}

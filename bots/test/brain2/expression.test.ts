@@ -1,5 +1,6 @@
 import { afterEach, describe, expect, it } from 'vitest';
 import type { WalkResult } from 'minicraft-bot';
+import { appraisalPatch } from '../../src/brain2/appraisal.js';
 import { Expression, gestureFor, inView } from '../../src/brain2/expression.js';
 import { BehaviourRunner } from '../../src/brain2/runner.js';
 import { BEHAVIOURS, type Behaviour } from '../../src/brain2/behaviours/behaviour.js';
@@ -11,7 +12,7 @@ import { ManualClock } from '../../src/brain2/clock.js';
 import { PIP } from '../../src/brain2/data/personalities.data.js';
 import { bandOf } from '../../src/brain2/emotions.js';
 import { StopSignal } from '../../src/body/stop-signal.js';
-import type { ActionEntry, GlobalAxis, Relation, State, WorldEvent } from '../../src/brain2/types.js';
+import type { ActionEntry, AxisId, GlobalAxis, Relation, State, WorldEvent } from '../../src/brain2/types.js';
 import type { KidInfo, Pose } from '../../src/types.js';
 import { FakeBody, FakeWorld, player } from '../fake-port.js';
 
@@ -48,13 +49,11 @@ function rig(o: { kids?: KidInfo[]; state?: (s: State) => void } = {}) {
 		const st = store.state;
 		const patch: Patch = [];
 		if (burst.length) patch.push({ path: ['events'], value: [...st.events, ...burst] });
-		for (const [axis, d] of Object.entries(moves)) {
-			const m = /^rel\.(.+)\.(\w+)$/.exec(axis);
-			if (m) patch.push({ path: ['relations', m[1], 'axes', m[2], 'value'], value: st.relations[m[1]].axes[m[2] as 'affection'].value + d! });
-			else patch.push({ path: ['emotions', axis, 'value'], value: st.emotions[axis as GlobalAxis].value + d! });
-		}
+		const id = ++appraisalId;
+		// The real appraisal patch: values clamped to [−1, 1], a Delta pushed per axis.
+		patch.push(...appraisalPatch(st, Object.entries(moves).map(([axis, amount]) => ({ axis: axis as AxisId, amount: amount!, because: 'test' })), id, clock.t));
 		const why = burst.map((e) => `${e.kind === 'outcome' ? `outcome:${e.detail}` : e.kind}#${e.id}`).join(' ');
-		store.apply(patch, { kind: 'appraisal', by: 'appraise', appraisalId: ++appraisalId, why });
+		store.apply(patch, { kind: 'appraisal', by: 'appraise', appraisalId: id, why });
 	};
 	let evId = 100;
 	const event = (kind: WorldEvent['kind'], o2: Partial<WorldEvent> = {}): WorldEvent => ({ id: ++evId, kind, t: clock.t, salient: true, ...o2 });
@@ -192,6 +191,32 @@ describe('gestures (spec §5.5)', () => {
 		await r2.step(10);
 		expect(r2.calls('move').length).toBe(4);
 		expect(r2.calls('fx')).toHaveLength(0);
+	});
+
+	// 8b. Red if the table reads the value's change (0.6 + 0.3 rounds below 0.9; Mood 0.8 is clamped at 1) instead of
+	// the appraisal's amount, or compares with no tolerance.
+	it('the double-hop and firework fire on outcome:done whatever Mood was (0.6, 0.8); slow-turn near −1', async () => {
+		for (const mood of [0.6, 0.8]) {
+			const r = rig({ state: (s) => (s.emotions.mood = { value: mood, band: bandOf(mood), deltas: [] }) });
+			const done = r.event('outcome', { detail: 'done' });
+			const entry: ActionEntry = { behaviour: 'build', params: {}, lastedMs: 60_000, outcome: 'done', why: 'done', endedT: done.t };
+			r.store.apply([{ path: ['memory', 'past'], value: [entry] }], { kind: 'behaviour', by: 'runner' });
+			r.appraise({ mood: 0.3 }, [done]);
+			await r.step(10);
+			expect(r.calls('fx'), `mood ${mood}`).toEqual([{ fn: 'fx', args: [expect.objectContaining({ kind: 'firework' })] }]);
+		}
+		// broke-my-block's −0.2 with Mood at −0.9 (the value moves only −0.1): still the slow turn.
+		const r3 = rig({ state: (s) => (s.emotions.mood = { value: -0.9, band: bandOf(-0.9), deltas: [] }) });
+		const seen: Array<string | undefined> = [];
+		r3.store.subscribe((cs) => seen.push(gestureFor(cs, r3.store.state)?.name));
+		r3.appraise({ mood: -0.2 }, [r3.event('broke-my-block', { player: 'Noah' })]);
+		expect(seen).toContain('slow-turn');
+		// An amount that is 0.3 after float rounding (0.7 − 0.4 = 0.29999999999999993): the tolerance keeps the hop.
+		const r4 = rig();
+		const seen4: Array<string | undefined> = [];
+		r4.store.subscribe((cs) => seen4.push(gestureFor(cs, r4.store.state)?.name));
+		r4.appraise({ mood: 0.7 - 0.4 });
+		expect(seen4).toContain('double-hop');
 	});
 });
 

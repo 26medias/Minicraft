@@ -1,4 +1,5 @@
 import { beforeEach, describe, expect, it } from 'vitest';
+import { appraisalPatch } from '../../src/brain2/appraisal.js';
 import { SelectionController, scoreInputs, scoreRows, selectInputs, type Row } from '../../src/brain2/selection.js';
 import { EMOTIONAL, MERGE } from '../../src/brain2/data/weights.data.js';
 import { paramsBuild, paramsExplore, paramsMine, paramsPlayer, resetCompany } from '../../src/brain2/params.js';
@@ -9,7 +10,7 @@ import { PIP } from '../../src/brain2/data/personalities.data.js';
 import { bandOf } from '../../src/brain2/emotions.js';
 import { StopSignal } from '../../src/body/stop-signal.js';
 import type { LogLine } from '../../src/brain2/log.js';
-import { GLOBAL_AXES, type ActionEntry, type ActiveBehaviour, type BehaviourKind, type Outcome, type Relation, type RelationAxis, type State, type WorldEvent } from '../../src/brain2/types.js';
+import { GLOBAL_AXES, type ActionEntry, type ActiveBehaviour, type AxisId, type BehaviourKind, type Outcome, type Relation, type RelationAxis, type State, type WorldEvent } from '../../src/brain2/types.js';
 import type { KidInfo } from '../../src/types.js';
 
 const Y = 200;
@@ -290,8 +291,8 @@ describe('the selection controller (spec §5.3)', () => {
 		expect(r.store.state.selection).toMatchObject({ trigger: 'stop', urgent: true, done: true });
 	});
 
-	// 10. Red if keep-going ignores Stimulation's band, or fires on an engaged Watch under typicalMs.
-	it('keep-going: a Watch past 60 s while bored triggers a selection; a Watch under typicalMs while engaged does not', async () => {
+	// 10. Red if keep-going ignores Stimulation's band, or fires on an engaged behaviour past 60 s but under typicalMs.
+	it('keep-going: a Watch past 60 s while bored triggers a selection; an engaged Follow at 150 s (under typicalMs) does not', async () => {
 		const bored = baseState();
 		setEmotions(bored, { stimulation: -0.5 });
 		const r = rig({ state: bored, kids: [kid('Noah', 5, 0)] });
@@ -301,11 +302,12 @@ describe('the selection controller (spec §5.3)', () => {
 		await r.step(10);                                   // the 60 s check
 		expect(r.store.state.selection).toMatchObject({ trigger: 'keep-going', urgent: false });
 
+		// Engaged, past 60 s (so an "always bored" check would fire) but under Follow's typicalMs[1] = 180 s.
 		const engaged = baseState();
 		setEmotions(engaged, { stimulation: 0.5 });
 		const e = rig({ state: engaged, kids: [kid('Noah', 5, 0)] });
-		e.runner.start('watch', { kid: 'Noah' });
-		await e.step(550);                                  // 55 s, under typicalMs[1] = 60 s
+		e.runner.start('follow', { kid: 'Noah' });
+		await e.step(1500);                                 // 150 s: five keep-going checks
 		expect(e.store.state.selection).toBeNull();
 	});
 
@@ -326,6 +328,54 @@ describe('the selection controller (spec §5.3)', () => {
 		expect(r.selects()[1]).toMatchObject({ trigger: 'looking-at-me', urgent: true, player: 'Mia', winner: r.runner.starts[1].kind });
 		expect(r.selects()[1].rows.find((x) => x.behaviour === 'follow')!.social).toBe(0.5);
 		expect(r.selects()[2].inputs.recency).toMatchObject({ [r.runner.starts[1].kind]: 'bad' });
+	});
+});
+
+describe('the selection controller: fix round (batch E review)', () => {
+	/** An appraisal the way the appraise expert writes it: real deltas, cause kind 'appraisal'. */
+	const appraise = (r: ReturnType<typeof rig>, id: number, moves: Record<string, number>) =>
+		r.store.apply(appraisalPatch(r.store.state, Object.entries(moves).map(([axis, amount]) => ({ axis: axis as AxisId, amount, because: 'test' })), id, r.clock.t),
+			{ kind: 'appraisal', by: 'appraise', appraisalId: id });
+
+	// 13. Red if the appraisal trigger re-counts the deltas it already fired on (a small later appraisal re-fires).
+	it('the appraisal trigger counts only deltas newer than the appraisal it last fired on', async () => {
+		const s = baseState();
+		setEmotions(s, { stimulation: 0.5 });
+		const r = rig({ state: s, kids: [kid('Noah', 5, 0)] });
+		r.runner.start('follow', { kid: 'Noah' });
+		await r.step(210);                                  // t = 21 s: past the minimum
+		expect(r.store.state.selection).toBeNull();
+		appraise(r, 1, { mood: 0.3, curiosity: 0.3 });      // Σ 0.6 > 0.5
+		await r.step();
+		expect(r.store.state.selection).toMatchObject({ trigger: 'appraisal' });
+		const id = r.store.state.selection!.id;
+		await r.step(10);
+		appraise(r, 2, { mood: 0.1 });                      // Σ 0.7 in 10 s, but only 0.1 is new
+		await r.step(250);                                  // past any minimum: a held re-fire would show
+		expect(r.store.state.selection!.id).toBe(id);
+		appraise(r, 3, { mood: 0.3, outlook: 0.3 });        // a new Σ 0.6 fires again
+		await r.step(250);
+		expect(r.store.state.selection!.id).toBeGreaterThan(id);
+		expect(r.selects().at(-1)!.trigger).toBe('appraisal');
+	});
+
+	// 14. Red if a held downgraded line is overwritten by a later normal trigger (Noah lost as player, Help-build masked).
+	it('a held urgent-origin trigger is not replaced by a later normal one', async () => {
+		const r = rig({ kids: [kid('Noah', 5, 0), kid('Mia', 8, 0)] });
+		await r.step();
+		r.push({ kind: 'looking-at-me', player: 'Mia' });   // an urgent switch: the governor is armed, the minimum restarts
+		await r.step();
+		expect(r.store.state.behaviour?.params.kid).toBe('Mia');
+		const id = r.store.state.selection!.id;
+		await r.step(100);                                  // 10 s in: fresh enough to still count when the minimum is up
+		r.push({ kind: 'line-started', player: 'Noah', cell: { x: 3, y: Y, z: 0 }, block: 'stone', detail: JSON.stringify({ next: { x: 3, y: Y, z: 0 }, d: { x: 1, y: 0, z: 0 }, block: 'stone' }) });
+		await r.step();
+		expect(r.store.state.selection!.id).toBe(id);       // downgraded by the governor, held
+		await r.step(20);
+		r.push({ kind: 'player-arrived', player: 'Leo' });  // a later normal trigger, no player
+		await r.step(100);                                  // the minimum is up
+		expect(r.store.state.selection).toMatchObject({ id: id + 1, trigger: 'line-started', urgent: false });
+		expect(r.store.state.behaviour).toMatchObject({ kind: 'help-build', params: { kid: 'Noah' } });
 	});
 });
 
@@ -354,7 +404,6 @@ describe('criterion 1: the switch cap (spec rev 3.3)', () => {
 			uncapped[c] = (await twoKids(c, true)).runner.switches();
 		}
 		for (const c of [3, 4, 5]) expect(uncapped[c], `uncapped c = ${c} s`).toBeGreaterThan(10);
-		console.log(`criterion 1 switches in 5 min: capped ${JSON.stringify(capped)}, uncapped ${JSON.stringify(uncapped)}`);
 	});
 
 	// 12. Red if the cap also blocks idle merges (the bot would idle for up to 5 minutes).
@@ -362,8 +411,14 @@ describe('criterion 1: the switch cap (spec rev 3.3)', () => {
 		const r = await twoKids(3, false);
 		expect(r.ctl.cappedSwitches(r.clock.t)).toBeGreaterThanOrEqual(9);   // the cap is full
 		const starts = r.runner.starts.length;
-		r.runner.end('done', 'done');
+		// Idle by a non-exempt path: the behaviour is cleared with no outcome event, then a kid looks at the bot.
+		r.store.apply([{ path: ['behaviour'], value: null }], { kind: 'behaviour', by: 'test' });
 		await r.step();
+		expect(r.runner.starts.length).toBe(starts);
+		r.push({ kind: 'looking-at-me', player: 'Noah' });
+		await r.step(5);
+		expect(r.store.state.selection).toMatchObject({ trigger: 'looking-at-me' });
+		expect(r.ctl.cappedSwitches(r.clock.t)).toBeGreaterThanOrEqual(9);   // still full: only the idle rule starts it
 		expect(r.runner.starts.length).toBe(starts + 1);
 		expect(r.store.state.behaviour).not.toBeNull();
 	});

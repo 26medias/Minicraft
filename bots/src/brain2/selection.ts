@@ -5,7 +5,7 @@
  */
 import type { StopSignal } from '../body/stop-signal.js';
 import type { KidInfo } from '../types.js';
-import { recentDeltaSum } from './appraisal.js';
+import { lastAppraisalId, recentDeltaSum } from './appraisal.js';
 import { BEHAVIOURS } from './behaviours/behaviour.js';
 import type { Clock } from './clock.js';
 import { LIMITS } from './data/limits.data.js';
@@ -149,6 +149,8 @@ export function socialCode(s: Readonly<State>, kids: string[], now: number): Rec
 
 type TriggerKind = 'start' | 'outcome' | 'stop' | 'hazard' | 'target-gone' | 'line-started' | 'looking-at-me' | 'player-arrived' | 'player-gone' | 'appraisal' | 'keep-going';
 interface Cand { kind: TriggerKind; trigger: string; player: string | null; urgent: boolean }
+/** Which held trigger survives a later one: urgent-origin (downgraded) > player-specific > others. */
+const holdRank = (c: Cand, urgentOrigin: boolean): number => (urgentOrigin ? 2 : c.player ? 1 : 0);
 interface Meta { player: string | null; kind: TriggerKind }
 /** Switches caused by these are never capped (spec rev 3.3); stop and hazard also bypass the governor. */
 const EXEMPT = new Set<TriggerKind>(['start', 'outcome', 'stop', 'hazard']);
@@ -180,7 +182,9 @@ export class SelectionController {
 	private started = false;
 	private nextId = 0;
 	private readonly meta = new Map<number, Meta>();
-	private held: Cand | null = null;
+	private held: { c: Cand; rank: number } | null = null;
+	/** The newest appraisal the appraisal trigger fired on: later firings count only newer deltas. */
+	private appraisalFired = 0;
 	private readonly urgentSeen = new Map<string, number>();
 	private switches: Array<{ t: number; capped: boolean; urgent: boolean }> = [];
 	private lastKeepGoing: number;
@@ -276,7 +280,10 @@ export class SelectionController {
 					break;
 			}
 		}
-		if (sig.changes.some((c) => c.cause.kind === 'appraisal') && recentDeltaSum(s, now) > APPRAISAL_TRIGGER) add('appraisal', null, false);
+		if (sig.changes.some((c) => c.cause.kind === 'appraisal') && recentDeltaSum(s, now, this.appraisalFired) > APPRAISAL_TRIGGER) {
+			this.appraisalFired = lastAppraisalId(s);
+			add('appraisal', null, false);
+		}
 		if (now - this.lastKeepGoing >= KEEP_GOING_MS) {
 			this.lastKeepGoing = now;
 			if (cur) {
@@ -316,12 +323,13 @@ export class SelectionController {
 				if (recentUrgent && c.kind !== 'stop' && c.kind !== 'hazard') c.urgent = false;           // the governor downgrades it
 			}
 			if (!c.urgent && c.kind !== 'outcome' && c.kind !== 'start' && !minUp) {
-				this.held = c;                                                                            // held until the minimum is up
+				const rank = holdRank(c, c0.urgent);                                                      // held until the minimum is up,
+				if (!this.held || rank >= this.held.rank) this.held = { c, rank };                        // unless a stronger one is held
 				return null;
 			}
 			return this.open(c, s, now);
 		}
-		if (this.held && minUp && cur) return this.open(this.held, s, now);
+		if (this.held && minUp && cur) return this.open(this.held.c, s, now);
 		return null;
 	}
 

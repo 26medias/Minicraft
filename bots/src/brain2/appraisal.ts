@@ -82,25 +82,31 @@ export function appraisalPatch(s: Readonly<State>, deltas: AppraisalDelta[], app
 	return [...out, ...bandsPatch(next)];
 }
 
-/** Σ|Δ| over every axis's deltas with t in the last 10 s (spec §5.3). Decay writes no deltas, so it never counts. */
-export function recentDeltaSum(s: Readonly<State>, now: number): number {
-	const sum = (a: AxisState) => a.deltas.filter((d) => now - d.t <= RECENT_MS).reduce((n, d) => n + Math.abs(d.amount), 0);
+/**
+ * Σ|Δ| over every axis's deltas with t in the last 10 s (spec §5.3), counting only appraisals after `afterId`
+ * (the selection trigger passes the one it last fired on). Decay writes no deltas, so it never counts.
+ */
+export function recentDeltaSum(s: Readonly<State>, now: number, afterId = 0): number {
+	const sum = (a: AxisState) => a.deltas.filter((d) => now - d.t <= RECENT_MS && d.appraisalId > afterId).reduce((n, d) => n + Math.abs(d.amount), 0);
 	let n = 0;
 	for (const ax of GLOBAL_AXES) n += sum(s.emotions[ax]);
 	for (const rel of Object.values(s.relations)) for (const ax of RELATION_AXES) n += sum(rel.axes[ax]);
 	return n;
 }
 
-/** The next appraisal id, from the state: 1 + the largest id among the kept deltas (the newest is always kept). */
-function nextAppraisalId(s: Readonly<State>): number {
+/** The largest appraisal id among the kept deltas (the newest is always kept); 0 when there are none. */
+export function lastAppraisalId(s: Readonly<State>): number {
 	let m = 0;
 	const see = (a: AxisState) => {
 		for (const d of a.deltas) m = Math.max(m, d.appraisalId);
 	};
 	for (const ax of GLOBAL_AXES) see(s.emotions[ax]);
 	for (const rel of Object.values(s.relations)) for (const ax of RELATION_AXES) see(rel.axes[ax]);
-	return m + 1;
+	return m;
 }
+
+/** The next appraisal id, from the state. */
+const nextAppraisalId = (s: Readonly<State>): number => lastAppraisalId(s) + 1;
 
 interface AppraiseSlice { state: Readonly<State>; burst: WorldEvent[] }
 interface AppraiseProposal { deltas: AppraisalDelta[]; t: number; why: string }

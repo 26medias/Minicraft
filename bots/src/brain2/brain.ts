@@ -24,7 +24,7 @@ import { Tripwire } from './safety.js';
 import { Scheduler } from './scheduler.js';
 import { SelectionController } from './selection.js';
 import { Store, initialState, type Cause, type Change, type Patch } from './store.js';
-import type { Build, Dig, Personality, State } from './types.js';
+import type { Build, Dig, Personality, State, Vec3 } from './types.js';
 
 export interface Brain2Deps {
 	port: Port; clock: Clock; wall: () => number; rng: () => number; seed: number;
@@ -75,13 +75,20 @@ function withValues(s: Readonly<State>, patch: Patch): State {
 	return { ...s, emotions, relations };
 }
 
+function boxOf(cells: Vec3[]): { min: Vec3; max: Vec3 } | null {
+	if (cells.length === 0) return null;
+	const xs = cells.map((c) => c.x), ys = cells.map((c) => c.y), zs = cells.map((c) => c.z);
+	return { min: { x: Math.min(...xs), y: Math.min(...ys), z: Math.min(...zs) }, max: { x: Math.max(...xs), y: Math.max(...ys), z: Math.max(...zs) } };
+}
+
 /** A new build or dig in one change: logged as a `plan` event (criterion 7's plan-time check reads it). */
 function planEvents(c: Change): Array<{ kind: 'build' | 'mine'; data: Record<string, unknown> }> {
 	if (c.path === 'builds' && Array.isArray(c.new)) {
-		const old = new Set(((c.old ?? []) as Build[]).map((b) => b.id));
-		return (c.new as Build[]).filter((b) => !old.has(b.id)).map((b) => ({
+		// A new build, or a replanned one (same id, new origin).
+		const old = new Map(((c.old ?? []) as Build[]).map((b) => [b.id, JSON.stringify(b.origin)]));
+		return (c.new as Build[]).filter((b) => old.get(b.id) !== JSON.stringify(b.origin)).map((b) => ({
 			kind: 'build' as const,
-			data: { id: b.id, template: b.template, variant: b.variant, site: b.origin, cells: b.cells.length },
+			data: { id: b.id, template: b.template, variant: b.variant, site: b.origin, cells: b.cells.length, box: boxOf(b.cells.map((c) => c.cell)) },
 		}));
 	}
 	if (c.path === 'digs' && Array.isArray(c.new)) {

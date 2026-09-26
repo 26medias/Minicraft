@@ -3,7 +3,7 @@ import { parseArgs } from '../src/cli-args.js';
 
 describe('parseArgs', () => {
 	it('parses value and boolean flags', () => {
-		const args = parseArgs(['--target', 'local', '--world', 'Home', '--name', 'Robo', '--skin', 'jj', '--brain', 'scripted', '--no-edits', '--revert-on-exit', '--i-deployed-the-server']);
+		const args = parseArgs(['--target', 'local', '--world', 'Home', '--name', 'Robo', '--skin', 'jj', '--brain', 'scripted', '--no-edits', '--revert-on-exit', '--i-deployed-the-server', '--personality', 'rex', '--builds']);
 		expect(args).toEqual({
 			target: 'local',
 			world: 'Home',
@@ -13,12 +13,14 @@ describe('parseArgs', () => {
 			noEdits: true,
 			revertOnExit: true,
 			iDeployedTheServer: true,
+			personality: 'rex',
+			builds: true,
 		});
 	});
 
 	it('defaults booleans to false and leaves value flags undefined when absent', () => {
 		const args = parseArgs([]);
-		expect(args).toEqual({ noEdits: false, revertOnExit: false, iDeployedTheServer: false });
+		expect(args).toEqual({ noEdits: false, revertOnExit: false, iDeployedTheServer: false, builds: false });
 	});
 
 	it('throws on an unknown flag', () => {

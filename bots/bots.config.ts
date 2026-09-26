@@ -31,6 +31,8 @@ export default {
 			experimental: true,
 		},
 	},
+	// Brain v2's local LLM (part 2; spec §3): Ollama, temperature 0, seed 42, keep_alive −1 set per call.
+	llm: { url: 'http://127.0.0.1:11434', model: 'llama3.2:3b', timeoutMs: 5000 },
 	companion: {
 		tickMs: 500,
 		editEveryMs: 2000,

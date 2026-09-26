@@ -10,13 +10,17 @@ export interface ParsedArgs {
 	name?: string;
 	skin?: string;
 	brain?: string;
+	/** `--personality pip|rex` (brain v2). */
+	personality?: string;
 	noEdits: boolean;
 	revertOnExit: boolean;
 	iDeployedTheServer: boolean;
+	/** `revert --builds` (brain v2): take the bot's standing builds apart instead of replaying the journal. */
+	builds: boolean;
 }
 
-type ValueFlagKey = 'target' | 'world' | 'name' | 'skin' | 'brain';
-type BooleanFlagKey = 'noEdits' | 'revertOnExit' | 'iDeployedTheServer';
+type ValueFlagKey = 'target' | 'world' | 'name' | 'skin' | 'brain' | 'personality';
+type BooleanFlagKey = 'noEdits' | 'revertOnExit' | 'iDeployedTheServer' | 'builds';
 
 const VALUE_FLAGS: Record<string, ValueFlagKey> = {
 	'--target': 'target',
@@ -24,17 +28,19 @@ const VALUE_FLAGS: Record<string, ValueFlagKey> = {
 	'--name': 'name',
 	'--skin': 'skin',
 	'--brain': 'brain',
+	'--personality': 'personality',
 };
 
 const BOOLEAN_FLAGS: Record<string, BooleanFlagKey> = {
 	'--no-edits': 'noEdits',
 	'--revert-on-exit': 'revertOnExit',
 	'--i-deployed-the-server': 'iDeployedTheServer',
+	'--builds': 'builds',
 };
 
 /** Parses `--flag value` / `--flag` pairs. Throws a plain `Error` on an unrecognised or malformed flag. */
 export function parseArgs(argv: readonly string[]): ParsedArgs {
-	const out: ParsedArgs = { noEdits: false, revertOnExit: false, iDeployedTheServer: false };
+	const out: ParsedArgs = { noEdits: false, revertOnExit: false, iDeployedTheServer: false, builds: false };
 	for (let i = 0; i < argv.length; i++) {
 		const arg = argv[i];
 		const valueKey = VALUE_FLAGS[arg];

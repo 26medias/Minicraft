@@ -15,6 +15,8 @@
  * - `cli`: the real CLI (`npx tsx src/cli.ts --target local …`) on its own server on the `local`
  *   target's port (18090): after SIGINT the process group exits by itself within 5 s, and
  *   `--revert-on-exit` removed its block.
+ * - `brain2-help`, `brain2-alone`, `brain2-mine`, `brain2-revert`, `brain2-follow-watch`, `brain2-cli`: brain v2,
+ *   code engines only (Task 17b), on one server on the `local` port; see `e2e-brain2.ts`.
  *
  * Safety: never port 8080, never `~/minicraft-mp`, never the live URL. Servers are ours, stopped by
  * PID with SIGTERM. Every temp dir is under BOTS_E2E_SCRATCH, and only those are removed.
@@ -37,6 +39,7 @@ import type { Vec3 } from '../src/types.js';
 import { FakeWorld } from './fake-port.js';
 import { Kid } from './kid-client.js';
 import { removeBuild, scratchRoot, startServer, TOKEN } from './mcserver.js';
+import { brain2CliLeg, brain2Legs } from './e2e-brain2.js';
 import type { McServer } from './mcserver.js';
 
 /* eslint-disable @typescript-eslint/no-explicit-any */
@@ -751,6 +754,22 @@ async function main(): Promise<void> {
 			}
 			if (healthy) await leg('laya', 'companion, Laya brain', () => runLeg(server!, 'laya', laya, runDir));
 			else console.log(`\nSKIP laya: ${why} (${def.url}${def.health}); start it with \`npm run brains -- laya\``);
+		}
+		const B2 = ['brain2-help', 'brain2-alone', 'brain2-mine', 'brain2-revert', 'brain2-follow-watch', 'brain2-cli'];
+		if (B2.some(want)) {
+			// On the `local` target's port: the real CLI (`revert`, `--brain v2`) reaches it by the committed config.
+			const b2 = await startServer(LOCAL_PORT);
+			console.log(`\nbrain2: mcserver pid ${b2.pid} on ${b2.url}`);
+			try {
+				const ctx = { server: b2, stateRoot: join(runDir, 'state'), botsDir: BOTS_DIR, want, leg, check, info };
+				await brain2Legs(ctx);
+				if (want('brain2-cli')) {
+					await leg('brain2-cli', 'the real CLI, --brain v2: runs, logs, SIGTERM exits with the brain file flushed', () => brain2CliLeg(ctx, 'SIGTERM'));
+					await leg('brain2-cli-int', 'the same, SIGINT', () => brain2CliLeg(ctx, 'SIGINT', 20_000));
+				}
+			} finally {
+				await b2.stop();
+			}
 		}
 		if (want('cli')) await leg('cli', 'the real CLI: SIGINT exit and --revert-on-exit', cliLeg);
 	} finally {

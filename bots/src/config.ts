@@ -7,6 +7,7 @@
  */
 import defaultBotsConfig from '../bots.config.js';
 import { parseArgs } from './cli-args.js';
+import { PERSONALITIES } from './brain2/data/personalities.data.js';
 import type { WorldListing } from 'minicraft-bot';
 
 /** Thrown by `loadConfig`, and returned (not thrown) by the other functions here. */
@@ -49,16 +50,24 @@ export interface CompanionTuning {
 	minTargetMs: number;
 }
 
+/** The local LLM engine of brain v2 (part 2; spec §3). */
+export interface LlmDef {
+	url: string;
+	model: string;
+	timeoutMs: number;
+}
+
 /** The shape of `bots/bots.config.ts`'s default export. */
 export interface BotsConfigData {
 	targets: Record<string, TargetDef>;
 	brains: Record<string, BrainDef>;
 	companion: CompanionTuning;
+	llm?: LlmDef;
 }
 
 const DEFAULT_BOTS_CONFIG = defaultBotsConfig as BotsConfigData;
 
-export type BrainName = 'laya' | 'clm' | 'scripted';
+export type BrainName = 'laya' | 'clm' | 'scripted' | 'v2';
 
 export interface Config {
 	target: { name: string; url: string; token: string; live: boolean };
@@ -66,11 +75,16 @@ export interface Config {
 	name: string;
 	skin?: string;
 	brain: BrainName;
+	/** Brain v2's personality (a key of PERSONALITIES); `pip` by default. */
+	personality: string;
 	noEdits: boolean;
 	revertOnExit: boolean;
 	ackLive: boolean;
 	companion: CompanionTuning;
 	brains: Record<string, BrainDef>;
+	llm?: LlmDef;
+	/** `revert --builds` (brain v2). */
+	revertBuilds: boolean;
 	/** Where `.state` lives for this run (injected, defaulted in cli.ts only). */
 	stateRoot: string;
 	statePath(worldUuid: string): string;
@@ -160,7 +174,7 @@ function resolveToken(targetDef: TargetDef, env: Record<string, string | undefin
 	return new ConfigError(`no live token found for this target: set ${envKey}, put it in bots/${ENV_LIVE_TOKEN_FILE}, or deploy one to ${targetDef.tokenFile ?? '(no token file configured)'}`);
 }
 
-const BRAIN_NAMES: readonly BrainName[] = ['laya', 'clm', 'scripted'];
+const BRAIN_NAMES: readonly BrainName[] = ['laya', 'clm', 'scripted', 'v2'];
 
 /** Builds a `Config` from fully injected inputs. Throws `ConfigError` with a human message. */
 export function loadConfig(input: LoadConfigInput): Config {
@@ -186,6 +200,11 @@ export function loadConfig(input: LoadConfigInput): Config {
 		throw new ConfigError(`unknown --brain "${args.brain}"; expected one of ${BRAIN_NAMES.join(', ')}`);
 	}
 
+	const personality = (args.personality ?? 'pip').toLowerCase();
+	if (!Object.hasOwn(PERSONALITIES, personality)) {
+		throw new ConfigError(`unknown --personality "${args.personality}"; expected one of ${Object.keys(PERSONALITIES).join(', ')}`);
+	}
+
 	const targetName = args.target;
 	const name = args.name ?? 'Bot';
 
@@ -195,11 +214,14 @@ export function loadConfig(input: LoadConfigInput): Config {
 		name,
 		skin: args.skin,
 		brain,
+		personality,
 		noEdits: args.noEdits,
 		revertOnExit: args.revertOnExit,
 		ackLive: args.iDeployedTheServer,
 		companion: botsConfig.companion,
 		brains: botsConfig.brains,
+		llm: botsConfig.llm,
+		revertBuilds: args.builds,
 		stateRoot,
 		statePath(worldUuid: string): string {
 			return `${stateRoot}/${targetName}/${worldUuid}/${name}.json`;

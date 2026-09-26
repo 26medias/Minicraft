@@ -315,6 +315,22 @@ describe('loadConfig: defaults and validation', () => {
 		expect(() => loadConfig({ argv: ['--target', 'local', '--brain', 'nope'], env: {}, readFile: noFile, homedir: () => '/home/fake', stateRoot: '.state', config })).toThrow(ConfigError);
 	});
 
+	// Task 17b. Red if 'v2' is missing from BRAIN_NAMES, or --personality isn't validated.
+	it('accepts --brain v2 and --personality pip|rex (default pip); refuses an unknown personality', () => {
+		const config = testConfig({ local: { url: 'http://localhost:18090', token: 'e2e' } });
+		const load = (argv: string[]) => loadConfig({ argv: ['--target', 'local', ...argv], env: {}, readFile: noFile, homedir: () => '/home/fake', stateRoot: '.state', config });
+		expect(load(['--brain', 'v2']).brain).toBe('v2');
+		expect(load(['--brain', 'v2']).personality).toBe('pip');
+		expect(load(['--brain', 'v2', '--personality', 'rex']).personality).toBe('rex');
+		expect(() => load(['--brain', 'v2', '--personality', 'bob'])).toThrow(ConfigError);
+	});
+
+	it('carries the llm engine config from bots.config.ts', () => {
+		const config = { ...testConfig({ local: { url: 'http://localhost:18090', token: 'e2e' } }), llm: { url: 'http://127.0.0.1:11434', model: 'm', timeoutMs: 5000 } };
+		const cfg = loadConfig({ argv: ['--target', 'local'], env: {}, readFile: noFile, homedir: () => '/home/fake', stateRoot: '.state', config });
+		expect(cfg.llm).toEqual({ url: 'http://127.0.0.1:11434', model: 'm', timeoutMs: 5000 });
+	});
+
 	it('never reads the real filesystem or env when everything is injected', () => {
 		// Sentinels that would blow up if config.ts ever called the real fs/env instead of the
 		// injected functions.

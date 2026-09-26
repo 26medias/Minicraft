@@ -512,7 +512,7 @@ plan once → loop { planner.next → judge → ok ? execute → result : back t
    - Help-build aside, no edit on a `kid` cell or inside its buffer (§4.5);
    - the 1-block buffer around every kid's body, at every height (today's `guard.ts`);
    - no breaking a cell that touches water or lava;
-   - **the stop signal: after a kid breaks a bot block, `StopSignal` (`bots/src/body/stop-signal.ts`) gives that kid a stop for `STOP_SIGNAL_MS` = 10 min, which follows him wherever he goes. While it's active:
+   - **the stop signal:** after a kid breaks a bot block, `StopSignal` (`bots/src/body/stop-signal.ts`) gives that kid a stop for `STOP_SIGNAL_MS` = 10 min, which follows him wherever he goes. While it's active:
      - no Help-build for that kid, as today;
      - no edit within `STOP_RADIUS` = 16 blocks (horizontal) of him.
 

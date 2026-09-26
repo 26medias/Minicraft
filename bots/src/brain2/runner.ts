@@ -34,7 +34,11 @@ const MAX_FAILURES = 3;
 const PAST_KEPT = 20;
 
 type RawEvent = Omit<WorldEvent, 'id' | 'salient' | 't'>;
-interface Active { kind: BehaviourKind; beh: Behaviour<Record<string, unknown>, unknown>; plan: unknown; params: Record<string, unknown>; startedT: number }
+interface Active {
+	kind: BehaviourKind; beh: Behaviour<Record<string, unknown>, unknown>; plan: unknown; params: Record<string, unknown>; startedT: number;
+	/** The newest event id when the behaviour started: a `need` event above it was written during the behaviour. */
+	eventFloor: number;
+}
 
 const cellOf = (a: Action): Vec3 | null => ('cell' in a ? a.cell : null);
 export function actionKey(a: Action): string {
@@ -71,7 +75,8 @@ export class BehaviourRunner {
 		this.failures.clear();
 		this.waits.clear();
 		this.follow = createFollowState();
-		this.active = { kind, beh, plan: null, params, startedT: now };
+		const eventFloor = this.d.store.state.events.reduce((m, e) => Math.max(m, e.id), 0);
+		this.active = { kind, beh, plan: null, params, startedT: now, eventFloor };
 		const b: ActiveBehaviour = { kind, params, startedT: now, step: 0, rejections: 0, failures: 0, plannedEdits: 0, progress: '', lastResults: [] };
 		// memory.current is an in-progress entry: if the bot dies, it reads as interrupted (outcome/why/endedT are placeholders).
 		const current: ActionEntry & { startedT: number } = { behaviour: kind, params, lastedMs: 0, outcome: 'interrupted', why: 'in progress', endedT: now, startedT: now };
@@ -96,7 +101,14 @@ export class BehaviourRunner {
 		else if (this.inFlight === 'walk' || this.inFlight === 'fly') body.move(body.pose());
 		if (this.inFlight === 'mine') body.stopMining();
 		this.gen++;                                           // rule 6: a result arriving later is discarded
-		if (a.plan !== null && a.beh.endPatch) this.apply(a.beh.endPatch(a.plan, outcome, why, this.ctx()));   // rule 9b
+		if (a.plan !== null && a.beh.endPatch) {
+			// Guarded: end() also runs from tick()'s catch, so a throw here would escape tick() as an unhandled rejection.
+			try {
+				this.apply(a.beh.endPatch(a.plan, outcome, why, this.ctx()));   // rule 9b
+			} catch (err) {
+				this.d.log('error', { error: `endPatch: ${err instanceof Error ? err.message : String(err)}` });
+			}
+		}
 		const now = this.d.clock();
 		const s = this.d.store.state;
 		const entry: ActionEntry = { behaviour: a.kind, params: a.params, lastedMs: now - a.startedT, outcome, why, endedT: now };
@@ -222,10 +234,18 @@ export class BehaviourRunner {
 		if (h && this.d.store.state.body.editsHalted !== h) this.apply([{ path: ['body', 'editsHalted'], value: h }]);
 	}
 
-	/** A behaviour's own {failed}: `stuck…` and `hazard…` reasons also write that event (rule 9). */
+	/**
+	 * A behaviour's own {failed}: `stuck…` and `hazard…` reasons also write that event (rule 9), and `need <block>`
+	 * writes a `need` event unless the behaviour already wrote one for that block (Task 12b).
+	 */
 	private failed(why: string): void {
 		if (why.startsWith('stuck')) this.apply(this.eventPatch({ kind: 'stuck', detail: why }));
 		else if (why.startsWith('hazard')) this.apply(this.eventPatch({ kind: 'hazard', detail: why }));
+		const need = /^need (\S+)$/.exec(why);
+		const act = this.active;
+		if (need && act && !this.d.store.state.events.some((e) => e.kind === 'need' && e.block === need[1] && e.id > act.eventFloor)) {
+			this.apply(this.eventPatch({ kind: 'need', block: need[1], detail: need[1] }));
+		}
 		this.end('failed', why);
 	}
 
@@ -331,6 +351,7 @@ export class BehaviourRunner {
 		this.apply(patch);
 		this.checkHalt();
 		const act = this.active!;
+		// Called for every executed action, `wait` included (Build records its site through a wait's onResult).
 		if (act.beh.onResult) this.apply(act.beh.onResult(act.plan, a, ok, this.ctx()));
 		this.maybeRecompute();
 	}

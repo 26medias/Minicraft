@@ -335,4 +335,62 @@ describe('BehaviourRunner (spec §7)', () => {
 		expect(r.calls('place')).toHaveLength(0);
 		expect(r.store.state.behaviour).not.toBeNull();
 	});
+	// Task 12b. Red if a behaviour's own `need <block>` failure writes no need event (Build, and Help-build
+	// starting with none in a must-mine world, relied on it).
+	it('a failure `need <block>` writes one salient need event', async () => {
+		const r = rig();
+		BEHAVIOURS.watch = scripted([{ failed: 'need stone' }]);
+		r.runner.start('watch', {});
+		await r.step();
+		expect(r.store.state.memory.past[0]).toMatchObject({ outcome: 'failed', why: 'need stone' });
+		expect(r.store.state.events.filter((e) => e.kind === 'need')).toEqual([expect.objectContaining({ block: 'stone', salient: true })]);
+	});
+
+	// Task 12b. Red if the runner writes a second need event when the behaviour already wrote one for that block.
+	it('no second need event when the behaviour already wrote one for that block', async () => {
+		const r = rig();
+		BEHAVIOURS.watch = {
+			...scripted([{ kind: 'wait', ms: 0 }, { failed: 'need stone' }]),
+			onResult: (p, _a, _ok, ctx) => ((p.i += 1), ctx.event({ kind: 'need', block: 'stone', detail: 'stone' })),
+		};
+		r.runner.start('watch', {});
+		await r.steps(3);
+		expect(r.store.state.memory.past[0]).toMatchObject({ outcome: 'failed', why: 'need stone' });
+		expect(r.store.state.events.filter((e) => e.kind === 'need')).toHaveLength(1);
+	});
+
+	// Task 12b. Red on the pre-12b runner: Help-build starting with none in a must-mine world ended failed
+	// 'need oak_planks' with no need event.
+	it('Help-build starting with 0 in a must-mine world writes a need event', async () => {
+		const r = rig();
+		r.world.mustMine = true;
+		r.noah(10.5, 13.5);
+		r.runner.start('help-build', { kid: 'Noah', next: { x: 13, y: Y, z: 10 }, d: { x: 1, y: 0, z: 0 }, block: 'oak_planks' });
+		await r.step();
+		expect(r.store.state.memory.past[0]).toMatchObject({ outcome: 'failed', why: 'need oak_planks' });
+		expect(r.store.state.events.filter((e) => e.kind === 'need')).toEqual([expect.objectContaining({ block: 'oak_planks', salient: true })]);
+	});
+
+	// Task 12b (Build records its site through a wait's onResult). Red if onResult isn't called for a `wait`:
+	// the script never advances past its wait and never ends.
+	it('calls onResult for a wait', async () => {
+		const r = rig();
+		BEHAVIOURS.watch = scripted([{ kind: 'wait', ms: 0 }, 'done']);
+		r.runner.start('watch', {});
+		await r.steps(3);
+		expect(r.store.state.memory.past[0]).toMatchObject({ outcome: 'done' });
+	});
+
+	// Batch C re-review. Red if end() calls endPatch unguarded: the throw escapes tick() (via the catch's own end())
+	// as a rejection, and the behaviour is never ended.
+	it('an endPatch that throws is logged, and the behaviour still ends', async () => {
+		const r = rig();
+		BEHAVIOURS.watch = { ...scripted(['done']), endPatch: () => { throw new Error('bad end'); } };
+		r.runner.start('watch', {});
+		await expect(r.runner.tick()).resolves.toBeUndefined();
+		expect(r.store.state.behaviour).toBeNull();
+		expect(r.store.state.memory.current).toBeNull();
+		expect(r.store.state.memory.past[0]).toMatchObject({ outcome: 'done' });
+		expect(r.logs.some(([k, d]) => k === 'error' && JSON.stringify(d).includes('bad end'))).toBe(true);
+	});
 });

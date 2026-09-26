@@ -8,6 +8,7 @@ import type { Ownership } from '../ownership.js';
 import type { Patch } from '../store.js';
 import type { Style } from '../style.js';
 import type { Action, BehaviourKind, Outcome, State, Vec3, WorldEvent } from '../types.js';
+import { build } from './build.js';
 import { FOLLOW } from './follow.js';
 import { HELP_BUILD } from './help-build.js';
 import { REST } from './rest.js';
@@ -34,7 +35,11 @@ export interface Behaviour<P = Record<string, unknown>, PL = unknown> {
 	next(plan: PL, ctx: BehaviourCtx): Next;
 	plannedEdits(plan: PL): number;
 	owns(plan: PL, a: Action): boolean;
-	/** Bookkeeping after an executed action (e.g. Mine updates its dig). Returned patch applied with cause {kind:'behaviour'}. */
+	/**
+	 * Bookkeeping after an executed action (e.g. Mine updates its dig). The runner calls it for **every** executed
+	 * action, `wait` included (Build records its site through the first `wait` after the site is chosen). Returned
+	 * patch applied with cause {kind:'behaviour'}.
+	 */
 	onResult?(plan: PL, a: Action, ok: boolean, ctx: BehaviourCtx): Patch;
 	/** Whether the result means plannedEdits must be recomputed (Help-build line extension, Build replan). */
 	recompute?(plan: PL): boolean;
@@ -47,6 +52,7 @@ export interface Behaviour<P = Record<string, unknown>, PL = unknown> {
 export const BEHAVIOURS: Partial<Record<BehaviourKind, Behaviour<any, any>>> = {
 	follow: FOLLOW,
 	'help-build': HELP_BUILD,
+	build,
 	watch: WATCH,
 	rest: REST,
 };

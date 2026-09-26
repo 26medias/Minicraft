@@ -1,6 +1,6 @@
 # Texture replacement: Mojang out, CC BY-SA in — design (rev 3, 2026-09-26)
 
-Status: **rev 3** — gate-1 findings (rigour, engine, boundary, player) and the rev-2 re-gate (rigour, engine) incorporated. Branch `textures`
+Status: **rev 3.1** — gate-1 findings (rigour, engine, boundary, player) and two re-gates (rigour, engine) incorporated. Branch `textures`
 (worktree off `main` @ 8c7aec3). Background: `docs/texture-replacement-research.md`. Candidate map:
 `docs/texture-fill-map.md` (historical; after this change `src/data/texture-sources.data.ts` is the truth).
 
@@ -33,12 +33,12 @@ not the whole bundle (§10 lists the skins and menu art).
 |---|---|
 | Textures referenced by non-retired `BLOCKS` | 448 |
 | Crack overlay `destroy_stage_0..9` (loaded by `crack-overlay.ts`; Pixel Perfection CE has all 10) | 10 |
-| From Pixel Perfection CE (file taken as is) | ≈309 |
-| From Bauniclonia / REFI / Mineclonia (file taken as is) | ≈122 |
-| Overlays and tint-derived rows (§5.4, §5.6) | ≈17 |
+| From Pixel Perfection CE (file taken as is) | 309 |
+| From Bauniclonia / REFI / Mineclonia (file taken as is) | 123 |
+| Overlays, tint-derived and `same` rows (§5.4, §5.6) | 16 |
 | Mojang files deleted (unused) | 625 |
 
-These three counts are approximate: the data file is the truth, and a test asserts the total of 448 + 10 = 458 rows.
+Counts measured on the planned rows (309 + 123 + 16 = 448). The data file is the truth; a test asserts 448 + 10 = 458 rows.
 Of the 337 Pixel Perfection tiles, 23 are traced and never used. None of the 314 clean ones scores above 0.8 on the
 trace metric (§6), and the highest pixel identity is 0.39. Some rows move off Pixel Perfection for **looks** (§5.5):
 iron_block, clay, birch_leaves, and the TNT faces (tinted, §5.6).
@@ -148,9 +148,11 @@ water, lava and `slime_pad` already disagree with their tiles. The rule is per r
 - (a) Every tinted texture has saturation < 0.30 (spruce 0.32, acacia 0.35 and dark oak 0.37 would fail).
 - (b) Every `*_leaves` and `grass_block_top` texture with saturation < 0.27 is tinted, **or** is on
   `UNTINTED_GREY = ['pale_oak_leaves']` (grey by design).
-- (c) After tinting, every leaves and `grass_block_top` texture not on `UNTINTED_GREY` has mean hue in the green
-  band 60°–150°, mean saturation > 0.25 and mean luminance > 40. This catches orange birch whether tinted or not,
-  and near-black foliage.
+- (c) After tinting, every leaves and `grass_block_top` texture not on `HUE_EXEMPT = ['pale_oak_leaves',
+  'cherry_leaves']` (grey and pink by design) has hue in the band 45°–150°, saturation > 0.25 and mean luminance
+  > 40. **Hue and saturation are those of the mean RGB over pixels with alpha > 0.** This catches orange birch
+  whether tinted (hue 48 fails through (a) at sat 0.64) or untinted (hue 28), and near-black foliage. Acacia is
+  olive at 56°.
 - (d) `birch_leaves` is pinned: it must be in `TEXTURE_TINTS`.
 
 ### 5.3 Ores must stay findable
@@ -162,19 +164,19 @@ Every `*_ore` texture must have at least 12 pixels at CIE-Lab ΔE > 25 from the 
   if it reads as invisible in the mine shot, the fix is a new tile, not a looser test.
 - **Test:** `texture-ores.test.ts`. A fully invisible ore (0–few pixels) goes red under either threshold.
 
-### 5.4 Overlays and derivations (14 rows)
+### 5.4 Overlays, derivations and the no-source tiles
 
 | Texture | Row |
 |---|---|
 | `copper_ore` | `over: 'stone'`, Bauniclonia `mcl_copper_ore` (it is a Luanti overlay: 73 transparent pixels) |
 | `muddy_mangrove_roots_side/top` | `over: 'mud'`, **Bauniclonia** `mcl_mangrove_roots_side/top` (brown; REFI's are dark green) |
 | `suspicious_sand_0`, `suspicious_gravel_0` | `over: 'sand'/'gravel'`, Mineclonia `mcl_sus_nodes_suspicious_overlay`, `overlayAlpha: 3` (at its drawn max of 48 it is invisible) |
-| `sculk_catalyst_bottom` | Mineclonia `mcl_sculk_catalyst_bottom` (trace score 0.48) |
+| `sculk_catalyst_bottom` | plain row: Mineclonia `mcl_sculk_catalyst_bottom` (trace score 0.48) |
 | `ochre/verdant/pearlescent_froglight_side` | `derive: 'tint'` from PP `shroomlight`, tints `#f2c14e` / `#7fd36b` / `#e4a6e8`, `targetLum: 210` (light blocks; 150 is drab) |
 | `…_froglight_top` | `same: '…_froglight_side'` |
-| `creaking_heart_awake`, `…_top_awake` | `derive: 'tint'` from the Bauniclonia `mcl_pale_oak_log` / `mcl_pale_oak_log_top` files, tint `#6e5a50`, `targetLum: 70`. Accepted as a plain dark log (the eye is lost). |
+| `creaking_heart_awake`, `…_top_awake` | `derive: 'tint'` from the Bauniclonia `mcl_pale_oak_log` / `mcl_pale_oak_log_top` files, tint `#6e5a50`, `targetLum: 120` (70 gives a flat tile, luminance std 6.1). Accepted as a plain dark log (the eye is lost). |
 
-**Test:** every `derive`/`over` output keeps a luminance standard deviation above 8, so no tile collapses to a flat swatch.
+**Test:** every `derive`/`over` output — the importer's rows in `texture-sources.data.ts` **and** build-atlas's `DERIVED_TEXTURES` — keeps a luminance standard deviation above 8 and at most 50% clipped pixels, so no tile collapses to a flat swatch.
 
 ### 5.5 Fill choice and look swaps
 **Default:**
@@ -191,11 +193,13 @@ Every `*_ore` texture must have at least 12 pixels at CIE-Lab ΔE > 25 from the 
 | `iron_block` | REFI `default_steel_block` | PP's is black, ΔE 6 from `coal_block` |
 | `clay` | Bauniclonia `default_clay` | PP's is brick-red, ΔE 8 from `bricks` |
 | `birch_leaves` | Bauniclonia mask | §5.2 |
-| `tnt_side` | `derive: 'tint'`, PP `tnt_side2` (bomb, user choice), red `#e0402c` | §5.6 |
-| `tnt_top` | `derive: 'tint'`, PP `tnt_top2`, red | matches the bomb crate |
-| `tnt_bottom` | `derive: 'tint'`, PP `tnt_top1`, red | PP `tnt_bottom` is traced; Bauniclonia's reads as brick; REFI's breaks the TNT hue test (0.2°) |
+| `tnt_side` | `derive: 'tint'`, PP `tnt_side2` (bomb, user choice), red `#e0402c`, `targetLum: 150` | §5.6 |
+| `tnt_top` | `derive: 'tint'`, PP `tnt_top2`, red, `targetLum: 150` | matches the bomb crate |
+| `tnt_bottom` | `derive: 'tint'`, PP `tnt_top1`, red, `targetLum: 150` | PP `tnt_bottom` is traced; Bauniclonia's reads as brick; REFI's breaks the TNT hue test (0.2°) |
 
-The TNT tiles are finalised against the §5.6 tests and the look review.
+Plain TNT at 150 reads clearly red (side mean 125,38,26). 120 is a dull maroon, and 180 clips 19% of the bottom.
+With plain TNT at 150 and the derived tiles at 180, all existing hue, order and brightness assertions pass (engine
+and rigour re-gates).
 
 ### 5.6 Derived game tiles: gain from luminance, not a constant
 `greyTint` uses `TINT_GAIN = 1.8`, tuned for Mojang TNT at luminance ~100. On the new art it fails the existing
@@ -234,8 +238,10 @@ These are shown at the look review, and each is a one-row swap.
 - **No shipped tile equals Mojang:** `src/data/mojang-tile-hashes.json` holds sha256 hashes of Mojang's decoded
   16×16 RGBA frame-0 tiles. These are hashes, not pixels. No shipped tile's decoded hash may match one.
 - **The 23 traced source files** (for example `ppce` + `tnt_bottom.png`) may never be the `pack` + `file` of any
-  row. The guard is keyed on the source file, not the output name: `tnt_bottom` legitimately comes from PP's
-  `tnt_top1`.
+  row, **including `derive` and `over` rows**. The guard is keyed on the source file, not the output name:
+  `tnt_bottom` legitimately comes from PP's `tnt_top1`.
+- `SOURCES.json` records a `same` row as `{ same: '<row>', sha256 }`. The hash test checks the copy against the
+  target row's file.
 
 **Pre-merge gate, run by hand:**
 1. `scripts/audit-textures.ts` reads the local Minecraft jar and reports every shipped tile's trace score

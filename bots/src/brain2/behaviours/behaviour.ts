@@ -9,6 +9,7 @@ import type { Patch } from '../store.js';
 import type { Style } from '../style.js';
 import type { Action, BehaviourKind, Outcome, State, Vec3, WorldEvent } from '../types.js';
 import { build } from './build.js';
+import { explore } from './explore.js';
 import { FOLLOW } from './follow.js';
 import { HELP_BUILD } from './help-build.js';
 import { mine } from './mine.js';
@@ -55,6 +56,7 @@ export const BEHAVIOURS: Partial<Record<BehaviourKind, Behaviour<any, any>>> = {
 	'help-build': HELP_BUILD,
 	build,
 	mine,
+	explore,
 	watch: WATCH,
 	rest: REST,
 };

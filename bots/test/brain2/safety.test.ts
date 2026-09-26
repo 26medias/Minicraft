@@ -57,14 +57,15 @@ describe('judgeSafety (spec §7.1)', () => {
 	it('refuses anything inside a kid\'s body buffer', () => {
 		expect(judgeSafety(place(30, 211, 30), ctx({ kids: [{ name: 'Noah', x: 30.5, y: 210, z: 30.5 }] })).ok).toBe(false);
 	});
-	// Red on the rev 3.2 wording (buffer only): a stop must keep every edit 16 blocks away from that kid.
-	it('stop signal: no edit within STOP_RADIUS of that kid, and no Help-build for him', () => {
+	// Red on the rev 3.2 wording (buffer only): a stop must keep every edit 16 blocks away from that kid. ("No Help-build
+	// for him" at any distance is Help-build's own rule: help-build.test.ts, which goes red without it.)
+	it('stop signal: no edit within STOP_RADIUS of that kid', () => {
 		const stop = new StopSignal(600_000);
 		stop.onEdit({ by: 7, byName: 'Noah', byBot: false, opCount: 1, cells: [{ x: 1, y: 1, z: 1, oldId: 1, newId: 0 }] }, [{ x: 1, y: 1, z: 1, oldId: 0, newId: 1, t: 0 }], 100_000);
 		const kids = [{ name: 'Noah', x: 40, y: 210, z: 40 }];
 		expect(judgeSafety(place(50, 210, 40), ctx({ kids, stop })).ok).toBe(false);
 		expect(judgeSafety(place(57, 210, 40), ctx({ kids, stop })).ok).toBe(true);
-		expect(judgeSafety({ ...place(50, 210, 40), free: true } as Action, ctx({ kids, stop, helpBuild: true, inventory: {} })).ok).toBe(false); // no Help-build near him
+		expect(judgeSafety({ ...place(50, 210, 40), free: true } as Action, ctx({ kids, stop, helpBuild: true, inventory: {} })).ok).toBe(false); // the radius binds Help-build too
 	});
 	it('a plan veto is marked so the tripwire can count it', () => {
 		const v = judgeSafety(place(5, 210, 5), ctx({ planOwns: () => false }));
@@ -122,6 +123,12 @@ describe('Tripwire (spec §7.2)', () => {
 		b.resetPlan(100);
 		for (const t of [0, 330_000, 660_000]) b.recordEdit({ x: 1, y: 1, z: 1 }, t);
 		expect(b.halted).toBeNull();
+	});
+	// Red if `planned` defaults to 0: a stray veto before the first resetPlan would halt the session (batch A review).
+	it('a plan veto before the first resetPlan does not halt', () => {
+		const t = new Tripwire(600);
+		t.recordPlanVeto();
+		expect(t.halted).toBeNull();
 	});
 	// Red if other rejections count (rev 3.1 defect), or if the count doesn't reset on recompute.
 	it('overrun counts done + plan vetoes against plannedEdits × 1.1, and resets on recompute', () => {

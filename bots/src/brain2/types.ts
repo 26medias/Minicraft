@@ -25,7 +25,9 @@ export type Action =
 	| { kind: 'walk'; to: { x: number; z: number }; speed: number }
 	| { kind: 'fly'; to: Vec3 }
 	| { kind: 'look'; at: Vec3 }
-	| { kind: 'wait'; ms: number };
+	| { kind: 'wait'; ms: number }
+	/** One tick of today's standing-intent follow controller, driven by the runner (Follow). Never an edit. */
+	| { kind: 'follow-tick'; kid: string };
 export const EDIT_KINDS = new Set<Action['kind']>(['place', 'break', 'mine']);
 export interface ActiveBehaviour { kind: BehaviourKind; params: Record<string, unknown>; startedT: number; step: number; rejections: number; failures: number; plannedEdits: number; progress: string; lastResults: boolean[] }  // lastResults: the last 3 executed actions' success (keep-going, spec §5.3)
 export interface Personality {

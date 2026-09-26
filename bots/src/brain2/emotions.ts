@@ -61,7 +61,11 @@ export function decayPatch(s: State, dtMs: number, pending: Map<string, number>)
 		if (r.pendingDrift === 0) pending.delete(id); else pending.set(id, r.pendingDrift);
 		if (r.value !== value) out.push({ path, value: r.value });
 	};
-	for (const ax of GLOBAL_AXES) one(ax, ['emotions', ax, 'value'], s.emotions[ax].value, s.personality.baselines[ax], s.personality.halfLifeMs[ax]);
+	for (const ax of GLOBAL_AXES) {
+		// Resting halves Stimulation's half-life (spec §6 Rest).
+		const hl = ax === 'stimulation' && s.behaviour?.kind === 'rest' ? s.personality.halfLifeMs[ax] / 2 : s.personality.halfLifeMs[ax];
+		one(ax, ['emotions', ax, 'value'], s.emotions[ax].value, s.personality.baselines[ax], hl);
+	}
 	for (const [name, rel] of Object.entries(s.relations)) {
 		for (const ax of RELATION_AXES) one(`rel.${name}.${ax}`, ['relations', name, 'axes', ax, 'value'], rel.axes[ax].value, 0, s.personality.relationHalfLifeMs[ax]);
 	}

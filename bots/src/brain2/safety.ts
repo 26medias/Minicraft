@@ -44,7 +44,8 @@ export function judgeSafety(a: Action, c: SafetyCtx): Verdict {
 export class Tripwire {
 	private times: number[] = [];
 	private cellTimes = new Map<string, number[]>();
-	private planned = 0;
+	/** Infinity until the first resetPlan: a stray veto before any plan must not halt the session. */
+	private planned = Infinity;
 	private count = 0;
 	private reason: string | null = null;
 	constructor(private readonly gapMs = LIMITS.EDIT_GAP_MIN_MS) {}

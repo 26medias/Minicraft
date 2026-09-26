@@ -59,6 +59,17 @@ describe('decay (spec §4.1)', () => {
 		for (let i = 0; i < 10; i++) patches += decayPatch(state, TICK, pending).length;
 		expect(patches).toBe(0);
 	});
+	// Red if resting doesn't halve Stimulation's half-life (spec §6 Rest), or halves another axis too.
+	it('while resting, Stimulation decays with half its half-life', () => {
+		const s0 = initialState(PIP, pose);
+		const emotions = { ...s0.emotions, stimulation: { ...s0.emotions.stimulation, value: 1 }, mood: { ...s0.emotions.mood, value: 1 } };
+		const value = (s: State, ax: string) => decayPatch(s, 60_000, new Map()).find((o) => o.path[1] === ax)?.value;
+		const idle: State = { ...s0, emotions };
+		const resting: State = { ...idle, behaviour: { kind: 'rest', params: {}, startedT: 0, step: 0, rejections: 0, failures: 0, plannedEdits: 0, progress: '', lastResults: [] } };
+		expect(value(idle, 'stimulation')).toBeCloseTo(0.5);     // one 1-min half-life
+		expect(value(resting, 'stimulation')).toBeCloseTo(0.25);  // two
+		expect(value(resting, 'mood')).toBeCloseTo(value(idle, 'mood') as number);
+	});
 });
 
 describe('bands with ±0.03 hysteresis (spec §4.1)', () => {

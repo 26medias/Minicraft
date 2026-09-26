@@ -175,9 +175,25 @@ npm --prefix bots run bot -- village --target local|live --world <uuid|name> --n
 	--brain laya|jev [--compare] [--rest-sec N] [--no-edits] [--i-deployed-the-server]
 ```
 
+## The helper bot (experiment E5)
+
+`bots/src/helper/`: it watches the kids' placements. When a kid is building (≥ 3 placements within 32 blocks of him in
+the last 60 s, then a 5 s pause) it builds a small matching structure beside his build: the model picks "a matching
+tower", "a wall", "a statue" or "a little house" (else random); the blocks are his (most used = wall, unlimited
+supply; never TNT, sand/gravel or liquids); the site puts every footprint column 4–8 blocks from his cells (never
+within 3 of any kid cell), out of his body buffer, turned to face his build. It builds with the builder's move loop
+(`checkPlace`, Tripwire), then helps the same kid again only for placements after that build. With no kid building
+it idles near spawn, looking around. State `bots/.state/helper/<target>/<world>/<name>.json`; log as the builder's
+(`decision` what=help, `project`); e2e leg: `helper`.
+
+```bash
+npm --prefix bots run bot -- helper --target local|live --world <uuid|name> --name <n> [--skin <s>] \
+	--brain laya|jev [--compare] [--rest-sec N] [--no-edits] [--i-deployed-the-server]
+```
+
 ## Shared bot cells
 
-Builder, decorator and village append every cell they place to
+Builder, decorator, village and helper append every cell they place to
 `bots/.state/shared/<target>/<world>/bot-cells.jsonl` (`{x,y,z,id,bot,t}`, append-only). A cell whose current block
 equals the latest entry's id counts as a bot cell (not a kid's), so one bot does not back off from another's blocks;
 a kid's later edit of the cell (a non-bot edit event) still makes it a kid cell.

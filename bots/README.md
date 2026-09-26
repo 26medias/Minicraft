@@ -191,9 +191,27 @@ npm --prefix bots run bot -- helper --target local|live --world <uuid|name> --na
 	--brain laya|jev [--compare] [--rest-sec N] [--no-edits] [--i-deployed-the-server]
 ```
 
+## The architect bot (experiment E6)
+
+`bots/src/architect/`: it designs its own structures. Eight parametric generators (`designs.ts`: castle gate,
+lighthouse, pyramid, bridge, giant mushroom, rocket, treehouse on a trunk, pixel-art smiley wall) each offer 3 sizes
+and 3 styles; 5 colour themes map roles to real blocks. The model picks the idea, the theme, then the size (options
+state the real dimensions; fallback: the smallest) and the style. Every design is validated before it is offered:
+≤ 12×12 footprint, ≤ 20 high, ≤ 400 cells, known block names, and every cell reaches the ground through face-adjacent
+design cells; that BFS depth is the placement order (supported first). Then the builder's site search, move loop
+(`checkPlace`, Tripwire), firework, rest. Builds live in the builder's state dir
+(`bots/.state/builder/<target>/<world>/<name>.json`), so the decorator and the other bots see them. `--llm-params`:
+Ollama (`llm` in bots.config.ts, llama3.2:3b, JSON schema, temperature 0) proposes the numbers first; clamped to
+each range and validated, else the choices (`llm-params` log line). e2e leg: `architect`.
+
+```bash
+npm --prefix bots run bot -- architect --target local|live --world <uuid|name> --name <n> [--skin <s>] \
+	--brain laya|jev [--compare] [--llm-params] [--rest-sec N] [--no-edits] [--i-deployed-the-server]
+```
+
 ## Shared bot cells
 
-Builder, decorator, village and helper append every cell they place to
+Builder, decorator, village, helper and architect append every cell they place to
 `bots/.state/shared/<target>/<world>/bot-cells.jsonl` (`{x,y,z,id,bot,t}`, append-only). A cell whose current block
 equals the latest entry's id counts as a bot cell (not a kid's), so one bot does not back off from another's blocks;
 a kid's later edit of the cell (a non-bot edit event) still makes it a kid cell.

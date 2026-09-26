@@ -18,12 +18,13 @@ describe('parseArgs', () => {
 			tui: true,
 			compare: false,
 			jev: false,
+			llmParams: false,
 		});
 	});
 
 	it('defaults booleans to false and leaves value flags undefined when absent', () => {
 		const args = parseArgs([]);
-		expect(args).toEqual({ noEdits: false, revertOnExit: false, iDeployedTheServer: false, builds: false, tui: false, compare: false, jev: false });
+		expect(args).toEqual({ noEdits: false, revertOnExit: false, iDeployedTheServer: false, builds: false, tui: false, compare: false, jev: false, llmParams: false });
 	});
 
 	it('throws on an unknown flag', () => {

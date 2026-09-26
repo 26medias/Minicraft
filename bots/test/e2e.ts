@@ -20,6 +20,7 @@
  * - `builder`: the builder bot's CLI in-process on its own free-port server; see `e2e-builder.ts`.
  * - `decorator`: the decorator bot's CLI in-process on its own free-port server; see `e2e-decorator.ts`.
  * - `helper`: the helper bot's CLI in-process on its own free-port server; see `e2e-helper.ts`.
+ * - `architect`: the architect bot's CLI in-process on its own free-port server; see `e2e-architect.ts`.
  *
  * Safety: never port 8080, never `~/minicraft-mp`, never the live URL. Servers are ours, stopped by
  * PID with SIGTERM. Every temp dir is under BOTS_E2E_SCRATCH, and only those are removed.
@@ -48,6 +49,7 @@ import { builderLeg } from './e2e-builder.js';
 import { decoratorLeg } from './e2e-decorator.js';
 import { villageLeg } from './e2e-village.js';
 import { helperLeg } from './e2e-helper.js';
+import { architectLeg } from './e2e-architect.js';
 
 /* eslint-disable @typescript-eslint/no-explicit-any */
 
@@ -783,6 +785,7 @@ async function main(): Promise<void> {
 		if (want('cli')) await leg('cli', 'the real CLI: SIGINT exit and --revert-on-exit', cliLeg);
 		if (want('builder')) await leg('builder', 'the builder CLI, engines down: finishes a build (≥ 20 cells), nothing on the kid pillar', () => builderLeg({ check, info }));
 		if (want('village')) await leg('village', 'the village CLI, engines down: ≥ 2 lots and ≥ 1 path, nothing on the kid pillar', () => villageLeg({ check, info }));
+		if (want('architect')) await leg('architect', 'the architect CLI, engines down: one design ≥ 30 cells, nothing within 3 of the kid pillar', () => architectLeg({ check, info }));
 		if (want('helper')) await leg('helper', 'the helper CLI, engines down: a matching build ≥ 6 cells, > 3 from the kid line, his block only', () => helperLeg({ check, info }));
 		if (want('decorator')) await leg('decorator', 'the decorator CLI, engines down: ≥ 10 decoration cells, nothing on the kid pillar', () => decoratorLeg({ check, info }));
 	} finally {

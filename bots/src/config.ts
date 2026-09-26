@@ -93,6 +93,8 @@ export interface Config {
 	restSec: number;
 	/** `--jev` (brain v2, experiment E2). */
 	jev: boolean;
+	/** `--llm-params` (architect, experiment E6). */
+	llmParams: boolean;
 	/** Where `.state` lives for this run (injected, defaulted in cli.ts only). */
 	stateRoot: string;
 	statePath(worldUuid: string): string;
@@ -238,6 +240,7 @@ export function loadConfig(input: LoadConfigInput): Config {
 		compare: args.compare,
 		restSec,
 		jev: args.jev,
+		llmParams: args.llmParams,
 		stateRoot,
 		statePath(worldUuid: string): string {
 			return `${stateRoot}/${targetName}/${worldUuid}/${name}.json`;

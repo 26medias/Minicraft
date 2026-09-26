@@ -65,7 +65,7 @@ async function guard(page: Page) {
 }
 
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
-const mc = <T>(page: Page, fn: (m: any) => T, a?: unknown) => page.evaluate(`(${fn.toString()})(window.__mc, ${JSON.stringify(a ?? null)})`) as Promise<T>;
+const mc = <T>(page: Page, fn: (m: any, a: any) => T, a?: unknown) => page.evaluate(`(${fn.toString()})(window.__mc, ${JSON.stringify(a ?? null)})`) as Promise<T>;
 const log = (page: Page) => page.evaluate(() => (window as unknown as { __soundLog: string[] }).__soundLog.slice());
 const clearLog = (page: Page) => page.evaluate(() => { (window as unknown as { __soundLog: string[] }).__soundLog.length = 0; });
 /** Mouse events under pointer lock turn the camera; aim straight down right before a click. */
@@ -87,7 +87,10 @@ for (const sig of ['SIGINT', 'SIGTERM', 'SIGHUP'] as const) process.on(sig, () =
 		// 0. The main menu has an Audio button next to Options.
 		check(await page.locator('#home-audio').count() === 1, 'main menu: Audio button');
 
+		// Music starts on the main menu at the first click (not only in a world).
 		await page.click('#home-single');
+		const menuMusic = await page.waitForFunction(() => (window as unknown as { __music: { playing: boolean } }).__music.playing, null, { timeout: 8_000 }).then(() => true, () => false);
+		check(menuMusic, 'music plays on the menu within a few seconds of the first click');
 		await page.click('#single-new');
 		await page.fill('#w-seed', '3');
 		await page.click('#w-create');

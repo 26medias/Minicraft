@@ -73,7 +73,7 @@ export function distanceGain(d: number, range = 32): number {
 
 // --- Music (spec §7) ----------------------------------------------------------------------------
 
-export const FIRST_TRACK_MS: [number, number] = [20_000, 60_000];
+export const FIRST_TRACK_MS: [number, number] = [1_000, 3_000];
 export const TRACK_GAP_MS: [number, number] = [120_000, 300_000];
 
 export function between([lo, hi]: [number, number], rng: () => number): number {

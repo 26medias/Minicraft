@@ -6,16 +6,28 @@ import { MUSIC_TRACKS } from './sounds.data';
  * Background music (sound spec §7): one track at a time, long silences between, shuffled, never the
  * same twice in a row. Each track streams through an <audio> element into the music bus.
  */
-export class MusicPlayer {
+class MusicPlayer {
 	private timer: ReturnType<typeof setTimeout> | null = null;
 	private el: HTMLAudioElement | null = null;
 	private fade: GainNode | null = null;
 	private prev: number | null = null;
 	private running = false;
 
-	/** Entering a world: the first track after 20–60 s. */
+	get isRunning(): boolean {
+		return this.running;
+	}
+
+	/** A track is sounding right now (dev oracle for sound-smoke). */
+	get playing(): boolean {
+		return this.el !== null && !this.el.paused;
+	}
+
+	/**
+	 * From the first click or key on the page, main menu included (Julien: music should already play
+	 * there): the first track in 1–3 s, then long gaps. Already running (menu → game): nothing changes.
+	 */
 	start(): void {
-		this.stop();
+		if (this.running) return;
 		this.running = true;
 		this.schedule(between(FIRST_TRACK_MS, Math.random));
 	}
@@ -50,8 +62,13 @@ export class MusicPlayer {
 		if (!this.running) return;
 		const a = audioContext();
 		const out = bus('music');
+		// Sound not running yet (the context is still resuming, or the tab is hidden): try again soon.
+		if (!a || !out || a.state !== 'running') {
+			this.schedule(2_000);
+			return;
+		}
 		// Music at 0 does not start tracks at all (spec §8); try again after a gap.
-		if (!a || !out || getAudioSettings().music === 0 || a.state !== 'running') {
+		if (getAudioSettings().music === 0) {
 			this.schedule(between(TRACK_GAP_MS, Math.random));
 			return;
 		}
@@ -80,4 +97,19 @@ export class MusicPlayer {
 			}
 		});
 	}
+}
+
+/** One player for the whole page, so the music carries on from the main menu into the game. */
+export const music = new MusicPlayer();
+
+/** Boot: the first click or key anywhere wakes sound and starts the music. */
+export function startMusicOnFirstGesture(): void {
+	const go = () => {
+		window.removeEventListener('pointerdown', go);
+		window.removeEventListener('keydown', go);
+		audioContext();
+		music.start();
+	};
+	window.addEventListener('pointerdown', go);
+	window.addEventListener('keydown', go);
 }

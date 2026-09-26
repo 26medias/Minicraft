@@ -8,6 +8,7 @@ import { FpCamera } from './engine/render/camera';
 import { setupPointerLock } from './engine/input/pointerLock';
 import { GameAudio } from './audio/game-audio';
 import { audioContext, installVisibilityHandling } from './audio/engine';
+import { music, startMusicOnFirstGesture } from './audio/music';
 import { Player, findSafeSpawn, type Keys } from './game/player';
 import { GameLoop } from './game/loop';
 import { ChunkJobs, type WorkerLike } from './engine/world/chunk-jobs';
@@ -133,6 +134,10 @@ async function main() {
 	const toasts = new Toasts(app);
 
 	const menu = new MainMenu(app, adapter, mpApi);
+	// Music from the main menu on (sound spec §7): browsers allow it after the first click or key.
+	startMusicOnFirstGesture();
+	installVisibilityHandling();
+	if (import.meta.env.DEV) (window as unknown as { __music: typeof music }).__music = music;
 	const options = new OptionsMenu(app);
 	const lights = new LightRegistry(renderer.scene);
 	const colorPicker = new ColorPicker(app, LIGHT_PALETTE);
@@ -792,7 +797,6 @@ async function main() {
 		const audio = new GameAudio(world, player);
 		gameAudio = audio;
 		audio.begin();
-		installVisibilityHandling();
 		for (const ev of ['pointerdown', 'keydown'] as const) window.addEventListener(ev, () => void audioContext(), { passive: true });
 		/** Multiplayer per-frame work (flush, avatars, minimap, pos); null in solo. */
 		let mpFrame: ((now: number) => void) | null = null;

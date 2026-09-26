@@ -7,7 +7,7 @@ import type { Player } from '../game/player';
 import { blockSound } from './block-sounds';
 import { waterLevels, windLevels, type Sampler } from './ambience';
 import { audioContext, loadSounds, setDuck, soundsReady, startLoop, playSound, type LoopHandle } from './engine';
-import { MusicPlayer } from './music';
+import { music } from './music';
 import { distanceGain, hitsDue, makeBoomGate, makeSplashDetector, makeThrottle, PICKUP_EVERY_MS } from './rules';
 import { breakSound, hitSound, placeSound, type SoundName } from './sounds.data';
 
@@ -24,7 +24,6 @@ const REMOTE_QUIET_MS = 3000;
  * else's fade with distance.
  */
 export class GameAudio {
-	private readonly music = new MusicPlayer();
 	private readonly sea: number;
 	private readonly sampler: Sampler;
 	private loops: Record<'lake' | 'stream' | 'waterfall' | 'light' | 'strong', LoopHandle> | null = null;
@@ -71,10 +70,10 @@ export class GameAudio {
 		};
 	}
 
-	/** The first click or key of the world: decode the files, start the music clock. */
+	/** Entering the world: decode the files; the music is already going since the menu's first click. */
 	begin(): void {
 		void loadSounds();
-		this.music.start();
+		music.start();
 	}
 
 	/** Pause menu, inventory: the world keeps sounding at half volume (spec §3). */
@@ -85,7 +84,7 @@ export class GameAudio {
 	/** Quit or the play-time lock: everything fades out, and stays out. */
 	silence(): void {
 		this.silenced = true;
-		this.music.stop();
+		music.stop();
 		if (this.loops) for (const l of Object.values(this.loops)) l.stop();
 		this.loops = null;
 	}

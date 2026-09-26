@@ -108,7 +108,7 @@ Four tracks: morning_piano, building_time, over_the_mountains, forest_clearing (
 
 - Played through an `<audio>` element per track (streamed, not decoded into memory), connected
   into the music bus with `createMediaElementSource`.
-- First track 20–60 s after entering a world. After a track ends: silence of 2–5 minutes, then
+- Music starts at the first click or key on the page, on the main menu, and carries on into the game (one player for the page). First track 1–3 s after that click. If sound is not running yet when a track is due, it retries after 2 s rather than waiting a whole gap. After a track ends: silence of 2–5 minutes, then
   the next. Shuffled; never the same track twice in a row. Fade in over 2 s.
 - Continues through the pause menu. Stops on quit to the main menu.
 - The scheduler is a pure function of an rng and times (`nextTrack(prev, rng)`, `nextGap(rng)`),

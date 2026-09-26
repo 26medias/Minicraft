@@ -6,6 +6,8 @@ import { Renderer } from './engine/render/renderer';
 import { CLOUD_UNIFORMS, cloudAltitude } from './engine/render/clouds';
 import { FpCamera } from './engine/render/camera';
 import { setupPointerLock } from './engine/input/pointerLock';
+import { GameAudio } from './audio/game-audio';
+import { audioContext, installVisibilityHandling } from './audio/engine';
 import { Player, findSafeSpawn, type Keys } from './game/player';
 import { GameLoop } from './game/loop';
 import { ChunkJobs, type WorkerLike } from './engine/world/chunk-jobs';
@@ -466,8 +468,11 @@ async function main() {
 		let pauseOpen = false;
 		/** Spec §3.6: Quit was clicked; the reload is coming and nothing else may start. */
 		let quitting = false;
+		/** Sound spec: created with the loop below; the pause menu and inventory duck it to half. */
+		let gameAudio: GameAudio | null = null;
 		const updatePaused = () => {
 			loop.paused = frozen || inventoryOpen || pauseOpen;
+			gameAudio?.setPaused(inventoryOpen || pauseOpen);
 		};
 		const resetKeys = () => {
 			keys.forward = keys.back = keys.left = keys.right = keys.jump = keys.sneak = false;
@@ -782,6 +787,13 @@ async function main() {
 				atlas.uvTable,
 			),
 		);
+		// Sound (docs/sound.md). The Play click already counts as the page's user gesture; any later
+		// click or key also resumes a context the browser kept suspended.
+		const audio = new GameAudio(world, player);
+		gameAudio = audio;
+		audio.begin();
+		installVisibilityHandling();
+		for (const ev of ['pointerdown', 'keydown'] as const) window.addEventListener(ev, () => void audioContext(), { passive: true });
 		/** Multiplayer per-frame work (flush, avatars, minimap, pos); null in solo. */
 		let mpFrame: ((now: number) => void) | null = null;
 		/** Multiplayer: told the local mining target every frame, to send `fx mine` / `mine-stop`. null in solo. */
@@ -793,6 +805,7 @@ async function main() {
 			else cracks.clearGroup('local');
 			mpMine?.(mi);
 			mpFrame?.(now);
+			audio.frame(now, mi, loop.paused);
 			perfOverlay.tick(now, { t: now, frameMs, tickMs }, () => {
 				const mem = (performance as { memory?: { usedJSHeapSize: number } }).memory;
 				return {
@@ -809,8 +822,19 @@ async function main() {
 			syncHotbar(); // unconditional: the badges change with every count, not only when the bar does
 			autosave.markDirty();
 		};
-		loop.onBlockBroken = (ev) => countRemoved([ev.blockId]);
-		loop.onBlocksRemoved = (removed) => countRemoved(removed.map((r) => r.blockId));
+		loop.onBlockBroken = (ev) => {
+			countRemoved([ev.blockId]);
+			audio.broke(ev.blockId);
+		};
+		loop.onBlocksRemoved = (removed, aimedId) => {
+			countRemoved(removed.map((r) => r.blockId));
+			// A mined area break sounds like its aimed block; a blast has its boom and only the pickup.
+			if (aimedId !== undefined) audio.broke(aimedId);
+			else audio.pickup();
+		};
+		loop.onDetonate = (x, y, z, effect) => {
+			if (effect !== 'firework') audio.boom(x, y, z);
+		};
 		loop.onWorldMutated = () => autosave.markDirty();
 		loop.onMiningProgress = (p) => hud.setMiningProgress(p);
 		loop.onFlyStateChange = (tier) => hud.setFlySpeed(tier);
@@ -850,6 +874,7 @@ async function main() {
 				expired: planExpired,
 				load: unlimited ? undefined : loadSession,
 				freeze: () => {
+					gameAudio?.silence();
 					closeInventory();
 					if (!quitting) closePause();
 					loop.setLeftMouseDown(false);
@@ -980,10 +1005,16 @@ async function main() {
 				}
 				clearRemotePrime(m.x, m.y, m.z);
 				if (m.kind === 'firework') particles.spawnFirework(m.x + 0.5, m.y + 0.5, m.z + 0.5, true);
-				else particles.spawnBreak(m.x, m.y, m.z, m.tier !== undefined && BLOCKS[m.tier] ? m.tier : TNT_ID);
+				else {
+					particles.spawnBreak(m.x, m.y, m.z, m.tier !== undefined && BLOCKS[m.tier] ? m.tier : TNT_ID);
+					audio.boom(m.x, m.y, m.z);
+				}
 			};
 			mpFx = (kind, x, y, z, tier) => void client.send({ t: 'fx', kind, x, y, z, tier });
-			loop.onDetonate = (x, y, z, effect, blockId) => mpFx?.(effect === 'firework' ? 'firework' : 'boom', x, y, z, blockId);
+			loop.onDetonate = (x, y, z, effect, blockId) => {
+				if (effect !== 'firework') audio.boom(x, y, z);
+				mpFx?.(effect === 'firework' ? 'firework' : 'boom', x, y, z, blockId);
+			};
 
 			const debugLog: ServerMsg[] = [];
 			link.setRoute((m) => {
@@ -991,7 +1022,10 @@ async function main() {
 				switch (m.t) {
 					case 'edit':
 						// A friend's place or break swings their arm (spec §7); water flow, drains and explosions don't.
-						if (m.by !== you && isHandEdit(m.ops, loadedBlock)) remote.swing(m.by, performance.now());
+						if (m.by !== you && isHandEdit(m.ops, loadedBlock)) {
+							remote.swing(m.by, performance.now());
+							audio.remoteEdit(m.ops, loadedBlock);
+						}
 						sync.onEdit(m, you);
 						break;
 					case 'tick': {
@@ -1039,6 +1073,7 @@ async function main() {
 					if (now - (lastPuff.get(a.by) ?? -Infinity) >= PUFF_EVERY_MS) {
 						lastPuff.set(a.by, now);
 						particles.spawnBreak(a.x, a.y, a.z, a.blockId);
+						audio.remoteHit(a.blockId, a.x, a.y, a.z);
 					}
 				}
 				cracks.retain(keep);
@@ -1063,6 +1098,7 @@ async function main() {
 			const freezeForNetwork = () => {
 				if (loop.mpDisconnected) return;
 				loop.mpDisconnected = true;
+				audio.silence();
 				closeInventory();
 				if (!quitting) closePause();
 				loop.setLeftMouseDown(false);
@@ -1130,6 +1166,7 @@ async function main() {
 		pauseMenu.onQuit = () => {
 			if (quitting) return;
 			quitting = true;
+			gameAudio?.silence();
 			pauseMenu.setQuitting();
 			if (mp) {
 				// Spec §3.6, in order: never rejoin, tell the friend, push the last edits.
@@ -1155,7 +1192,7 @@ async function main() {
 			// `playtime.setRemaining(ms)` (plan I1, E5) sets the live session's time left; no fast clock.
 			// `worldHash` and `refReplay` are the two-client suite's oracles (plan I2, scripts/mp-e2e.ts).
 			(window as unknown as { __mc: unknown }).__mc = {
-				world, player, loop, apiUrl, cam, highlight, mustMine, syncHotbar, keys,
+				world, player, loop, apiUrl, cam, highlight, mustMine, syncHotbar, keys, audio,
 				playtime, mp: mpDebug, cracks, camera: renderer.camera, cloudUniforms: CLOUD_UNIFORMS,
 				markDirtyCalls: () => markDirtyCalls,
 				pause: { isOpen: () => pauseOpen, controlsShown: () => pauseMenu.controlsShown, quitting: () => quitting },
@@ -1180,8 +1217,12 @@ async function main() {
 				// Shift replaces the aimed block instead of building next to it. tryPlace owns the
 				// count refusal, the world write and the count update; the loop's placeBlock /
 				// replaceBlock fire onWorldMutated, which marks the save dirty.
+				const placing = player.hotbar[player.selected];
 				const placed = tryPlace({ loop, world, player, hit, shift: e.shiftKey, mustMine, lampColor: opts.currentLightColor });
-				if (placed.ok) syncHotbar(); // a place that needed a count spent one; markDirty comes from onWorldMutated
+				if (placed.ok) {
+					syncHotbar();
+					if (placing !== undefined) gameAudio?.placed(placing);
+				} // a place that needed a count spent one; markDirty comes from onWorldMutated
 				else if (placed.reason === 'no-count') playNope(); // spec §3's soft "nope"
 			}
 		});

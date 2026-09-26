@@ -135,7 +135,8 @@ export class GameLoop {
 	 * Crafting spec §2/§7: the blocks one batch removed. Fired by a TNT detonation (without the detonating TNT's own cell;
 	 * chain-primed TNT is never removed by a blast) and by area mining. Single-block mining keeps onBlockBroken.
 	 */
-	onBlocksRemoved: ((removed: BlockBrokenEvent[]) => void) | null = null;
+	/** `aimedId` is set for a mined area break (its aimed block, for the break sound); absent for a blast. */
+	onBlocksRemoved: ((removed: BlockBrokenEvent[], aimedId?: BlockId) => void) | null = null;
 	onWorldMutated: (() => void) | null = null;
 	onMiningProgress: ((progress: number) => void) | null = null;
 	onFlyStateChange: ((tier: number | null) => void) | null = null;
@@ -802,7 +803,7 @@ export class GameLoop {
 				const { removed } = this.removeBlocks(areaCells(target, hit.face, tier), target);
 				this.lastArea = { ...areaBounds(target, hit.face, tier), face: hit.face };
 				this.floorArmed = false;
-				if (removed.length > 0) this.onBlocksRemoved?.(removed);
+				if (removed.length > 0) this.onBlocksRemoved?.(removed, blockId);
 				return;
 			}
 			this.clearBlockEffects(target.x, target.y, target.z, blockId);

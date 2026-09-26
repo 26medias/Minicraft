@@ -1,4 +1,5 @@
 import type { ControlLine } from './controls-model';
+import { buildAudioPanel } from './audio-panel';
 
 /**
  * The Esc menu over the running game (pause menu spec §3.3–§3.5): one .menu-card, like the main
@@ -8,7 +9,7 @@ import type { ControlLine } from './controls-model';
 export class PauseMenu {
 	private root: HTMLDivElement;
 	private title = '';
-	private view: 'card' | 'controls' = 'card';
+	private view: 'card' | 'controls' | 'audio' = 'card';
 	private quitting = false;
 	onResume: (() => void) | null = null;
 	onQuit: (() => void) | null = null;
@@ -24,8 +25,9 @@ export class PauseMenu {
 		return !this.root.classList.contains('hidden');
 	}
 
+	/** A sub-view (Controls or Audio) is up: Esc goes back to the card, not to the game. */
 	get controlsShown(): boolean {
-		return this.isOpen && this.view === 'controls';
+		return this.isOpen && this.view !== 'card';
 	}
 
 	open(title: string): void {
@@ -53,6 +55,12 @@ export class PauseMenu {
 		this.view = 'controls';
 		this.render();
 		this.root.querySelector<HTMLButtonElement>('#pause-back')?.focus();
+	}
+
+	showAudio(): void {
+		this.view = 'audio';
+		this.render();
+		this.root.querySelector<HTMLInputElement>('#audio-music')?.focus();
 	}
 
 	setQuitting(): void {
@@ -93,10 +101,15 @@ export class PauseMenu {
 				card.appendChild(line);
 			}
 			this.button(card, 'pause-back', 'Back', () => this.showCard(), 'menu-back');
+		} else if (this.view === 'audio') {
+			h.textContent = 'Audio';
+			buildAudioPanel(card);
+			this.button(card, 'pause-back', 'Back', () => this.showCard(), 'menu-back');
 		} else {
 			h.textContent = this.title;
 			this.button(card, 'pause-resume', 'Return to Game', () => this.onResume?.(), 'home-button');
 			this.button(card, 'pause-controls', 'Controls', () => this.showControls());
+			this.button(card, 'pause-audio', 'Audio', () => this.showAudio());
 			this.button(card, 'pause-quit', this.quitting ? 'Saving…' : 'Quit to Menu', () => this.onQuit?.(), 'pause-quit');
 			if (!this.quitting) {
 				const credits = document.createElement('a');

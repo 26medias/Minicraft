@@ -1,15 +1,10 @@
-// Tiny synthesized sounds (no audio files). The AudioContext is created on first use,
-// which is always inside a click or key handler, so autoplay rules allow it.
-let ctx: AudioContext | null = null;
+import { audioContext, bus } from '../audio/engine';
 
+// Tiny synthesized sounds (no audio files), on the Sound effects bus (sound spec §1). The
+// AudioContext is created on first use, which is always inside a click or key handler, so
+// autoplay rules allow it.
 function audio(): AudioContext | null {
-	try {
-		ctx ??= new AudioContext();
-		if (ctx.state === 'suspended') void ctx.resume();
-		return ctx;
-	} catch {
-		return null; // no Web Audio: stay silent
-	}
+	return audioContext();
 }
 
 function tone(freq: number, start: number, dur: number, type: OscillatorType, peak: number): void {
@@ -23,7 +18,7 @@ function tone(freq: number, start: number, dur: number, type: OscillatorType, pe
 	gain.gain.setValueAtTime(0.0001, t0);
 	gain.gain.exponentialRampToValueAtTime(peak, t0 + 0.01);
 	gain.gain.exponentialRampToValueAtTime(0.0001, t0 + dur);
-	osc.connect(gain).connect(a.destination);
+	osc.connect(gain).connect(bus('sfx')!);
 	osc.start(t0);
 	osc.stop(t0 + dur + 0.02);
 }

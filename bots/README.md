@@ -209,6 +209,14 @@ npm --prefix bots run bot -- architect --target local|live --world <uuid|name> -
 	--brain laya|jev [--compare] [--llm-params] [--rest-sec N] [--no-edits] [--i-deployed-the-server]
 ```
 
+## The build cap
+
+Builder, architect and helper stop building after `--max-builds N` builds (default 12); the decorator after
+`--max-decorations N` (default 40); the village bot builds one village and stops. The count comes from the bot's own
+state file (a record counts once it placed a block), so it holds across restarts. A capped bot stays online, logs
+`cap-reached` once, and only wanders and looks around near its builds: no edits. Raise the flag (or move the state
+file aside) to let it build again.
+
 ## Shared bot cells
 
 Builder, decorator, village, helper and architect append every cell they place to

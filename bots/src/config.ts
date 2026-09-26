@@ -95,6 +95,12 @@ export interface Config {
 	jev: boolean;
 	/** `--llm-params` (architect, experiment E6). */
 	llmParams: boolean;
+	/** `--max-builds N` (builder, architect, helper); undefined = the bot's default (12). */
+	maxBuilds?: number;
+	/** `--max-decorations N` (decorator); undefined = the default (40). */
+	maxDecorations?: number;
+	/** `--join-plan` (builder, architect): claim the foreman's next open lot first. */
+	joinPlan: boolean;
 	/** Where `.state` lives for this run (injected, defaulted in cli.ts only). */
 	stateRoot: string;
 	statePath(worldUuid: string): string;
@@ -219,6 +225,15 @@ export function loadConfig(input: LoadConfigInput): Config {
 	if (args.jev && brain !== 'v2') throw new ConfigError('--jev needs --brain v2');
 	if (!Number.isFinite(restSec) || restSec < 0) throw new ConfigError(`--rest-sec must be a number of seconds >= 0, not "${args.restSec}"`);
 
+	const count = (flag: string, v: string | undefined): number | undefined => {
+		if (v === undefined) return undefined;
+		const n = Number(v);
+		if (!Number.isInteger(n) || n < 0) throw new ConfigError(`${flag} must be a whole number >= 0, not "${v}"`);
+		return n;
+	};
+	const maxBuilds = count('--max-builds', args.maxBuilds);
+	const maxDecorations = count('--max-decorations', args.maxDecorations);
+
 	const targetName = args.target;
 	const name = args.name ?? 'Bot';
 
@@ -241,6 +256,9 @@ export function loadConfig(input: LoadConfigInput): Config {
 		restSec,
 		jev: args.jev,
 		llmParams: args.llmParams,
+		maxBuilds,
+		maxDecorations,
+		joinPlan: args.joinPlan,
 		stateRoot,
 		statePath(worldUuid: string): string {
 			return `${stateRoot}/${targetName}/${worldUuid}/${name}.json`;

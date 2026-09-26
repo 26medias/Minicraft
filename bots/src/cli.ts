@@ -538,7 +538,7 @@ async function builderCommand(cfg: Config, deps: CliDeps): Promise<void> {
 	deps.print(`${cfg.name} joined "${prepared.listing.name}" as ${prepared.skin}; builder (${primary?.name ?? 'no engine'}${secondary ? ` + ${secondary.name} compare` : ''})${cfg.noEdits ? ' --no-edits' : ''}; log ${logPath}; state ${statePath}`);
 	const handle = runBuilder({
 		name: cfg.name, body: port.body, world: port.world, spawn: { x: sp.x, y: 0, z: sp.z }, primary, secondary,
-		noEdits: cfg.noEdits, statePath, rng: seededRng(seed), known: new Set(blockNames()), restMs: deps.builderRestMs ?? cfg.restSec * 1000,
+		noEdits: cfg.noEdits, statePath, rng: seededRng(seed), known: new Set(blockNames()), restMs: deps.builderRestMs ?? cfg.restSec * 1000, maxBuilds: cfg.maxBuilds,
 		shared: new SharedCells(sharedCellsPath(deps.stateRoot, cfg.target.name, uuid), cfg.name),
 		log: (o) => {
 			try {
@@ -617,7 +617,7 @@ async function decoratorCommand(cfg: Config, deps: CliDeps): Promise<void> {
 	const handle = runDecorator({
 		name: cfg.name, body: port.body, world: port.world, primary, secondary, noEdits: cfg.noEdits, statePath,
 		builderDir: builderDir(deps.stateRoot, cfg.target.name, uuid), rng: seededRng(seed), known: new Set(blockNames()),
-		restMs: deps.builderRestMs ?? cfg.restSec * 1000, shared: new SharedCells(sharedCellsPath(deps.stateRoot, cfg.target.name, uuid), cfg.name),
+		restMs: deps.builderRestMs ?? cfg.restSec * 1000, shared: new SharedCells(sharedCellsPath(deps.stateRoot, cfg.target.name, uuid), cfg.name), maxDecorations: cfg.maxDecorations,
 		log: (o) => {
 			try {
 				appendFileSync(logPath, `${JSON.stringify(o)}\n`);
@@ -776,7 +776,7 @@ async function helperCommand(cfg: Config, deps: CliDeps): Promise<void> {
 	const handle = runHelper({
 		name: cfg.name, body: port.body, world: port.world, spawn: { x: sp.x, y: 0, z: sp.z }, primary, secondary,
 		noEdits: cfg.noEdits, statePath, rng: seededRng(seed),
-		known: new Set(blockNames()), restMs: deps.builderRestMs ?? cfg.restSec * 1000,
+		known: new Set(blockNames()), restMs: deps.builderRestMs ?? cfg.restSec * 1000, maxBuilds: cfg.maxBuilds,
 		shared: new SharedCells(sharedCellsPath(deps.stateRoot, cfg.target.name, uuid), cfg.name),
 		log: (o) => {
 			try {
@@ -858,7 +858,7 @@ async function architectCommand(cfg: Config, deps: CliDeps): Promise<void> {
 	const handle = runArchitect({
 		name: cfg.name, body: port.body, world: port.world, spawn: { x: sp.x, y: 0, z: sp.z }, primary, secondary, proposer,
 		noEdits: cfg.noEdits, statePath, builderDir: builderDir(deps.stateRoot, cfg.target.name, uuid), rng: seededRng(seed),
-		known: new Set(blockNames()), restMs: deps.builderRestMs ?? cfg.restSec * 1000,
+		known: new Set(blockNames()), restMs: deps.builderRestMs ?? cfg.restSec * 1000, maxBuilds: cfg.maxBuilds,
 		shared: new SharedCells(sharedCellsPath(deps.stateRoot, cfg.target.name, uuid), cfg.name),
 		log: (o) => {
 			try {

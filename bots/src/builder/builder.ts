@@ -21,6 +21,7 @@ import type { ChoiceEngine } from './engines.js';
 import { candidateMoves, cellKey, describeMove, heuristicPick, planCells, type PlanCell } from './moves.js';
 import { palettesFor, type Palette } from './palettes.data.js';
 import type { SharedCells } from '../shared/bot-cells.js';
+import { capCount, capReached, countsTowardCap, DEFAULT_MAX_BUILDS } from '../shared/cap.js';
 
 export interface BuilderBuild {
 	id: string; template: string; variant: 'small' | 'medium'; palette: string; origin: Vec3; w: number; d: number; h: number;
@@ -152,6 +153,8 @@ export interface BuilderOpts {
 	known: ReadonlySet<string>;
 	/** The shared bot-cell registry: placed cells are appended; other bots' cells count as bot cells. */
 	shared?: SharedCells | null;
+	/** Stop building after this many builds (counted from the persisted records, so across restarts; default 12). */
+	maxBuilds?: number;
 }
 export interface BuilderStats { placed: number; refused: number; failed: number; buildsDone: number; buildsAbandoned: number; asks: number; fallbacks: number; current: string }
 export interface BuilderHandle { stop(): Promise<void>; stats: BuilderStats; file: BuilderFile; done: Promise<void> }
@@ -177,6 +180,7 @@ export function runBuilder(o: BuilderOpts): BuilderHandle {
 		wakers.add(done);
 	});
 	const save = () => saveBuilderFile(o.statePath, file);
+	const maxBuilds = o.maxBuilds ?? DEFAULT_MAX_BUILDS;
 	const palettes = (t: string): Palette[] => palettesFor(t).filter((p) => Object.values(p.blocks).every((b) => o.known.has(b)));
 
 	const unsubs = [
@@ -287,6 +291,20 @@ export function runBuilder(o: BuilderOpts): BuilderHandle {
 		}
 	}
 
+
+	let capLogged = false;
+	/** Past the build cap: no more edits, only a wander and a look around near one of its builds. */
+	async function capped(): Promise<void> {
+		const n = capCount(file.builds);
+		if (!capLogged) o.log({ k: 'cap-reached', t: clock(), builds: n, max: maxBuilds });
+		capLogged = true;
+		stats.current = `build cap reached (${n}/${maxBuilds}); wandering near my builds`;
+		const mine = file.builds.filter(countsTowardCap);
+		const b = mine[Math.floor(o.rng() * mine.length) % Math.max(1, mine.length)];
+		if (b) await restNear(b, 60_000);
+		else await sleep(10_000);
+	}
+
 	async function loop(): Promise<void> {
 		let resume = file.builds.find((b) => b.status === 'building') ?? null;
 		let haltedLogged = false;
@@ -301,6 +319,10 @@ export function runBuilder(o: BuilderOpts): BuilderHandle {
 			let b = resume;
 			resume = null;
 			try {
+				if (!b && capReached(file.builds, maxBuilds)) {
+					await capped();
+					continue;
+				}
 				b ??= await pickProject();
 				if (!b) {
 					stats.current = 'no site found; waiting';

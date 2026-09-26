@@ -27,10 +27,16 @@ export interface ParsedArgs {
 	jev: boolean;
 	/** `--llm-params` (architect, experiment E6): Ollama proposes the design's numbers before the choices. */
 	llmParams: boolean;
+	/** `--max-builds N` (builder, architect, helper): stop building after N builds (counted across restarts). */
+	maxBuilds?: string;
+	/** `--max-decorations N` (decorator): stop decorating after N decorations (counted across restarts). */
+	maxDecorations?: string;
+	/** `--join-plan` (builder, architect, experiment E7): claim the next open lot of the foreman's plan first. */
+	joinPlan: boolean;
 }
 
-type ValueFlagKey = 'target' | 'world' | 'name' | 'skin' | 'brain' | 'personality' | 'restSec';
-type BooleanFlagKey = 'noEdits' | 'revertOnExit' | 'iDeployedTheServer' | 'builds' | 'tui' | 'compare' | 'jev' | 'llmParams';
+type ValueFlagKey = 'target' | 'world' | 'name' | 'skin' | 'brain' | 'personality' | 'restSec' | 'maxBuilds' | 'maxDecorations';
+type BooleanFlagKey = 'noEdits' | 'revertOnExit' | 'iDeployedTheServer' | 'builds' | 'tui' | 'compare' | 'jev' | 'llmParams' | 'joinPlan';
 
 const VALUE_FLAGS: Record<string, ValueFlagKey> = {
 	'--target': 'target',
@@ -40,6 +46,8 @@ const VALUE_FLAGS: Record<string, ValueFlagKey> = {
 	'--brain': 'brain',
 	'--personality': 'personality',
 	'--rest-sec': 'restSec',
+	'--max-builds': 'maxBuilds',
+	'--max-decorations': 'maxDecorations',
 };
 
 const BOOLEAN_FLAGS: Record<string, BooleanFlagKey> = {
@@ -51,11 +59,12 @@ const BOOLEAN_FLAGS: Record<string, BooleanFlagKey> = {
 	'--compare': 'compare',
 	'--jev': 'jev',
 	'--llm-params': 'llmParams',
+	'--join-plan': 'joinPlan',
 };
 
 /** Parses `--flag value` / `--flag` pairs. Throws a plain `Error` on an unrecognised or malformed flag. */
 export function parseArgs(argv: readonly string[]): ParsedArgs {
-	const out: ParsedArgs = { noEdits: false, revertOnExit: false, iDeployedTheServer: false, builds: false, tui: false, compare: false, jev: false, llmParams: false };
+	const out: ParsedArgs = { noEdits: false, revertOnExit: false, iDeployedTheServer: false, builds: false, tui: false, compare: false, jev: false, llmParams: false, joinPlan: false };
 	for (let i = 0; i < argv.length; i++) {
 		const arg = argv[i];
 		const valueKey = VALUE_FLAGS[arg];

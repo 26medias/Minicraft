@@ -19,6 +19,7 @@ import { approach, checkPlace, eyeDist, PLACE_MAX } from '../builder/builder.js'
 import type { ChoiceEngine } from '../builder/engines.js';
 import { cellKey } from '../builder/moves.js';
 import type { SharedCells } from '../shared/bot-cells.js';
+import { capCount, capReached, countsTowardCap, DEFAULT_MAX_DECORATIONS } from '../shared/cap.js';
 import { candidateDecorations, niceBuild, readBuilderRecords, type DecorCell, type DecorKind, type KnownBuild } from './decor.js';
 
 export interface DecorRecord {
@@ -64,6 +65,8 @@ export interface DecoratorOpts {
 	known: ReadonlySet<string>;
 	/** The shared bot-cell registry: placed cells are appended; other bots' cells count as bot cells. */
 	shared?: SharedCells | null;
+	/** Stop decorating after this many decorations (counted from the persisted records, so across restarts; default 40). */
+	maxDecorations?: number;
 }
 export interface DecoratorStats { placed: number; refused: number; failed: number; done: number; abandoned: number; asks: number; fallbacks: number; current: string }
 export interface DecoratorHandle { stop(): Promise<void>; stats: DecoratorStats; file: DecoratorFile; done: Promise<void> }
@@ -97,6 +100,8 @@ export function runDecorator(o: DecoratorOpts): DecoratorHandle {
 		wakers.add(done);
 	});
 	const save = () => saveDecoratorFile(o.statePath, file);
+	const maxDecorations = o.maxDecorations ?? DEFAULT_MAX_DECORATIONS;
+	let capLogged = false;
 
 	const unsubs = [
 		o.body.onEdit((e) => {
@@ -281,6 +286,19 @@ export function runDecorator(o: DecoratorOpts): DecoratorHandle {
 			resume.status = 'abandoned';
 			resume.why = 'build gone';
 			save();
+		}
+		if (capReached(file.decorations, maxDecorations)) {
+			// Past the cap: no more edits, only a wander and a look around near a build it decorated.
+			const n = capCount(file.decorations);
+			if (!capLogged) o.log({ k: 'cap-reached', t: clock(), decorations: n, max: maxDecorations });
+			capLogged = true;
+			stats.current = `decoration cap reached (${n}/${maxDecorations}); wandering near the builds`;
+			const mine = file.decorations.filter(countsTowardCap);
+			const d = mine[Math.floor(o.rng() * mine.length) % Math.max(1, mine.length)];
+			const kbd = d && recs.builds.find((b) => b.bot === d.bot && b.build.id === d.buildId);
+			if (kbd) await restNear(kbd.build, 60_000);
+			else await sleep(10_000);
+			return;
 		}
 		const kb = await pickBuild(recs.builds);
 		if (!kb) {

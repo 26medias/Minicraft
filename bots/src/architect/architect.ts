@@ -22,6 +22,7 @@ import type { ChoiceEngine } from '../builder/engines.js';
 import { cellKey } from '../builder/moves.js';
 import { readBuilderRecords } from '../decorator/decor.js';
 import type { SharedCells } from '../shared/bot-cells.js';
+import { capCount, capReached, countsTowardCap, DEFAULT_MAX_BUILDS } from '../shared/cap.js';
 import { clampParams, IDEAS, makeDesign, presetParams, THEMES, themeSlug, type Design, type DRole, type Idea, type Theme } from './designs.js';
 import type { ParamProposer } from './llm-params.js';
 
@@ -40,6 +41,8 @@ export interface ArchitectOpts {
 	rng: () => number; clock?: () => number; paceMs?: number; statusEveryMs?: number; restMs?: number;
 	known: ReadonlySet<string>;
 	shared?: SharedCells | null;
+	/** Stop building after this many builds (counted from the persisted records, so across restarts; default 12). */
+	maxBuilds?: number;
 }
 export interface ArchitectStats { placed: number; refused: number; failed: number; buildsDone: number; buildsAbandoned: number; asks: number; fallbacks: number; current: string }
 export interface ArchitectHandle { stop(): Promise<void>; stats: ArchitectStats; file: ArchitectFile; done: Promise<void> }
@@ -80,6 +83,7 @@ export function runArchitect(o: ArchitectOpts): ArchitectHandle {
 	const save = () => saveBuilderFile(o.statePath, file);
 	const ask = makeAsk({ primary: o.primary, secondary: o.secondary, clock, log: o.log, stats });
 	const themes = THEMES.filter((t) => Object.values(t.blocks).every((b) => o.known.has(b)));
+	const maxBuilds = o.maxBuilds ?? DEFAULT_MAX_BUILDS;
 	const pick = <T>(xs: readonly T[]): T => xs[Math.floor(o.rng() * xs.length) % xs.length];
 
 	const unsubs = [
@@ -191,6 +195,20 @@ export function runArchitect(o: ArchitectOpts): ArchitectHandle {
 		}
 	}
 
+
+	let capLogged = false;
+	/** Past the build cap: no more edits, only a wander and a look around near one of its builds. */
+	async function capped(): Promise<void> {
+		const n = capCount(file.builds);
+		if (!capLogged) o.log({ k: 'cap-reached', t: clock(), builds: n, max: maxBuilds });
+		capLogged = true;
+		stats.current = `build cap reached (${n}/${maxBuilds}); wandering near my builds`;
+		const mine = file.builds.filter(countsTowardCap);
+		const b = mine[Math.floor(o.rng() * mine.length) % Math.max(1, mine.length)];
+		if (b) await restNear(b, 60_000);
+		else await sleep(10_000);
+	}
+
 	async function loop(): Promise<void> {
 		let resume = file.builds.find((b) => b.status === 'building') ?? null;
 		let haltedLogged = false;
@@ -205,6 +223,10 @@ export function runArchitect(o: ArchitectOpts): ArchitectHandle {
 			let b = resume;
 			resume = null;
 			try {
+				if (!b && capReached(file.builds, maxBuilds)) {
+					await capped();
+					continue;
+				}
 				b ??= await pickProject();
 				if (!b) {
 					stats.current = 'no design or site; waiting';

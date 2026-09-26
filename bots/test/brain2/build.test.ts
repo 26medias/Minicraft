@@ -225,6 +225,42 @@ describe('Build (spec §6, §6.1)', () => {
 		expect(r.tripwire.halted).toBeNull();
 	});
 
+	// Fix round (R10). Red if the search avoids only kid-placed cells: the kid is the anchor, so the site centred on
+	// him (flat, cost 0, nearest) would win and every edit would then fail 'kid body buffer'.
+	it('R10: never anchors a site where a kid stands — the grown footprint clears his body buffer', async () => {
+		const r = buildRig();
+		const kid = { x: 155.5, y: Y, z: 132.5 };                  // on the platform, 23 from spawn
+		r.body.list = [player({ id: 7, name: 'Noah', ...kid })];
+		r.see();
+		r.runner.start('build', params({ template: 'house' }) as unknown as Record<string, unknown>);
+		for (let i = 0; i < 400 && r.store.state.builds.length === 0; i++) await r.ticks(1);
+		const o = r.store.state.builds[0].origin;
+		const g = { x0: o.x - 1, x1: o.x + 5, z0: o.z - 1, z1: o.z + 5 };
+		const kx = Math.floor(kid.x), kz = Math.floor(kid.z);
+		expect(g.x0 <= kx + 1 && g.x1 >= kx - 1 && g.z0 <= kz + 1 && g.z1 >= kz - 1, JSON.stringify(o)).toBe(false);
+		expect(await r.runToEnd()).toMatchObject({ outcome: 'done' });
+	});
+
+	// Fix round. Red if an empty dismantle list (every old cell now a kid's) still marks the renewed build dismantled.
+	it('renew with nothing left to dismantle does not mark the old build dismantled', async () => {
+		const r = buildRig({ inventory: { stone: 100 } });
+		for (let i = 0; i < 3; i++) {
+			r.runner.start('build', params({ template: 'wall' }) as unknown as Record<string, unknown>);
+			expect(await r.runToEnd()).toMatchObject({ outcome: 'done' });
+		}
+		const old = r.store.state.builds[0];
+		const stone = id('stone');
+		// Noah re-places every block of the oldest wall with the same stone: all its cells become kid cells.
+		const cells = old.cells.map((c) => ({ ...c.cell, oldId: stone, newId: stone }));
+		for (const c of cells) r.world.set(c.x, c.y, c.z, 'stone');
+		r.store.apply(r.own.onEdit({ by: 7, byName: 'Noah', byBot: false, opCount: 1, cells }, r.body.you), { kind: 'body', by: 'test' });
+		expect(old.cells.every((c) => r.own.classify(c.cell.x, c.cell.y, c.cell.z) === 'kid')).toBe(true);
+		r.runner.start('build', params({ template: 'wall', renew: true }) as unknown as Record<string, unknown>);
+		await r.runToEnd();
+		expect(r.store.state.builds[0].status).not.toBe('dismantled');
+		expect(standing(r.store.state.builds[0], r.world)).toBe(true);
+	});
+
 	// Rule 10, R5. Red if plan() accepts a liquid, CRAFTED_ONLY, ore or unknown material (or the runner doesn't end at once).
 	it('never places a CRAFTED_ONLY or liquid block even if materials name one', () => {
 		for (const bad of ['water', 'lava', 'big_tnt', 'coal_ore', 'oak_planks', 'no_such_block']) {

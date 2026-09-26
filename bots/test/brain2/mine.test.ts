@@ -280,6 +280,111 @@ describe('Mine (spec §6.2)', () => {
 		expect(r.store.state.inventory.iron_ore).toBe(3);
 	});
 
+	// Fix round (R10). Red if the pillar area is checked only against kid-placed cells: spiralsFor's first candidate
+	// (pillar 207,208) has its 3×3 right beside where Noah stands.
+	it('R10: a kid standing at the best pillar → another pillar, whose 3×3 clears his body buffer', async () => {
+		const r = mineRig();
+		const t = { x: TX, y: Y0 - 7, z: TZ };
+		r.world.setNatural(t.x, t.y, t.z, 'gold_block');              // the only one in the world: no nearer target
+		const first = expected(t);
+		const kid = { x: first.px - 1.5, y: Y0, z: first.pz + 0.5 };   // one column west of the pillar area
+		r.kid(kid.x, kid.y, kid.z);
+		r.start('gold_block');
+		await r.until(() => r.store.state.digs.length === 1 || r.store.state.behaviour === null);
+		const sp = r.dig().spiral;
+		expect(sp).not.toEqual(first);
+		expect(r.dig().target).toEqual(t);
+		const kx = Math.floor(kid.x), kz = Math.floor(kid.z);
+		expect(Math.max(Math.abs(sp.px - kx), Math.abs(sp.pz - kz))).toBeGreaterThan(2);
+	});
+
+	// Fix round (R10, at resume). Red if a resume checks only the leash: the dig beside Noah would resume.
+	it('R10: a paused dig whose pillar is now beside a kid is not resumed', async () => {
+		const r = mineRig();
+		deep(r, 'stone');
+		r.start('stone');
+		await r.until(() => (r.store.state.digs[0]?.stepsDone ?? 0) >= 3);
+		r.runner.end('interrupted', 'test');
+		const paused = r.dig();
+		r.kid(paused.spiral.px + 2.5, Y0, paused.spiral.pz + 0.5);     // two columns east of the pillar
+		r.start('stone');
+		await r.ticks(5);
+		expect(r.store.state.digs.find((d) => d.id === paused.id)).toMatchObject({ status: 'paused', stepsDone: paused.stepsDone });
+		if (r.store.state.behaviour) r.runner.end('interrupted', 'test');
+		// Control: with Noah further off (still within the leash), it resumes.
+		r.kid(paused.spiral.px + 6.5, Y0, paused.spiral.pz + 0.5);
+		r.start('stone');
+		expect(r.store.state.digs.find((d) => d.id === paused.id)?.status).toBe('active');
+	});
+
+	// Fix round (I2). Red if a kid block in the remaining route is left to the safety tier: 3 'kid cell buffer'
+	// rejections end the episode paused, and the next Mine resumes the same dig into the same block, forever.
+	it('a kid block in the remaining route → failed \'stuck (kid-block)\', the dig dropped and not resumed', async () => {
+		const r = mineRig();
+		const t = deep(r, 'stone');
+		r.start('stone');
+		await r.until(() => (r.store.state.digs[0]?.stepsDone ?? 0) >= 3);
+		r.runner.end('interrupted', 'test');
+		const paused = r.dig();
+		const st = spiralStep(expected(t), paused.stepsDone + 2);
+		const block = st.clear[0];
+		r.world.set(block.x, block.y, block.z, 'cobblestone');           // Noah's block (an edited cell nobody owns)
+		expect(r.own.classify(block.x, block.y, block.z)).toBe('kid');
+		r.start('stone');
+		expect(r.dig().status).toBe('active');                           // the recorded cells are intact: resumed
+		expect(await r.runToEnd(300)).toMatchObject({ outcome: 'failed', why: 'stuck (kid-block)' });
+		expect(r.store.state.digs.find((d) => d.id === paused.id)?.status).toBe('dropped');
+		expect(r.mines()).not.toContain(k(block));
+		r.start('stone');
+		expect(r.store.state.digs.find((d) => d.id === paused.id)?.status).toBe('dropped');
+	});
+
+	// Fix round (I3). Red if leaves count as the ground: the staircase would start in the canopy (y0 = canopy + 1).
+	it('a tree canopy over the target is not the ground: the spiral starts at the soil', async () => {
+		const r = mineRig();
+		const t = shallowIron(r);
+		for (let x = TX - 3; x <= TX + 3; x++) for (let z = TZ - 3; z <= TZ + 3; z++) for (const y of [TOP + 3, TOP + 4]) r.world.setNatural(x, y, z, 'oak_leaves');
+		for (let y = TOP + 1; y <= TOP + 2; y++) r.world.setNatural(TX + 3, y, TZ + 3, 'oak_log');   // the trunk, outside the pillar areas
+		r.start('iron_ore');
+		await r.until(() => r.store.state.digs.length === 1 || r.store.state.behaviour === null);
+		expect(r.dig().spiral).toEqual(expected(t));
+		expect(await r.runToEnd()).toMatchObject({ outcome: 'done' });
+	});
+
+	// Fix round (I3). Red without the pillar-area headroom check: a trunk on spiralsFor's first pillar would be
+	// looked through, and the bot would stand inside it.
+	it('a trunk on the best pillar → another pillar, still at the soil', async () => {
+		const r = mineRig();
+		const t = { x: TX, y: Y0 - 7, z: TZ };
+		r.world.setNatural(t.x, t.y, t.z, 'gold_block');
+		const first = expected(t);
+		for (let y = TOP + 1; y <= TOP + 5; y++) r.world.setNatural(first.px, y, first.pz, 'oak_log');
+		r.start('gold_block');
+		await r.until(() => r.store.state.digs.length === 1 || r.store.state.behaviour === null);
+		const sp = r.dig().spiral;
+		expect(sp).not.toEqual(first);
+		expect(sp.y0).toBe(Y0);
+		expect(Math.max(Math.abs(sp.px - first.px), Math.abs(sp.pz - first.pz))).toBeGreaterThan(1);
+	});
+
+	// Fix round. Red if the 120 s episode includes the resume walk-down: a slow walk-down leaves no time to dig.
+	it('the episode timer starts after the resume walk-down', async () => {
+		const r = mineRig();
+		deep(r, 'stone');
+		r.start('stone');
+		await r.until(() => (r.store.state.digs[0]?.stepsDone ?? 0) >= 10);
+		r.runner.end('interrupted', 'test');
+		const done = r.dig().stepsDone;
+		r.body.current = { x: 212.5, y: Y0, z: 212.5, yaw: 0, pitch: 0 };
+		r.start('stone');
+		const from = r.mines().length;
+		await r.ticks(2);                                                 // the walk-down has started
+		r.clock.advance(119_500);                                         // … and is slow
+		await r.until(() => r.store.state.behaviour === null || r.dig().stepsDone > done, 400);
+		expect(r.mines().length).toBeGreaterThan(from);
+		expect(r.dig().stepsDone).toBeGreaterThan(done);
+	});
+
 	// Spec §6.2 ending. Red if either failure leaves the dig active or drops it (both are fixable: more inventory,
 	// the kid moving away), or a resume doesn't pick it up.
 	it('after stuck (gap) and after kid body buffer, the dig is paused and resumable', async () => {

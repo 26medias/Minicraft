@@ -83,7 +83,7 @@ export function anchorOf(ctx: BehaviourCtx): Vec3 {
 
 function newSearch(t: Template, ctx: BehaviourCtx, extra: Array<{ min: Vec3; max: Vec3 }> = []): SiteSearch {
 	const avoid = ctx.state.builds.filter((b) => b.status !== 'dismantled' && b.cells.length > 0).map((b) => boxOf(b.cells));
-	return new SiteSearch({ w: t.w, d: t.d, h: t.h, anchor: anchorOf(ctx), avoid: [...avoid, ...extra] }, { world: ctx.world, own: ctx.own, spawn: ctx.spawn });
+	return new SiteSearch({ w: t.w, d: t.d, h: t.h, anchor: anchorOf(ctx), avoid: [...avoid, ...extra] }, { world: ctx.world, own: ctx.own, spawn: ctx.spawn, kids: ctx.kids.map((k) => k.pose) });
 }
 
 function setSite(pl: BuildPlan, site: Site): void {
@@ -277,8 +277,8 @@ export const build: Behaviour<BuildParams, BuildPlan> = {
 	endPatch(pl, outcome, _why, ctx) {
 		let builds = ctx.state.builds;
 		if (outcome === 'done') builds = builds.map((b) => (b.id === pl.buildId ? { ...b, status: 'done' as const } : b));
-		// The renewed build is dismantled only when every one of its dismantle cells was broken; else standing() decides.
-		if (pl.renew && pl.dismantle.every((c) => pl.broken.has(kv(c)))) {
+		// The renewed build is dismantled only when it had cells to take apart and every one was broken; else standing() decides.
+		if (pl.renew && pl.dismantle.length > 0 && pl.dismantle.every((c) => pl.broken.has(kv(c)))) {
 			const id = pl.renew.id;
 			builds = builds.map((b) => (b.id === id ? { ...b, status: 'dismantled' as const } : b));
 		}

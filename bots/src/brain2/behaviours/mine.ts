@@ -11,15 +11,17 @@ import { SALIENCE } from '../data/salience.data.js';
 import { key, type Ownership } from '../ownership.js';
 import type { Patch } from '../store.js';
 import { anchorOf } from './build.js';
-import { topSolid } from './site-search.js';
-import { safeToMine, spiralStep, spiralsFor, type Spiral } from './spiral.js';
+import { boxMeetsKids, groundTop } from './site-search.js';
+import { safeToMine, spiralStep, spiralsFor, type Spiral, type Step } from './spiral.js';
 import type { Behaviour, BehaviourCtx, Next } from './behaviour.js';
 
 export interface MineParams { block: string; digId?: string }
 export interface MinePlan {
 	params: MineParams; dig: Dig | null; spiral: Spiral | null;
 	scan: { chunks: Array<[number, number]>; best: Vec3 | null } | null;    // target scan, one chunk per next()
-	phase: 'scan' | 'descend' | 'target' | 'vein'; stepIdx: number; mined: number; episodeStart: number; planned: number;
+	phase: 'scan' | 'descend' | 'target' | 'vein'; stepIdx: number; mined: number; planned: number;
+	/** When the 120 s episode started: the first next() after the resume walk-down (null until then). */
+	episodeStart: number | null;
 	/** The scan's anchor (nearest kid, else latest build, else spawn). */
 	anchor: Vec3;
 	/** Target candidates found so far, with their horizontal distance to the anchor; `scanned` = chunks done. */
@@ -45,6 +47,8 @@ const EPISODE_STEPS = Math.ceil(LIMITS.MINE_EPISODE_MS / (3 * LIMITS.EDIT_GAP_MI
 /** The pillar area (3×3, radius 1.5 around the pillar) must be ≥ 12 from kid cells (spec §6). */
 const KID_DIST = LIMITS.SITE_KID_DIST + 1.5;
 const REACH = 4.5;
+/** Failures that drop the dig for good: the route is unsafe or a kid's (the others pause it, fixable). */
+const DROP_REASONS: readonly string[] = ['hazard', 'stuck (kid-liquid)', 'stuck (kid-block)'];
 /** Floor fills take the most-held of these natural blocks. */
 const FILL_BLOCKS = ['dirt', 'stone', 'deepslate', 'sand', 'grass_block', 'granite', 'diorite', 'andesite', 'tuff'];
 const FACES: ReadonlyArray<[number, number, number]> = [[1, 0, 0], [-1, 0, 0], [0, 1, 0], [0, -1, 0], [0, 0, 1], [0, 0, -1]];
@@ -56,6 +60,26 @@ const centre = (c: Vec3): { x: number; z: number } => ({ x: c.x + 0.5, z: c.z + 
 
 /** Ores already reported this session (spec §6.2: `found` once per cell per session), per session's Ownership. */
 const reported = new WeakMap<Ownership, Set<string>>();
+
+/** Whether the pillar's 3×3 meets the body buffer of a kid standing there now (ruling R10). */
+function pillarNearKids(sp: Spiral, ctx: BehaviourCtx): boolean {
+	return boxMeetsKids(sp.px - 1, sp.px + 1, sp.pz - 1, sp.pz + 1, ctx.kids.map((k) => k.pose));
+}
+
+/**
+ * Whether the step's edits would touch a kid cell or its buffer, as judgeSafety's 'kid cell buffer': a cell to
+ * clear (not air, not liquid) that is a kid's or near one, or an air floor to fill that is a kid's or beside one.
+ */
+function kidBlocked(st: Step, ctx: BehaviourCtx): boolean {
+	const { world: w, own } = ctx;
+	for (const c of st.clear) {
+		const v = w.getBlock(c.x, c.y, c.z);
+		if (v === 0 || w.isLiquid(v)) continue;
+		if (own.classify(c.x, c.y, c.z) === 'kid' || own.kidNeighbour(c.x, c.y, c.z, 1) || own.kidNeighbour(c.x, c.y, c.z, 2, true)) return true;
+	}
+	const f = st.floor;
+	return w.getBlock(f.x, f.y, f.z) === 0 && (own.classify(f.x, f.y, f.z) === 'kid' || own.kidNeighbour(f.x, f.y, f.z, 1));
+}
 
 function touchesLiquid(c: Vec3, ctx: BehaviourCtx): boolean {
 	return faces(c).some((n) => ctx.world.isLiquid(ctx.world.getBlock(n.x, n.y, n.z)));
@@ -88,7 +112,7 @@ function chooseSpiral(pl: MinePlan, ctx: BehaviourCtx): { target: Vec3; sp: Spir
 	const top = (x: number, z: number): number => {
 		const k = `${x},${z}`;
 		let v = tops.get(k);
-		if (v === undefined) tops.set(k, (v = topSolid(ctx.world, x, z)));
+		if (v === undefined) tops.set(k, (v = groundTop(ctx.world, x, z)));
 		return v;
 	};
 	const a = pl.anchor;
@@ -98,9 +122,11 @@ function chooseSpiral(pl: MinePlan, ctx: BehaviourCtx): { target: Vec3; sp: Spir
 			for (let dz = -1; dz <= 1; dz++) {
 				const x = sp.px + dx, z = sp.pz + dz, s = top(x, z);
 				if (s < 0 || ctx.own.classify(x, s, z) !== 'natural' || ctx.world.isLiquid(ctx.world.getBlock(x, s + 1, z))) return false;
+				// Headroom: no trunk (or other solid) in the 2 cells above the surface, where the bot stands and walks.
+				if (ctx.world.isSolid(ctx.world.getBlock(x, s + 1, z)) || ctx.world.isSolid(ctx.world.getBlock(x, s + 2, z))) return false;
 			}
 		}
-		return !ctx.own.kidCellWithin(sp.px, sp.pz, KID_DIST);
+		return !ctx.own.kidCellWithin(sp.px, sp.pz, KID_DIST) && !pillarNearKids(sp, ctx);
 	};
 	for (const c of pl.cands) {
 		const sp = spiralsFor(c.cell, (x, z) => top(x, z) + 1).find(areaOk);
@@ -170,7 +196,7 @@ function veinCell(pl: MinePlan, ctx: BehaviourCtx): Vec3 | null {
 /**
  * Mine {block} (spec §6.2): resume a paused dig for the block (if its pillar is within the leash of the current
  * anchor), else scan for the nearest target and a qualifying spiral. plannedEdits = the next S steps' non-air cells
- * + their air floors + N. The dig is never left `active`: endPatch writes done, dropped (hazard, kid-liquid) or paused.
+ * + their air floors + N. The dig is never left `active`: endPatch writes done, dropped (hazard, kid-liquid, kid-block) or paused.
  */
 export const mine: Behaviour<MineParams, MinePlan> = {
 	kind: 'mine',
@@ -187,9 +213,9 @@ export const mine: Behaviour<MineParams, MinePlan> = {
 		const dropIds = ctx.state.digs.filter((d) => d.status === 'paused' && !intact(d)).map((d) => d.id);
 		const paused = ctx.state.digs.filter((d) => d.status === 'paused' && !dropIds.includes(d.id));
 		const resume = paused.find((d) => (p.digId ? d.id === p.digId : d.block === p.block)
-			&& Math.hypot(d.spiral.px - anchor.x, d.spiral.pz - anchor.z) <= LIMITS.LEASH);
+			&& Math.hypot(d.spiral.px - anchor.x, d.spiral.pz - anchor.z) <= LIMITS.LEASH && !pillarNearKids(d.spiral, ctx));
 		const pl: MinePlan = {
-			params: p, dig: null, spiral: null, scan: null, phase: 'scan', stepIdx: 0, mined: 0, episodeStart: ctx.now, planned: 0,
+			params: p, dig: null, spiral: null, scan: null, phase: 'scan', stepIdx: 0, mined: 0, episodeStart: null, planned: 0,
 			anchor, cands: [], scanned: 0, walkDown: 0, resumeTo: 0, dropIds, record: false, changed: false, seeds: [],
 		};
 		if (resume) {
@@ -214,8 +240,9 @@ export const mine: Behaviour<MineParams, MinePlan> = {
 		}];
 	},
 	next(pl, ctx) {
-		const started = ctx.state.behaviour?.startedT ?? pl.episodeStart;
-		if (ctx.now - started >= LIMITS.MINE_EPISODE_MS) return 'paused';
+		// The episode is timed from the first next() after the resume walk-down (a fresh dig: the first next()).
+		if (pl.walkDown >= pl.resumeTo) pl.episodeStart ??= ctx.now;
+		if (pl.episodeStart !== null && ctx.now - pl.episodeStart >= LIMITS.MINE_EPISODE_MS) return 'paused';
 		if (pl.phase === 'scan') return scanStep(pl, ctx);
 		if (pl.record) return { kind: 'wait', ms: 0 };
 		const sp = pl.spiral!, w = ctx.world, walkSpeed = ctx.style.walkSpeed;
@@ -228,6 +255,8 @@ export const mine: Behaviour<MineParams, MinePlan> = {
 				const pc = centre({ x: sp.px, y: 0, z: sp.pz });
 				if (Math.hypot(ctx.pose.x - pc.x, ctx.pose.z - pc.z) > 0.5) return { kind: 'walk', to: pc, speed: walkSpeed };   // stand on the pillar
 			}
+			// 0. A kid's block in (or buffering) this step's edits: the route is his now; the dig is dropped (no re-routing).
+			if (kidBlocked(st, ctx)) return { failed: 'stuck (kid-block)' };
 			// 1. The floor check: fill an air floor from inventory, else stuck (no re-routing).
 			if (w.getBlock(st.floor.x, st.floor.y, st.floor.z) === 0) {
 				const inv = ctx.state.inventory;
@@ -312,7 +341,7 @@ export const mine: Behaviour<MineParams, MinePlan> = {
 	endPatch(pl, outcome, why, ctx) {
 		const d = pl.dig;
 		if (!d || pl.record || !ctx.state.digs.some((x) => x.id === d.id)) return [];
-		const status: Dig['status'] = outcome === 'done' ? 'done' : why === 'hazard' || why === 'stuck (kid-liquid)' ? 'dropped' : 'paused';
+		const status: Dig['status'] = outcome === 'done' ? 'done' : DROP_REASONS.includes(why) ? 'dropped' : 'paused';
 		return digPatch(pl, ctx, { status });
 	},
 };

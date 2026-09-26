@@ -106,6 +106,53 @@ describe('site search (spec §6.1)', () => {
 		expect(evaluateSite(o.x, o.z, q, { world, own: new Ownership(world, () => ({})), spawn })).toBeNull();
 	});
 
+	// Fix round (R10). Red if the search avoids only kid-placed cells: the kid stands on the flat patch's best site.
+	it('rejects a site whose grown footprint meets a kid\'s body buffer (where he stands now)', () => {
+		const world = new FakeWorld();
+		const spawn = spawnOf(world);
+		const q: SiteQuery = { ...SMALL_HOUSE, anchor: spawn, avoid: [] };
+		const first = run(world, q, spawn);
+		if (first === 'none') throw new Error('no site');
+		const kid = { x: first.origin.x + 2.5, y: first.origin.y, z: first.origin.z + 2.5 };   // in the middle of it
+		const s = new SiteSearch({ ...q, anchor: kid }, { world, own: new Ownership(world, () => ({})), spawn, kids: [kid] });
+		let r: ReturnType<SiteSearch['step']> = null;
+		for (let i = 0; i < 1000 && r === null; i++) r = s.step();
+		if (r === null || r === 'none') throw new Error('no site');
+		// The grown footprint (margin 1) stays clear of the kid's buffer columns (his box's column ± 1).
+		const kx = Math.floor(kid.x), kz = Math.floor(kid.z);
+		const g = { x0: r.origin.x - 1, x1: r.origin.x + q.w, z0: r.origin.z - 1, z1: r.origin.z + q.d };
+		const meets = g.x0 <= kx + 1 && g.x1 >= kx - 1 && g.z0 <= kz + 1 && g.z1 >= kz - 1;
+		expect(meets).toBe(false);
+		// evaluateSite alone refuses the site he stands on.
+		expect(evaluateSite(first.origin.x, first.origin.z, q, { world, own: new Ownership(world, () => ({})), spawn, kids: [kid] })).toBeNull();
+		expect(evaluateSite(first.origin.x, first.origin.z, q, { world, own: new Ownership(world, () => ({})), spawn })).not.toBeNull();
+	});
+
+	// Fix round (I3). Red if leaves and logs count as the ground: the site would sit on the canopy.
+	it('a tree canopy is not the ground: the site sits on the soil under it, and a trunk in it refuses the site', () => {
+		const world = new FakeWorld();
+		const Y = 199;
+		const o = { x: 100, z: 300 };
+		for (let x = o.x - 1; x <= o.x + 5; x++) {
+			for (let z = o.z - 1; z <= o.z + 5; z++) {
+				world.setNatural(x, Y, z, 'grass_block');
+				world.setNatural(x, Y + 8, z, 'oak_leaves');          // a flat canopy, above the house's height
+			}
+		}
+		const spawn = spawnOf(world);
+		const q: SiteQuery = { ...SMALL_HOUSE, anchor: { x: o.x, y: Y, z: o.z }, avoid: [] };
+		const ctx = { world, own: new Ownership(world, () => ({})), spawn };
+		const site = evaluateSite(o.x, o.z, q, ctx);
+		expect(site?.groundY).toBe(Y);
+		// A trunk inside the footprint: no longer a site (its log is solid where the house goes).
+		for (let y = Y + 1; y <= Y + 7; y++) world.setNatural(o.x + 2, y, o.z + 2, 'oak_log');
+		expect(evaluateSite(o.x, o.z, q, ctx)).toBeNull();
+		// A 1-high stump in the margin, below the headroom rows: still refused.
+		for (let y = Y + 1; y <= Y + 7; y++) world.setNatural(o.x + 2, y, o.z + 2, 'air');
+		world.setNatural(o.x - 1, Y + 1, o.z, 'oak_log');
+		expect(evaluateSite(o.x, o.z, q, ctx)).toBeNull();
+	});
+
 	// Red on a search that scans the whole leash in one call.
 	it('step() touches at most one new chunk per call', () => {
 		const inner = new FakeWorld();

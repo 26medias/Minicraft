@@ -1,6 +1,6 @@
 import { describe, it, expect } from 'vitest';
 import { Chunk } from './chunk';
-import { meshChunk } from './mesher';
+import { meshChunk, type ChunkMesh } from './mesher';
 import { BLOCK_BY_NAME } from '../../data/blocks.data';
 import { World } from './world';
 import { indexOf } from './coords';
@@ -8,6 +8,15 @@ import { fillChunkLights } from './lighting';
 import { computeChunkShadows } from './shadows';
 
 const stone = BLOCK_BY_NAME['stone'].id;
+
+/**
+ * The colour a vertex is drawn with when no cloud is overhead: min(raw light, 1) × AO, as the chunk
+ * shader computes it (clouds.ts applyChunkShading; ChunkMesh.shade).
+ */
+function finalRGB(mesh: ChunkMesh, v: number): [number, number, number] {
+	const ao = mesh.shade[v * 2 + 1] / 255;
+	return [0, 1, 2].map((ch) => Math.min(mesh.colors[v * 3 + ch], 1) * ao) as [number, number, number];
+}
 
 function uvStub() {
 	return [0, 0, 1, 1] as [number, number, number, number];
@@ -100,9 +109,7 @@ describe('meshChunk — per-vertex colors from lightmap', () => {
 		let topFaceVertexCount = 0;
 		for (let i = 0; i < mesh.normals.length; i += 3) {
 			if (mesh.normals[i + 1] > 0.9) {
-				const r = mesh.colors[i];
-				const g = mesh.colors[i + 1];
-				const b = mesh.colors[i + 2];
+				const [r, g, b] = finalRGB(mesh, i / 3);
 				expect(Number.isNaN(r)).toBe(false);
 				expect(Number.isNaN(g)).toBe(false);
 				expect(Number.isNaN(b)).toBe(false);
@@ -139,7 +146,7 @@ describe('meshChunk — ambient occlusion', () => {
 			if (ny > 0.9 && py === 31 && px >= 5 && px <= 6 && pz >= 5 && pz <= 6) {
 				verts.push({
 					pos: [px, py, pz],
-					rgb: [mesh.colors[i], mesh.colors[i + 1], mesh.colors[i + 2]],
+					rgb: finalRGB(mesh, i / 3),
 				});
 			}
 		}
@@ -230,7 +237,7 @@ describe('meshChunk — sun and sky', () => {
 			if (!only(centre(i, 0), centre(i, 1), centre(i, 2))) continue;
 			const key = `${mesh.normals[i]},${mesh.normals[i + 1]},${mesh.normals[i + 2]}`;
 			const a = acc.get(key) ?? [0, 0, 0, 0];
-			for (let v = 0; v < 4; v++) for (let ch = 0; ch < 3; ch++) a[ch] += mesh.colors[i + v * 3 + ch];
+			for (let v = 0; v < 4; v++) { const c = finalRGB(mesh, i / 3 + v); for (let ch = 0; ch < 3; ch++) a[ch] += c[ch]; }
 			a[3] += 4;
 			acc.set(key, a);
 		}
@@ -272,5 +279,32 @@ describe('meshChunk — sun and sky', () => {
 		expect(lit[0]).toBeGreaterThanOrEqual(lit[2]);
 		expect(shade[2]).toBeGreaterThan(shade[0] + 0.05);
 		expect(sum(shade)).toBeLessThan(sum(lit) * 0.7);
+	});
+});
+
+describe('meshChunk — shade attribute (sun factor, AO) for the chunk shader', () => {
+	it('one [sun, ao] byte pair per vertex: sun on a sunlit top, none on a side turned away, AO where blocks meet', () => {
+		const w = new World(1);
+		const c = w.ensureChunk(0, 0);
+		c.blocks.fill(0);
+		c.blocks[indexOf(5, 30, 5)] = stone;
+		c.blocks[indexOf(6, 31, 5)] = stone; // an edge occluder for the top face's +x corners
+		fillChunkLights(w, c);
+		computeChunkShadows(w, c);
+		const mesh = meshChunk(c, w.neighbors(c), uvStub).opaque;
+		expect(mesh.shade).toBeInstanceOf(Uint8Array);
+		expect(mesh.shade.length).toBe((mesh.positions.length / 3) * 2);
+		const top: number[] = [], away: number[] = [], aos: number[] = [];
+		for (let v = 0; v < mesh.positions.length / 3; v++) {
+			const [x, y, z] = [mesh.positions[v * 3], mesh.positions[v * 3 + 1], mesh.positions[v * 3 + 2]];
+			const n = [mesh.normals[v * 3], mesh.normals[v * 3 + 1], mesh.normals[v * 3 + 2]];
+			if (n[1] === 1 && y === 31 && x <= 6 && z <= 6) { top.push(mesh.shade[v * 2]); aos.push(mesh.shade[v * 2 + 1]); }
+			if (n[2] === 1 && z === 6 && y <= 31 && x <= 6) away.push(mesh.shade[v * 2]);
+		}
+		// Top in full sun: sun factor = normal · sun direction (≈ 0.864) → ≈ 220.
+		expect(Math.max(...top)).toBeGreaterThan(200);
+		expect(Math.max(...away)).toBe(0); // +z faces away from the sun
+		expect(Math.min(...aos)).toBeLessThan(255); // the occluded corners
+		expect(Math.max(...aos)).toBe(255);
 	});
 });

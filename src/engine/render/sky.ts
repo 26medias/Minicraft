@@ -103,9 +103,14 @@ const GRADE_GLSL = /* glsl */ `
 	}
 	#include <fog_fragment>`;
 
+/** Insert GRADE_GLSL just before fog in a built-in fragment shader. */
+export function gradeFragment(fragmentShader: string): string {
+	return fragmentShader.replace('#include <fog_fragment>', GRADE_GLSL);
+}
+
 /** Install GRADE_GLSL on a built-in material (one whose fragment shader includes fog_fragment). */
 export function applyGrade(material: THREE.Material): void {
 	material.onBeforeCompile = (shader) => {
-		shader.fragmentShader = shader.fragmentShader.replace('#include <fog_fragment>', GRADE_GLSL);
+		shader.fragmentShader = gradeFragment(shader.fragmentShader);
 	};
 }

@@ -17,6 +17,8 @@ function arg(name: string): string | null {
 const PORT = Number(arg('--port'));
 const OUT = arg('--out');
 const SEED = arg('--seed') ?? '5';
+/** --no-cloud-shadow: every view without cloud shadows (to compare terrain with a build that has none). */
+const NO_CLOUD_SHADOW = process.argv.includes('--no-cloud-shadow');
 if (!Number.isInteger(PORT) || PORT === 5173 || PORT === 8080 || !OUT) {
 	console.error('look-shots: pass --port <free port> (never 5173 or 8080) and --out <dir>');
 	process.exit(1);
@@ -58,6 +60,7 @@ async function guard(page: Page) {
 }
 
 type Mc = {
+	cloudUniforms: { cloudShadowScale: { value: number } };
 	player: { position: [number, number, number]; flying: boolean; vy: number };
 	cam: { yaw: number; pitch: number };
 	loop: { stats: { streamQueue: number; mounted: number } };
@@ -74,6 +77,8 @@ const VIEWS: { name: string; yaw: number; pitch: number }[] = [
 	{ name: 'away-from-sun', yaw: 1.03 + Math.PI, pitch: -0.25 },
 	{ name: 'side-lit', yaw: 1.03 + Math.PI / 2, pitch: -0.2 },
 	{ name: 'down', yaw: 1.03 + Math.PI * 0.75, pitch: -0.7 },
+	{ name: 'up', yaw: 1.03 + Math.PI / 2, pitch: 0.35 },
+	{ name: 'up-steep', yaw: 1.03 + Math.PI / 2, pitch: 0.95 },
 ];
 
 process.on('exit', () => stopDev?.());
@@ -103,6 +108,7 @@ for (const sig of ['SIGINT', 'SIGTERM', 'SIGHUP'] as const) process.on(sig, () =
 			m.player.position = [m.player.position[0], m.player.position[1] + 18, m.player.position[2]];
 		});
 		await settled(page);
+		if (NO_CLOUD_SHADOW) await page.evaluate(() => { (window as unknown as { __mc: Mc }).__mc.cloudUniforms.cloudShadowScale.value = 0; });
 		for (const v of VIEWS) {
 			await page.evaluate(([yaw, pitch]) => {
 				const m = (window as unknown as { __mc: Mc }).__mc;
@@ -113,6 +119,20 @@ for (const sig of ['SIGINT', 'SIGTERM', 'SIGHUP'] as const) process.on(sig, () =
 			await page.screenshot({ path: `${OUT}/${v.name}.png` });
 			console.log(`saved ${OUT}/${v.name}.png`);
 		}
+		// Straight down: cloud shadows on the ground.
+		await page.evaluate(() => {
+			const m = (window as unknown as { __mc: Mc }).__mc;
+			m.cam.pitch = -1.5;
+		});
+		await settled(page);
+		await page.waitForTimeout(400);
+		await page.screenshot({ path: `${OUT}/topdown.png` });
+		console.log(`saved ${OUT}/topdown.png`);
+		// The same frame without cloud shadows: diff the pair to see exactly where they fall.
+		await page.evaluate(() => { (window as unknown as { __mc: Mc }).__mc.cloudUniforms.cloudShadowScale.value = 0; });
+		await page.waitForTimeout(200);
+		await page.screenshot({ path: `${OUT}/topdown-no-cloud-shadow.png` });
+		console.log(`saved ${OUT}/topdown-no-cloud-shadow.png`);
 	} finally {
 		await browser.close();
 		stopDev?.();

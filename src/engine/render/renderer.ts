@@ -5,7 +5,8 @@ import type { LoadedAtlas } from './atlas';
 import { MESH_RADIUS } from '../world/radii';
 import { installRadialFog } from './radial-fog';
 import { Sun } from './sun';
-import { SkyDome, applyGrade, installSkyFog } from './sky';
+import { SkyDome, installSkyFog } from './sky';
+import { Clouds, applyChunkShading } from './clouds';
 
 // Before any material compiles: fog by distance, not by view depth (a mountain must not fade as you turn to it),
 // fading to the sky's colour along the view ray.
@@ -36,6 +37,7 @@ export class Renderer {
 	private gpuString: string | null = null;
 	private sun: Sun;
 	private sky: SkyDome;
+	private clouds: Clouds;
 
 	constructor(container: HTMLElement, atlas: LoadedAtlas) {
 		this.scene = new THREE.Scene();
@@ -46,6 +48,7 @@ export class Renderer {
 		this.camera.position.set(8, 70, 8);
 		this.sky = new SkyDome(this.scene);
 		this.sun = new Sun(this.scene);
+		this.clouds = new Clouds(this.scene);
 
 		this.gl = new THREE.WebGLRenderer({
 			antialias: false,
@@ -86,7 +89,7 @@ export class Renderer {
 			alphaTest: 0.01,
 		});
 
-		for (const m of [this.material, this.liquidMaterial, this.translucentMaterial]) applyGrade(m);
+		for (const m of [this.material, this.liquidMaterial, this.translucentMaterial]) applyChunkShading(m);
 
 		this.resize();
 		window.addEventListener('resize', () => this.resize());
@@ -104,6 +107,7 @@ export class Renderer {
 		geo.setAttribute('normal', new THREE.BufferAttribute(new Float32Array(9), 3));
 		geo.setAttribute('uv', new THREE.BufferAttribute(new Float32Array(6), 2));
 		geo.setAttribute('color', new THREE.BufferAttribute(new Float32Array(9), 3));
+		geo.setAttribute('shade', new THREE.BufferAttribute(new Uint8Array(6), 2, true));
 		const probes = [this.material, this.liquidMaterial, this.translucentMaterial].map((m) => new THREE.Mesh(geo, m));
 		for (const p of probes) this.chunkGroup.add(p);
 		this.gl.compile(this.scene, this.camera);
@@ -114,6 +118,11 @@ export class Renderer {
 		this.gl.initTexture(this.material instanceof THREE.MeshBasicMaterial && this.material.map ? this.material.map : new THREE.Texture());
 	}
 
+
+	/** Put the cloud layer at `y` (cloudAltitude of the world being played). */
+	setCloudAltitude(y: number): void {
+		this.clouds.setAltitude(y);
+	}
 
 	onTick(fn: (dt: number) => void) {
 		this.tickFn = fn;
@@ -190,6 +199,7 @@ export class Renderer {
 		g.setAttribute('normal', new THREE.BufferAttribute(mesh.normals, 3));
 		g.setAttribute('uv', new THREE.BufferAttribute(mesh.uvs, 2));
 		g.setAttribute('color', new THREE.BufferAttribute(mesh.colors, 3));
+		g.setAttribute('shade', new THREE.BufferAttribute(mesh.shade, 2, true));
 		g.setIndex(new THREE.BufferAttribute(mesh.indices, 1));
 		g.computeBoundingSphere();
 		return g;
@@ -227,6 +237,7 @@ export class Renderer {
 		this.tickFn?.(dt);
 		this.sky.update(this.camera);
 		this.sun.update(this.camera);
+		this.clouds.update(this.camera, Date.now());
 		this.gl.render(this.scene, this.camera);
 		requestAnimationFrame(this.frame);
 	};

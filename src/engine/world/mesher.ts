@@ -8,7 +8,14 @@ export type ChunkMesh = {
 	positions: Float32Array;
 	normals: Float32Array;
 	uvs: Float32Array;
+	/** Raw light per vertex (sky fill + sun + block light), before the clamp to 1 and before AO. */
 	colors: Float32Array;
+	/**
+	 * Per vertex, 2 bytes read as 0..1: [the direct-sun factor, the AO factor]. The chunk shader
+	 * computes min(colour − SUN_COLOR × sun × cloudShadow, 1) × ao, so a drifting cloud can take the
+	 * sun away (clouds.ts) and, with no cloud, the result is the mesher's clamp(colour) × ao.
+	 */
+	shade: Uint8Array;
 	indices: Uint32Array;
 };
 
@@ -29,7 +36,7 @@ export type Neighbors = { px?: Chunk; nx?: Chunk; pz?: Chunk; nz?: Chunk };
  * warm; a shadow keeps only the fill, so it reads blue rather than grey. Values are linear.
  */
 const SKY_FILL: [number, number, number] = [0.36, 0.42, 0.56];
-const SUN_COLOR: [number, number, number] = [0.78, 0.66, 0.4];
+export const SUN_COLOR: [number, number, number] = [0.78, 0.66, 0.4];
 const MIN_AMBIENT = 0.03;
 /**
  * Block light (lamps, lava) is still scaled as before the sun/sky split: halved where no sun reaches
@@ -321,6 +328,7 @@ type MeshBufs = {
 	normals: GrowBuf;
 	uvs: GrowBuf;
 	colors: GrowBuf;
+	shade: GrowBuf;
 	indices: GrowBufU32;
 	vcount: number;
 };
@@ -331,6 +339,7 @@ function makeBufs(): MeshBufs {
 		normals: new GrowBuf(4096 * 3),
 		uvs: new GrowBuf(4096 * 2),
 		colors: new GrowBuf(4096 * 3),
+		shade: new GrowBuf(4096 * 2),
 		indices: new GrowBufU32(4096 * 6 / 4),
 		vcount: 0,
 	};
@@ -341,6 +350,7 @@ function resetBufs(b: MeshBufs): void {
 	b.normals.reset();
 	b.uvs.reset();
 	b.colors.reset();
+	b.shade.reset();
 	b.indices.reset();
 	b.vcount = 0;
 }
@@ -351,8 +361,16 @@ function bufsToMesh(b: MeshBufs): ChunkMesh {
 		normals: b.normals.toFloat32(),
 		uvs: b.uvs.toFloat32(),
 		colors: b.colors.toFloat32(),
+		shade: toUnorm8(b.shade.toFloat32()),
 		indices: b.indices.toUint32(),
 	};
+}
+
+/** 0..1 floats to normalized bytes (the `shade` attribute is read back as byte / 255). */
+function toUnorm8(f: Float32Array): Uint8Array {
+	const out = new Uint8Array(f.length);
+	for (let i = 0; i < f.length; i++) out[i] = Math.round(f[i] * 255);
+	return out;
 }
 
 // Three independent scratch sets: opaque, translucent and liquid passes never share.
@@ -455,13 +473,14 @@ function readSunlit(chunk: Chunk, neighbors: Neighbors, x: number, y: number, z:
 // shadow together; results land in module-level scratch numbers.
 // ---------------------------------------------------------------------------
 
-/** Output of cornerColor(): the final vertex colour (r, g, b). */
-const C_OUT = new Float32Array(3);
+/** Output of cornerColor(): the raw vertex light (r, g, b), then the sun factor and the AO factor. */
+const C_OUT = new Float32Array(5);
 
 /**
  * Compute the vertex colour for the corner (cx, cy, cz) of a face with pattern index fi:
  * averaged (sky, r, g, b) light → sky fill + direct sun (scaled by the sunlit fraction and
- * the face's angle to the sun) + block light (BLOCK_SHADOW_FLOOR), clamped, times the AO factor.
+ * the face's angle to the sun) + block light (BLOCK_SHADOW_FLOOR), unclamped; plus the sun factor
+ * and the AO factor, which the chunk shader applies (see ChunkMesh.shade).
  */
 function cornerColor(
 	chunk: Chunk,
@@ -504,19 +523,15 @@ function cornerColor(
 	const sunlitFrac = sumSun / 4;
 	const sun = skyScale * FACE_SUN[fi] * sunlitFrac;
 	const block = (BLOCK_SHADOW_FLOOR + (1 - BLOCK_SHADOW_FLOOR) * sunlitFrac) / 4 / 15;
-	let r = SKY_FILL[0] * fill + SUN_COLOR[0] * sun + sumR * block + MIN_AMBIENT;
-	let g = SKY_FILL[1] * fill + SUN_COLOR[1] * sun + sumG * block + MIN_AMBIENT;
-	let b = SKY_FILL[2] * fill + SUN_COLOR[2] * sun + sumB * block + MIN_AMBIENT;
-	if (r > 1) r = 1;
-	if (g > 1) g = 1;
-	if (b > 1) b = 1;
+	C_OUT[0] = SKY_FILL[0] * fill + SUN_COLOR[0] * sun + sumR * block + MIN_AMBIENT;
+	C_OUT[1] = SKY_FILL[1] * fill + SUN_COLOR[1] * sun + sumG * block + MIN_AMBIENT;
+	C_OUT[2] = SKY_FILL[2] * fill + SUN_COLOR[2] * sun + sumB * block + MIN_AMBIENT;
 	let ao: number;
 	if (edgeCount === 0) ao = 1.0;
 	else if (edgeCount === 1) ao = 0.85;
 	else ao = diagOpaque ? 0.5 : 0.7;
-	C_OUT[0] = r * ao;
-	C_OUT[1] = g * ao;
-	C_OUT[2] = b * ao;
+	C_OUT[3] = sun;
+	C_OUT[4] = ao;
 }
 
 /** Emit one quad (4 vertices + 6 indices) for block (x, y, z), face fi, into bufs. */
@@ -547,6 +562,7 @@ function emitFace(
 		bufs.uvs.push2(FACE_UVSEL[ui] === 0 ? u0 : u1, FACE_UVSEL[ui + 1] === 0 ? v0 : v1);
 		cornerColor(chunk, neighbors, px, py, pz, fi);
 		bufs.colors.push3(C_OUT[0], C_OUT[1], C_OUT[2]);
+		bufs.shade.push2(C_OUT[3], C_OUT[4]);
 	}
 	bufs.indices.pushQuad(bufs.vcount);
 	bufs.vcount += 4;

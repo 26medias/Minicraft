@@ -2,6 +2,7 @@ import './ui/ui.css';
 import { World } from './engine/world/world';
 import { loadAtlas } from './engine/render/atlas';
 import { Renderer } from './engine/render/renderer';
+import { CLOUD_UNIFORMS, cloudAltitude } from './engine/render/clouds';
 import { FpCamera } from './engine/render/camera';
 import { setupPointerLock } from './engine/input/pointerLock';
 import { Player, findSafeSpawn, type Keys } from './game/player';
@@ -344,6 +345,7 @@ async function main() {
 		} else {
 			world = save ? worldFromSave(save) : World.create(seed);
 		}
+		renderer.setCloudAltitude(cloudAltitude(world.height));
 		// New v3 worlds: the spawn column is searched once, in memory (spec §9). Show the
 		// message and yield TWO frames: the first rAF callback runs before style/layout/paint,
 		// so a single yield lets the synchronous search start before the text is on screen.
@@ -1125,7 +1127,7 @@ async function main() {
 			// `worldHash` and `refReplay` are the two-client suite's oracles (plan I2, scripts/mp-e2e.ts).
 			(window as unknown as { __mc: unknown }).__mc = {
 				world, player, loop, apiUrl, cam, highlight, mustMine, syncHotbar, keys,
-				playtime, mp: mpDebug, cracks, camera: renderer.camera,
+				playtime, mp: mpDebug, cracks, camera: renderer.camera, cloudUniforms: CLOUD_UNIFORMS,
 				markDirtyCalls: () => markDirtyCalls,
 				pause: { isOpen: () => pauseOpen, controlsShown: () => pauseMenu.controlsShown, quitting: () => quitting },
 				worldHash: (chunks: Array<[number, number]>) => worldHash(world, chunks),

@@ -41,7 +41,7 @@ export function handleMessage(data: unknown, post: (reply: JobReply, transfer: A
 	const mesh = meshChunk(centre, { px: grid[7], nx: grid[1], pz: grid[5], nz: grid[3] }, uvFor);
 	const transfer: ArrayBuffer[] = [centre.sunlit.buffer as ArrayBuffer];
 	for (const m2 of [mesh.opaque, mesh.liquid, mesh.translucent]) {
-		if (m2) transfer.push(m2.positions.buffer as ArrayBuffer, m2.normals.buffer as ArrayBuffer, m2.uvs.buffer as ArrayBuffer, m2.colors.buffer as ArrayBuffer, m2.indices.buffer as ArrayBuffer);
+		if (m2) transfer.push(m2.positions.buffer as ArrayBuffer, m2.normals.buffer as ArrayBuffer, m2.uvs.buffer as ArrayBuffer, m2.colors.buffer as ArrayBuffer, m2.shade.buffer as ArrayBuffer, m2.indices.buffer as ArrayBuffer);
 	}
 	post({ id: job.id, sunlit: centre.sunlit, mesh }, transfer);
 }

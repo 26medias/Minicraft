@@ -104,9 +104,15 @@ sunlit   = averaged sunlit fraction (see Cast shadows)
 skyScale = averagedSkyLight / 15
 block    = (BLOCK_SHADOW_FLOOR + (1 - BLOCK_SHADOW_FLOOR) * sunlit) * averagedBlockRGB / 15
 
-vertexRGB = SKY_FILL * skyScale * skyView + SUN_COLOR * skyScale * faceSun * sunlit + block + MIN_AMBIENT
-vertexRGB = clamp(vertexRGB, 0, 1) * aoFactor
+raw = SKY_FILL * skyScale * skyView + SUN_COLOR * skyScale * faceSun * sunlit + block + MIN_AMBIENT
+sun = skyScale * faceSun * sunlit
+
+// written to the mesh: colors = raw, shade = [sun, aoFactor] as bytes
+// drawn by the chunk shader (clouds.ts applyChunkShading):
+light = min(raw - SUN_COLOR * sun * cloudShadow, 1) * aoFactor
 ```
+
+With no cloud overhead (`cloudShadow = 0`) that is `clamp(raw) * aoFactor`, the same as clamping on the CPU, apart from the clamp now running per pixel instead of per vertex (at most 9/255 on a handful of pixels, measured).
 
 `BLOCK_SHADOW_FLOOR = 0.5` keeps block light (lamps, lava) exactly as before the split: halved where no sun reaches, which is every cave, so lit caves keep the brightness they were tuned at.
 
@@ -143,6 +149,10 @@ Invalidation: a block change flags the containing chunk and its three SE neighbo
 
 **Sky and fog** (`src/engine/render/sky.ts`). `skyColor(dir)` (GLSL) gives the sky's colour along a world-space direction: deep blue overhead, paler at the horizon, pale gold haze low on the sun's side, and a glow around the sun. A `SkyDome` around the camera paints it in place of a flat background, and `installSkyFog` patches three's fog chunks so fog fades each fragment to `skyColor` along its view ray instead of to one flat colour: a distant hill melts into the sky behind it, warm toward the sun and blue away from it. The colours are sRGB and used after three's colour-space conversion, where fog is applied, so dome and fog match exactly. `scene.fog`'s own colour is unused.
 
+**Clouds** (`src/engine/render/clouds.ts`). Blocky clouds in 12-block cells, 5 or 10 blocks thick, from a fixed 96 × 96-cell repeating pattern (about 30% cover, no lone specks). The layer sits at y = 176 in a 256-high world (the tallest peaks poke through) and y = 100 in a 64-high one. It drifts toward +x at 0.6 blocks/s, timed from the wall clock (`Date.now()`), so two players in the same world see the same clouds. The mesh holds the cells within about 290 blocks of the camera and is rebuilt (≈ 0.6 ms) when the camera's cloud cell changes; clouds are opaque and fade out toward that edge.
+
+**Cloud shadows.** The chunk shader follows the sun ray from each pixel up to the cloud layer and reads the same pattern (a shared texture and drift offset, `CLOUD_UNIFORMS`). Under a cloud it takes away 85% of the direct sun, which is why the mesher passes the sun factor separately (`shade`): a cloud shadow looks exactly like a block's shadow, blue from the sky fill, and slides with the cloud. Nothing is re-baked.
+
 **Grade.** `applyGrade` adds a little saturation and a gentle S-curve to the three chunk materials, before fog, so fogged terrain still meets the sky. The liquid material adds `transparent: true, depthWrite: false, side: DoubleSide` so water surfaces alpha-blend without occluding geometry behind them and are visible from both sides.
 
 ## Code map
@@ -153,6 +163,7 @@ Invalidation: a block change flags the containing chunk and its three SE neighbo
 - `src/engine/world/chunk.ts` — packed-nibble storage + accessors; `sunlit` byte array.
 - `src/engine/world/mesher.ts` — `cornerColor` (light, sun/sky split, AO, shadow per face corner) and the opaque/liquid/translucent vertex pipelines.
 - `src/engine/render/sky.ts` — `skyColor`, `SkyDome`, `installSkyFog`, `applyGrade`.
+- `src/engine/render/clouds.ts` — the cloud pattern, `Clouds` (mesh and drift), `applyChunkShading` (cloud shadow + grade for the chunk materials).
 - `src/engine/render/renderer.ts` — `MeshBasicMaterial` setup, `mountChunkMesh` writing the `color` attribute.
 - `src/game/loop.ts` — `applyLightUpdate` wiring; called after every block edit.
 

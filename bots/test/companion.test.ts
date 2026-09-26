@@ -130,7 +130,7 @@ class SimBody extends FakeBody {
 	private gen = 0;
 	hops: { t: number; from: Vec3; to: Vec3; kids: Vec3[] }[] = [];
 
-	constructor(private readonly world: FakeWorld) {
+	constructor(private readonly sim: FakeWorld) {
 		super();
 		this.walkImpl = (t) => this.run({ x: t.x, y: NaN, z: t.z }, WALK_SPEED, true);
 		this.flyImpl = (t) => this.run(t, FLY_SPEED, false);
@@ -158,7 +158,7 @@ class SimBody extends FakeBody {
 					return resolve('arrived');
 				}
 				const nx = c.x + (dx / d) * s, nz = c.z + (dz / d) * s;
-				const ny = walking ? (this.world.groundY(Math.floor(nx), Math.floor(nz), c.y) ?? c.y) : c.y + (dy / d) * s;
+				const ny = walking ? (this.sim.groundY(Math.floor(nx), Math.floor(nz), c.y) ?? c.y) : c.y + (dy / d) * s;
 				this.current = { ...c, x: nx, y: ny, z: nz };
 				setTimeout(step, 100);
 			};

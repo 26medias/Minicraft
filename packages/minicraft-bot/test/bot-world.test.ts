@@ -1,10 +1,12 @@
 // Plan Task 5 step 4: BotWorld, the SDK's World + ChunkOverlay pair (spec §6, §12a).
 import { describe, expect, it } from 'vitest';
 import { BotWorld, blockNames, createWorld } from '../src/bot-world';
+import { worldSpawn } from '../src/index';
 import { World } from '../../../src/engine/world/world';
 import { ChunkOverlay } from '../../../src/engine/world/overlay';
 import { applyRemoteOps } from '../../../src/engine/world/apply-remote';
 import { indexOf } from '../../../src/engine/world/coords';
+import { spawnV3 } from '../../../src/engine/world/v3/spawn';
 import { AIR, BLOCKS, BLOCK_BY_NAME, isLiquid, isSolid } from '../../../src/data/blocks.data';
 import { colorToInt, type EditMsg, type EditOut, type Op } from '../../../src/net/protocol';
 import { SEED, snapshot, welcome } from './fixtures';
@@ -256,7 +258,8 @@ describe('the public BotWorld is read-only (I-1)', () => {
 		}
 		for (const k of Object.getOwnPropertyNames(BotWorld)) names.add(k);
 		for (const m of MUTATORS) expect(names.has(m), m).toBe(false);
-		expect([...names].filter((n) => /set|write|apply|reset|edit|sync/i.test(n))).toEqual([]);
+		// `edit` alone would also catch `isEdited` / `editedCellsInChunk`, both reads (brain2 Task 1).
+		expect([...names].filter((n) => /set|write|apply|reset|edit(?!ed)|sync/i.test(n))).toEqual([]);
 		expect(view.getBlock(0, 250, 0)).toBe(AIR);
 	});
 });
@@ -416,5 +419,39 @@ describe('parity with the game World', () => {
 			expect(world.getBlock(a, b, c), k).toBe(game.w.getBlock(a, b, c));
 			expect(world.getBlock(a, b, c), k).toBe(src.getBlock(a, b, c));
 		}
+	});
+});
+
+describe('isEdited / editedCellsInChunk (brain2 spec §4.5)', () => {
+	// Red if isEdited reads only the overlay: the bot's own localSet never enters the overlay.
+	it('counts snapshot cells and the bot\'s own local writes', () => {
+		const { world, view } = setup([[10, 60, 10, DIRT, 0, 0]]);
+		expect(view.isEdited(10, 60, 10)).toBe(true);
+		expect(view.isEdited(11, 60, 10)).toBe(false);
+		world.localSet(11, 60, 10, STONE);
+		expect(view.isEdited(11, 60, 10)).toBe(true);
+		const cells = view.editedCellsInChunk(0, 0).map((c) => c.join(',')).sort();
+		expect(cells).toEqual(['10,60,10', '11,60,10']);
+	});
+	// Red if local writes survive a reset: after a reconnect the snapshot is the truth.
+	it('forgets local writes on reset', () => {
+		const { world, view } = setup();
+		world.localSet(12, 60, 12, STONE);
+		world.reset(welcome({ you: 1 }), snapshot([]), 1);
+		expect(view.isEdited(12, 60, 12)).toBe(false);
+	});
+	// Red if remote ops don't count (they go through applyRemoteOps into the overlay).
+	it('counts remote ops', () => {
+		const { world, view } = setup([], 1);
+		world.onServerEdit({ t: 'edit', seq: 1, by: 2, ops: [[13, 60, 13, STONE, 0, 0]] } as EditOut);
+		expect(view.isEdited(13, 60, 13)).toBe(true);
+	});
+});
+
+describe('worldSpawn (brain2 spec §6)', () => {
+	// Red if worldSpawn doesn't use the game's own spawnV3: it would drift from resolveMpSpawn's 'first' pick.
+	it('is the game\'s own spawnV3 column for this seed', () => {
+		const s = spawnV3(SEED);
+		expect(worldSpawn(SEED, 3)).toEqual({ x: s.x, z: s.z });
 	});
 });

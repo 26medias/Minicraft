@@ -1410,3 +1410,34 @@ describe('walkTo jump and stairs (spec §12b)', () => {
 		await walkExpect(bot, ws, { x: s.x + 0.5, z: s.z + 0.5 }, s.y);
 	});
 });
+
+describe('walkTo speed (brain2 spec §5.5)', () => {
+	/** Poses sent while walking `dist` blocks on the flat platform, until walkTo resolves 'arrived'. */
+	async function posesToWalk(dist: number, speed: number | undefined): Promise<number> {
+		const s = PLAT;
+		const { bot, ws } = await connected({ spawn: { x: s.x + 0.5, y: s.y, z: s.z + 0.5 } });
+		floorAt(bot, -3, 14, -3, 3);
+		const n0 = ws.of('pos').length;
+		const p = bot.walkTo({ x: s.x + 0.5 + dist, z: s.z + 0.5 }, speed === undefined ? undefined : { speed });
+		let result: string | null = null;
+		void p.then((r) => (result = r));
+		await advance(ws, POS_EVERY_MS * 50);
+		expect(result).toBe('arrived');
+		return ws.of('pos').length - n0;
+	}
+
+	// Red if speed is ignored: a half-speed walk must take about twice the poses of a full-speed one.
+	it('walkTo speed scales the per-pose step (brain2 spec §5.5)', async () => {
+		const full = await posesToWalk(8, undefined);
+		const half = await posesToWalk(8, 0.5);
+		expect(half).toBeGreaterThanOrEqual(full * 2 - 1);
+		expect(half).toBeLessThanOrEqual(full * 2 + 1);
+	});
+
+	// Red if bad speeds are accepted: they would stall (0) or exceed a block per pose (> 1).
+	it('walkTo rejects speed outside (0, 1]', async () => {
+		const { bot: c } = await connected();
+		expect(() => c.walkTo({ x: 5, z: 5 }, { speed: 0 })).toThrow(RangeError);
+		expect(() => c.walkTo({ x: 5, z: 5 }, { speed: 1.5 })).toThrow(RangeError);
+	});
+});

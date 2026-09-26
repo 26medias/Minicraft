@@ -106,6 +106,21 @@ export class FakeWorld implements WorldView {
 		return this.inWorld(fx, fy, fz) ? this.generated(fx, fy, fz) : AIR;
 	}
 
+	/** True when the cell was written by `set` (the fake's stand-in for the server overlay / local writes). */
+	isEdited(x: number, y: number, z: number): boolean {
+		return this.overlay.has(`${Math.floor(x)},${Math.floor(y)},${Math.floor(z)}`);
+	}
+
+	/** Every `set` cell of chunk (cx, cz), in world coordinates. */
+	editedCellsInChunk(cx: number, cz: number): Array<[number, number, number]> {
+		const out: Array<[number, number, number]> = [];
+		for (const k of this.overlay.keys()) {
+			const [x, y, z] = k.split(',').map(Number);
+			if (Math.floor(x / 16) === cx && Math.floor(z / 16) === cz) out.push([x, y, z]);
+		}
+		return out;
+	}
+
 	/** Test helper: the topmost solid block's y in a column, or −1. */
 	surfaceY(x: number, z: number): number {
 		for (let y = WORLD_HEIGHT - 1; y >= 0; y--) if (isSolidId(this.getBlock(x, y, z))) return y;
@@ -121,18 +136,40 @@ export function player(p: Partial<BotPlayer> & { id: number; name: string }): Bo
 /** One recorded body call, for loop tests. */
 export type BodyCall = { fn: string; args: unknown[] };
 
+const BEDROCK_ID = id('bedrock');
+
 export class FakeBody implements Body {
 	you = 99;
 	current: Pose = { x: 0, y: 64, z: 0, yaw: 0, pitch: 0 };
 	list: BotPlayer[] = [];
 	entries: JournalEntry[] = [];
 	calls: BodyCall[] = [];
+	/** Set to connect this body's writes and motion to a world, as the real SDK's `client.world` does. */
+	world?: FakeWorld;
 	/** What `walkTo`/`flyTo` return; replace for a never-resolving or rejecting walk. */
 	walkImpl: (t: { x: number; z: number }) => Promise<WalkResult> = async () => 'arrived';
 	flyImpl: (t: { x: number; y: number; z: number }) => Promise<WalkResult> = async () => 'arrived';
 	placeImpl: (x: number, y: number, z: number, name: string) => Promise<boolean> = async () => true;
+	/** Default, when `world` is set: false for air/bedrock, else `world.set(x, y, z, 0)` and true (the SDK's `break` rule). */
+	breakImpl: (x: number, y: number, z: number) => Promise<boolean> = async (x, y, z) => {
+		if (!this.world) return true;
+		const cur = this.world.getBlock(x, y, z);
+		if (cur === AIR || cur === BEDROCK_ID) return false;
+		this.world.set(x, y, z, AIR);
+		return true;
+	};
+	/** Default, when `world` is set: false for air/liquid/bedrock, else `world.set(x, y, z, 0)` and true (the SDK's `mine` rule). */
+	mineImpl: (x: number, y: number, z: number) => Promise<boolean> = async (x, y, z) => {
+		if (!this.world) return true;
+		const cur = this.world.getBlock(x, y, z);
+		if (cur === AIR || cur === BEDROCK_ID || this.world.isLiquid(cur)) return false;
+		this.world.set(x, y, z, AIR);
+		return true;
+	};
 	private readonly editCbs = new Set<(e: EditEvent) => void>();
 	private readonly fxCbs = new Set<(fx: FxMsg) => void>();
+	/** Identifies whichever walk or flight is currently pending (they share one slot, as the SDK). */
+	private pendingMotion: { resolve: (r: WalkResult) => void } | null = null;
 
 	pose(): Pose {
 		return { ...this.current };
@@ -142,18 +179,63 @@ export class FakeBody implements Body {
 		return this.list.map((p) => ({ ...p }));
 	}
 
-	walkTo(t: { x: number; z: number }): Promise<WalkResult> {
-		this.calls.push({ fn: 'walkTo', args: [t] });
-		return this.walkImpl(t);
+	/** Resolves a still-pending walk or flight 'cancelled' (a new walkTo/flyTo, a move, as the SDK). */
+	private cancelMotion(): void {
+		const p = this.pendingMotion;
+		this.pendingMotion = null;
+		if (p) p.resolve('cancelled');
+	}
+
+	walkTo(t: { x: number; z: number }, opts?: { speed?: number }): Promise<WalkResult> {
+		this.calls.push({ fn: 'walkTo', args: [t, opts] });
+		this.cancelMotion();
+		return new Promise<WalkResult>((resolve, reject) => {
+			const token = { resolve };
+			this.pendingMotion = token;
+			this.walkImpl(t).then(
+				(r) => {
+					if (this.pendingMotion !== token) return; // superseded or already cancelled
+					this.pendingMotion = null;
+					if (r === 'arrived' && this.world) {
+						this.current = { ...this.current, x: t.x, z: t.z, y: this.world.groundY(Math.floor(t.x), Math.floor(t.z), this.current.y) ?? this.current.y };
+					}
+					resolve(r);
+				},
+				(err: unknown) => {
+					if (this.pendingMotion !== token) return; // superseded or already cancelled: swallow, don't reject a settled promise
+					this.pendingMotion = null;
+					reject(err);
+				},
+			);
+		});
 	}
 
 	flyTo(t: { x: number; y: number; z: number }): Promise<WalkResult> {
 		this.calls.push({ fn: 'flyTo', args: [t] });
-		return this.flyImpl(t);
+		this.cancelMotion();
+		return new Promise<WalkResult>((resolve, reject) => {
+			const token = { resolve };
+			this.pendingMotion = token;
+			this.flyImpl(t).then(
+				(r) => {
+					if (this.pendingMotion !== token) return; // superseded or already cancelled
+					this.pendingMotion = null;
+					// Not otherwise: an existing companion test relies on the fake not moving.
+					if (r === 'arrived' && this.world) this.current = { ...this.current, x: t.x, y: t.y, z: t.z };
+					resolve(r);
+				},
+				(err: unknown) => {
+					if (this.pendingMotion !== token) return; // superseded or already cancelled: swallow, don't reject a settled promise
+					this.pendingMotion = null;
+					reject(err);
+				},
+			);
+		});
 	}
 
 	move(p: PoseInput): void {
 		this.calls.push({ fn: 'move', args: [p] });
+		this.cancelMotion();
 		this.current = { ...this.current, ...p };
 	}
 
@@ -163,7 +245,28 @@ export class FakeBody implements Body {
 
 	place(x: number, y: number, z: number, name: string): Promise<boolean> {
 		this.calls.push({ fn: 'place', args: [x, y, z, name] });
-		return this.placeImpl(x, y, z, name);
+		return this.placeImpl(x, y, z, name).then((ok) => {
+			if (ok && this.world) this.world.set(x, y, z, name);
+			return ok;
+		});
+	}
+
+	break(x: number, y: number, z: number): Promise<boolean> {
+		this.calls.push({ fn: 'break', args: [x, y, z] });
+		return this.breakImpl(x, y, z);
+	}
+
+	mine(x: number, y: number, z: number): Promise<boolean> {
+		this.calls.push({ fn: 'mine', args: [x, y, z] });
+		return this.mineImpl(x, y, z);
+	}
+
+	stopMining(): void {
+		this.calls.push({ fn: 'stopMining', args: [] });
+	}
+
+	fx(msg: Omit<FxMsg, 't' | 'by'>): void {
+		this.calls.push({ fn: 'fx', args: [msg] });
 	}
 
 	async revert(sinceMs?: number): Promise<number> {

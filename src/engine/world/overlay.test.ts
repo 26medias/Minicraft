@@ -109,3 +109,23 @@ describe('ChunkOverlay', () => {
 		expect(c.modified).toBe(false);
 	});
 });
+
+describe('ChunkOverlay.cellsIn', () => {
+	// Red if cellsIn returns local coords, or leaks cells of a neighbouring chunk.
+	it('lists one chunk\'s cells in world coordinates only', () => {
+		const o = new ChunkOverlay();
+		o.set(17, 70, 33, 1, 0, 0); // chunk (1, 2)
+		o.set(18, 71, 34, 2, 0, 0); // chunk (1, 2)
+		o.set(1, 70, 1, 1, 0, 0); // chunk (0, 0)
+		const cells = o.cellsIn(1, 2).sort((a, b) => a[0] - b[0]);
+		expect(cells).toEqual([[17, 70, 33], [18, 71, 34]]);
+		expect(o.cellsIn(5, 5)).toEqual([]);
+	});
+
+	// Red: chunkIndex(-1, 32) === 0 with no bounds check, so cellsIn would alias onto chunk (0, 0)'s cell.
+	it('returns nothing for an out-of-world chunk that would alias a real one', () => {
+		const o = new ChunkOverlay();
+		o.set(5, 60, 5, 1, 0, 0); // chunk (0, 0), index 0
+		expect(o.cellsIn(-1, 32)).toEqual([]);
+	});
+});

@@ -16,6 +16,15 @@ export { EYE_HEIGHT, FLY_SPEED, WALK_SPEED } from '../../../src/game/player-cons
 /** The catalog's solidity rules, as pure functions of a block id (the same ones `BotWorld.isSolid` / `isLiquid` use). */
 export { isLiquid as isLiquidId, isSolid as isSolidId } from '../../../src/data/blocks.data';
 export type { VoxelHit } from '../../../src/engine/input/raycast';
+/** Blocks the world generator places (a bot can mine only these) and blocks only crafting makes (never mined, never held by a bot). */
+export { WORLDGEN_BLOCKS, CRAFTED_ONLY } from '../../../src/data/crafting.data';
+import { spawnV3 } from '../../../src/engine/world/v3/spawn';
+/** The world's generated spawn column, the point "first" joins spawn at (the game uses spawnV3 on every gen). brain2 spec §6. */
+export function worldSpawn(seed: number, _gen: number): { x: number; z: number } {
+	// The game's resolveMpSpawn uses spawnV3 for 'first' joins on every gen (mp-spawn.ts:27); so does this.
+	const s = spawnV3(seed);
+	return { x: s.x, z: s.z };
+}
 
 /**
  * The block ids of one generated chunk (before any player edit), exactly as the game generates it:

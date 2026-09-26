@@ -20,11 +20,17 @@ export interface Body {
 	readonly you: number;
 	pose(): Pose;
 	players(): PlayerView[];
-	walkTo(target: { x: number; z: number }): Promise<WalkResult>;
+	walkTo(target: { x: number; z: number }, opts?: { speed?: number }): Promise<WalkResult>;
 	flyTo(target: { x: number; y: number; z: number }): Promise<WalkResult>;
 	move(pose: PoseInput): void;
 	lookAt(x: number, y: number, z: number): void;
 	place(x: number, y: number, z: number, name: string): Promise<boolean>;
+	break(x: number, y: number, z: number): Promise<boolean>;
+	mine(x: number, y: number, z: number): Promise<boolean>;
+	/** Cancels an in-flight `mine` (a mine-stop fx, no break). A no-op when nothing is mining. */
+	stopMining(): void;
+	/** Sends a raw cosmetic effect (the SDK's own type: no `t`/`by`, the client and server set those). */
+	fx(msg: Omit<FxMsg, 't' | 'by'>): void;
 	revert(sinceMs?: number): Promise<number>;
 	journal(): JournalEntry[];
 	/** Every server-ordered edit (anyone's, the bot's own echoes included). Returns the unsubscribe. */
@@ -44,6 +50,10 @@ export interface WorldView {
 	raycast(origin: Tuple3, dir: Tuple3, max: number): VoxelHit | null;
 	/** The block id at a cell as the world generator made it, before any edit. */
 	generatedBlock(x: number, y: number, z: number): number;
+	/** True when the cell is in the server overlay, or was written locally by this bot since the last reconnect. */
+	isEdited(x: number, y: number, z: number): boolean;
+	/** Every edited cell of chunk (cx, cz), in world coordinates. */
+	editedCellsInChunk(cx: number, cz: number): Array<[number, number, number]>;
 	/** The world's `mustMine` flag, from its `listWorlds()` row. */
 	readonly mustMine: boolean;
 }
@@ -120,11 +130,17 @@ export function realPort(client: BotClient, listing: WorldListing): Port {
 		},
 		pose: () => client.pose(),
 		players: () => client.players(),
-		walkTo: (t) => client.walkTo(t),
+		walkTo: (t, opts) => client.walkTo(t, opts),
 		flyTo: (t) => client.flyTo(t),
 		move: (p) => client.move(p),
 		lookAt: (x, y, z) => client.lookAt(x, y, z),
 		place: (x, y, z, name) => client.place(x, y, z, name),
+		break: (x, y, z) => client.break(x, y, z),
+		mine: (x, y, z) => client.mine(x, y, z),
+		// A cancel with no SDK change: BotClient.mine calls its private cancelMine() first (sending
+		// mine-stop for a mine in flight), then resolves false for the out-of-world cell (gate 2).
+		stopMining: () => void client.mine(0, -10, 0),
+		fx: (msg) => client.fx(msg),
 		revert: (sinceMs) => client.revert(sinceMs),
 		journal: () => client.journal(),
 		onEdit(cb) {
@@ -144,6 +160,8 @@ export function realPort(client: BotClient, listing: WorldListing): Port {
 		groundY: (x, z, nearY) => world.groundY(x, z, nearY),
 		raycast: (origin, dir, max) => raycastVoxel(world, origin, dir, max),
 		generatedBlock: generated,
+		isEdited: (x, y, z) => world.isEdited(x, y, z),
+		editedCellsInChunk: (cx, cz) => world.editedCellsInChunk(cx, cz),
 		mustMine: listing.mustMine,
 	};
 

@@ -1,7 +1,7 @@
 import type { BlockId } from '../../data/blocks.data';
 import { isLiquid } from '../../data/blocks.data';
 import type { Chunk } from './chunk';
-import { CHUNK_SIZE_X, CHUNK_SIZE_Z, chunkIndex, indexOf, worldToChunk } from './coords';
+import { CHUNK_SIZE_X, CHUNK_SIZE_Z, WORLD_CHUNKS_X, WORLD_CHUNKS_Z, chunkIndex, indexOf, worldToChunk } from './coords';
 
 /** One overlay cell: block id, raw fluidMeta (0 = none/source, 0x80|d = flow), packed colour (0 = none). */
 export type OverlayCell = [id: BlockId, fluid: number, color: number];
@@ -32,6 +32,24 @@ export class ChunkOverlay {
 	get(x: number, y: number, z: number): OverlayCell | undefined {
 		const { cx, cz, lx, lz } = worldToChunk(x, z);
 		return this.chunks.get(chunkIndex(cx, cz))?.get(indexOf(lx, y, lz));
+	}
+
+	/** Every overlay cell of chunk (cx, cz), in world coordinates (read-only; the bot SDK's `editedCellsInChunk`). */
+	cellsIn(cx: number, cz: number): Array<[number, number, number]> {
+		// chunkIndex has no bounds check and aliases out-of-world chunks onto real ones (gate 2 probe).
+		if (cx < 0 || cz < 0 || cx >= WORLD_CHUNKS_X || cz >= WORLD_CHUNKS_Z) return [];
+		const cells = this.chunks.get(chunkIndex(cx, cz));
+		if (!cells) return [];
+		const out: Array<[number, number, number]> = [];
+		const plane = CHUNK_SIZE_X * CHUNK_SIZE_Z;
+		for (const i of cells.keys()) {
+			const y = Math.floor(i / plane);
+			const r = i - y * plane;
+			const lz = Math.floor(r / CHUNK_SIZE_X);
+			const lx = r - lz * CHUNK_SIZE_X;
+			out.push([cx * CHUNK_SIZE_X + lx, y, cz * CHUNK_SIZE_Z + lz]);
+		}
+		return out;
 	}
 
 	/** Snapshot rows, flat: [x, y, z, id, fluid, color, …]. */

@@ -189,7 +189,7 @@ new BotClient({ url, token, bid?, statePath?, editGapMs? })
 | `pose()` | The bot's own pose. |
 | `players()` | Everyone else (never the bot itself): `{ id, name, skin, bot, x, y, z, yaw, pitch, hasPos }`. `hasPos: false` means they haven't sent a pose yet. |
 | `move(pose)` | Sets the pose (a teleport). It is sent within 100 ms. A jump over 8 blocks snaps on the kids' screens. It cancels a walk or a flight. |
-| `walkTo({ x, z })` | Walks there in a straight line (see below). Resolves `'arrived'` or `'cancelled'`. |
+| `walkTo({ x, z }, opts?)` | Walks there in a straight line (see below). Resolves `'arrived'` or `'cancelled'`. `opts.speed` (0, 1], default 1, scales the per-pose step; outside that range it throws `RangeError`. |
 | `flyTo({ x, y, z })` | Flies there in a straight 3D line, rising over what is in the way (see below). Resolves `'arrived'` or `'cancelled'`. |
 | `lookAt(x, y, z)` | Turns the head toward a point. It only rotates. |
 | `place(x, y, z, name, color?)` | Places a block (`color` `#RRGGBB` for a `lamp`), **replacing whatever is in the cell**, as the game's replace does. The replaced block is journaled, so `revert` puts it back. Resolves `true` when sent. |
@@ -316,6 +316,8 @@ itself, before the first welcome). Detect it with `bot.on('close', (code) => { i
 | `surfaceY(x, z)` | The topmost block that is not air or liquid, or −1. |
 | `region(min, max)` | The ids of a box, bounds inclusive, as a `Uint16Array` indexed `(y−y0)·dx·dz + (z−z0)·dx + (x−x0)`. At most 32 per side (it throws beyond). A compact view for an AI. |
 | `findNearest(name, from, radius)` | The nearest cell holding that block, or `null`. The radius is capped at 32. It generates every chunk in range first, so the answer doesn't depend on what was read before. |
+| `isEdited(x, y, z)` | True when the cell is in the server overlay, or was written locally by this bot since the last reconnect. |
+| `editedCellsInChunk(cx, cz)` | Every edited cell of chunk (cx, cz) (the union of the two above), in world coordinates. |
 | `onBlockChange(cb)` | `cb(x, y, z, oldId, newId, by)`. Returns the unsubscribe function. |
 | `raycastVoxel(world, origin, dir, max)` | (a function) The first solid cell along a ray, as the game aims. |
 
@@ -331,7 +333,9 @@ generated yet.
 `blockNames()` lists every block name. Other exports: `generateChunkBlocks(seed, gen, cx, cz)` (a
 chunk's generated ids), `isSolidId(id)` and `isLiquidId(id)` (the catalog's rules as pure functions, the
 same ones `world.isSolid`/`isLiquid` use), `CLIENT_VERSION`, `EYE_HEIGHT`, `WALK_SPEED`, `FLY_SPEED` and
-`POS_EVERY_MS`.
+`POS_EVERY_MS`. `worldSpawn(seed, gen)` is the world's generated spawn column (the point a `'first'` join
+spawns at). `WORLDGEN_BLOCKS` is every block name the world generator places (a bot can mine only these);
+`CRAFTED_ONLY` is every block name only crafting makes (never mined, never held by a bot).
 
 ## Costs
 

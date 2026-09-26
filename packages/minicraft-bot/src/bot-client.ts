@@ -118,7 +118,7 @@ export type BotEvents = {
 
 type State = 'idle' | 'connecting' | 'connected' | 'reconnecting' | 'closed';
 type Settle = { resolve: (r: WalkResult) => void; reject: (e: BlockedError) => void };
-type Walk = Settle & { kind: 'walk'; tx: number; tz: number; falling: boolean };
+type Walk = Settle & { kind: 'walk'; tx: number; tz: number; falling: boolean; speed: number };
 /**
  * `ticks` / `maxTicks`: a backstop that rejects `wall` if a flight never settles. No geometry found (unit
  * tests, a 400-flight fuzz) reaches it; it only guarantees a flight can't run forever.
@@ -344,15 +344,17 @@ export class BotClient {
 	 * before moving on). Not pathfinding: it checks only the centre column (it can clip wall corners), and a
 	 * wall or a cliff it can't climb rejects with `BlockedError`. Resolves 'arrived' within 0.3 blocks, or
 	 * 'cancelled' when a new `walkTo` or `flyTo`, a `move`, a lost connection or `close()` ends it. `lookAt`
-	 * and `mine` don't cancel it.
+	 * and `mine` don't cancel it. `speed` (0, 1] scales the pace (brain2 style, spec §5.5).
 	 */
-	walkTo(target: { x: number; z: number }): Promise<WalkResult> {
+	walkTo(target: { x: number; z: number }, opts: { speed?: number } = {}): Promise<WalkResult> {
 		this.assertConnected('walkTo');
 		finite('walkTo', target.x, target.z);
+		const speed = opts.speed ?? 1;
+		if (!(speed > 0 && speed <= 1)) throw new RangeError(`walkTo: speed must be in (0, 1], got ${speed}`);
 		this.cancelMotion();
 		if (this.state !== 'connected') return Promise.resolve('cancelled');
 		return new Promise<WalkResult>((resolve, reject) => {
-			this.motion = { kind: 'walk', tx: target.x, tz: target.z, falling: false, resolve, reject };
+			this.motion = { kind: 'walk', tx: target.x, tz: target.z, falling: false, speed, resolve, reject };
 		});
 	}
 
@@ -804,7 +806,7 @@ export class BotClient {
 		const dx = w.tx - cur.x, dz = w.tz - cur.z;
 		const d = Math.hypot(dx, dz);
 		if (d <= ARRIVE) return this.arrive(w);
-		const s = Math.min(d, STEP);
+		const s = Math.min(d, STEP * w.speed);
 		const nx = cur.x + (dx / d) * s, nz = cur.z + (dz / d) * s;
 		const ny = world.groundY(nx, nz, cur.y);
 		if (ny === null) return this.blocked(w, 'noGround');

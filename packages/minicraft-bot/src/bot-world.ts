@@ -10,7 +10,7 @@
 import { World } from '../../../src/engine/world/world';
 import { ChunkOverlay } from '../../../src/engine/world/overlay';
 import { applyRemoteOps } from '../../../src/engine/world/apply-remote';
-import { CHUNK_SIZE_X, CHUNK_SIZE_Z, type WorldHeight } from '../../../src/engine/world/coords';
+import { CHUNK_SIZE_X, CHUNK_SIZE_Z, chunkIndex, worldToChunk, type WorldHeight } from '../../../src/engine/world/coords';
 import { AIR, BLOCKS, BLOCK_BY_NAME, isLiquid as isLiquidId, isSolid as isSolidId } from '../../../src/data/blocks.data';
 import { MpSync, type StorageLike } from '../../../src/net/mp-sync';
 import { decodeSnapshot } from '../../../src/net/snapshot';
@@ -82,6 +82,8 @@ export class WorldCore {
 	/** The author of the edit being applied (the echo filter's apply callback only carries ops). */
 	private applyingBy = 0;
 	private readonly storage = new MemStorage();
+	/** Cells this bot wrote with localSet since the last reset, per chunk (localSet never touches the overlay). */
+	private localEdited = new Map<number, Set<string>>();
 
 	constructor(private readonly send: (msg: object) => void) {}
 
@@ -111,6 +113,7 @@ export class WorldCore {
 		this.sync = sync;
 		this.colors = colors;
 		this.you = you;
+		this.localEdited = new Map();
 	}
 
 	get seed(): number {
@@ -251,6 +254,11 @@ export class WorldCore {
 		else this.colors.delete(key);
 		const oldId = this.world.getBlock(fx, fy, fz);
 		this.world.setBlock(fx, fy, fz, id);
+		const { cx, cz } = worldToChunk(fx, fz);
+		const ci = chunkIndex(cx, cz);
+		let set = this.localEdited.get(ci);
+		if (!set) this.localEdited.set(ci, (set = new Set()));
+		set.add(key);
 		if (flush) this.sync.flushFrame();
 		this.emit(fx, fy, fz, oldId, id, this.you);
 	}
@@ -277,6 +285,32 @@ export class WorldCore {
 	/** The lamp colour the bot knows for a cell (#RRGGBB), or null. */
 	colorAt(x: number, y: number, z: number): string | null {
 		return this.colors.get(`${Math.floor(x)},${Math.floor(y)},${Math.floor(z)}`) ?? null;
+	}
+
+	/** True when the cell is in the server overlay, or was written locally by this bot since the last reset. */
+	isEdited(x: number, y: number, z: number): boolean {
+		const fx = Math.floor(x), fy = Math.floor(y), fz = Math.floor(z);
+		if (!this.world.inBounds(fx, fy, fz)) return false; // the overlay aliases out-of-world chunks
+		if (this.overlay.get(fx, fy, fz)) return true;
+		const { cx, cz } = worldToChunk(fx, fz);
+		return this.localEdited.get(chunkIndex(cx, cz))?.has(`${fx},${fy},${fz}`) ?? false;
+	}
+
+	/** The union of the server overlay and this bot's own local writes for chunk (cx, cz), in world coordinates. */
+	editedCellsInChunk(cx: number, cz: number): Array<[number, number, number]> {
+		const seen = new Set<string>();
+		const out: Array<[number, number, number]> = [];
+		for (const c of this.overlay.cellsIn(cx, cz)) {
+			const k = c.join(',');
+			if (!seen.has(k)) { seen.add(k); out.push(c); }
+		}
+		for (const k of this.localEdited.get(chunkIndex(cx, cz)) ?? []) {
+			if (seen.has(k)) continue;
+			seen.add(k);
+			const [x, y, z] = k.split(',').map(Number);
+			out.push([x, y, z]);
+		}
+		return out;
 	}
 
 	/** Where the bot stands after a welcome: the game's own `resolveMpSpawn` (spec §7.2) on this world. */
@@ -400,6 +434,16 @@ export class BotWorld {
 	/** Subscribes to block changes (remote edits that changed the world, and the bot's own writes). Returns the unsubscribe. */
 	onBlockChange(cb: BlockChangeListener): () => void {
 		return core(this).onBlockChange(cb);
+	}
+
+	/** True when the cell was edited by anyone (the server overlay) or by this bot since the last reconnect. */
+	isEdited(x: number, y: number, z: number): boolean {
+		return core(this).isEdited(x, y, z);
+	}
+
+	/** Every edited cell of chunk (cx, cz), in world coordinates. */
+	editedCellsInChunk(cx: number, cz: number): Array<[number, number, number]> {
+		return core(this).editedCellsInChunk(cx, cz);
 	}
 }
 

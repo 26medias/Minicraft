@@ -1,3 +1,5 @@
+import type { Spiral } from './behaviours/spiral.js';
+
 export type Vec3 = { x: number; y: number; z: number };
 export const GLOBAL_AXES = ['mood', 'confidence', 'trust', 'affection', 'curiosity', 'patience', 'outlook', 'stimulation'] as const;
 export type GlobalAxis = (typeof GLOBAL_AXES)[number];
@@ -17,7 +19,8 @@ export type WorldEventKind =
 	| 'line-started' | 'looking-at-me' | 'following-me' | 'found' | 'need' | 'stuck' | 'hazard' | 'outcome';
 export interface WorldEvent { id: number; kind: WorldEventKind; t: number; player?: string; cell?: Vec3; block?: string; detail?: string; salient: boolean }
 export interface Build { id: string; template: string; variant: 'small' | 'medium'; origin: Vec3; cells: Array<{ cell: Vec3; block: string }>; status: 'planned' | 'building' | 'done' | 'reverted' | 'dismantled' }
-export interface Dig { id: string; block: string; entrance: Vec3; target: Vec3; stepsDone: number; cells: string[]; status: 'active' | 'paused' | 'done' | 'reverted' | 'dropped' }  // cells: 'x,y,z' the dig broke or filled
+/** cells: 'x,y,z' the dig broke or filled; spiral: the staircase geometry, persisted to resume (spec §6.2). */
+export interface Dig { id: string; block: string; entrance: Vec3; target: Vec3; stepsDone: number; cells: string[]; status: 'active' | 'paused' | 'done' | 'reverted' | 'dropped'; spiral: Spiral }
 export type Action =
 	| { kind: 'place'; cell: Vec3; block: string; free?: boolean }
 	| { kind: 'break'; cell: Vec3 }

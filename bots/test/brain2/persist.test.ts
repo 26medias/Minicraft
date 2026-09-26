@@ -23,7 +23,8 @@ const FULL = { relations: {}, inventory: {}, builds: [], digs: [], owned: {}, ex
 describe('brain file (spec §4.6)', () => {
 	it('round-trips relations, inventory, builds, digs, owned, explored', () => {
 		const p = tmpPath();
-		const st = { ...initialState(PIP, pose), inventory: { stone: 4 }, owned: { '1,2,3': 1 }, explored: { '0,0': true as const } };
+		const dig = { id: 'd1', block: 'iron_ore', entrance: { x: 2, y: 61, z: 2 }, target: { x: 3, y: 50, z: 2 }, stepsDone: 4, cells: ['3,60,2'], status: 'paused' as const, spiral: { px: 2, pz: 2, y0: 61, phase: 3, lastStep: 10 } };
+		const st = { ...initialState(PIP, pose), inventory: { stone: 4 }, owned: { '1,2,3': 1 }, explored: { '0,0': true as const }, digs: [dig] };
 		const wall = 1_000_000;
 		const s = new BrainSaver(p, META, () => wall);
 		s.markDirty();
@@ -32,6 +33,7 @@ describe('brain file (spec §4.6)', () => {
 		expect(file?.inventory).toEqual({ stone: 4 });
 		expect(file?.explored).toEqual(['0,0']);
 		expect(file?.owned).toEqual({ '1,2,3': 1 });
+		expect(file?.digs).toEqual([dig]);   // the spiral survives (Task 13b: needed to resume)
 	});
 	// Review Focus 3. Red if any of these crash or load: another world's file, garbage, a future schema.
 	it.each([
@@ -90,7 +92,7 @@ describe('revert reconciliation (spec §4.6)', () => {
 			inventory: { stone: 1, dirt: 0 },
 			owned: { '1,60,1': 1, '2,60,2': 0 },
 			builds: [{ id: 'b1', template: 'tower', variant: 'small' as const, origin: { x: 1, y: 60, z: 1 }, cells: [{ cell: { x: 1, y: 60, z: 1 }, block: 'stone' }], status: 'done' as const }],
-			digs: [{ id: 'd1', block: 'dirt', entrance: { x: 2, y: 61, z: 2 }, target: { x: 2, y: 50, z: 2 }, stepsDone: 1, cells: ['2,60,2'], status: 'paused' as const }],
+			digs: [{ id: 'd1', block: 'dirt', entrance: { x: 2, y: 61, z: 2 }, target: { x: 2, y: 50, z: 2 }, stepsDone: 1, cells: ['2,60,2'], status: 'paused' as const, spiral: { px: 1, pz: 2, y0: 61, phase: 0, lastStep: 10 } }],
 		};
 		const reverted = [
 			{ x: 1, y: 60, z: 1, oldId: 0, newId: 1, t: 1 }, // the bot placed stone → revert removes it → stone back to inventory

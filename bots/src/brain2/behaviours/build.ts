@@ -73,7 +73,7 @@ function boxOf(cells: Array<{ cell: Vec3 }>): { min: Vec3; max: Vec3 } {
 }
 
 /** The search anchor: the nearest kid, else the latest build, else world spawn (spec §6). */
-function anchorOf(ctx: BehaviourCtx): Vec3 {
+export function anchorOf(ctx: BehaviourCtx): Vec3 {
 	const p = ctx.pose;
 	const kid = [...ctx.kids].sort((a, b) => Math.hypot(a.pose.x - p.x, a.pose.z - p.z) - Math.hypot(b.pose.x - p.x, b.pose.z - p.z))[0];
 	if (kid) return { x: kid.pose.x, y: kid.pose.y, z: kid.pose.z };

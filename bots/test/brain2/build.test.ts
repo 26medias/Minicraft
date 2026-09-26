@@ -114,13 +114,26 @@ describe('Build (spec §6, §6.1)', () => {
 		const site = r.siteAt('house', 'medium', ox, oz);
 		expect(site.digs.length + site.fills.length).toBeGreaterThanOrEqual(5);
 		r.runner.start('build', params({ template: 'house', variant: 'medium', site }) as unknown as Record<string, unknown>);
+		const t = templateOf('house', 'medium');
+		expect(r.store.state.behaviour?.plannedEdits).toBe(site.digs.length + site.fills.length + t.cells.length);
 		expect(await r.runToEnd()).toMatchObject({ outcome: 'done' });
 		expect(r.tripwire.halted).toBeNull();
 		for (const d of site.digs) expect(r.world.getBlock(d.x, d.y, d.z), k(d)).toBe(id('stone'));   // dug, then floored
 		for (const f of site.fills) expect(r.world.getBlock(f.x, f.y, f.z), k(f)).not.toBe(0);
 		expect(r.store.state.builds[0].status).toBe('done');
-		const t = templateOf('house', 'medium');
 		expect(r.edits()).toHaveLength(site.digs.length + site.fills.length + t.cells.length);
+	});
+
+	// Spec §6: the bot never stands inside the footprint. Red if an in-reach cell is placed from inside it.
+	it('walks out of the footprint before placing', async () => {
+		const r = buildRig();
+		const site = r.siteAt('house', 'small', 150, 150);
+		r.body.current = { x: 152.5, y: Y, z: 152.5, yaw: 0, pitch: 0 };   // the footprint's centre
+		r.runner.start('build', params({ template: 'house', site }) as unknown as Record<string, unknown>);
+		await r.ticks(3);                                     // the record wait, then the first cell
+		expect(r.body.calls[0]).toMatchObject({ fn: 'walkTo' });
+		const to = r.body.calls[0].args[0] as { x: number; z: number };
+		expect(to.x < 150 - 0.3 || to.x > 155 + 0.3 || to.z < 150 - 0.3 || to.z > 155 + 0.3).toBe(true);
 	});
 
 	// Red if running out writes no need event (the runner's rule), or doesn't end failed 'need stone'.
@@ -222,6 +235,10 @@ describe('Build (spec §6, §6.1)', () => {
 			expect(r.store.state.events.some((e) => e.kind === 'stuck')).toBe(false);
 			expect(r.store.state.builds).toEqual([]);
 		}
+		// A bad material for a role the template doesn't use (a wall has no roof) is still refused.
+		const w = buildRig();
+		w.runner.start('build', params({ template: 'wall', materials: { wall: 'stone', roof: 'water' }, site: w.siteAt('wall', 'small', 150, 150) }) as unknown as Record<string, unknown>);
+		expect(w.store.state.memory.past[0]).toMatchObject({ outcome: 'failed', why: 'bad material' });
 		const r = buildRig();
 		const ctx = { world: r.world } as unknown as Parameters<typeof build.plan>[1];
 		expect(build.plan(params({ template: 'tower', materials: { wall: 'water' } }), ctx)).toEqual({ failed: 'bad material' });

@@ -11,6 +11,7 @@ import type { Action, BehaviourKind, Outcome, State, Vec3, WorldEvent } from '..
 import { build } from './build.js';
 import { FOLLOW } from './follow.js';
 import { HELP_BUILD } from './help-build.js';
+import { mine } from './mine.js';
 import { REST } from './rest.js';
 import { WATCH } from './watch.js';
 
@@ -53,6 +54,7 @@ export const BEHAVIOURS: Partial<Record<BehaviourKind, Behaviour<any, any>>> = {
 	follow: FOLLOW,
 	'help-build': HELP_BUILD,
 	build,
+	mine,
 	watch: WATCH,
 	rest: REST,
 };

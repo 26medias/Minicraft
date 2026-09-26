@@ -198,10 +198,13 @@
 		"sha256": "09b6572c30aa12cb34dc3507fc2532e2875e7b2aa837b859d71c9ea4d4be9eee"
 	},
 	"black_stained_glass": {
-		"pack": "ppce",
-		"file": "assets/minecraft/textures/block/black_stained_glass.png",
-		"commit": "28e38cab7c1f03f86364ef704f705bebcc13cb3d",
-		"sha256": "fddee53bce27950974dd597a999544bba99ac0d32e0e12cf24a8e925c41233fe"
+		"flat": [
+			29,
+			29,
+			33
+		],
+		"alpha": 140,
+		"sha256": "62b7cf2807cfe34abffca9dac70d60990500e284b14f0c393825389b346d6644"
 	},
 	"black_terracotta": {
 		"pack": "ppce",
@@ -270,10 +273,13 @@
 		"sha256": "39678594032fb9bb4174cc2a7b0d6549395d80324192a0ed6a44924a400f6f54"
 	},
 	"blue_stained_glass": {
-		"pack": "ppce",
-		"file": "assets/minecraft/textures/block/blue_stained_glass.png",
-		"commit": "28e38cab7c1f03f86364ef704f705bebcc13cb3d",
-		"sha256": "c5c1b17a532793406ed98460ef2e4ba5aaadc94b1f55085d9584299a7b175b33"
+		"flat": [
+			60,
+			68,
+			170
+		],
+		"alpha": 140,
+		"sha256": "510dd88e0013ed85a8fa55b6d25713628ae8784f0672ffa702400f4cd49dec7a"
 	},
 	"blue_terracotta": {
 		"pack": "ppce",
@@ -336,10 +342,13 @@
 		"sha256": "ddfc366669b2427633e3982e689f57cfe76624681cfb790f38f24c08a81ae8b5"
 	},
 	"brown_stained_glass": {
-		"pack": "ppce",
-		"file": "assets/minecraft/textures/block/brown_stained_glass.png",
-		"commit": "28e38cab7c1f03f86364ef704f705bebcc13cb3d",
-		"sha256": "b1bfa04020abaf9c223af907f312a73919bde00cef9bed825363bec387ac8c38"
+		"flat": [
+			131,
+			84,
+			50
+		],
+		"alpha": 140,
+		"sha256": "b38a279fff2c40e4c277ec3e9f471b00a1b3394f16f7d0b14eb7bd6cffd2f844"
 	},
 	"brown_terracotta": {
 		"pack": "ppce",
@@ -753,10 +762,13 @@
 		"sha256": "63b41402b7fb7426fd80ff67ef48677bcdb8f8fffeb6a7bac0f5468cfcf644c1"
 	},
 	"cyan_stained_glass": {
-		"pack": "ppce",
-		"file": "assets/minecraft/textures/block/cyan_stained_glass.png",
-		"commit": "28e38cab7c1f03f86364ef704f705bebcc13cb3d",
-		"sha256": "f9c580c503abd0307187ead667768ace5ede2c6aa4e6bb668f8087f3d6ccee32"
+		"flat": [
+			22,
+			156,
+			156
+		],
+		"alpha": 140,
+		"sha256": "1a398985727015eb2f95a623855be79b1f8eadd936478ddeb2896afa831646a6"
 	},
 	"cyan_terracotta": {
 		"pack": "ppce",
@@ -1131,10 +1143,13 @@
 		"sha256": "ab58b0e27d80e913b22a992c790c0b86db00f6ba912a6d0c960dfce349863335"
 	},
 	"glass": {
-		"pack": "ppce",
-		"file": "assets/minecraft/textures/block/glass.png",
-		"commit": "28e38cab7c1f03f86364ef704f705bebcc13cb3d",
-		"sha256": "b3f93523f451dd806617ecccb1cea3ddbdaea2ff93160a17e94720c41dceab16"
+		"flat": [
+			220,
+			239,
+			245
+		],
+		"alpha": 70,
+		"sha256": "ade138c08e78cb03625bea01a3491edf72eff8ab8d10f5a073daf35376d70b22"
 	},
 	"glowstone": {
 		"pack": "ppce",
@@ -1197,10 +1212,13 @@
 		"sha256": "34e4c3a0cc0721baea5e39ab2eb03ac9796f4de40fc7e1367cd22113843d5435"
 	},
 	"gray_stained_glass": {
-		"pack": "ppce",
-		"file": "assets/minecraft/textures/block/gray_stained_glass.png",
-		"commit": "28e38cab7c1f03f86364ef704f705bebcc13cb3d",
-		"sha256": "a1c95c0deafc574bd520897ea1917eb56efa68b5d450999bb706524ac7ad0937"
+		"flat": [
+			71,
+			79,
+			82
+		],
+		"alpha": 140,
+		"sha256": "e961e2fc6a51a90c0643ae93c3b6a0750a6309e5b892082029e92f7c7f0c98fc"
 	},
 	"gray_terracotta": {
 		"pack": "ppce",
@@ -1233,10 +1251,13 @@
 		"sha256": "af3e7cca8c80532cdfbb01477bf5f0e9fd109125558068b73d748e1bb6a94efc"
 	},
 	"green_stained_glass": {
-		"pack": "ppce",
-		"file": "assets/minecraft/textures/block/green_stained_glass.png",
-		"commit": "28e38cab7c1f03f86364ef704f705bebcc13cb3d",
-		"sha256": "190a57edd34ca37b028edaf9bed8a95d38a8ee5ce89abae3a34ee27ea66a74d1"
+		"flat": [
+			94,
+			124,
+			22
+		],
+		"alpha": 140,
+		"sha256": "30c79b638b7edc26b35e024778bf91f09c5215141a218541d7ffd2c244f3c24c"
 	},
 	"green_terracotta": {
 		"pack": "ppce",
@@ -1377,10 +1398,13 @@
 		"sha256": "3ce1c385d8020d9c2585d6e36961f72643e74b0275c4fcdb5ef9b0f186fd952b"
 	},
 	"light_blue_stained_glass": {
-		"pack": "ppce",
-		"file": "assets/minecraft/textures/block/light_blue_stained_glass.png",
-		"commit": "28e38cab7c1f03f86364ef704f705bebcc13cb3d",
-		"sha256": "fe10f1873940537098e89a983214e632c85f925c5c5821a86116178b088e070a"
+		"flat": [
+			58,
+			179,
+			218
+		],
+		"alpha": 140,
+		"sha256": "bf57c374234f419091a748cd117f54dd6771efa378305bd04a825a6410047740"
 	},
 	"light_blue_terracotta": {
 		"pack": "ppce",
@@ -1413,10 +1437,13 @@
 		"sha256": "00b38dc93bb8a27c7ac87f8ce3ed4a98189a19e24554b4d4bc3a4c8913b73b16"
 	},
 	"light_gray_stained_glass": {
-		"pack": "ppce",
-		"file": "assets/minecraft/textures/block/light_gray_stained_glass.png",
-		"commit": "28e38cab7c1f03f86364ef704f705bebcc13cb3d",
-		"sha256": "66be90b13fb4a8503803d7ba2ee1adbd5a574dc0edcd332b537410e75cd34940"
+		"flat": [
+			157,
+			157,
+			151
+		],
+		"alpha": 140,
+		"sha256": "2c974daf816c15017fd7320aa85fee8c799d98ea08f651bcd9f8ea1cdc88f19e"
 	},
 	"light_gray_terracotta": {
 		"pack": "ppce",
@@ -1449,10 +1476,13 @@
 		"sha256": "a75678725955d82fc4ba20bb5c4ce9929f31701536cfcdcb623b4d037acf78d0"
 	},
 	"lime_stained_glass": {
-		"pack": "ppce",
-		"file": "assets/minecraft/textures/block/lime_stained_glass.png",
-		"commit": "28e38cab7c1f03f86364ef704f705bebcc13cb3d",
-		"sha256": "c2997d8708296b97061db4885e48e3553a9a46c8be61b71a89fdb3b6a60406b9"
+		"flat": [
+			128,
+			199,
+			31
+		],
+		"alpha": 140,
+		"sha256": "046607e9376ebdbea74e2eb7601c9254bd93f9ec9f0cb4c0d1afca19e34ac1d1"
 	},
 	"lime_terracotta": {
 		"pack": "ppce",
@@ -1521,10 +1551,13 @@
 		"sha256": "fd3b1cfe130129176a5bc0c7bd1d65a4b60583a76785bb05ccce887a5321a473"
 	},
 	"magenta_stained_glass": {
-		"pack": "ppce",
-		"file": "assets/minecraft/textures/block/magenta_stained_glass.png",
-		"commit": "28e38cab7c1f03f86364ef704f705bebcc13cb3d",
-		"sha256": "c55d37ddff022585e33dba7f82326d87f1bb3d644e665a6d66cb2c3d9d756e8d"
+		"flat": [
+			199,
+			78,
+			189
+		],
+		"alpha": 140,
+		"sha256": "dff807f81e0ba076d0c1a9d67a457349794ae21cc9b629aa4368cf1777b6a34f"
 	},
 	"magenta_terracotta": {
 		"pack": "ppce",
@@ -1768,10 +1801,13 @@
 		"sha256": "b25f4169b5afe1fb54a13cbbb5f93b8282b8beccaadaf5fe3a33b261d69bfcac"
 	},
 	"orange_stained_glass": {
-		"pack": "ppce",
-		"file": "assets/minecraft/textures/block/orange_stained_glass.png",
-		"commit": "28e38cab7c1f03f86364ef704f705bebcc13cb3d",
-		"sha256": "d07ab829998249be16c7c835b03bbdfdebe409c201b46edb776a5122c67a6788"
+		"flat": [
+			249,
+			128,
+			29
+		],
+		"alpha": 140,
+		"sha256": "1fe8b5509ea12f0420d7f87e344e3d2239fe88d6d8a1c9d86d05256427da1a48"
 	},
 	"orange_terracotta": {
 		"pack": "ppce",
@@ -1893,10 +1929,13 @@
 		"sha256": "7f5157e392eb1af083797690739f76d8a256e479b9ce863fa41daa23792939dd"
 	},
 	"pink_stained_glass": {
-		"pack": "ppce",
-		"file": "assets/minecraft/textures/block/pink_stained_glass.png",
-		"commit": "28e38cab7c1f03f86364ef704f705bebcc13cb3d",
-		"sha256": "594e7550a164324d1ef7fc60db54dac52fa71261b0679d49d9cb8cc4007c5d54"
+		"flat": [
+			243,
+			139,
+			170
+		],
+		"alpha": 140,
+		"sha256": "24a3468c66fb17a26d47d78fe696c1d72f58a2bcc8e7c6ed9d4de7f469c29bd2"
 	},
 	"pink_terracotta": {
 		"pack": "ppce",
@@ -2019,10 +2058,13 @@
 		"sha256": "c769551075eee32077ba50646eefe7e389d13fcb2d0c1b32cb3dab9b0b6c1c26"
 	},
 	"purple_stained_glass": {
-		"pack": "ppce",
-		"file": "assets/minecraft/textures/block/purple_stained_glass.png",
-		"commit": "28e38cab7c1f03f86364ef704f705bebcc13cb3d",
-		"sha256": "a09435723b4f893acaf803ac85c6c93cc678c559949599ef3a3b72e9bd352b78"
+		"flat": [
+			137,
+			50,
+			184
+		],
+		"alpha": 140,
+		"sha256": "f8735aa877ef0b50afc8f421d04c2e7ca62b933c2871cc2ad70c70947a91462e"
 	},
 	"purple_terracotta": {
 		"pack": "ppce",
@@ -2157,10 +2199,13 @@
 		"sha256": "5f598854402e36f8198ffcfaacb887d9f24699aa40e73a0f537bfc275c2a9f1e"
 	},
 	"red_stained_glass": {
-		"pack": "ppce",
-		"file": "assets/minecraft/textures/block/red_stained_glass.png",
-		"commit": "28e38cab7c1f03f86364ef704f705bebcc13cb3d",
-		"sha256": "60ee7bd82a93769d6b574a20e4341804cd0c896480fca1da3f4ad393fa213b8f"
+		"flat": [
+			176,
+			46,
+			38
+		],
+		"alpha": 140,
+		"sha256": "855c545a2fd191e473c9d102b10169d06572cedfef1231258429c8bed37882c8"
 	},
 	"red_terracotta": {
 		"pack": "ppce",
@@ -2575,10 +2620,13 @@
 		"sha256": "0b127f52e88c60cf708bcdf4b66737f67cf289013bc55250fcb21ee1095130a6"
 	},
 	"tinted_glass": {
-		"pack": "refi",
-		"file": "textures/mcl_amethyst/mcl_amethyst_tinted_glass.png",
-		"commit": "33f1f719930d1d202beaa5fa6251c26d3a711149",
-		"sha256": "10ca04983be5d2532b63cb3f8459b3473726350586f9303a55538ed1cb891ed9"
+		"flat": [
+			46,
+			38,
+			54
+		],
+		"alpha": 200,
+		"sha256": "3cb38288af594f4b9920ab219e23aaccbdfe8af39c22fae2aeed338c27cca460"
 	},
 	"tnt_bottom": {
 		"derive": "tint",
@@ -2751,10 +2799,13 @@
 		"sha256": "079100175eba104d7f0131f7056c2c5e00122470a9ced340288d65792249b1fc"
 	},
 	"white_stained_glass": {
-		"pack": "ppce",
-		"file": "assets/minecraft/textures/block/white_stained_glass.png",
-		"commit": "28e38cab7c1f03f86364ef704f705bebcc13cb3d",
-		"sha256": "a586ed656641efe70ccf0a5b7b128335994515213273f9c359afa4e2991b8111"
+		"flat": [
+			249,
+			255,
+			254
+		],
+		"alpha": 140,
+		"sha256": "374eb00977cbfd1f14a0f75e79b633d4f4fcf16cfc156f1e5e763c20b74c467f"
 	},
 	"white_terracotta": {
 		"pack": "ppce",
@@ -2787,10 +2838,13 @@
 		"sha256": "afabfc9088b5e0aea43efa539ec5b63550e724f7452308207398e46300f8ea6c"
 	},
 	"yellow_stained_glass": {
-		"pack": "ppce",
-		"file": "assets/minecraft/textures/block/yellow_stained_glass.png",
-		"commit": "28e38cab7c1f03f86364ef704f705bebcc13cb3d",
-		"sha256": "6a0badae9db470fd1afd71e51a7bf6a31fd00a96a88bfd57f1e691b677d1cfd4"
+		"flat": [
+			254,
+			216,
+			61
+		],
+		"alpha": 140,
+		"sha256": "e5b3a835b57591149e80497e0dfaac7ec5e46912e209c9f5a52426325aca349f"
 	},
 	"yellow_terracotta": {
 		"pack": "ppce",

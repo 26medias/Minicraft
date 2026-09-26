@@ -86,10 +86,7 @@ export const TEXTURE_SOURCES: Record<string, TextureSource> = {
 		pack: 'ppce',
 		file: 'assets/minecraft/textures/block/black_glazed_terracotta.png',
 	},
-	black_stained_glass: {
-		pack: 'ppce',
-		file: 'assets/minecraft/textures/block/black_stained_glass.png',
-	},
+	black_stained_glass: { flat: [0x1d, 0x1d, 0x21], alpha: 140 },
 	black_terracotta: {
 		pack: 'ppce',
 		file: 'assets/minecraft/textures/block/black_terracotta.png',
@@ -119,10 +116,7 @@ export const TEXTURE_SOURCES: Record<string, TextureSource> = {
 		file: 'assets/minecraft/textures/block/blue_glazed_terracotta.png',
 	},
 	blue_ice: { pack: 'ppce', file: 'assets/minecraft/textures/block/blue_ice.png' },
-	blue_stained_glass: {
-		pack: 'ppce',
-		file: 'assets/minecraft/textures/block/blue_stained_glass.png',
-	},
+	blue_stained_glass: { flat: [0x3c, 0x44, 0xaa], alpha: 140 },
 	blue_terracotta: { pack: 'ppce', file: 'assets/minecraft/textures/block/blue_terracotta.png' },
 	blue_wool: { pack: 'ppce', file: 'assets/minecraft/textures/block/blue_wool.png' },
 	bone_block_side: { pack: 'ppce', file: 'assets/minecraft/textures/block/bone_block_side.png' },
@@ -142,10 +136,7 @@ export const TEXTURE_SOURCES: Record<string, TextureSource> = {
 		pack: 'ppce',
 		file: 'assets/minecraft/textures/block/brown_glazed_terracotta.png',
 	},
-	brown_stained_glass: {
-		pack: 'ppce',
-		file: 'assets/minecraft/textures/block/brown_stained_glass.png',
-	},
+	brown_stained_glass: { flat: [0x83, 0x54, 0x32], alpha: 140 },
 	brown_terracotta: {
 		pack: 'ppce',
 		file: 'assets/minecraft/textures/block/brown_terracotta.png',
@@ -348,10 +339,7 @@ export const TEXTURE_SOURCES: Record<string, TextureSource> = {
 		pack: 'ppce',
 		file: 'assets/minecraft/textures/block/cyan_glazed_terracotta.png',
 	},
-	cyan_stained_glass: {
-		pack: 'ppce',
-		file: 'assets/minecraft/textures/block/cyan_stained_glass.png',
-	},
+	cyan_stained_glass: { flat: [0x16, 0x9c, 0x9c], alpha: 140 },
 	cyan_terracotta: { pack: 'ppce', file: 'assets/minecraft/textures/block/cyan_terracotta.png' },
 	cyan_wool: { pack: 'ppce', file: 'assets/minecraft/textures/block/cyan_wool.png' },
 	dark_oak_leaves: { pack: 'ppce', file: 'assets/minecraft/textures/block/dark_oak_leaves.png' },
@@ -498,7 +486,7 @@ export const TEXTURE_SOURCES: Record<string, TextureSource> = {
 		pack: 'ppce',
 		file: 'assets/minecraft/textures/block/gilded_blackstone.png',
 	},
-	glass: { pack: 'ppce', file: 'assets/minecraft/textures/block/glass.png' },
+	glass: { flat: [0xdc, 0xef, 0xf5], alpha: 70 },
 	glowstone: { pack: 'ppce', file: 'assets/minecraft/textures/block/glowstone.png' },
 	gold_block: { pack: 'ppce', file: 'assets/minecraft/textures/block/gold_block.png' },
 	gold_ore: { pack: 'ppce', file: 'assets/minecraft/textures/block/gold_ore.png' },
@@ -518,10 +506,7 @@ export const TEXTURE_SOURCES: Record<string, TextureSource> = {
 		pack: 'ppce',
 		file: 'assets/minecraft/textures/block/gray_glazed_terracotta.png',
 	},
-	gray_stained_glass: {
-		pack: 'ppce',
-		file: 'assets/minecraft/textures/block/gray_stained_glass.png',
-	},
+	gray_stained_glass: { flat: [0x47, 0x4f, 0x52], alpha: 140 },
 	gray_terracotta: { pack: 'ppce', file: 'assets/minecraft/textures/block/gray_terracotta.png' },
 	gray_wool: { pack: 'ppce', file: 'assets/minecraft/textures/block/gray_wool.png' },
 	green_concrete: { pack: 'ppce', file: 'assets/minecraft/textures/block/green_concrete.png' },
@@ -533,10 +518,7 @@ export const TEXTURE_SOURCES: Record<string, TextureSource> = {
 		pack: 'refi',
 		file: 'textures/mcl_colorblocks/mcl_colorblocks_glazed_terracotta_green.png',
 	},
-	green_stained_glass: {
-		pack: 'ppce',
-		file: 'assets/minecraft/textures/block/green_stained_glass.png',
-	},
+	green_stained_glass: { flat: [0x5e, 0x7c, 0x16], alpha: 140 },
 	green_terracotta: {
 		pack: 'ppce',
 		file: 'assets/minecraft/textures/block/green_terracotta.png',
@@ -578,10 +560,7 @@ export const TEXTURE_SOURCES: Record<string, TextureSource> = {
 		pack: 'refi',
 		file: 'textures/mcl_colorblocks/mcl_colorblocks_glazed_terracotta_light_blue.png',
 	},
-	light_blue_stained_glass: {
-		pack: 'ppce',
-		file: 'assets/minecraft/textures/block/light_blue_stained_glass.png',
-	},
+	light_blue_stained_glass: { flat: [0x3a, 0xb3, 0xda], alpha: 140 },
 	light_blue_terracotta: {
 		pack: 'ppce',
 		file: 'assets/minecraft/textures/block/light_blue_terracotta.png',
@@ -599,10 +578,7 @@ export const TEXTURE_SOURCES: Record<string, TextureSource> = {
 		pack: 'ppce',
 		file: 'assets/minecraft/textures/block/light_gray_glazed_terracotta.png',
 	},
-	light_gray_stained_glass: {
-		pack: 'ppce',
-		file: 'assets/minecraft/textures/block/light_gray_stained_glass.png',
-	},
+	light_gray_stained_glass: { flat: [0x9d, 0x9d, 0x97], alpha: 140 },
 	light_gray_terracotta: {
 		pack: 'ppce',
 		file: 'assets/minecraft/textures/block/light_gray_terracotta.png',
@@ -617,10 +593,7 @@ export const TEXTURE_SOURCES: Record<string, TextureSource> = {
 		pack: 'refi',
 		file: 'textures/mcl_colorblocks/mcl_colorblocks_glazed_terracotta_lime.png',
 	},
-	lime_stained_glass: {
-		pack: 'ppce',
-		file: 'assets/minecraft/textures/block/lime_stained_glass.png',
-	},
+	lime_stained_glass: { flat: [0x80, 0xc7, 0x1f], alpha: 140 },
 	lime_terracotta: { pack: 'ppce', file: 'assets/minecraft/textures/block/lime_terracotta.png' },
 	lime_wool: { pack: 'ppce', file: 'assets/minecraft/textures/block/lime_wool.png' },
 	lodestone_side: { pack: 'refi', file: 'textures/HUD/lodestone_side4.png' },
@@ -641,10 +614,7 @@ export const TEXTURE_SOURCES: Record<string, TextureSource> = {
 		pack: 'ppce',
 		file: 'assets/minecraft/textures/block/magenta_glazed_terracotta.png',
 	},
-	magenta_stained_glass: {
-		pack: 'ppce',
-		file: 'assets/minecraft/textures/block/magenta_stained_glass.png',
-	},
+	magenta_stained_glass: { flat: [0xc7, 0x4e, 0xbd], alpha: 140 },
 	magenta_terracotta: {
 		pack: 'ppce',
 		file: 'assets/minecraft/textures/block/magenta_terracotta.png',
@@ -734,10 +704,7 @@ export const TEXTURE_SOURCES: Record<string, TextureSource> = {
 		pack: 'ppce',
 		file: 'assets/minecraft/textures/block/orange_glazed_terracotta.png',
 	},
-	orange_stained_glass: {
-		pack: 'ppce',
-		file: 'assets/minecraft/textures/block/orange_stained_glass.png',
-	},
+	orange_stained_glass: { flat: [0xf9, 0x80, 0x1d], alpha: 140 },
 	orange_terracotta: {
 		pack: 'ppce',
 		file: 'assets/minecraft/textures/block/orange_terracotta.png',
@@ -799,10 +766,7 @@ export const TEXTURE_SOURCES: Record<string, TextureSource> = {
 		pack: 'refi',
 		file: 'textures/mcl_colorblocks/mcl_colorblocks_glazed_terracotta_pink.png',
 	},
-	pink_stained_glass: {
-		pack: 'ppce',
-		file: 'assets/minecraft/textures/block/pink_stained_glass.png',
-	},
+	pink_stained_glass: { flat: [0xf3, 0x8b, 0xaa], alpha: 140 },
 	pink_terracotta: { pack: 'ppce', file: 'assets/minecraft/textures/block/pink_terracotta.png' },
 	pink_wool: { pack: 'ppce', file: 'assets/minecraft/textures/block/pink_wool.png' },
 	podzol_side: { pack: 'ppce', file: 'assets/minecraft/textures/block/podzol_side.png' },
@@ -853,10 +817,7 @@ export const TEXTURE_SOURCES: Record<string, TextureSource> = {
 		pack: 'refi',
 		file: 'textures/mcl_colorblocks/mcl_colorblocks_glazed_terracotta_purple.png',
 	},
-	purple_stained_glass: {
-		pack: 'ppce',
-		file: 'assets/minecraft/textures/block/purple_stained_glass.png',
-	},
+	purple_stained_glass: { flat: [0x89, 0x32, 0xb8], alpha: 140 },
 	purple_terracotta: {
 		pack: 'ppce',
 		file: 'assets/minecraft/textures/block/purple_terracotta.png',
@@ -921,10 +882,7 @@ export const TEXTURE_SOURCES: Record<string, TextureSource> = {
 		pack: 'ppce',
 		file: 'assets/minecraft/textures/block/red_sandstone_top.png',
 	},
-	red_stained_glass: {
-		pack: 'ppce',
-		file: 'assets/minecraft/textures/block/red_stained_glass.png',
-	},
+	red_stained_glass: { flat: [0xb0, 0x2e, 0x26], alpha: 140 },
 	red_terracotta: { pack: 'ppce', file: 'assets/minecraft/textures/block/red_terracotta.png' },
 	red_wool: { pack: 'ppce', file: 'assets/minecraft/textures/block/red_wool.png' },
 	redstone_block: { pack: 'ppce', file: 'assets/minecraft/textures/block/redstone_block.png' },
@@ -1108,7 +1066,7 @@ export const TEXTURE_SOURCES: Record<string, TextureSource> = {
 	target_side: { pack: 'ppce', file: 'assets/minecraft/textures/block/target_side.png' },
 	target_top: { pack: 'ppce', file: 'assets/minecraft/textures/block/target_top.png' },
 	terracotta: { pack: 'ppce', file: 'assets/minecraft/textures/block/terracotta.png' },
-	tinted_glass: { pack: 'refi', file: 'textures/mcl_amethyst/mcl_amethyst_tinted_glass.png' },
+	tinted_glass: { flat: [0x2e, 0x26, 0x36], alpha: 200 },
 	tnt_bottom: {
 		derive: 'tint',
 		pack: 'ppce',
@@ -1187,10 +1145,7 @@ export const TEXTURE_SOURCES: Record<string, TextureSource> = {
 		pack: 'ppce',
 		file: 'assets/minecraft/textures/block/white_glazed_terracotta.png',
 	},
-	white_stained_glass: {
-		pack: 'ppce',
-		file: 'assets/minecraft/textures/block/white_stained_glass.png',
-	},
+	white_stained_glass: { flat: [0xf9, 0xff, 0xfe], alpha: 140 },
 	white_terracotta: {
 		pack: 'ppce',
 		file: 'assets/minecraft/textures/block/white_terracotta.png',
@@ -1205,10 +1160,7 @@ export const TEXTURE_SOURCES: Record<string, TextureSource> = {
 		pack: 'refi',
 		file: 'textures/mcl_colorblocks/mcl_colorblocks_glazed_terracotta_yellow.png',
 	},
-	yellow_stained_glass: {
-		pack: 'ppce',
-		file: 'assets/minecraft/textures/block/yellow_stained_glass.png',
-	},
+	yellow_stained_glass: { flat: [0xfe, 0xd8, 0x3d], alpha: 140 },
 	yellow_terracotta: {
 		pack: 'ppce',
 		file: 'assets/minecraft/textures/block/yellow_terracotta.png',

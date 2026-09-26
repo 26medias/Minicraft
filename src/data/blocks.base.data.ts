@@ -59,7 +59,7 @@ export const BASE_BLOCKS: BlockDef[] = [
 	{ id: 7, name: 'oak_log', label: 'Oak Log', solid: true, transparent: false, translucent: false, group: 'basics', hardness: 0.8,
 		lightLevel: 0, lightFilter: 15, liquid: 'none',
 		textures: { kind: 'columnar', top: 'oak_log_top', bottom: 'oak_log_top', sides: 'oak_log' } },
-	{ id: 8, name: 'glass', label: 'Glass', solid: true, transparent: true, translucent: false, group: 'basics', hardness: 0.2,
+	{ id: 8, name: 'glass', label: 'Glass', solid: true, transparent: true, translucent: true, group: 'basics', hardness: 0.2,
 		lightLevel: 0, lightFilter: 0, liquid: 'none',
 		textures: { kind: 'uniform', all: 'glass' } },
 	{ id: 9, name: 'white_wool', label: 'White Wool', solid: true, transparent: false, translucent: false, group: 'basics', hardness: 0.5,

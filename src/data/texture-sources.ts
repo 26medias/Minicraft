@@ -10,7 +10,8 @@ export type TextureSource =
 	| { pack: Pack; file: string; alpha?: 'keep' }
 	| { over: string; pack: Pack; file: string; overlayAlpha?: number }
 	| { derive: 'tint'; pack: Pack; file: string; tint: Rgb; targetLum?: number }
-	| { same: string };
+	| { same: string }
+	| { flat: Rgb; alpha: number }; // one colour, no texture (glass; user decision 2026-09-26). Original, not from a pack.
 
 export const PACKS: Record<Pack, { title: string; repo: string; commit: string; licence: string; licenceUri: string; authors: string; url: string }> = {
 	ppce: {

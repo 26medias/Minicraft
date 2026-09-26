@@ -113,7 +113,7 @@ async function main() {
 			writeFileSync(join(ASSETS, `${name}.png`), png);
 			const r = TEXTURE_SOURCES[name];
 			const sha256 = createHash('sha256').update(png).digest('hex');
-			sources[name] = 'same' in r ? { same: r.same, sha256 } : { ...r, commit: PACKS[r.pack].commit, sha256 };
+			sources[name] = 'same' in r || 'flat' in r ? { ...r, sha256 } : { ...r, commit: PACKS[r.pack].commit, sha256 };
 		}
 		for (const f of readdirSync(ASSETS)) if (f.endsWith('.png') && !tiles.has(f.slice(0, -4))) unlinkSync(join(ASSETS, f));
 		writeFileSync(join(ASSETS, 'SOURCES.json'), JSON.stringify(sources, null, '\t') + '\n');

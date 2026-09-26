@@ -34,6 +34,10 @@ describe('renderAll (spec §4.2, §5)', () => {
 		const out = renderAll({ slime_block: { pack: 'ppce', file: 'slime.png' } }, read).get('slime_block')!;
 		for (let i = 3; i < out.length; i += 4) expect(out[i]).toBe(255);
 	});
+	it('flat fills the tile with one colour and alpha, no texture (glass, user decision 2026-09-26)', () => {
+		const t = renderAll({ blue_stained_glass: { flat: [60, 68, 170], alpha: 140 } }, read).get('blue_stained_glass')!;
+		for (let i = 0; i < t.length; i += 4) expect([...t.slice(i, i + 4)]).toEqual([60, 68, 170, 140]);
+	});
 	it('same copies the target bytes exactly', () => {
 		const m = renderAll({ stone: { pack: 'ppce', file: 'stone.png' }, cobblestone: { same: 'stone' } }, read);
 		expect(m.get('cobblestone')).toEqual(m.get('stone'));

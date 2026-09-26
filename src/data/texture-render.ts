@@ -12,7 +12,10 @@ export function renderAll(rows: Record<string, TextureSource>, readPack: (pack: 
 		const row = rows[name];
 		const mode = alphaModeFor(name);
 		let tile: Uint8Array;
-		if ('same' in row) {
+		if ('flat' in row) {
+			tile = new Uint8Array(16 * 16 * 4);
+			for (let i = 0; i < tile.length; i += 4) tile.set([...row.flat, row.alpha], i);
+		} else if ('same' in row) {
 			tile = new Uint8Array(out.get(row.same)!);
 		} else if ('over' in row) {
 			tile = composite(out.get(row.over)!, readPack(row.pack, row.file), row.overlayAlpha ?? 1);

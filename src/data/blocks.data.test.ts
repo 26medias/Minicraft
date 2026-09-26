@@ -51,10 +51,12 @@ describe('block catalog', () => {
 		for (let i = 0; i < BLOCKS.length; i++) expect(BLOCKS[i].id).toBe(i);
 	});
 
-	it('base rows carry group basics and are not translucent', () => {
+	it('base rows carry group basics and are not translucent, except glass', () => {
+		// Glass is a flat tinted transparent colour since the texture replacement (user decision
+		// 2026-09-26), so it draws in the translucent pass like stained glass.
 		for (const b of BLOCKS.slice(0, 20)) {
 			expect(b.group).toBe('basics');
-			expect(b.translucent).toBe(false);
+			expect(b.translucent, b.name).toBe(b.name === 'glass');
 		}
 	});
 

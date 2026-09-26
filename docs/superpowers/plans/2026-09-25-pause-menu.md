@@ -727,6 +727,25 @@ git commit -m "feat(pause): Esc opens the game menu in solo and multiplayer"
 
 ---
 
+### Task 5b: Existing scripts meet the pause menu
+
+**Files:**
+- Modify (only as needed): `scripts/crafting-smoke.ts`, `scripts/cheat-smoke.ts`, `scripts/mp-e2e.ts` (E13's ending and the Escape presses at ≈1140/1171), `scripts/menu-smoke.ts`, `scripts/perf-bench.ts`, `bots/` e2e if it drives a page.
+
+**Why:** with rule (b), an `Escape` with nothing open and the pointer free now **opens** the pause menu, and any unlock nobody owns opens it too. Existing scripts press Esc "to be safe" (`crafting-smoke.ts:273, :289` say "no-op if already closed") and E13 ends with `exitPointerLock()`. The menu then covers the canvas and later clicks time out.
+
+- [ ] **Step 1:** `rtk proxy grep -rn "Escape\|exitPointerLock" scripts bots --include=*.ts | grep -v node_modules` and list every hit.
+- [ ] **Step 2:** Run `npm run smoke:crafting`, `npm run smoke:cheats`, `npm run smoke:menu` on the Task 5 build. For each failure caused by the pause menu, fix the **script**, never the game: drop an Esc that was only "to be safe" when nothing is open, or, where the script really needs the pointer free, dismiss the menu afterwards by clicking `#pause-resume` (headless grants the lock, M4) and waiting for `!__mc.pause.isOpen()`. Keep every existing assertion's meaning unchanged; a changed assertion must be named in the report with the reason.
+- [ ] **Step 3:** mp-e2e: run `--only E13` (command form in Task 7 Step 2); if E13 itself breaks, apply the same rule. Leave E13 ending with the menu either open or closed, but say which — Task 7 handles both.
+- [ ] **Step 4:** All three smokes green; paste their tails. Commit the touched scripts by explicit path:
+
+```bash
+git add <each touched script>
+git commit -m "test: existing smokes dismiss the new pause menu where they free the pointer"
+```
+
+---
+
 ### Task 6: Browser smoke (`scripts/pause-smoke.ts`)
 
 **Files:**
@@ -759,8 +778,8 @@ Checks, in this order (one world, started from Single Player with the duration s
 | S9 | `lock()`, press `KeyC` (picker opens), press `Escape` | picker hidden **and** pause not open |
 | S10 | now unlocked with nothing open: press `Escape` | pause open (rule b); then Return (S7 path) |
 | S11 | `unlock()` (menu open), `page.evaluate(() => __mc.playtime.setRemaining(1))`, wait for `#playtime-freeze:not(.hidden)` | TIME'S UP visible; `#pause-root` hidden |
-| S12 | go to the menu with `page.goto(BASE)` (the freeze ended the session), start a **new** world with a duration, set `apiMode = 'delay'`, `lock()`, place a block (right-click on the ground in front — read `scripts/cheat-smoke.ts` for how it places for real and reads the cell back with `__mc.world.getBlock`), then **within 2 s** (well under AutoSave's 5 s debounce) `unlock()` and click `#pause-quit`, noting `tClick` | within 200 ms `#pause-quit` text = `Saving…` and it is disabled; a `PUT` in `apiLog` with time **after `tClick`** and before navigation; navigation **≥ 1400 ms** after `tClick` (the flush was awaited: measured 1925 ms correct vs 350 ms for a no-flush Quit); the main menu shows after navigation; Continue → `__mc.world.getBlock(x,y,z)` equals the placed block (a sanity check only: `pagehide` writes the local copy even without a flush, so this line alone cannot catch a no-flush Quit) |
-| S13 | Continue (with `apiMode = 'delay'` so the menu loads), then set `apiMode = 'hang'` **before** placing; `lock()`, place another block, within 2 s `unlock()` and click `#pause-quit`, noting `tClick` | a `PUT` in `apiLog` after `tClick`; navigation **≥ 2800 ms and ≤ 4500 ms** after `tClick` (measured 3.4 s) |
+| S12 | go to the menu with `page.goto(BASE)` (the freeze ended the session), start a **new** world with a duration, set `apiMode = 'delay'`, `lock()`, place a block (right-click on the ground in front — read `scripts/cheat-smoke.ts` for how it places for real and reads the cell back with `__mc.world.getBlock`), then **within 1 s** (well under AutoSave's 5 s debounce) `unlock()` and click `#pause-quit`, noting `tClick` | within 200 ms `#pause-quit` text = `Saving…` and it is disabled; a `PUT` in `apiLog` with time **after `tClick`** and before navigation, and the first such PUT **within 500 ms of `tClick`** (an awaited flush sends at once, ~150 ms; a mutant that only waits would let the 5 s debounce send one later); navigation **≥ 1400 ms** after `tClick` (the flush was awaited: measured 1925 ms correct vs 350 ms for a no-flush Quit); the main menu shows after navigation; Continue → `__mc.world.getBlock(x,y,z)` equals the placed block (a sanity check only: `pagehide` writes the local copy even without a flush, so this line alone cannot catch a no-flush Quit) |
+| S13 | still in the world from S12's Continue (do not reload again), set `apiMode = 'hang'` **before** placing; `lock()`, place another block, within 2 s `unlock()` and click `#pause-quit`, noting `tClick` | a `PUT` in `apiLog` after `tClick`; navigation **≥ 2800 ms and ≤ 4500 ms** after `tClick` (measured 3.4 s) |
 
 Rules for this task:
 
@@ -807,8 +826,8 @@ git commit -m "test(pause): headless smoke of the pause menu, every check with i
 **Interfaces:**
 - Consumes: `__mc.pause`, `#pause-root`, `#pause-title`, `#pause-quit` (Task 4/5); the existing `scenario(id, title, body)`, the two clients `A`, `B`, the `needMp` list and the E13 scenario as the model for placing a block and reading the other client's world (read E13 end to end first).
 
-- [ ] **Step 1:** Add scenario `E14` ("the pause menu: the shared world keeps going, and Quit says went home") **immediately after the E13 block**, and add `'E14'` to the `needMp` list (that is what makes A and B join). Placement matters: after E14, A's page is on the main menu, and E3 / E6 later in the file only check `A && B`. So E14 **ends by rejoining A**: copy the rejoin block that sits before E13 (≈ mp-e2e.ts:1094: `A = null`, a new page, `joinWorld(A, BASE, WORLD, '10 min')`, sleep 1500 — use its real code). Steps:
-  1. A: lock the canvas, then `document.exitPointerLock()` → `#pause-root` visible, `#pause-title` = `Game Menu`.
+- [ ] **Step 1:** Add scenario `E14` ("the pause menu: the shared world keeps going, and Quit says went home") **immediately after the E13 block**, and add `'E14'` to the `needMp` list (that is what makes A and B join). Placement matters: after E14, A's page is on the main menu, and E3 / E6 later in the file only check `A && B`. So E14 **ends by rejoining A**: wait for B's log to show A's `left` (as E13 does), `await` close A's old page, then copy the rejoin block that sits before E13 (≈ mp-e2e.ts:1094: `A = null`, a new page, `joinWorld(A, BASE, WORLD, '10 min')`, sleep 1500 — use its real code). Also add `'E14'` to that line-1094 rejoin list, so `--only E2,E14` does not skip E14 silently. Steps:
+  1. A may arrive with the Game Menu already open (E13 ends with `exitPointerLock()`, which now opens it; Task 5b may also have changed E13's ending). If `__mc.pause.isOpen()`: click `#pause-resume` and wait for the lock. Then (locked) `document.exitPointerLock()` → `#pause-root` visible, `#pause-title` = `Game Menu`.
   2. B places a block (as E13 does). Poll A's `__mc.world.getBlock(x,y,z)` until it equals the block (≤ 5 s) **while A's menu is still open** — assert both.
   3. A clicks `#pause-quit`. B: wait (≤ 5 s) for a toast whose text contains `went home` (read how other scenarios read toasts; the toast text comes from `leavingText`). A: wait for navigation, then assert the main menu is showing and `sessionStorage.getItem('mp:autojoin')` is null (use the real `AUTOJOIN_KEY` value from `src/game/boot.ts`).
 - [ ] **Step 2:** Run `MP_E2E_SCRATCH=<a dir under the session scratchpad> PATH=$HOME/.local/go/bin:$PATH npm run e2e:mp -- --only E14` (it starts its own local `mcserver` on a temp database; never the live one) → E14 passes. Then `--only E13,E14,E3,E6` (check the header for the list syntax) to show the rejoin leaves the later scenarios working.

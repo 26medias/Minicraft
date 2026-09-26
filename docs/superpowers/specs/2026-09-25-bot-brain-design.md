@@ -512,7 +512,11 @@ plan once → loop { planner.next → judge → ok ? execute → result : back t
    - Help-build aside, no edit on a `kid` cell or inside its buffer (§4.5);
    - the 1-block buffer around every kid's body, at every height (today's `guard.ts`);
    - no breaking a cell that touches water or lava;
-   - **the stop signal, as today's code does it:** after a kid breaks a bot block, no edits within that kid's buffer, following the kid, for `STOP_SIGNAL_MS` = 10 min (`bots/src/body/stop-signal.ts`);
+   - **the stop signal: after a kid breaks a bot block, `StopSignal` (`bots/src/body/stop-signal.ts`) gives that kid a stop for `STOP_SIGNAL_MS` = 10 min, which follows him wherever he goes. While it's active:
+     - no Help-build for that kid, as today;
+     - no edit within `STOP_RADIUS` = 16 blocks (horizontal) of him.
+
+     Rev 3.2 said "no edits within that kid's buffer", which the buffer rule already forbids, so the stop did nothing. Found while planning;
    - a gap of `EDIT_GAP_MIN_MS` = 600 between edits;
    - `--no-edits`;
    - inventory > 0 to place, except for Help-build under R12;

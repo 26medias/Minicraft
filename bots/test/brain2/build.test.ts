@@ -143,7 +143,7 @@ describe('Build (spec §6, §6.1)', () => {
 		expect(await r.runToEnd()).toMatchObject({ outcome: 'failed', why: 'need stone' });
 		expect(r.edits()).toHaveLength(5);
 		expect(r.store.state.events.filter((e) => e.kind === 'need')).toEqual([expect.objectContaining({ block: 'stone', salient: true })]);
-		expect(r.store.state.builds[0].status).toBe('building');
+		expect(r.store.state.builds[0].status).toBe('abandoned');
 	});
 
 	// Red if a site cell turning kid is ignored (the bot builds around the kid's block), if it doesn't replan to
@@ -293,5 +293,35 @@ describe('Build (spec §6, §6.1)', () => {
 		expect(standing(b, world)).toBe(false);
 		for (const c of cells.slice(0, Math.ceil(cells.length / 2))) world.set(c.cell.x, c.cell.y, c.cell.z, 'stone');
 		expect(standing(b, world)).toBe(true);
+	});
+	// Fix round (batch F, concern 2). Red if a failed Build keeps its 'building' record: 17 in a 20-minute lone run,
+	// each one logged and avoided forever.
+	it('a Build that fails with nothing placed removes its record', async () => {
+		const r = buildRig({ inventory: {} });
+		r.runner.start('build', params({ template: 'tower', site: r.siteAt('tower', 'small', 150, 150) }) as unknown as Record<string, unknown>);
+		await r.ticks(1);
+		expect(r.store.state.builds).toHaveLength(1);                   // recorded through the first wait
+		expect(await r.runToEnd()).toMatchObject({ outcome: 'failed', why: 'need stone' });
+		expect(r.edits()).toHaveLength(0);
+		expect(r.store.state.builds).toEqual([]);
+	});
+
+	// Fix round (batch F, concern 2). Red if a partly placed failed Build stays 'building', or is removed (its cells
+	// would be forgotten by renew, avoid and revert --builds); standing() still decides clutter.
+	it('a Build that fails with some cells placed becomes abandoned, not standing', async () => {
+		const r = buildRig({ inventory: { stone: 5 } });
+		r.runner.start('build', params({ template: 'tower', site: r.siteAt('tower', 'small', 150, 150) }) as unknown as Record<string, unknown>);
+		expect(await r.runToEnd()).toMatchObject({ outcome: 'failed', why: 'need stone' });
+		expect(r.store.state.builds).toHaveLength(1);
+		const b = r.store.state.builds[0];
+		expect(b.status).toBe('abandoned');
+		expect(standing(b, r.world)).toBe(false);
+		// Interrupted with nothing placed: removed too (every not-done ending).
+		const q = buildRig({ inventory: { stone: 400 } });
+		q.runner.start('build', params({ template: 'tower', site: q.siteAt('tower', 'small', 150, 150) }) as unknown as Record<string, unknown>);
+		await q.ticks(1);
+		expect(q.store.state.builds).toHaveLength(1);
+		q.runner.end('interrupted', 'test');
+		expect(q.store.state.builds).toEqual([]);
 	});
 });

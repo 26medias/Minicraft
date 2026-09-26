@@ -71,7 +71,7 @@ export function createPerceiver(d: { body: Body; world: WorldView; own: Ownershi
 						raw.push({ kind: 'broke-my-block', t: now, player: e.byName, cell, detail: st !== null && now - st <= 1000 ? 'stop' : undefined });
 					}
 					raw.push({ kind: c.newId !== 0 ? 'placed' : 'broke', t: now, player: e.byName, cell, block: d.world.blockName(c.newId !== 0 ? c.newId : (c.oldId ?? 0)) ?? undefined });
-					if (c.newId !== 0 && s.builds.some((b) => (b.status === 'building' || b.status === 'done') && nextToBuild(b.cells.map((x) => x.cell), cell))) {
+					if (c.newId !== 0 && s.builds.some((b) => (b.status === 'building' || b.status === 'done' || b.status === 'abandoned') && nextToBuild(b.cells.map((x) => x.cell), cell))) {
 						raw.push({ kind: 'added-to-my-build', t: now, player: e.byName, cell });
 					}
 				}

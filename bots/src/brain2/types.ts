@@ -18,7 +18,7 @@ export type WorldEventKind =
 	| 'placed' | 'broke' | 'player-near' | 'player-arrived' | 'player-gone' | 'broke-my-block' | 'added-to-my-build'
 	| 'line-started' | 'looking-at-me' | 'following-me' | 'found' | 'need' | 'stuck' | 'hazard' | 'outcome';
 export interface WorldEvent { id: number; kind: WorldEventKind; t: number; player?: string; cell?: Vec3; block?: string; detail?: string; salient: boolean }
-export interface Build { id: string; template: string; variant: 'small' | 'medium'; origin: Vec3; cells: Array<{ cell: Vec3; block: string }>; status: 'planned' | 'building' | 'done' | 'reverted' | 'dismantled' }
+export interface Build { id: string; template: string; variant: 'small' | 'medium'; origin: Vec3; cells: Array<{ cell: Vec3; block: string }>; status: 'planned' | 'building' | 'done' | 'abandoned' | 'reverted' | 'dismantled' }
 /** cells: 'x,y,z' the dig broke or filled; spiral: the staircase geometry, persisted to resume (spec §6.2). */
 export interface Dig { id: string; block: string; entrance: Vec3; target: Vec3; stepsDone: number; cells: string[]; status: 'active' | 'paused' | 'done' | 'reverted' | 'dropped'; spiral: Spiral }
 export type Action =

@@ -277,6 +277,15 @@ export const build: Behaviour<BuildParams, BuildPlan> = {
 	endPatch(pl, outcome, _why, ctx) {
 		let builds = ctx.state.builds;
 		if (outcome === 'done') builds = builds.map((b) => (b.id === pl.buildId ? { ...b, status: 'done' as const } : b));
+		else {
+			// Not done (batch F concern 2): with none of its cells placed the record goes; with some it is 'abandoned'
+			// (renew, avoid and standing() treat it as any other build while its cells remain).
+			const rec = builds.find((b) => b.id === pl.buildId);
+			if (rec) {
+				const placed = rec.cells.some((c) => ctx.own.classify(c.cell.x, c.cell.y, c.cell.z) === 'bot' && ctx.world.getBlock(c.cell.x, c.cell.y, c.cell.z) === blockId(c.block));
+				builds = placed ? builds.map((b) => (b.id === pl.buildId ? { ...b, status: 'abandoned' as const } : b)) : builds.filter((b) => b.id !== pl.buildId);
+			}
+		}
 		// The renewed build is dismantled only when it had cells to take apart and every one was broken; else standing() decides.
 		if (pl.renew && pl.dismantle.length > 0 && pl.dismantle.every((c) => pl.broken.has(kv(c)))) {
 			const id = pl.renew.id;

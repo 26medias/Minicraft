@@ -137,6 +137,28 @@ npm --prefix bots run bot -- builder --target local|live --world <uuid|name> --n
   progress resumes after a restart). **Log:** `bots/.state/logs/<target>/<world>/<name>-<stamp>.jsonl` (`decision`,
   `project`, `place`, `refused`, `build-end`, `stop-signal`, …). A status line every 30 s; Ctrl-C/SIGTERM stops it.
 
+## The decorator bot
+
+A small companion to the builder (`bots/src/decorator/`): it decorates around the builds the builder bots made, with
+unlimited blocks, and never mines or changes an existing block. It loops: read every builder record of the world
+(`bots/.state/builder/<target>/<world>/*.json`, all bots) → the model picks one of the ≤ 4 nearest builds (else the
+least decorated, then nearest) → ≤ 3 candidate decorations (corner light posts, a flower patch, a leaf bush, a path out
+of the door, a little fenced garden), each a short cell list → the model picks one (else random) → place it cell by
+cell, flying within reach like the builder → rest `--rest-sec` with an idle look-around → again.
+
+```bash
+npm --prefix bots run bot -- decorator --target local|live --world <uuid|name> --name <n> [--skin <s>] \
+	--brain laya|jev [--compare] [--rest-sec N] [--no-edits] [--i-deployed-the-server]
+```
+
+- **Where:** only into air, only on natural or bot ground, outside every build's footprint and within 4 blocks of
+  the chosen build's; never in front of a door except for the path. Blocks come from `DECOR_BLOCKS` in
+  `decor.ts` (checked against the SDK's `blockNames()`).
+- **Safety and engines:** as the builder (`checkPlace` = brain2's `judgeSafety` with `allowFree`, kid cells and their
+  buffer, kid body buffer, stop signal, Tripwire; `--brain`/`--compare` as above). Builder-owned cells count as bot
+  cells, so the ground beside a build is not mistaken for a kid's.
+- **State:** `bots/.state/decorator/<target>/<world>/<name>.json`; log as the builder's. e2e leg: `decorator`.
+
 ## The live checklist
 
 Running against the kids' real world is the same command with `--target live`, plus:

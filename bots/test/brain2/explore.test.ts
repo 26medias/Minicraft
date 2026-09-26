@@ -80,10 +80,12 @@ describe('Explore (spec §6)', () => {
 		expect(r.store.state.behaviour?.kind).toBe('explore');
 	});
 
-	// Red if blocked walks are retried forever, or the failure isn't `stuck`.
-	it('fails stuck after 3 blocked walks', async () => {
+	// Red if blocked walks are retried forever, or the failure isn't `stuck`. The runner's fallback flight is
+	// blocked too, so each walk is one failure.
+	it('fails stuck after 3 blocked walks (their fallback flights blocked too)', async () => {
 		const r = rig();
 		r.body.walkImpl = () => Promise.reject(new BlockedError(r.body.pose(), 'wall'));
+		r.body.flyImpl = () => Promise.reject(new BlockedError(r.body.pose(), 'wall', 'flyTo'));
 		r.runner.start('explore', {});
 		for (let i = 0; i < 20 && r.store.state.behaviour; i++) await r.ticks(1);
 		expect(r.walks()).toHaveLength(3);

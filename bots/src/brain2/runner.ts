@@ -2,8 +2,8 @@
  * The behaviour runner (spec §7): one action in flight at a time, paced by style, and every action
  * judged by safety (§7.1 tier 1), sense (tier 2) and fit (tier 3, injected) before it runs.
  */
-import { CRAFTED_ONLY, WORLDGEN_BLOCKS, blockId } from 'minicraft-bot';
-import { createFollowState, followTick, stopMoving, type FollowState } from '../body/act.js';
+import { CRAFTED_ONLY, WORLDGEN_BLOCKS, blockId, type WalkResult } from 'minicraft-bot';
+import { createFollowState, followTick, isBlocked, stopMoving, type FollowState } from '../body/act.js';
 import type { StopSignal } from '../body/stop-signal.js';
 import type { Body, WorldView } from '../port.js';
 import type { Clock } from './clock.js';
@@ -15,7 +15,7 @@ import { styleOf, type Style } from './style.js';
 import { EDIT_KINDS, type Action, type ActionEntry, type ActiveBehaviour, type BehaviourKind, type Outcome, type Vec3, type WorldEvent } from './types.js';
 import { BEHAVIOURS, type Behaviour, type BehaviourCtx } from './behaviours/behaviour.js';
 import { SALIENCE } from './data/salience.data.js';
-import { climbPath } from './behaviours/spiral.js';
+import { RING, climbPath } from './behaviours/spiral.js';
 import { escapeTarget } from './behaviours/mine.js';
 
 export type FitFn = (a: Action, ctx: BehaviourCtx) => Promise<'yes' | 'wait' | 'no'>;
@@ -246,6 +246,13 @@ export class BehaviourRunner {
 		this.failed('stuck (climb)');
 	}
 
+	/** True when a walk target is a ring (step) column of an active or paused dig's staircase (not its pillar). */
+	private inStaircase(to: { x: number; z: number }): boolean {
+		const x = Math.floor(to.x), z = Math.floor(to.z);
+		return this.d.store.state.digs.some((d) => (d.status === 'active' || d.status === 'paused') && !!d.spiral
+			&& RING.some(([dx, dz]) => d.spiral.px + dx === x && d.spiral.pz + dz === z));
+	}
+
 	private apply(p: Patch): void {
 		if (p.length) this.d.store.apply(p, CAUSE);
 	}
@@ -358,7 +365,19 @@ export class BehaviourRunner {
 					break;
 				case 'walk': {
 					this.inFlight = 'walk';
-					const r = await body.walkTo(a.to, { speed: ctx.style.walkSpeed });
+					let r: WalkResult;
+					try {
+						r = await body.walkTo(a.to, { speed: ctx.style.walkSpeed });
+					} catch (err) {
+						// walkTo is a straight line with no pathfinding: at a wall or a cliff, fly to the same column
+						// (the kids fly too). Never for a dig's step walks, which must stay in the staircase.
+						if (!isBlocked(err) || this.gen !== gen || this.inStaircase(a.to)) throw err;
+						const p = body.pose();
+						const to = { x: a.to.x, y: world.groundY(Math.floor(a.to.x), Math.floor(a.to.z), p.y + 16) ?? p.y, z: a.to.z };
+						this.d.log('walk-fly', { to });
+						this.inFlight = 'fly';
+						r = await body.flyTo(to);                 // blocked too → the outer catch: one failure
+					}
 					cancelled = r === 'cancelled';
 					ok = r === 'arrived';
 					if (ok) this.arrivalT = this.d.clock();

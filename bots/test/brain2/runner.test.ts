@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
-import type { WalkResult } from 'minicraft-bot';
+import { BlockedError, type WalkResult } from 'minicraft-bot';
 import { BehaviourRunner, type RunnerDeps } from '../../src/brain2/runner.js';
 import { BEHAVIOURS, type Behaviour, type Next } from '../../src/brain2/behaviours/behaviour.js';
 import { createPerceiver } from '../../src/brain2/perception.js';
@@ -9,7 +9,8 @@ import { Store, initialState } from '../../src/brain2/store.js';
 import { ManualClock } from '../../src/brain2/clock.js';
 import { PIP } from '../../src/brain2/data/personalities.data.js';
 import { StopSignal } from '../../src/body/stop-signal.js';
-import type { Action } from '../../src/brain2/types.js';
+import type { Action, Dig } from '../../src/brain2/types.js';
+import { spiralStep } from '../../src/brain2/behaviours/spiral.js';
 import { FakeBody, FakeWorld, id, player } from '../fake-port.js';
 
 // Seed 12345's surface is at y≈104–138, so these tests work in open air at y 200.
@@ -392,5 +393,91 @@ describe('BehaviourRunner (spec §7)', () => {
 		expect(r.store.state.memory.current).toBeNull();
 		expect(r.store.state.memory.past[0]).toMatchObject({ outcome: 'done' });
 		expect(r.logs.some(([k, d]) => k === 'error' && JSON.stringify(d).includes('bad end'))).toBe(true);
+	});
+	// Fix (live log): walkTo is a straight line and rejects BlockedError at a wall or cliff; the kids fly (creative),
+	// so a blocked walk is retried as a flight to the same column's ground before it counts as a failure.
+	describe('a blocked walk falls back to a flight', () => {
+		const blocked = (r: ReturnType<typeof rig>) => () => Promise.reject(new BlockedError(r.body.pose(), 'wall'));
+		const dig = (status: Dig['status']): Dig => ({
+			id: 'd1', block: 'stone', entrance: { x: 10, y: Y, z: 10 }, target: { x: 11, y: Y - 10, z: 10 }, stepsDone: 3, cells: [], status,
+			spiral: { px: 10, pz: 10, y0: Y, phase: 0, lastStep: 9 },
+		});
+		const withDig = (r: ReturnType<typeof rig>, status: Dig['status']) =>
+			r.store.apply([{ path: ['digs'], value: [dig(status)] }], { kind: 'body', by: 'test' });
+
+		// Red if a blocked walk counts as a failure (no flight), or the flight doesn't aim at the target column's ground.
+		it('a blocked walk flies to the same target, and the action succeeds with no failure counted', async () => {
+			const r = rig();
+			r.body.walkImpl = blocked(r);
+			BEHAVIOURS.watch = scripted([{ kind: 'walk', to: { x: 20.5, z: 20.5 }, speed: 1 }, 'done']);
+			r.runner.start('watch', {});
+			await r.steps(3);
+			expect(r.calls('walkTo')).toHaveLength(1);
+			const g = r.world.groundY(20, 20, Y + 16) ?? Y;
+			expect(r.calls('flyTo').map((c) => c.args[0])).toEqual([{ x: 20.5, y: g, z: 20.5 }]);
+			expect(r.store.state.memory.past[0]).toMatchObject({ outcome: 'done' });
+			expect(r.store.state.memory.past[0]).not.toMatchObject({ why: expect.stringContaining('failed') });
+		});
+
+		// Red if the fallback flight counts as the result when it is also blocked (no failure), or counts twice.
+		it('a blocked walk whose flight is blocked too is one failure', async () => {
+			const r = rig();
+			r.body.walkImpl = blocked(r);
+			r.body.flyImpl = blocked(r);
+			BEHAVIOURS.watch = scripted([{ kind: 'walk', to: { x: 20.5, z: 20.5 }, speed: 1 }]);
+			r.runner.start('watch', {});
+			await r.step();
+			expect(r.calls('walkTo')).toHaveLength(1);
+			expect(r.calls('flyTo')).toHaveLength(1);
+			expect(r.store.state.behaviour?.failures).toBe(1);
+			await r.steps(10);
+			expect(r.calls('walkTo')).toHaveLength(3);
+			expect(r.store.state.memory.past[0]).toMatchObject({ outcome: 'failed', why: 'same action failed 3 times' });
+		});
+
+		// Red if a cancelled fallback flight counts as a failure instead of being reissued.
+		it('a cancelled fallback flight is reissued, not a failure', async () => {
+			const r = rig();
+			r.body.walkImpl = blocked(r);
+			const flights: WalkResult[] = ['cancelled', 'arrived'];
+			r.body.flyImpl = async () => flights.shift() ?? 'arrived';
+			BEHAVIOURS.watch = scripted([{ kind: 'walk', to: { x: 20.5, z: 20.5 }, speed: 1 }, 'done']);
+			r.runner.start('watch', {});
+			await r.steps(4);
+			expect(r.calls('flyTo')).toHaveLength(2);
+			expect(r.store.state.memory.past[0]).toMatchObject({ outcome: 'done' });
+		});
+
+		// Red if a step walk inside an active or paused dig's staircase falls back to a flight (the dig's walks must
+		// stay walks: a flight would leave the staircase).
+		for (const status of ['active', 'paused'] as const) {
+			it(`a blocked walk onto a ${status} dig's step never flies`, async () => {
+				const r = rig();
+				withDig(r, status);
+				r.body.walkImpl = blocked(r);
+				const f = spiralStep(dig(status).spiral, 2).feet;
+				BEHAVIOURS.watch = scripted([{ kind: 'walk', to: { x: f.x + 0.5, z: f.z + 0.5 }, speed: 1 }]);
+				r.runner.start('watch', {});
+				await r.steps(10);
+				expect(r.calls('walkTo')).toHaveLength(3);
+				expect(r.calls('flyTo')).toHaveLength(0);
+				expect(r.store.state.memory.past[0]).toMatchObject({ outcome: 'failed', why: 'same action failed 3 times' });
+			});
+		}
+
+		// Red if the pillar column counts as the staircase: Mine could never reach its pillar across a wall. Also red
+		// if a done/dropped dig's area still blocks the fallback.
+		it('the pillar column, and a finished dig\'s area, still fall back to a flight', async () => {
+			for (const [status, to] of [['active', { x: 10.5, z: 10.5 }], ['done', { x: 11.5, z: 10.5 }]] as const) {
+				const r = rig();
+				withDig(r, status);
+				r.body.walkImpl = blocked(r);
+				BEHAVIOURS.watch = scripted([{ kind: 'walk', to, speed: 1 }, 'done']);
+				r.runner.start('watch', {});
+				await r.steps(3);
+				expect(r.calls('flyTo'), status).toHaveLength(1);
+				expect(r.store.state.memory.past[0]).toMatchObject({ outcome: 'done' });
+			}
+		});
 	});
 });

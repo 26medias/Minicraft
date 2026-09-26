@@ -208,7 +208,7 @@ export function stopMoving(f: FollowState, body: Body): void {
 	f.move = { gen: f.move.gen + 1, kind: null, target: null, inFlight: false, lastResult: 'cancelled' };
 }
 
-function isBlocked(err: unknown): boolean {
+export function isBlocked(err: unknown): boolean {
 	return err instanceof BlockedError || (err instanceof Error && err.name === 'BlockedError');
 }
 

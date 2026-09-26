@@ -6,6 +6,7 @@ import sharp from 'sharp';
 import { BLOCKS } from '../src/data/blocks.data.js';
 import { textureNames } from '../src/data/catalog-rules.js';
 import { DERIVED_TEXTURES, PICKAXE_TIERS, greyTint, pickaxeIcon, pickaxeIconName } from '../src/data/atlas-derive.js';
+import { TEXTURE_TINTS } from './build-atlas-tints.js';
 
 const ATLAS_SIZE = 1024;
 const TILE = 16;
@@ -16,20 +17,6 @@ const TILES_PER_ROW = Math.floor(ATLAS_SIZE / CELL); // 32
 const ASSETS_DIR = 'src/assets/blocks';
 const OUT_PNG = 'public/atlas.png';
 const OUT_JSON = 'public/atlas.json';
-
-// Textures shipped by Mojang as grayscale masks that the game tints at runtime.
-// We have no biomes, so the tint is baked in at build time.
-const TEXTURE_TINTS: Record<string, [number, number, number]> = {
-	grass_block_top: [0x79, 0xc0, 0x5a], // plains-biome grass green
-	water_still: [0x3f, 0x76, 0xe4], // Minecraft plains-biome water blue
-	oak_leaves: [0x77, 0xab, 0x2f],
-	jungle_leaves: [0x77, 0xab, 0x2f],
-	acacia_leaves: [0x77, 0xab, 0x2f],
-	dark_oak_leaves: [0x77, 0xab, 0x2f],
-	mangrove_leaves: [0x77, 0xab, 0x2f],
-	birch_leaves: [0x80, 0xa7, 0x55],
-	spruce_leaves: [0x61, 0x99, 0x61],
-};
 
 function applyTint(raw: Uint8Array, tint: [number, number, number]): Uint8Array {
 	const [tr, tg, tb] = tint;

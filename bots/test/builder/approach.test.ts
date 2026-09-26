@@ -112,7 +112,7 @@ describe('builder approach (unstick)', () => {
 		const idle = body.calls.slice(n).map((c) => c.fn);
 		await h.stop();
 		expect(idle).toContain('lookAt');
-		expect(idle).toContain('flyTo');
+				expect(idle.some((f) => f === 'walkTo' || f === 'flyTo')).toBe(true); // a hop, through the navigator
 		// every placement happened with the eye within reach
 		for (const e of logs.filter((l) => l.k === 'place')) expect(e.ok).toBe(true);
 	}, 40_000);

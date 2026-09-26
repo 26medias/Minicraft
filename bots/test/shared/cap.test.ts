@@ -9,6 +9,7 @@ import { cellKey, planCells } from '../../src/builder/moves.js';
 import { PALETTES } from '../../src/builder/palettes.data.js';
 import { runDecorator, type DecoratorFile } from '../../src/decorator/decorator.js';
 import { capCount } from '../../src/shared/cap.js';
+import { readPlan, type NeighbourhoodPlan } from '../../src/foreman/plan-file.js';
 import { FakeBody, FakeWorld } from '../fake-port.js';
 
 const known = new Set(blockNames());
@@ -38,8 +39,12 @@ describe('build cap', () => {
 		])).toBe(2);
 	});
 
+	it('builds on claimed plan lots never count toward the cap', () => {
+		expect(capCount([{ status: 'done', placed: ['a'], lot: 'lot-1' }, { status: 'done', placed: ['a'] }])).toBe(1);
+	});
+
 	/** Runs a builder over a state file holding `n` finished builds, with --max-builds `max`; returns its log kinds and the body's places. */
-	async function builderRun(n: number, max: number) {
+	async function builderRun(n: number, max: number, planLot = false) {
 		const world = new FakeWorld();
 		const builds = Array.from({ length: n }, (_, i) => house(world, `b${i}`, 100 + i * 12, 100));
 		const owned: Record<string, number> = {};
@@ -48,19 +53,30 @@ describe('build cap', () => {
 		const root = mkdtempSync(join(tmpdir(), 'cap-'));
 		const statePath = join(root, 'Milo.json');
 		writeFileSync(statePath, JSON.stringify(file));
+		let planPath: string | undefined;
+		if (planLot) {
+			planPath = join(root, 'plan.json');
+			const lx = 200, lz = 100, ly = world.surfaceY(lx, lz) + 1;
+			const plan: NeighbourhoodPlan = {
+				v: 1, id: 'p1', foreman: 'Boss', t: 1, anchor: { x: lx, y: ly, z: lz }, corner: { x: lx, z: lz }, cols: 1, rows: 1,
+				lots: [{ id: 'lot-1', origin: { x: lx, y: ly, z: lz }, w: 14, d: 14, h: 14, status: 'open' }], roads: [], lamps: [],
+			};
+			writeFileSync(planPath, JSON.stringify(plan));
+		}
 		const body = new FakeBody();
 		body.world = world;
 		body.current = { x: 90, y: world.surfaceY(90, 90) + 1, z: 90, yaw: 0, pitch: 0 };
 		const log: Array<Record<string, unknown>> = [];
 		const h = runBuilder({
 			name: 'Milo', body, world, spawn: { x: 0, y: 0, z: 0 }, primary: null, noEdits: false, statePath, rng: rng(3), paceMs: 0, restMs: 10,
-			known, maxBuilds: max, log: (e) => log.push(e),
+			known, maxBuilds: max, log: (e) => log.push(e), ...(planPath ? { planPath, joinPlan: true } : {}),
 		});
 		const t0 = Date.now();
-		while (Date.now() - t0 < 1500 && !log.some((e) => e.k === 'cap-reached' || (e.k === 'decision' && e.what === 'project'))) await sleep(20);
+		while (Date.now() - t0 < 1500 && !log.some((e) => e.k === 'cap-reached' || (e.k === 'decision' && e.what === 'project') || e.lot)) await sleep(20);
 		await sleep(200);
 		await h.stop();
-		return { log, places: body.calls.filter((c) => c.fn === 'place').length, current: h.stats.current };
+		const lot = planPath ? readPlan(planPath)!.lots[0] : undefined;
+		return { log, places: body.calls.filter((c) => c.fn === 'place').length, current: h.stats.current, lot };
 	}
 
 	it('the builder at its cap (restored from its file) never plans another build and never places', async () => {
@@ -75,6 +91,12 @@ describe('build cap', () => {
 		const r = await builderRun(3, 4);
 		expect(r.log.some((e) => e.k === 'cap-reached')).toBe(false);
 		expect(r.log.some((e) => e.k === 'decision' && e.what === 'project')).toBe(true);
+	});
+
+	it('a capped --join-plan builder still claims the open plan lot (control: the same capped bot without a plan does not)', async () => {
+		const r = await builderRun(3, 3, true);
+		expect(r.lot?.claimedBy).toBe('Milo');
+		expect(r.log.some((e) => e.k === 'project' && e.lot === 'lot-1') || r.log.some((e) => e.k === 'lot-rejected' && e.lot === 'lot-1')).toBe(true);
 	});
 
 	async function decoratorRun(n: number, max: number) {

@@ -14,7 +14,6 @@ import type { Body, WorldView } from '../port.js';
 import { Ownership } from '../brain2/ownership.js';
 import { Tripwire, type KidPos } from '../brain2/safety.js';
 import { LIMITS } from '../brain2/data/limits.data.js';
-import { groundTop } from '../brain2/behaviours/site-search.js';
 import { approach, checkPlace, eyeDist, PLACE_MAX } from '../builder/builder.js';
 import type { ChoiceEngine } from '../builder/engines.js';
 import { cellKey } from '../builder/moves.js';
@@ -22,6 +21,7 @@ import type { SharedCells } from '../shared/bot-cells.js';
 import { capCount, capReached, countsTowardCap, DEFAULT_MAX_DECORATIONS } from '../shared/cap.js';
 import { candidateDecorations, niceBuild, readBuilderRecords, type DecorCell, type DecorKind, type KnownBuild } from './decor.js';
 import { StuckWatchdog } from '../nav/navigate.js';
+import { pickWanderSpot, wanderer } from '../nav/wander.js';
 import { idlePaused, PresenceGate, type WhenMode } from '../shared/when.js';
 
 export interface DecorRecord {
@@ -79,6 +79,8 @@ export function runDecorator(o: DecoratorOpts): DecoratorHandle {
 	const clock = o.clock ?? (() => Date.now());
 	// The stuck watchdog every approach on this body shares (nav/navigate.ts): its `unstick` lines go to this bot's log.
 	StuckWatchdog.for(o.body, o.world).log = (e) => o.log({ ...e, t: clock() });
+	// Idle moves (rest hops, the capped wander, the stroll): through the navigator, standing still after repeated failures.
+	const wand = wanderer(o.body, o.world, { rng: o.rng, clock, log: o.log });
 	const gate = new PresenceGate({ mode: o.when ?? 'always', players: () => o.body.players(), clock, log: (e) => o.log({ ...e, t: clock() }) });
 	const paused = () => gate.paused();
 	const pace = o.paceMs ?? 800;
@@ -264,18 +266,14 @@ export function runDecorator(o: DecoratorOpts): DecoratorHandle {
 		const until = clock() + ms;
 		const cx = b.origin.x + b.w / 2, cz = b.origin.z + b.d / 2;
 		while (!stopped && !paused() && clock() < until) {
-			const left = until - clock();
 			if (o.rng() < 0.6) {
 				// Look around: at the build, or out at the view.
 				const a = o.rng() * Math.PI * 2;
 				if (o.rng() < 0.5) o.body.lookAt(b.origin.x + o.rng() * b.w, b.origin.y + o.rng() * b.h, b.origin.z + o.rng() * b.d);
 				else o.body.lookAt(o.body.pose().x + Math.cos(a) * 10, o.body.pose().y + 1, o.body.pose().z + Math.sin(a) * 10);
 			} else {
-				const a = o.rng() * Math.PI * 2;
-				const rad = Math.max(b.w, b.d) / 2 + 2 + o.rng() * 3;
-				const x = cx + Math.cos(a) * rad, z = cz + Math.sin(a) * rad;
-				const y = groundTop(o.world, Math.floor(x), Math.floor(z)) + 1;
-				if (y > 0) await Promise.race([o.body.flyTo({ x, y, z }).catch(() => undefined), sleep(Math.min(left, 4000))]);
+				const rad = Math.max(b.w, b.d) / 2 + 2;
+				await wand.go(pickWanderSpot(o.world, { x: cx, z: cz }, o.rng, rad, rad + 3), () => !stopped && !paused() && clock() < until + 5000);
 			}
 			await sleep(Math.min(until - clock(), 2000 + o.rng() * 2500));
 		}

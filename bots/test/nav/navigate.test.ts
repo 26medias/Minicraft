@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import { BlockedError } from 'minicraft-bot';
-import { airPathToSky, navigate, StuckWatchdog, walkOrFly } from '../../src/nav/navigate.js';
+import { airPathToSky, bodyFits, navigate, StuckWatchdog, walkOrFly } from '../../src/nav/navigate.js';
+import { pickWanderSpot, wanderer } from '../../src/nav/wander.js';
 import { FakeBody, FakeWorld } from '../fake-port.js';
 import type { Vec3 } from '../../src/types.js';
 
@@ -191,5 +192,56 @@ describe('stuck watchdog', () => {
 		t = 74_999;
 		expect(await wd.guard()).toBe('ok');
 		expect(logs).toEqual([]);
+	});
+});
+
+describe('idle wander (nav/wander.ts)', () => {
+	const seq = (seed: number) => {
+		let s = seed >>> 0;
+		return () => ((s = (s * 1664525 + 1013904223) >>> 0) / 2 ** 32);
+	};
+
+	it('by a cliff: every destination is a standable open-sky cell within 12, reached through the navigator (no walk into the cliff face)', async () => {
+		const world = floorWorld();
+		world.fill({ x: 320, y: Y, z: 280 }, { x: 360, y: Y + 24, z: 360 }, 'stone'); // cliff face at x = 320
+		const body = physBody(world, { x: 316.5, y: Y, z: 300.5 });
+		const logs: Array<Record<string, unknown>> = [];
+		const w = wanderer(body, world, { rng: seq(7), clock: () => Date.now(), log: (e) => logs.push(e) });
+		const rng = seq(11);
+		for (let i = 0; i < 8; i++) {
+			const spot = pickWanderSpot(world, { x: 316.5, z: 300.5 }, rng);
+			expect(spot).not.toBeNull();
+			const s = spot!;
+			expect(Math.hypot(s.x - 316.5, s.z - 300.5)).toBeLessThanOrEqual(13);
+			expect(bodyFits(world, Math.floor(s.x), s.y, Math.floor(s.z))).toBe(true);
+			expect(world.isSolid(world.getBlock(Math.floor(s.x), s.y - 1, Math.floor(s.z)))).toBe(true);
+			expect(await w.go(s, () => true)).toBe(true);
+			expect(body.pose()).toMatchObject({ x: s.x, y: s.y, z: s.z });
+		}
+		// every walk aimed at a picked standable column: none into the cliff's inside
+		for (const c of body.calls.filter((c) => c.fn === 'walkTo')) {
+			const t = c.args[0] as { x: number; z: number };
+			const fx = Math.floor(t.x), fz = Math.floor(t.z);
+			const top = fx >= 320 ? Y + 25 : Y;
+			expect(bodyFits(world, fx, top, fz)).toBe(true);
+		}
+		expect(w.fails).toBe(0);
+	});
+
+	it('after two navigator failures it stands still and looks around instead of retrying against the wall', async () => {
+		const world = floorWorld();
+		const body = physBody(world, { x: 300.5, y: Y, z: 300.5 });
+		const blocked = () => Promise.reject(new BlockedError({ ...body.current }, 'wall', 'walkTo'));
+		body.walkImpl = blocked;
+		body.flyImpl = blocked;
+		const w = wanderer(body, world, { rng: seq(3), clock: () => Date.now(), log: () => undefined });
+		const spot = { x: 305.5, y: Y, z: 300.5 };
+		expect(await w.go(spot, () => true)).toBe(false);
+		expect(await w.go(spot, () => true)).toBe(false);
+		expect(w.fails).toBe(2);
+		const moves = body.calls.filter((c) => c.fn === 'walkTo' || c.fn === 'flyTo').length;
+		for (let i = 0; i < 5; i++) expect(await w.go(spot, () => true)).toBe(false);
+		expect(body.calls.filter((c) => c.fn === 'walkTo' || c.fn === 'flyTo').length).toBe(moves);
+		expect(body.calls.filter((c) => c.fn === 'lookAt').length).toBeGreaterThanOrEqual(5);
 	});
 });

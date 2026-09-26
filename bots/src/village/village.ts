@@ -27,6 +27,7 @@ import { planAvoidBoxes } from '../foreman/plan-file.js';
 import { boxOf, doorFronts, lampSpots, planPath, plazaGoal, VillageSearch, type Box, type Col, type LotSpec } from './plan.js';
 import { LAYOUTS, THEMES, themeBlocks, themeSlug, type Layout, type VillageTheme } from './themes.data.js';
 import { StuckWatchdog } from '../nav/navigate.js';
+import { pickWanderSpot, wanderer } from '../nav/wander.js';
 import { showtimeOf } from '../nav/showtime.js';
 import { idlePaused, PresenceGate, type WhenMode } from '../shared/when.js';
 
@@ -85,6 +86,8 @@ export function runVillage(o: VillageOpts): VillageHandle {
 	const clock = o.clock ?? (() => Date.now());
 	// The stuck watchdog every approach on this body shares (nav/navigate.ts): its `unstick` lines go to this bot's log.
 	StuckWatchdog.for(o.body, o.world).log = (e) => o.log({ ...e, t: clock() });
+	// Idle moves (rest hops, the capped wander, the stroll): through the navigator, standing still after repeated failures.
+	const wand = wanderer(o.body, o.world, { rng: o.rng, clock, log: o.log });
 	const gate = new PresenceGate({ mode: o.when ?? 'always', players: () => o.body.players(), clock, log: (e) => o.log({ ...e, t: clock() }) });
 	const paused = () => gate.paused();
 	const pace = o.paceMs ?? 800;
@@ -324,15 +327,11 @@ export function runVillage(o: VillageOpts): VillageHandle {
 	async function restNear(c: Vec3, ms: number): Promise<void> {
 		const until = clock() + ms;
 		while (!stopped && !paused() && clock() < until) {
-			const left = until - clock();
 			if (o.rng() < 0.6) {
 				const a = o.rng() * Math.PI * 2;
 				o.body.lookAt(c.x + Math.cos(a) * 8, c.y + 1 + o.rng() * 3, c.z + Math.sin(a) * 8);
 			} else {
-				const a = o.rng() * Math.PI * 2;
-				const x = c.x + 0.5 + Math.cos(a) * (2 + o.rng() * 3), z = c.z + 0.5 + Math.sin(a) * (2 + o.rng() * 3);
-				const y = groundTop(o.world, Math.floor(x), Math.floor(z)) + 1;
-				if (y > 0) await Promise.race([o.body.flyTo({ x, y, z }).catch(() => undefined), sleep(Math.min(left, 4000))]);
+				await wand.go(pickWanderSpot(o.world, { x: c.x + 0.5, z: c.z + 0.5 }, o.rng, 2, 5), () => !stopped && !paused() && clock() < until + 5000);
 			}
 			await sleep(Math.min(until - clock(), 2000 + o.rng() * 2500));
 		}

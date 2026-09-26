@@ -15,7 +15,6 @@ import type { Vec3 } from '../types.js';
 import { Ownership } from '../brain2/ownership.js';
 import { Tripwire, type KidPos } from '../brain2/safety.js';
 import { LIMITS } from '../brain2/data/limits.data.js';
-import { groundTop } from '../brain2/behaviours/site-search.js';
 import { constructBuild, loadBuilderFile, makeAsk, saveBuilderFile, type BuilderBuild, type BuilderFile } from '../builder/builder.js';
 import type { ChoiceEngine } from '../builder/engines.js';
 import { cellKey, planCells } from '../builder/moves.js';
@@ -23,6 +22,7 @@ import type { SharedCells } from '../shared/bot-cells.js';
 import { capCount, capReached, countsTowardCap, DEFAULT_MAX_BUILDS } from '../shared/cap.js';
 import { HELP_CHOICES, helpTemplate, helperSite, kidBuilding, kidPalette, type KidPlacement } from './plan.js';
 import { StuckWatchdog } from '../nav/navigate.js';
+import { pickWanderSpot, wanderer } from '../nav/wander.js';
 import { idlePaused, PresenceGate, type WhenMode } from '../shared/when.js';
 
 export interface HelperBuild extends BuilderBuild { kid: string; kidCells: Vec3[]; kidBlocks: string[]; minGap: number; rot: number }
@@ -55,6 +55,8 @@ export function runHelper(o: HelperOpts): HelperHandle {
 	const clock = o.clock ?? (() => Date.now());
 	// The stuck watchdog every approach on this body shares (nav/navigate.ts): its `unstick` lines go to this bot's log.
 	StuckWatchdog.for(o.body, o.world).log = (e) => o.log({ ...e, t: clock() });
+	// Idle moves (rest hops, the capped wander, the stroll): through the navigator, standing still after repeated failures.
+	const wand = wanderer(o.body, o.world, { rng: o.rng, clock, log: o.log });
 	const gate = new PresenceGate({ mode: o.when ?? 'always', players: () => o.body.players(), clock, log: (e) => o.log({ ...e, t: clock() }) });
 	const paused = () => gate.paused();
 	const pace = o.paceMs ?? 800;
@@ -171,10 +173,8 @@ export function runHelper(o: HelperOpts): HelperHandle {
 		const home = o.spawn;
 		const far = Math.hypot(p.x - home.x, p.z - home.z) > IDLE_NEAR_SPAWN * 2;
 		if (far || o.rng() < 0.3) {
-			const a = o.rng() * Math.PI * 2, r = far ? 3 : 2 + o.rng() * IDLE_NEAR_SPAWN;
-			const x = home.x + 0.5 + Math.cos(a) * r, z = home.z + 0.5 + Math.sin(a) * r;
-			const y = groundTop(o.world, Math.floor(x), Math.floor(z)) + 1;
-			if (y > 0) await Promise.race([o.body.flyTo({ x, y, z }).catch(() => undefined), sleep(5000)]);
+			const spot = far ? pickWanderSpot(o.world, { x: home.x + 0.5, z: home.z + 0.5 }, o.rng, 1, 4) : pickWanderSpot(o.world, { x: home.x + 0.5, z: home.z + 0.5 }, o.rng, 2, 2 + IDLE_NEAR_SPAWN);
+			await wand.go(spot, () => !stopped && !paused());
 		} else {
 			const a = o.rng() * Math.PI * 2;
 			o.body.lookAt(p.x + Math.cos(a) * 8, p.y + 1 + o.rng() * 3, p.z + Math.sin(a) * 8);

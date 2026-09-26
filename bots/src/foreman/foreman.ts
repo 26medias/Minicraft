@@ -17,7 +17,6 @@ import type { Vec3 } from '../types.js';
 import { Ownership } from '../brain2/ownership.js';
 import { Tripwire, type KidPos } from '../brain2/safety.js';
 import { LIMITS } from '../brain2/data/limits.data.js';
-import { groundTop } from '../brain2/behaviours/site-search.js';
 import { approach, checkPlace, eyeDist, PLACE_MAX } from '../builder/builder.js';
 import { cellKey } from '../builder/moves.js';
 import { readBuilderRecords } from '../decorator/decor.js';
@@ -25,6 +24,7 @@ import type { SharedCells } from '../shared/bot-cells.js';
 import { areaD, areaW, NeighbourhoodSearch, ROWS } from './layout.js';
 import { createPlan, readPlan, type NeighbourhoodPlan, type PlanCell } from './plan-file.js';
 import { StuckWatchdog } from '../nav/navigate.js';
+import { pickWanderSpot, standable, WANDER_MAX, wanderer } from '../nav/wander.js';
 import { idlePaused, PresenceGate, type WhenMode } from '../shared/when.js';
 
 export interface Progress { placed: string[]; skipped: string[]; status: 'placing' | 'done' }
@@ -74,6 +74,8 @@ export function runForeman(o: ForemanOpts): ForemanHandle {
 	const clock = o.clock ?? (() => Date.now());
 	// The stuck watchdog every approach on this body shares (nav/navigate.ts): its `unstick` lines go to this bot's log.
 	StuckWatchdog.for(o.body, o.world).log = (e) => o.log({ ...e, t: clock() });
+	// Idle moves (rest hops, the capped wander, the stroll): through the navigator, standing still after repeated failures.
+	const wand = wanderer(o.body, o.world, { rng: o.rng, clock, log: o.log });
 	const gate = new PresenceGate({ mode: o.when ?? 'always', players: () => o.body.players(), clock, log: (e) => o.log({ ...e, t: clock() }) });
 	const paused = () => gate.paused();
 	const pace = o.paceMs ?? 800;
@@ -229,9 +231,13 @@ export function runForeman(o: ForemanOpts): ForemanHandle {
 		const cx = p.corner.x + areaW(p.cols) / 2, cz = p.corner.z + areaD(p.rows) / 2;
 		while (!stopped && !paused() && clock() < until) {
 			if (o.rng() < 0.5 && p.roads.length) {
-				const r = p.roads[Math.floor(o.rng() * p.roads.length) % p.roads.length].cell;
-				const y = groundTop(o.world, r.x, r.z) + 1;
-				if (y > 0) await Promise.race([o.body.flyTo({ x: r.x + 0.5, y, z: r.z + 0.5 }).catch(() => undefined), sleep(4000)]);
+				// A standable open-sky cell near a road cell within 12 of where it stands (else near any road cell).
+				const me = o.body.pose();
+				const near = p.roads.filter((rd) => Math.hypot(rd.cell.x + 0.5 - me.x, rd.cell.z + 0.5 - me.z) <= WANDER_MAX);
+				const pool = near.length ? near : p.roads;
+				const r = pool[Math.floor(o.rng() * pool.length) % pool.length].cell;
+				const spot = standable(o.world, r.x, r.z) ?? pickWanderSpot(o.world, { x: r.x + 0.5, z: r.z + 0.5 }, o.rng, 1, 3);
+				await wand.go(spot, () => !stopped && !paused() && clock() < until + 5000);
 			} else {
 				const l = p.lots[Math.floor(o.rng() * p.lots.length) % p.lots.length];
 				o.body.lookAt(l.origin.x + l.w / 2, l.origin.y + 2, l.origin.z + l.d / 2);

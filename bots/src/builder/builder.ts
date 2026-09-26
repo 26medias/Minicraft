@@ -21,8 +21,9 @@ import type { ChoiceEngine } from './engines.js';
 import { candidateMoves, cellKey, describeMove, heuristicPick, planCells, type PlanCell } from './moves.js';
 import { palettesFor, type Palette } from './palettes.data.js';
 import { flyLeg, navigate, StuckWatchdog } from '../nav/navigate.js';
+import { pickWanderSpot, wanderer } from '../nav/wander.js';
 import type { SharedCells } from '../shared/bot-cells.js';
-import { capCount, capReached, countsTowardCap, DEFAULT_MAX_BUILDS } from '../shared/cap.js';
+import { capCount, capReached, DEFAULT_MAX_BUILDS } from '../shared/cap.js';
 import { claimLot, planAvoidBoxes, updateLot, type PlanLot } from '../foreman/plan-file.js';
 import { endLot, fitsLot, lotSite, rejectStatus, renewClaim } from '../foreman/join.js';
 import { showtimeOf } from '../nav/showtime.js';
@@ -172,6 +173,8 @@ export function runBuilder(o: BuilderOpts): BuilderHandle {
 	const clock = o.clock ?? (() => Date.now());
 	// The stuck watchdog every approach on this body shares (nav/navigate.ts): its `unstick` lines go to this bot's log.
 	StuckWatchdog.for(o.body, o.world).log = (e) => o.log({ ...e, t: clock() });
+	// Idle moves (rest hops, the capped wander, the stroll): through the navigator, standing still after repeated failures.
+	const wand = wanderer(o.body, o.world, { rng: o.rng, clock, log: o.log });
 	const gate = new PresenceGate({ mode: o.when ?? 'always', players: () => o.body.players(), clock, log: (e) => o.log({ ...e, t: clock() }) });
 	const paused = () => gate.paused();
 	const pace = o.paceMs ?? 800;
@@ -283,7 +286,7 @@ export function runBuilder(o: BuilderOpts): BuilderHandle {
 		return b;
 	}
 
-	async function pickProject(): Promise<BuilderBuild | null> {
+	async function pickProject(lotsOnly = false): Promise<BuilderBuild | null> {
 		// --join-plan: the plan's lots first (a dropped lot: the next one; a kid on it: wait); the own search when none is left.
 		for (let i = 0; o.joinPlan && i < 12 && !stopped; i++) {
 			const r = await pickLot();
@@ -292,7 +295,7 @@ export function runBuilder(o: BuilderOpts): BuilderHandle {
 			if (r) return r;
 			break;
 		}
-		if (stopped) return null;
+		if (stopped || lotsOnly) return null;
 		const c = await chooseTemplate(() => true);
 		if (!c) return null;
 		const { t, palette, picked } = c;
@@ -355,20 +358,16 @@ export function runBuilder(o: BuilderOpts): BuilderHandle {
 		const until = clock() + ms;
 		const cx = b.origin.x + b.w / 2, cz = b.origin.z + b.d / 2;
 		while (!stopped && !paused() && clock() < until) {
-			const left = until - clock();
 			const r = o.rng();
 			if (r < 0.5) {
 				// Look at a random spot on the build.
 				o.body.lookAt(b.origin.x + o.rng() * b.w, b.origin.y + o.rng() * b.h, b.origin.z + o.rng() * b.d);
 			} else {
 				// A short hop to a spot just outside the footprint (never inside it).
-				const a = o.rng() * Math.PI * 2;
-				const rad = Math.max(b.w, b.d) / 2 + 1.5 + o.rng() * 2;
-				const x = cx + Math.cos(a) * rad, z = cz + Math.sin(a) * rad;
-				const y = groundTop(o.world, Math.floor(x), Math.floor(z)) + 1;
-				if (y > 0) await Promise.race([o.body.flyTo({ x, y, z }).catch(() => undefined), sleep(Math.min(left, 4000))]);
+				const rad = Math.max(b.w, b.d) / 2 + 1.5;
+				const moved = await wand.go(pickWanderSpot(o.world, { x: cx, z: cz }, o.rng, rad, rad + 2), () => !stopped && !paused() && clock() < until + 5000);
 				if (stopped) return;
-				o.body.lookAt(cx, b.origin.y + b.h / 2, cz);
+				if (moved) o.body.lookAt(cx, b.origin.y + b.h / 2, cz);
 			}
 			await sleep(Math.min(until - clock(), 2500 + o.rng() * 2500));
 		}
@@ -382,7 +381,7 @@ export function runBuilder(o: BuilderOpts): BuilderHandle {
 		if (!capLogged) o.log({ k: 'cap-reached', t: clock(), builds: n, max: maxBuilds });
 		capLogged = true;
 		stats.current = `build cap reached (${n}/${maxBuilds}); wandering near my builds`;
-		const mine = file.builds.filter(countsTowardCap);
+		const mine = file.builds.filter((x) => x.status === 'done' || x.placed.length > 0);
 		const b = mine[Math.floor(o.rng() * mine.length) % Math.max(1, mine.length)];
 		if (b) await restNear(b, 60_000);
 		else await sleep(10_000);
@@ -408,8 +407,12 @@ export function runBuilder(o: BuilderOpts): BuilderHandle {
 			resume = null;
 			try {
 				if (!b && capReached(file.builds, maxBuilds)) {
-					await capped();
-					continue;
+					// Plan lots don't count toward the cap (the plan bounds them): a capped --join-plan bot still claims them.
+					if (o.joinPlan) b = await pickProject(true);
+					if (!b) {
+						await capped();
+						continue;
+					}
 				}
 				b ??= await pickProject();
 				if (!b) {

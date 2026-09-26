@@ -47,18 +47,20 @@ import { ollamaProposer } from './architect/llm-params.js';
 import { builderDir, decoratorStatePath, runDecorator, saveDecoratorFile, type DecoratorHandle } from './decorator/decorator.js';
 import { foremanStatePath, runForeman, saveForemanFile, type ForemanHandle } from './foreman/foreman.js';
 import { planFilePath } from './foreman/plan-file.js';
+import { landscaperStatePath, runLandscaper, saveLandscaperFile, type LandscaperHandle } from './landscaper/landscaper.js';
+import { boardPath } from './board/board.js';
 
 const BOTS_DIR = resolve(dirname(fileURLToPath(import.meta.url)), '..');
 const STATE_ROOT = resolve(BOTS_DIR, '.state');
 
-export type Command = 'companion' | 'revert' | 'builder' | 'decorator' | 'village' | 'helper' | 'architect' | 'foreman';
+export type Command = 'companion' | 'revert' | 'builder' | 'decorator' | 'village' | 'helper' | 'architect' | 'foreman' | 'landscaper';
 
 /** Splits `<companion|revert> [flags]`; flags alone mean `companion`. */
 export function parseCommand(argv: readonly string[]): { command: Command; flags: string[] } {
 	const [first, ...rest] = argv;
-	if (first === 'companion' || first === 'revert' || first === 'builder' || first === 'decorator' || first === 'village' || first === 'helper' || first === 'architect' || first === 'foreman') return { command: first, flags: rest };
+	if (first === 'companion' || first === 'revert' || first === 'builder' || first === 'decorator' || first === 'village' || first === 'helper' || first === 'architect' || first === 'foreman' || first === 'landscaper') return { command: first, flags: rest };
 	if (first === undefined || first.startsWith('--')) return { command: 'companion', flags: [...argv] };
-	throw new ConfigError(`unknown bot "${first}"; expected companion, revert, builder, decorator, village, helper, architect or foreman`);
+	throw new ConfigError(`unknown bot "${first}"; expected companion, revert, builder, decorator, village, helper, architect, foreman or landscaper`);
 }
 
 /** Builds the real brain for `--brain laya|clm` (Task 6), or `null` for `--brain scripted` (the loop
@@ -122,6 +124,14 @@ export interface CliDeps {
 	onForeman?: (h: ForemanHandle, client: BotClient) => void;
 	/** Test hook: the foreman's pause between placements (default 800 ms). */
 	foremanPaceMs?: number;
+	/** Test hook: the running landscaper and its client (the e2e stops it itself). */
+	onLandscaper?: (h: LandscaperHandle, client: BotClient) => void;
+	/** Test hook: the landscaper's rest between blasts (default: --rest-sec). */
+	landscaperRestMs?: number;
+	/** Test hook: the landscaper's mining time per block (default: the hand's time for the block). */
+	landscaperMineMs?: number;
+	/** Test hook: the side of the squares it levels (default 16). */
+	landscaperAreaSize?: number;
 }
 
 const DEFAULT_DEPS: CliDeps = {
@@ -923,6 +933,91 @@ async function architectCommand(cfg: Config, deps: CliDeps): Promise<void> {
 }
 
 /**
+ * `landscaper` (the landscaper bot): mines the ingredients, crafts Flattening TNT by the game's recipes and levels hilly
+ * ground near the neighbourhood (or where the board / a kid's red marker asks), posting 'flattened' on the shared board.
+ * Same engines (`--brain laya|jev`, `--compare`), signals and `--when` as `builder`; `--max-blasts N` (default 6).
+ */
+async function landscaperCommand(cfg: Config, deps: CliDeps): Promise<void> {
+	if (cfg.brain !== 'laya' && cfg.brain !== 'jev') throw new ConfigError(`landscaper: --brain must be laya or jev, not "${cfg.brain}"`);
+	const fetchImpl = deps.fetchImpl ?? fetch;
+	const laya = (): ChoiceEngine => layaEngine(cfg.brains.laya.url, fetchImpl, cfg.brains.laya.timeoutMs);
+	const jev = (): ChoiceEngine | null => {
+		const key = JEV_ENV_FILES.map((f) => parseJevKey(deps.readFile(f))).find((k) => k) ?? null;
+		if (!key) deps.print(`jev: no JEV_API_KEY in ${JEV_ENV_FILES.join(' or ')}; jev questions fall back`);
+		return key ? jevEngine(key, fetchImpl) : null;
+	};
+	const primary = cfg.brain === 'jev' ? jev() : laya();
+	const secondary = cfg.compare ? (cfg.brain === 'jev' ? laya() : jev()) : null;
+	const prepared = await prepare(cfg, deps);
+	if (!prepared) return;
+	const client = await connect(cfg, prepared.listing, prepared.skin, deps);
+	const port = realPort(client, prepared.listing);
+	const uuid = prepared.listing.uuid;
+	const stamp = new Date().toISOString().replace(/[:.]/g, '-');
+	const logPath = resolve(deps.stateRoot, 'logs', cfg.target.name, uuid, `${cfg.name}-${stamp}.jsonl`);
+	mkdirSync(dirname(logPath), { recursive: true });
+	const statePath = landscaperStatePath(deps.stateRoot, cfg.target.name, uuid, cfg.name);
+	const board = boardPath(deps.stateRoot, cfg.target.name, uuid);
+	const sp = worldSpawn(client.world.seed, client.world.gen);
+	const seed = (Date.now() ^ (process.pid << 16)) >>> 0;
+	const mineMs = deps.landscaperMineMs;
+	deps.print(`${cfg.name} joined "${prepared.listing.name}" as ${prepared.skin}; landscaper (${primary?.name ?? 'no engine'}${secondary ? ` + ${secondary.name} compare` : ''})${cfg.noEdits ? ' --no-edits' : ''}; board ${board}; log ${logPath}; state ${statePath}`);
+	const handle = runLandscaper({
+		when: cfg.when,
+		name: cfg.name, body: port.body, world: port.world, spawn: { x: sp.x, y: 0, z: sp.z }, primary, secondary,
+		noEdits: cfg.noEdits, statePath, boardPath: board, planPath: planFilePath(deps.stateRoot, cfg.target.name, uuid), rng: seededRng(seed),
+		restMs: deps.landscaperRestMs ?? cfg.restSec * 1000, maxBlasts: cfg.maxBlasts, areaSize: deps.landscaperAreaSize,
+		mine: mineMs !== undefined ? (x, y, z) => client.mine(x, y, z, mineMs) : undefined,
+		breakMany: (cells) => client.breakMany(cells),
+		shared: new SharedCells(sharedCellsPath(deps.stateRoot, cfg.target.name, uuid), cfg.name),
+		log: (o) => {
+			try {
+				appendFileSync(logPath, `${JSON.stringify(o)}\n`);
+			} catch {
+				// a full disk must not stop the bot
+			}
+		},
+		status: (line) => deps.print(`[${new Date().toISOString()}] ${line}`),
+	});
+	deps.onLandscaper?.(handle, client);
+	if (deps.onLandscaper) return;
+	const removeGuards = installCrashGuards({
+		event: (kind, data) => {
+			try {
+				appendFileSync(logPath, `${JSON.stringify({ k: kind, t: Date.now(), data })}\n`);
+			} catch {
+				// ignore
+			}
+		},
+		flush: () => saveLandscaperFile(statePath, handle.file),
+		print: deps.print,
+	});
+	let exiting = false;
+	const onSignal = (signal: string): void => {
+		if (exiting) {
+			deps.print(`${signal} again: exiting now`);
+			process.exit(130);
+		}
+		exiting = true;
+		deps.print(`${signal}: stopping`);
+		void Promise.race([handle.stop(), new Promise((r) => setTimeout(r, 8000))]).finally(() => {
+			client.close();
+			removeGuards();
+			deps.print('stopped');
+			armHardExit();
+		});
+	};
+	process.on('SIGINT', () => onSignal('SIGINT'));
+	process.on('SIGTERM', () => onSignal('SIGTERM'));
+	client.on('close', (code) => {
+		if (exiting) return;
+		exiting = true;
+		deps.print(`connection closed (${code})`);
+		void handle.stop().finally(() => process.exit(code === 1000 ? 0 : 1));
+	});
+}
+
+/**
  * `foreman` (experiment E7): lays out one neighbourhood per world (4–10 lots on a road grid) in the shared plan
  * `bots/.state/shared/<target>/<world>/plan.json`, then builds the roads and lamps itself. Builder and architect bots
  * started with `--join-plan` build on its lots. No engine; same safety and signals as `builder`.
@@ -1003,6 +1098,7 @@ export async function main(argv: readonly string[], deps: CliDeps = DEFAULT_DEPS
 	else if (command === 'helper') await helperCommand(cfg, deps);
 	else if (command === 'architect') await architectCommand(cfg, deps);
 	else if (command === 'foreman') await foremanCommand(cfg, deps);
+	else if (command === 'landscaper') await landscaperCommand(cfg, deps);
 	else await companionCommand(cfg, deps);
 }
 

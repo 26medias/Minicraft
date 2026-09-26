@@ -100,6 +100,8 @@ export interface Config {
 	maxBuilds?: number;
 	/** `--max-decorations N` (decorator); undefined = the default (40). */
 	maxDecorations?: number;
+	/** `--max-blasts N` (landscaper); undefined = the default (6). */
+	maxBlasts?: number;
 	/** `--join-plan` (builder, architect): claim the foreman's next open lot first. */
 	joinPlan: boolean;
 	/** `--when always|players` (every bot, default always): with `players`, paused while no non-bot player is online. */
@@ -236,6 +238,7 @@ export function loadConfig(input: LoadConfigInput): Config {
 	};
 	const maxBuilds = count('--max-builds', args.maxBuilds);
 	const maxDecorations = count('--max-decorations', args.maxDecorations);
+	const maxBlasts = count('--max-blasts', args.maxBlasts);
 	const when = (args.when ?? 'always') as WhenMode;
 	if (!WHEN_MODES.includes(when)) throw new ConfigError(`--when must be always or players, not "${args.when}"`);
 
@@ -263,6 +266,7 @@ export function loadConfig(input: LoadConfigInput): Config {
 		llmParams: args.llmParams,
 		maxBuilds,
 		maxDecorations,
+		maxBlasts,
 		joinPlan: args.joinPlan,
 		when,
 		stateRoot,

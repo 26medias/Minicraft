@@ -29,6 +29,8 @@ import { MarkerWatcher } from '../board/markers.js';
 import { AREA, blastWorld, evaluateArea, filterBlast, kidCellsNear, KID_CELL_DIST, scoreArea, terrainTop, type AreaPlan } from './blast-plan.js';
 import { craftUpTo, rawShortfall, type Inventory } from './craft.js';
 import { gather, mineCell, travelTo, type GatherCtx } from './gather.js';
+import type { SharedCells } from '../shared/bot-cells.js';
+import { idlePaused, PresenceGate, type WhenMode } from '../shared/when.js';
 
 export const DEFAULT_MAX_BLASTS = 6;
 const TOY = 'flatten_tnt';
@@ -36,7 +38,6 @@ const TOY_ID = blockId(TOY)!;
 const FUSE_MS = tntSpec(TOY)!.fuse * 1000;
 /** Candidate squares: origins on an 8-block grid within this of the anchor. */
 const SEARCH_R = 48;
-const RESUME_AFTER_PLAYER_MS = 5000;
 
 export interface LandscapeArea extends AreaPlan {
 	id: string; status: 'active' | 'done' | 'abandoned'; t: number; why?: string;
@@ -46,7 +47,11 @@ export interface LandscapeArea extends AreaPlan {
 	post?: string; requester?: string;
 }
 export interface BlastRecord { t: number; area: string; tnt: Vec3; removed: number; planned: number; dropped?: string }
-export interface LandscaperFile { v: 1; inv: Inventory; areas: LandscapeArea[]; blasts: BlastRecord[]; crafts: Array<{ t: number; recipes: string[] }> }
+export interface LandscaperFile {
+	v: 1; inv: Inventory; areas: LandscapeArea[]; blasts: BlastRecord[]; crafts: Array<{ t: number; recipes: string[] }>;
+	/** The cells it last wrote (a mined or blasted cell: 0), so its own work never counts as a kid's. */
+	owned: Record<string, number>;
+}
 
 export function landscaperStatePath(stateRoot: string, target: string, world: string, name: string): string {
 	return join(stateRoot, 'landscaper', target, world, `${name}.json`);
@@ -54,11 +59,11 @@ export function landscaperStatePath(stateRoot: string, target: string, world: st
 export function loadLandscaperFile(path: string): LandscaperFile {
 	try {
 		const f = JSON.parse(readFileSync(path, 'utf8')) as LandscaperFile;
-		if (f && f.v === 1 && f.inv && Array.isArray(f.areas)) return f;
+		if (f && f.v === 1 && f.inv && Array.isArray(f.areas)) return { ...f, owned: f.owned ?? {} };
 	} catch {
 		// fresh
 	}
-	return { v: 1, inv: {}, areas: [], blasts: [], crafts: [] };
+	return { v: 1, inv: {}, areas: [], blasts: [], crafts: [], owned: {} };
 }
 export function saveLandscaperFile(path: string, f: LandscaperFile): void {
 	mkdirSync(dirname(path), { recursive: true });
@@ -104,11 +109,15 @@ export interface LandscaperOpts {
 	/** Blasts in all (counted from the state file, so across restarts); default 6. */
 	maxBlasts?: number;
 	/** 'players': act only while a kid is online (resume 5 s after one joins). */
-	when?: 'always' | 'players';
+	when?: WhenMode;
 	/** Mines one cell (default body.mine: the hand's time). */
 	mine?: (x: number, y: number, z: number) => Promise<boolean>;
 	/** Breaks a batch of cells as one edit (BotClient.breakMany). */
 	breakMany: (cells: ReadonlyArray<{ x: number; y: number; z: number; expect?: number }>) => Promise<Vec3[]>;
+	/** The side of the squares it levels (default AREA, 16; the e2e uses 8: one TNT). */
+	areaSize?: number;
+	/** The shared bot-cell registry: its writes are appended (so other bots never take them for a kid's); others' count as bot cells. */
+	shared?: SharedCells | null;
 }
 export interface LandscaperStats { blasts: number; dropped: number; removed: number; mined: number; crafted: number; areasDone: number; asks: number; fallbacks: number; current: string }
 export interface LandscaperHandle { stop(): Promise<void>; stats: LandscaperStats; file: LandscaperFile; done: Promise<void> }
@@ -116,8 +125,15 @@ export interface LandscaperHandle { stop(): Promise<void>; stats: LandscaperStat
 export function runLandscaper(o: LandscaperOpts): LandscaperHandle {
 	const clock = o.clock ?? (() => Date.now());
 	const file = loadLandscaperFile(o.statePath);
-	const owned: Record<string, number> = {};
-	const own = new Ownership(o.world, () => owned);
+	const own = new Ownership(o.world, () => file.owned, o.shared ? () => o.shared!.cells() : undefined);
+	/** Records its own writes: the state file, ownership, and the shared registry. */
+	const wrote = (cells: readonly Vec3[], id: number) => {
+		for (const c of cells) {
+			file.owned[`${c.x},${c.y},${c.z}`] = id;
+			own.ownWrite(c.x, c.y, c.z, id);
+		}
+		o.shared?.appendMany(cells, id);
+	};
 	const stop = new StopSignal(LIMITS.STOP_SIGNAL_MS);
 	const trip = new Tripwire();
 	const budget = new BlastBudget();
@@ -142,28 +158,12 @@ export function runLandscaper(o: LandscaperOpts): LandscaperHandle {
 	const ask = makeAsk({ primary: o.primary, secondary: o.secondary, clock, log: o.log, stats });
 	const halted = () => trip.halted ?? budget.halted;
 
-	// The --when players pause: no model calls, no edits while no kid is online; resume 5 s after one joins.
-	let paused = false;
+	// The --when players pause (the shared PresenceGate: 5 s debounce, logs paused/resumed): no model calls, no edits.
+	const presence = new PresenceGate({ mode: o.when ?? 'always', players: () => o.body.players(), clock, log: (e) => o.log({ ...e, t: clock() }) });
 	async function gate(): Promise<void> {
-		if (o.when !== 'players') return;
-		for (;;) {
-			if (stopped) return;
-			if (!hasPlayer()) {
-				if (!paused) {
-					paused = true;
-					o.log({ k: 'paused', t: clock(), why: 'no players online' });
-				}
-				stats.current = 'paused: no players online';
-				await sleep(1000);
-				continue;
-			}
-			if (!paused) return;
-			await sleep(RESUME_AFTER_PLAYER_MS);
-			if (hasPlayer()) {
-				paused = false;
-				o.log({ k: 'resumed', t: clock() });
-				return;
-			}
+		while (!stopped && presence.paused()) {
+			stats.current = 'paused: no players online';
+			await idlePaused(o.body, sleep, o.rng);
 		}
 	}
 
@@ -171,7 +171,7 @@ export function runLandscaper(o: LandscaperOpts): LandscaperHandle {
 		o.body.onEdit((e) => {
 			const who = stop.onEdit(e, o.body.journal(), clock());
 			if (who) o.log({ k: 'stop-signal', kid: who, t: clock() });
-			own.onEdit(e, o.body.you);
+			for (const op of own.onEdit(e, o.body.you)) if (op.value === undefined) delete file.owned[op.path[1] as string];
 		}),
 		o.body.onReconnect(() => own.reset()),
 	];
@@ -184,7 +184,7 @@ export function runLandscaper(o: LandscaperOpts): LandscaperHandle {
 	const gctx: GatherCtx = {
 		body: o.body, world: o.world, own, inv: file.inv, kidsNow, stop, trip, edits, noEdits: o.noEdits, clock, sleep,
 		stopped: () => stopped || halted() !== null, gate, log: o.log, mine: o.mine ?? ((x, y, z) => o.body.mine(x, y, z)),
-		anchor: o.spawn, onChange: () => {
+		anchor: o.spawn, onWrite: (cell, id) => wrote([cell], id), onChange: () => {
 			stats.mined++;
 			save();
 		},
@@ -199,7 +199,8 @@ export function runLandscaper(o: LandscaperOpts): LandscaperHandle {
 	/** The candidate squares around `a`, best first. */
 	async function candidates(a: { x: number; z: number }): Promise<AreaPlan[]> {
 		const classify = (x: number, y: number, z: number) => own.classify(x, y, z);
-		const kidCells = kidCellsNear(o.world, classify, a.x - SEARCH_R, a.z - SEARCH_R, a.x + SEARCH_R + AREA, a.z + SEARCH_R + AREA, KID_CELL_DIST + 8);
+		const size = o.areaSize ?? AREA;
+		const kidCells = kidCellsNear(o.world, classify, a.x - SEARCH_R - size, a.z - SEARCH_R - size, a.x + SEARCH_R + size, a.z + SEARCH_R + size, KID_CELL_DIST + 8);
 		const kids = kidsNow();
 		const busy = file.areas.filter((x) => x.status !== 'abandoned');
 		const out: AreaPlan[] = [];
@@ -207,9 +208,9 @@ export function runLandscaper(o: LandscaperOpts): LandscaperHandle {
 		for (let dx = -SEARCH_R; dx <= SEARCH_R; dx += 8) {
 			for (let dz = -SEARCH_R; dz <= SEARCH_R; dz += 8) {
 				if (stopped) return [];
-				const x0 = Math.floor(a.x) + dx - AREA / 2, z0 = Math.floor(a.z) + dz - AREA / 2;
-				if (busy.some((b) => x0 < b.x0 + b.size + 4 && x0 + AREA + 4 > b.x0 && z0 < b.z0 + b.size + 4 && z0 + AREA + 4 > b.z0)) continue;
-				const r = evaluateArea(o.world, x0, z0, AREA, { classify, kidCells, kids });
+				const x0 = Math.floor(a.x) + dx - size / 2, z0 = Math.floor(a.z) + dz - size / 2;
+				if (busy.some((b) => x0 < b.x0 + b.size + 4 && x0 + size + 4 > b.x0 && z0 < b.z0 + b.size + 4 && z0 + size + 4 > b.z0)) continue;
+				const r = evaluateArea(o.world, x0, z0, size, { classify, kidCells, kids });
 				if (typeof r === 'string') rejections[r] = (rejections[r] ?? 0) + 1;
 				else if (r.range >= 2) out.push(r);
 				else rejections['already flat'] = (rejections['already flat'] ?? 0) + 1;
@@ -300,8 +301,7 @@ export function runLandscaper(o: LandscaperOpts): LandscaperHandle {
 		trip.recordEdit(cell, edits.lastEditT);
 		if (ok) {
 			file.inv[TOY]--;
-			owned[`${cell.x},${cell.y},${cell.z}`] = TOY_ID;
-			own.ownWrite(cell.x, cell.y, cell.z, TOY_ID);
+			wrote([cell], TOY_ID);
 			save();
 		}
 		return ok;
@@ -315,7 +315,7 @@ export function runLandscaper(o: LandscaperOpts): LandscaperHandle {
 		budget.spend(got);
 		if (got.length) {
 			file.inv[TOY] = (file.inv[TOY] ?? 0) + 1;
-			delete owned[`${cell.x},${cell.y},${cell.z}`];
+			wrote(got, 0);
 			save();
 		}
 	}
@@ -389,7 +389,7 @@ export function runLandscaper(o: LandscaperOpts): LandscaperHandle {
 			return 'halted';
 		}
 		o.body.fx({ kind: 'boom', x: tnt.x, y: tnt.y, z: tnt.z, tier: TOY_ID });
-		delete owned[`${tnt.x},${tnt.y},${tnt.z}`];
+		wrote(removed, 0);
 		// The game counts what a blast removes (the TNT itself excepted).
 		let n = 0;
 		for (const c of removed) {
@@ -462,6 +462,8 @@ export function runLandscaper(o: LandscaperOpts): LandscaperHandle {
 					continue;
 				}
 				gctx.anchor = { x: area.x0 + area.size / 2, z: area.z0 + area.size / 2 };
+				// Never mine in (or beside) a square being levelled: a staircase there would leave holes under the floor.
+				gctx.avoid = file.areas.filter((a) => a.status !== 'abandoned').map((a) => ({ x0: a.x0 - 2, z0: a.z0 - 2, x1: a.x0 + a.size + 1, z1: a.z0 + a.size + 1 }));
 				const i = area.spots.findIndex((_, k) => !area.done.includes(k));
 				if (i < 0) {
 					finishArea(area);

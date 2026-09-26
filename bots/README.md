@@ -232,6 +232,29 @@ npm --prefix bots run bot -- foreman --target local|live --world <uuid|name> --n
 npm --prefix bots run bot -- builder ... --join-plan      # or architect ... --join-plan
 ```
 
+## The landscaper and the shared board
+
+`bots/src/landscaper/`: makes flat building ground with the game's own toys. It takes an open `flat-needed` post or a
+kid's red marker from the board, else picks a hilly 16×16 patch near the foreman's neighbourhood (else spawn); the
+model chooses among ≤ 3 candidates. Per Flattening TNT it mines the recipe's raw ingredients into its own inventory
+(10 sand, 8 coal, 8 redstone, 16 stone: surface blocks from above, buried ores by brain2's spiral staircase, same
+safety), crafts by the Craft tab's recipes (the SDK's `RECIPES`), digs a hole so the TNT sits on natural ground at the
+floor level, places it, sends `fx prime`, waits the game's fuse (3 s) and applies the game's own blast cells (the SDK's
+`blastCells`) as batched edits (`BotClient.breakMany`) with `fx boom`. A blast removes natural cells only and is
+dropped whole when any cell is within 12 of a kid cell, within 24 of a kid, or touches liquid (checked before lighting
+and again after the fuse). Blast edits go through a plan-bound budget (exactly the planned cells, else every edit
+halts). `--max-blasts N` (default 6, counted across restarts). Done squares are posted `flattened`. e2e leg: `landscaper`.
+
+The board is `bots/.state/shared/<target>/<world>/board.json` (`bots/src/board/`), with the foreman plan's lock and
+atomic writes: posts `flat-needed | flattened | build-request | decorate | kid-marker`, open → claimed → done, claims
+expire after 15 min. **Kid markers:** a kid stacks exactly 3 wool of one colour: red = flatten here, blue = build a
+house here, green = make a garden here. A watching bot posts it once and the nearest one sets off a firework above it.
+Marker cells are kid cells: no bot touches them.
+
+```bash
+npm --prefix bots run bot -- landscaper --target local|live --world <uuid|name> --name <n> [--brain laya|jev] [--compare] [--max-blasts N] [--rest-sec N] [--when always|players] [--no-edits] [--i-deployed-the-server]
+```
+
 ## The build cap
 
 Builder, architect and helper stop building after `--max-builds N` builds (default 12); the decorator after

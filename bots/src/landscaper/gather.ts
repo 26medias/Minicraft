@@ -45,8 +45,12 @@ export interface GatherCtx {
 	mine(x: number, y: number, z: number): Promise<boolean>;
 	/** The search anchor (spawn, or the foreman's neighbourhood). */
 	anchor: { x: number; z: number };
+	/** Squares (inclusive x/z boxes) it must not dig in or beside: the area it is levelling. */
+	avoid?: Array<{ x0: number; z0: number; x1: number; z1: number }>;
 	/** Called after every block added to the inventory (the caller saves). */
 	onChange?(): void;
+	/** Records the bot's own write (ownership, shared registry): a mined cell (0) or a placed fill. */
+	onWrite(cell: Vec3, id: number): void;
 }
 
 const key = (c: Vec3) => `${c.x},${c.y},${c.z}`;
@@ -92,6 +96,7 @@ export async function mineCell(c: GatherCtx, cell: Vec3): Promise<boolean> {
 	c.edits.lastEditT = t;
 	c.trip.recordEdit(cell, t);
 	if (ok) {
+		c.onWrite(cell, 0);
 		c.inv[name] = (c.inv[name] ?? 0) + 1;
 		c.onChange?.();
 	}
@@ -120,7 +125,7 @@ async function fillCell(c: GatherCtx, cell: Vec3): Promise<boolean> {
 	if (ok) {
 		c.inv[block]--;
 		const id = blockId(block);
-		if (id !== null) c.own.ownWrite(cell.x, cell.y, cell.z, id);
+		if (id !== null) c.onWrite(cell, id);
 		c.onChange?.();
 	}
 	c.log({ k: 'fill', t, cell, block, ok });
@@ -165,6 +170,11 @@ function pillarOk(c: GatherCtx, sp: Spiral): string | null {
 	return null;
 }
 
+/** Within `m` of an avoided square. */
+function avoided(c: GatherCtx, x: number, z: number, m: number): boolean {
+	return (c.avoid ?? []).some((b) => x >= b.x0 - m && x <= b.x1 + m && z >= b.z0 - m && z <= b.z1 + m);
+}
+
 type Target = { cell: Vec3; d: number; surface: boolean; sp: Spiral | null };
 
 /** The nearest reachable natural `names` cell around the anchor (widening 32 → 64 → 96), not in `dead`. */
@@ -191,6 +201,7 @@ async function findTarget(c: GatherCtx, names: readonly string[], dead: Set<stri
 		cands.sort((p, q) => p.d - q.d || q.cell.y - p.cell.y);
 		for (const cand of cands.slice(0, 200)) {
 			const top = terrainTop(w, cand.cell.x, cand.cell.z);
+			if (avoided(c, cand.cell.x, cand.cell.z, 3)) continue;
 			if (cand.cell.y >= top - 1) {
 				// From above: the column's top must be natural and dry, and no kid near.
 				if (c.own.kidCellWithin(cand.cell.x, cand.cell.z, KID_CELL_DIST) || c.kidsNow().some((k) => Math.hypot(k.x - cand.cell.x, k.z - cand.cell.z) <= KID_POS_DIST)) continue;
@@ -198,7 +209,7 @@ async function findTarget(c: GatherCtx, names: readonly string[], dead: Set<stri
 				return { ...cand, surface: true, sp: null };
 			}
 			for (const sp of spiralsFor(cand.cell, (x, z) => terrainTop(w, x, z) + 1)) {
-				if (Math.hypot(sp.px - a.x, sp.pz - a.z) > r + 2) continue;
+				if (Math.hypot(sp.px - a.x, sp.pz - a.z) > r + 2 || avoided(c, sp.px, sp.pz, 4)) continue;
 				if (pillarOk(c, sp) === null) return { ...cand, surface: false, sp };
 			}
 			dead.add(key(cand.cell));

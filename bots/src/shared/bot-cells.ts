@@ -35,6 +35,23 @@ export class SharedCells {
 		}
 	}
 
+	/** Appends many cells with one id in one write (a blast's removals: id 0). Never throws. */
+	appendMany(cells: readonly Vec3[], id: number): void {
+		if (cells.length === 0) return;
+		const t = this.clock();
+		let text = '';
+		for (const c of cells) {
+			this.latest[`${c.x},${c.y},${c.z}`] = id;
+			text += `${JSON.stringify({ x: c.x, y: c.y, z: c.z, id, bot: this.bot, t })}\n`;
+		}
+		try {
+			mkdirSync(dirname(this.path), { recursive: true });
+			appendFileSync(this.path, text);
+		} catch {
+			// ignore
+		}
+	}
+
 	/** The latest id per cell key, across every bot (re-reads the new tail at most every refreshMs). */
 	cells(): Readonly<Record<string, number>> {
 		const now = this.clock();

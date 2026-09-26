@@ -21,6 +21,7 @@
  * - `decorator`: the decorator bot's CLI in-process on its own free-port server; see `e2e-decorator.ts`.
  * - `helper`: the helper bot's CLI in-process on its own free-port server; see `e2e-helper.ts`.
  * - `architect`: the architect bot's CLI in-process on its own free-port server; see `e2e-architect.ts`.
+ * - `landscaper`: the landscaper bot's CLI in-process on its own free-port server; see `e2e-landscaper.ts`.
  *
  * Safety: never port 8080, never `~/minicraft-mp`, never the live URL. Servers are ours, stopped by
  * PID with SIGTERM. Every temp dir is under BOTS_E2E_SCRATCH, and only those are removed.
@@ -51,6 +52,7 @@ import { villageLeg } from './e2e-village.js';
 import { helperLeg } from './e2e-helper.js';
 import { architectLeg } from './e2e-architect.js';
 import { foremanLeg } from './e2e-foreman.js';
+import { landscaperLeg } from './e2e-landscaper.js';
 
 /* eslint-disable @typescript-eslint/no-explicit-any */
 
@@ -790,6 +792,7 @@ async function main(): Promise<void> {
 		if (want('helper')) await leg('helper', 'the helper CLI, engines down: a matching build ≥ 6 cells, > 3 from the kid line, his block only', () => helperLeg({ check, info }));
 		if (want('decorator')) await leg('decorator', 'the decorator CLI, engines down: ≥ 10 decoration cells, nothing on the kid pillar', () => decoratorLeg({ check, info }));
 		if (want('foreman')) await leg('foreman', 'the foreman CLI + a builder --join-plan, engines down: roads done and ≥ 1 lot built, nothing on the kid pillar', () => foremanLeg({ check, info }));
+		if (want('landscaper')) await leg('landscaper', 'the landscaper CLI, engines down: mines, crafts one Flattening TNT, blasts an area flat (±1), nothing within 12 of the kid pillar', () => landscaperLeg({ check, info }));
 	} finally {
 		try {
 			await server?.stop();

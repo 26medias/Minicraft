@@ -19,8 +19,16 @@ export type { VoxelHit } from '../../../src/engine/input/raycast';
 /** Blocks the world generator places (a bot can mine only these) and blocks only crafting makes (never mined, never held by a bot). */
 export { WORLDGEN_BLOCKS, CRAFTED_ONLY } from '../../../src/data/crafting.data';
 /** Toy TNT: the game's blast cells for flatten/tunnel TNT, TNT specs (radius, fuse) and the crafting recipes. Read-only. */
+/** Pickaxes (read-only): the game's tiers, mining time and area-break cells (a w × h × d box on the hit face). */
+export { PICKAXES, AREA_FLOOR_ARMED, AREA_FLOOR_HELD } from '../../../src/data/crafting.data';
+export type { PickaxeDef, PickaxeTier } from '../../../src/data/crafting.data';
+export { miningDuration, isMultiBlock } from '../../../src/game/tools';
+export type { Face } from '../../../src/data/blocks.base.data';
 export { blastCells, tntSpec, RECIPES, FLATTEN_HEIGHT, TUNNEL_LENGTH } from './blast';
 export type { BlastToy, BlastWorld, Cell, Ingredient, Recipe, TntSpec, TunnelDir } from './blast';
+import { areaCells as gameAreaCells } from '../../../src/game/tools';
+import type { Face } from '../../../src/data/blocks.base.data';
+import type { PickaxeTier } from '../../../src/data/crafting.data';
 import { spawnV3 } from '../../../src/engine/world/v3/spawn';
 /** The world's generated spawn column, the point "first" joins spawn at (the game uses spawnV3 on every gen). brain2 spec §6. */
 export function worldSpawn(seed: number, _gen: number): { x: number; z: number } {
@@ -37,4 +45,12 @@ export function generateChunkBlocks(seed: number, gen: number, cx: number, cz: n
 	const c = new Chunk(cx, cz, worldProfile(gen).height);
 	generateChunk(c, seed, gen);
 	return c.blocks;
+}
+
+/**
+ * The game's area-break cells for a pickaxe (every cell, air included): a w × h plane centred on `target` on the hit
+ * `face`, `d` deep away from the player (the face's opposite direction). Same order as the game.
+ */
+export function areaCells(target: { x: number; y: number; z: number }, face: Face, tier: PickaxeTier): Array<{ x: number; y: number; z: number }> {
+	return gameAreaCells(target, face, tier);
 }

@@ -935,7 +935,8 @@ async function architectCommand(cfg: Config, deps: CliDeps): Promise<void> {
 /**
  * `landscaper` (the landscaper bot): mines the ingredients, crafts Flattening TNT by the game's recipes and levels hilly
  * ground near the neighbourhood (or where the board / a kid's red marker asks), posting 'flattened' on the shared board.
- * Same engines (`--brain laya|jev`, `--compare`), signals and `--when` as `builder`; `--max-blasts N` (default 6).
+ * Same engines (`--brain laya|jev`, `--compare`), signals and `--when` as `builder`; `--max-blasts N` (default 6); `--pickaxe <name>` (hand … emerald: its mining time, and a multi-block tier's area
+ * break around each mined cell, each area cell checked by the safety rules); `--grant-ores N` (once per state file).
  */
 async function landscaperCommand(cfg: Config, deps: CliDeps): Promise<void> {
 	if (cfg.brain !== 'laya' && cfg.brain !== 'jev') throw new ConfigError(`landscaper: --brain must be laya or jev, not "${cfg.brain}"`);
@@ -967,7 +968,8 @@ async function landscaperCommand(cfg: Config, deps: CliDeps): Promise<void> {
 		name: cfg.name, body: port.body, world: port.world, spawn: { x: sp.x, y: 0, z: sp.z }, primary, secondary,
 		noEdits: cfg.noEdits, statePath, boardPath: board, planPath: planFilePath(deps.stateRoot, cfg.target.name, uuid), rng: seededRng(seed),
 		restMs: deps.landscaperRestMs ?? cfg.restSec * 1000, maxBlasts: cfg.maxBlasts, areaSize: deps.landscaperAreaSize,
-		mine: mineMs !== undefined ? (x, y, z) => client.mine(x, y, z, mineMs) : undefined,
+		pickaxe: cfg.pickaxe, grantOres: cfg.grantOres,
+		mine: (x, y, z, face) => client.mine(x, y, z, mineMs, { tier: cfg.pickaxe, face }),
 		breakMany: (cells) => client.breakMany(cells),
 		shared: new SharedCells(sharedCellsPath(deps.stateRoot, cfg.target.name, uuid), cfg.name),
 		log: (o) => {

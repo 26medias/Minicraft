@@ -246,7 +246,7 @@ floor level, places it, sends `fx prime`, waits the game's fuse (3 s) and applie
 `blastCells`) as batched edits (`BotClient.breakMany`) with `fx boom`. A blast removes natural cells only and is
 dropped whole when any cell is within 12 of a kid cell, within 24 of a kid, or touches liquid (checked before lighting
 and again after the fuse). Blast edits go through a plan-bound budget (exactly the planned cells, else every edit
-halts). `--max-blasts N` (default 6, counted across restarts). Done squares are posted `flattened`. e2e leg: `landscaper`.
+halts). `--max-blasts N` (default 6, counted across restarts). `--pickaxe <name>` (hand|wood|stone|copper|iron|gold|diamond|emerald, default hand; granted, not crafted): mines with that pickaxe's time, and a multi-block tier (iron and up) also breaks the game's area around each mined cell on the hit face, keeping only cells that pass the mining safety rules on their own and are in reach (one batched edit, counted in the tripwire's plan, all into the inventory; never for the TNT hole). `--grant-ores N`: N of each ore and TNT raw ingredient into the inventory, once per state file (`granted` in it). Done squares are posted `flattened`. e2e leg: `landscaper`.
 
 The board is `bots/.state/shared/<target>/<world>/board.json` (`bots/src/board/`), with the foreman plan's lock and
 atomic writes: posts `flat-needed | flattened | build-request | decorate | kid-marker`, open → claimed → done, claims
@@ -255,7 +255,7 @@ house here, green = make a garden here. A watching bot posts it once and the nea
 Marker cells are kid cells: no bot touches them.
 
 ```bash
-npm --prefix bots run bot -- landscaper --target local|live --world <uuid|name> --name <n> [--brain laya|jev] [--compare] [--max-blasts N] [--rest-sec N] [--when always|players] [--no-edits] [--i-deployed-the-server]
+npm --prefix bots run bot -- landscaper --target local|live --world <uuid|name> --name <n> [--brain laya|jev] [--compare] [--max-blasts N] [--pickaxe <name>] [--grant-ores N] [--rest-sec N] [--when always|players] [--no-edits] [--i-deployed-the-server]
 ```
 
 ## The build cap

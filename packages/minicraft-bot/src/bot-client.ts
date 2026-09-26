@@ -11,7 +11,9 @@ import { existsSync, readFileSync, renameSync, writeFileSync } from 'node:fs';
 import { MpClient, type MpHandlers, type MpState } from '../../../src/net/mp-client';
 import { MpApi } from '../../../src/net/mp-api';
 import { GIVE_UP_MS, Reconnector } from '../../../src/game/mp-reconnect';
-import { isRemovableId, miningDuration } from '../../../src/game/tools';
+import { isMultiBlock, isRemovableId, miningDuration } from '../../../src/game/tools';
+import { PICKAXES, type PickaxeTier } from '../../../src/data/crafting.data';
+import type { Face } from '../../../src/data/blocks.base.data';
 import { EYE_HEIGHT, FLY_SPEED, WALK_SPEED } from '../../../src/game/player-constants';
 import { NEWEST_GEN_VERSION } from '../../../src/engine/world/generation';
 import { AIR, BLOCKS, BLOCK_BY_NAME, isLiquid, isSolid } from '../../../src/data/blocks.data';
@@ -478,9 +480,11 @@ export class BotClient {
 	 * `ms` (default: the hand's mining time for that block), then breaks it. Resolves false (no fx) for a
 	 * block that can't be mined (air, liquid, bedrock), and false with `fx mine-stop` when cancelled by a
 	 * new `mine`, a lost connection or `close()`, or when the cell no longer holds the block it started on
-	 * just before the break (a kid changed it). Doesn't cancel a walk or a flight.
+	 * just before the break (a kid changed it). Doesn't cancel a walk or a flight. `tool` (a pickaxe tier, and the hit
+	 * face) mines with that pickaxe's time (the game's 'armed' floor for a multi-block tier) when `ms` is not given;
+	 * it breaks only the one cell (area cells are the caller's, e.g. via `breakMany`).
 	 */
-	mine(x: number, y: number, z: number, ms?: number): Promise<boolean> {
+	mine(x: number, y: number, z: number, ms?: number, tool?: { tier: number; face?: Face }): Promise<boolean> {
 		this.assertConnected('mine');
 		this.cancelMine();
 		if (this.state !== 'connected') return Promise.resolve(false);
@@ -488,8 +492,11 @@ export class BotClient {
 		const id = this.core!.getBlock(fx, fy, fz);
 		if (!isRemovableId(id)) return Promise.resolve(false);
 		this.face(fx + 0.5, fy + 0.5, fz + 0.5);
-		const dur = ms !== undefined ? Math.max(0, Math.round(ms)) : Math.round(miningDuration(BLOCKS[id].hardness, 0, 'none') * 1000);
-		this.send({ t: 'fx', kind: 'mine', x: fx, y: fy, z: fz, tier: id, dur });
+		const tier = (tool && PICKAXES[tool.tier] ? tool.tier : 0) as PickaxeTier;
+		const dur = ms !== undefined ? Math.max(0, Math.round(ms)) : Math.round(miningDuration(BLOCKS[id].hardness, tier, tool ? 'armed' : 'none') * 1000);
+		// As the game's own mine fx (main.ts): a multi-block tool adds its tier and the hit face (the kids see the area crack).
+		const multi = tool && isMultiBlock(tier) && tool.face ? { tool: tier, face: tool.face } : {};
+		this.send({ t: 'fx', kind: 'mine', x: fx, y: fy, z: fz, tier: id, dur, ...multi });
 		return new Promise<boolean>((resolve) => {
 			const m: Mining = {
 				x: fx,

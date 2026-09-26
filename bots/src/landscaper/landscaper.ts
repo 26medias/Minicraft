@@ -14,7 +14,7 @@
  */
 import { existsSync, mkdirSync, readFileSync, renameSync, writeFileSync } from 'node:fs';
 import { dirname, join } from 'node:path';
-import { blastCells, blockId, tntSpec } from 'minicraft-bot';
+import { blastCells, blockId, tntSpec, WORLDGEN_BLOCKS, type Face } from 'minicraft-bot';
 import { StopSignal } from '../body/stop-signal.js';
 import type { Body, WorldView } from '../port.js';
 import type { Vec3 } from '../types.js';
@@ -51,6 +51,17 @@ export interface LandscaperFile {
 	v: 1; inv: Inventory; areas: LandscapeArea[]; blasts: BlastRecord[]; crafts: Array<{ t: number; recipes: string[] }>;
 	/** The cells it last wrote (a mined or blasted cell: 0), so its own work never counts as a kid's. */
 	owned: Record<string, number>;
+	/** `--grant-ores` was applied to this file (once per file: restarts never re-grant). */
+	granted?: boolean;
+}
+
+/** The TNT toys the landscaper crafts; `--grant-ores` covers their raw ingredients. */
+const GRANT_TOYS = ['flatten_tnt', 'tunnel_tnt'];
+/** What `--grant-ores` grants: every generated ore, and the raw (mined) ingredients of the toys, by the game's recipes. */
+export function grantList(): string[] {
+	const out = new Set(WORLDGEN_BLOCKS.filter((n) => n.endsWith('_ore')));
+	for (const toy of GRANT_TOYS) for (const m of rawShortfall(toy, 1, {})) out.add(m.anyOf[0]);
+	return [...out].sort();
 }
 
 export function landscaperStatePath(stateRoot: string, target: string, world: string, name: string): string {
@@ -110,8 +121,12 @@ export interface LandscaperOpts {
 	maxBlasts?: number;
 	/** 'players': act only while a kid is online (resume 5 s after one joins). */
 	when?: WhenMode;
-	/** Mines one cell (default body.mine: the hand's time). */
-	mine?: (x: number, y: number, z: number) => Promise<boolean>;
+	/** Mines one cell (default body.mine: the hand's time); `face` is the face it hits. */
+	mine?: (x: number, y: number, z: number, face?: Face) => Promise<boolean>;
+	/** The pickaxe tier it mines with (`--pickaxe`, default 0: the hand); a multi-block tier also breaks the area. */
+	pickaxe?: number;
+	/** `--grant-ores N`: at the first start of this state file, N of each ore and TNT raw ingredient into the inventory. */
+	grantOres?: number;
 	/** Breaks a batch of cells as one edit (BotClient.breakMany). */
 	breakMany: (cells: ReadonlyArray<{ x: number; y: number; z: number; expect?: number }>) => Promise<Vec3[]>;
 	/** The side of the squares it levels (default AREA, 16; the e2e uses 8: one TNT). */
@@ -184,6 +199,7 @@ export function runLandscaper(o: LandscaperOpts): LandscaperHandle {
 	const gctx: GatherCtx = {
 		body: o.body, world: o.world, own, inv: file.inv, kidsNow, stop, trip, edits, noEdits: o.noEdits, clock, sleep,
 		stopped: () => stopped || halted() !== null, gate, log: o.log, mine: o.mine ?? ((x, y, z) => o.body.mine(x, y, z)),
+		tier: o.pickaxe ?? 0, breakMany: o.breakMany,
 		anchor: o.spawn, onWrite: (cell, id) => wrote([cell], id), onChange: () => {
 			stats.mined++;
 			save();
@@ -499,7 +515,14 @@ export function runLandscaper(o: LandscaperOpts): LandscaperHandle {
 		}, o.statusEveryMs ?? 30_000)
 		: null;
 
-	o.log({ k: 'start', t: clock(), name: o.name, primary: o.primary?.name ?? null, secondary: o.secondary?.name ?? null, noEdits: o.noEdits, when: o.when ?? 'always', maxBlasts, inv: file.inv });
+	if (o.grantOres && o.grantOres > 0 && !file.granted) {
+		const granted = grantList();
+		for (const n of granted) file.inv[n] = (file.inv[n] ?? 0) + o.grantOres;
+		file.granted = true;
+		save();
+		o.log({ k: 'grant', t: clock(), each: o.grantOres, blocks: granted });
+	}
+	o.log({ k: 'start', t: clock(), pickaxe: o.pickaxe ?? 0, name: o.name, primary: o.primary?.name ?? null, secondary: o.secondary?.name ?? null, noEdits: o.noEdits, when: o.when ?? 'always', maxBlasts, inv: file.inv });
 	const done = loop();
 	return {
 		stats,

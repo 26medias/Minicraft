@@ -46,3 +46,14 @@ describe('blast exports', () => {
 		expect(RECIPES.find((r) => r.id === 'tunnel_tnt')!.needs).toEqual([{ anyOf: ['tnt'], count: 2 }, { anyOf: ['iron_ore', 'deepslate_iron_ore'], count: 8 }]);
 	});
 });
+
+describe('pickaxe exports', () => {
+	it('PICKAXES, miningDuration and areaCells are the game\'s', async () => {
+		const sdk = await import('../src/index');
+		expect(sdk.PICKAXES[4]).toMatchObject({ name: 'iron', area: { w: 3, h: 3, d: 1 } });
+		expect(sdk.miningDuration(1.5, 4, 'armed')).toBeLessThan(sdk.miningDuration(1.5, 0, 'none'));
+		expect(sdk.areaCells({ x: 0, y: 0, z: 0 }, 'py', 4)).toHaveLength(9);
+		expect(sdk.AREA_FLOOR_ARMED).toBe(0.4);
+		expect(sdk.isMultiBlock(4)).toBe(true);
+	});
+});

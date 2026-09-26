@@ -8,7 +8,7 @@
 import defaultBotsConfig from '../bots.config.js';
 import { parseArgs } from './cli-args.js';
 import { PERSONALITIES } from './brain2/data/personalities.data.js';
-import type { WorldListing } from 'minicraft-bot';
+import { PICKAXES, type WorldListing } from 'minicraft-bot';
 import { WHEN_MODES, type WhenMode } from './shared/when.js';
 
 /** Thrown by `loadConfig`, and returned (not thrown) by the other functions here. */
@@ -102,6 +102,10 @@ export interface Config {
 	maxDecorations?: number;
 	/** `--max-blasts N` (landscaper); undefined = the default (6). */
 	maxBlasts?: number;
+	/** `--pickaxe <name>` (landscaper): the pickaxe's tier (0 hand … 7 emerald; default 0). */
+	pickaxe: number;
+	/** `--grant-ores N` (landscaper); undefined = none. */
+	grantOres?: number;
 	/** `--join-plan` (builder, architect): claim the foreman's next open lot first. */
 	joinPlan: boolean;
 	/** `--when always|players` (every bot, default always): with `players`, paused while no non-bot player is online. */
@@ -239,6 +243,10 @@ export function loadConfig(input: LoadConfigInput): Config {
 	const maxBuilds = count('--max-builds', args.maxBuilds);
 	const maxDecorations = count('--max-decorations', args.maxDecorations);
 	const maxBlasts = count('--max-blasts', args.maxBlasts);
+	const grantOres = count('--grant-ores', args.grantOres);
+	const pickaxeName = (args.pickaxe ?? 'hand').toLowerCase();
+	const pickaxe = PICKAXES.find((p) => p.name === pickaxeName)?.tier;
+	if (pickaxe === undefined) throw new ConfigError(`--pickaxe must be one of ${PICKAXES.map((p) => p.name).join(', ')}, not "${args.pickaxe}"`);
 	const when = (args.when ?? 'always') as WhenMode;
 	if (!WHEN_MODES.includes(when)) throw new ConfigError(`--when must be always or players, not "${args.when}"`);
 
@@ -267,6 +275,8 @@ export function loadConfig(input: LoadConfigInput): Config {
 		maxBuilds,
 		maxDecorations,
 		maxBlasts,
+		pickaxe,
+		grantOres,
 		joinPlan: args.joinPlan,
 		when,
 		stateRoot,

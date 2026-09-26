@@ -13,7 +13,7 @@
  *
  * Travel goes through the shared navigator (bots/src/nav/); the staircase steps stay plain walks (as brain2's dig).
  */
-import { blockId } from 'minicraft-bot';
+import { areaCells, blockId, isMultiBlock, type Face, type PickaxeTier } from 'minicraft-bot';
 import type { StopSignal } from '../body/stop-signal.js';
 import type { Body, WorldView } from '../port.js';
 import type { Vec3 } from '../types.js';
@@ -41,8 +41,12 @@ export interface GatherCtx {
 	/** Resolves when the bot may act (the --when players pause); called before every edit. */
 	gate(): Promise<void>;
 	log(e: Record<string, unknown>): void;
-	/** Mines one cell (the hand's time by default; tests pass a shorter one). */
-	mine(x: number, y: number, z: number): Promise<boolean>;
+	/** Mines one cell (the pickaxe's time; the hand's by default; tests pass a shorter one). `face`: the face it hits. */
+	mine(x: number, y: number, z: number, face?: Face): Promise<boolean>;
+	/** The pickaxe tier it mines with (`--pickaxe`, default 0: the hand). A multi-block tier also breaks the area. */
+	tier?: number;
+	/** Breaks the area cells around a mined target as one batched edit (BotClient.breakMany); needed for area mining. */
+	breakMany?: (cells: ReadonlyArray<{ x: number; y: number; z: number; expect?: number }>) => Promise<Vec3[]>;
 	/** The search anchor (spawn, or the foreman's neighbourhood). */
 	anchor: { x: number; z: number };
 	/** Squares (inclusive x/z boxes) it must not dig in or beside: the area it is levelling. */
@@ -61,11 +65,46 @@ function wet(w: WorldView, c: Vec3): boolean {
 	return faces(c).some((n) => w.isLiquid(w.getBlock(n.x, n.y, n.z)));
 }
 
+/** The face of `cell` the bot's eye looks at: the one whose normal points most toward the eye. */
+export function hitFace(eye: { x: number; y: number; z: number }, cell: Vec3): Face {
+	const dx = eye.x - (cell.x + 0.5), dy = eye.y - (cell.y + 0.5), dz = eye.z - (cell.z + 0.5);
+	const ax = Math.abs(dx), ay = Math.abs(dy), az = Math.abs(dz);
+	if (ay >= ax && ay >= az) return dy > 0 ? 'py' : 'ny';
+	if (ax >= az) return dx > 0 ? 'px' : 'nx';
+	return dz > 0 ? 'pz' : 'nz';
+}
+
+/**
+ * The area cells a multi-block pickaxe would break around `target` on `face` (the game's own areaCells, the target
+ * excepted) that each pass the landscaper's rules on their own: a natural, minable, non-bedrock block; the full safety
+ * verdict (kid body and cell buffers, stop signal, not touching liquid); not within KID_CELL_DIST of a kid cell nor
+ * KID_POS_DIST of a kid; outside the avoided squares; within reach; and `allow` (the staircase's own cells stay).
+ */
+export function areaExtras(c: GatherCtx, target: Vec3, face: Face, allow: (q: Vec3) => boolean = () => true): Vec3[] {
+	const tier = (c.tier ?? 0) as PickaxeTier;
+	if (!isMultiBlock(tier)) return [];
+	const w = c.world, kids = c.kidsNow(), eye = c.body.pose(), now = c.clock();
+	return areaCells(target, face, tier).filter((q) => {
+		if (q.x === target.x && q.y === target.y && q.z === target.z) return false;
+		const id = w.getBlock(q.x, q.y, q.z);
+		const name = w.blockName(id);
+		if (id === 0 || !name || w.isLiquid(id) || name === 'bedrock') return false;
+		if (c.own.classify(q.x, q.y, q.z) !== 'natural' || !allow(q) || avoided(c, q.x, q.z, 0)) return false;
+		if (eyeDist(eye, q) > REACH) return false;
+		if (c.own.kidCellWithin(q.x, q.z, KID_CELL_DIST) || kids.some((k) => Math.hypot(k.x - q.x, k.z - q.z) <= KID_POS_DIST)) return false;
+		return judgeSafety({ kind: 'mine', cell: q }, {
+			world: w, own: c.own, kids, stop: c.stop, now, lastEditT: null, noEdits: c.noEdits,
+			inventory: {}, halted: c.trip.halted, helpBuild: false, planOwns: () => true,
+		}).ok;
+	});
+}
+
 /**
  * Mines one natural cell with the full safety verdict (waiting out the edit gap). True when it broke; the block goes
- * into the inventory.
+ * into the inventory. With `area` (and a multi-block pickaxe), the area cells around it that pass `areaExtras` are
+ * broken too, as one batched edit counted in the tripwire's plan, each into the inventory.
  */
-export async function mineCell(c: GatherCtx, cell: Vec3): Promise<boolean> {
+export async function mineCell(c: GatherCtx, cell: Vec3, area?: (q: Vec3) => boolean): Promise<boolean> {
 	await c.gate();
 	if (c.stopped()) return false;
 	const w = c.world;
@@ -87,8 +126,10 @@ export async function mineCell(c: GatherCtx, cell: Vec3): Promise<boolean> {
 		if (i === 19) return false;
 	}
 	let ok = false;
+	const pose = c.body.pose();
+	const face = hitFace({ x: pose.x, y: pose.y + 1.6, z: pose.z }, cell);
 	try {
-		ok = await c.mine(cell.x, cell.y, cell.z);
+		ok = await c.mine(cell.x, cell.y, cell.z, face);
 	} catch (err) {
 		c.log({ k: 'mine-error', t: c.clock(), err: err instanceof Error ? err.message : String(err) });
 	}
@@ -101,7 +142,32 @@ export async function mineCell(c: GatherCtx, cell: Vec3): Promise<boolean> {
 		c.onChange?.();
 	}
 	c.log({ k: 'mine', t, cell, block: name, ok });
+	if (ok && area && c.breakMany && !c.stopped()) await breakArea(c, cell, face, area);
 	return ok;
+}
+
+/** The area break after a mined target: the extras that pass, as one batched edit, each into the inventory. */
+async function breakArea(c: GatherCtx, target: Vec3, face: Face, allow: (q: Vec3) => boolean): Promise<number> {
+	const extras = areaExtras(c, target, face, allow);
+	if (extras.length === 0) return 0;
+	const ids = new Map(extras.map((q) => [key(q), c.world.getBlock(q.x, q.y, q.z)]));
+	let got: Vec3[] = [];
+	try {
+		got = await c.breakMany!(extras.map((q) => ({ ...q, expect: ids.get(key(q))! })));
+	} catch (err) {
+		c.log({ k: 'mine-error', t: c.clock(), err: err instanceof Error ? err.message : String(err) });
+	}
+	const t = c.clock();
+	c.edits.lastEditT = t;
+	c.trip.recordBatch(extras, t);
+	for (const q of got) {
+		const name = c.world.blockName(ids.get(key(q)) ?? 0);
+		c.onWrite(q, 0);
+		if (name) c.inv[name] = (c.inv[name] ?? 0) + 1;
+		c.onChange?.();
+	}
+	c.log({ k: 'mine-area', t, target, face, planned: extras.length, broken: got.length });
+	return got.length;
 }
 
 /** Places a fill block from the inventory (a staircase floor gap). */
@@ -232,7 +298,7 @@ async function vein(c: GatherCtx, seeds: Vec3[], names: Set<string>, enough: () 
 			const name = c.world.blockName(c.world.getBlock(nb.x, nb.y, nb.z));
 			if (!name || !names.has(name) || (sp && !safeToMine(sp, nb)) || wet(c.world, nb)) continue;
 			if (eyeDist(c.body.pose(), nb) > REACH) continue;
-			if (await mineCell(c, nb)) {
+			if (await mineCell(c, nb, sp ? (q) => safeToMine(sp, q) : () => true)) {
 				n++;
 				queue.push(nb);
 				if (enough()) break;
@@ -251,7 +317,7 @@ async function surfaceMine(c: GatherCtx, t: Target, names: Set<string>, enough: 
 		const cell = { x: t.cell.x, y, z: t.cell.z };
 		if (w.getBlock(cell.x, cell.y, cell.z) === 0) continue;
 		if (wet(w, cell)) return 'hazard';
-		if (!(await mineCell(c, cell))) return 'refused';
+		if (!(await mineCell(c, cell, () => true))) return 'refused';
 	}
 	await vein(c, [t.cell], names, enough, null);
 	return null;
@@ -279,7 +345,7 @@ async function spiralMine(c: GatherCtx, t: Target, names: Set<string>, enough: (
 			const v = w.getBlock(q.x, q.y, q.z);
 			if (v === 0) continue;
 			if (w.isLiquid(v) || wet(w, q)) why = 'hazard';
-			else if (!(await mineCell(c, q))) why = 'refused';
+			else if (!(await mineCell(c, q, (r) => safeToMine(sp, r)))) why = 'refused';
 		}
 		if (why) break;
 		// Needed ores beside the step, on the way down.
@@ -295,7 +361,7 @@ async function spiralMine(c: GatherCtx, t: Target, names: Set<string>, enough: (
 		const tn = w.blockName(tv);
 		if (tn && names.has(tn)) {
 			if (wet(w, t.cell)) why = 'hazard';
-			else if (await mineCell(c, t.cell)) await vein(c, [t.cell], names, enough, sp);
+			else if (await mineCell(c, t.cell, (r) => safeToMine(sp, r))) await vein(c, [t.cell], names, enough, sp);
 		}
 	}
 	await climbOut(c, sp, dug);

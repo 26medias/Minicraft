@@ -70,6 +70,24 @@ export class Tripwire {
 		this.count++;
 		this.checkOverrun();
 	}
+	/**
+	 * A batched edit of `cells` (a pickaxe's area break): one edit for the rate, churn per cell, and the cells are added
+	 * to the plan as they are counted, so legitimate area mining never trips the overrun.
+	 */
+	recordBatch(cells: readonly Vec3[], now: number): void {
+		if (cells.length === 0) return;
+		this.planned += cells.length;
+		this.recordEdit(cells[0], now);
+		this.count += cells.length - 1;
+		for (const c of cells.slice(1)) {
+			const k = `${c.x},${c.y},${c.z}`;
+			const ts = (this.cellTimes.get(k) ?? []).filter((t) => t > now - LIMITS.TRIP_CHURN_WINDOW_MS);
+			ts.push(now);
+			this.cellTimes.set(k, ts);
+			if (ts.length >= LIMITS.TRIP_CHURN) this.trip(`churn: ${k} edited ${ts.length}× in 10 min`);
+		}
+		this.checkOverrun();
+	}
 	recordPlanVeto(): void {
 		this.count++;
 		this.checkOverrun();

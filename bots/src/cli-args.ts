@@ -33,13 +33,17 @@ export interface ParsedArgs {
 	maxDecorations?: string;
 	/** `--max-blasts N` (landscaper): stop after N blasts (counted across restarts). */
 	maxBlasts?: string;
+	/** `--pickaxe <name>` (landscaper): the pickaxe it mines with (hand … emerald). */
+	pickaxe?: string;
+	/** `--grant-ores N` (landscaper): N of each ore / TNT ingredient into its inventory, once per state file. */
+	grantOres?: string;
 	/** `--join-plan` (builder, architect, experiment E7): claim the next open lot of the foreman's plan first. */
 	joinPlan: boolean;
 	/** `--when always|players` (every bot): with `players`, active only while a non-bot player is online. */
 	when?: string;
 }
 
-type ValueFlagKey = 'target' | 'world' | 'name' | 'skin' | 'brain' | 'personality' | 'restSec' | 'maxBuilds' | 'maxDecorations' | 'maxBlasts' | 'when';
+type ValueFlagKey = 'target' | 'world' | 'name' | 'skin' | 'brain' | 'personality' | 'restSec' | 'maxBuilds' | 'maxDecorations' | 'maxBlasts' | 'when' | 'pickaxe' | 'grantOres';
 type BooleanFlagKey = 'noEdits' | 'revertOnExit' | 'iDeployedTheServer' | 'builds' | 'tui' | 'compare' | 'jev' | 'llmParams' | 'joinPlan';
 
 const VALUE_FLAGS: Record<string, ValueFlagKey> = {
@@ -54,6 +58,8 @@ const VALUE_FLAGS: Record<string, ValueFlagKey> = {
 	'--max-decorations': 'maxDecorations',
 	'--max-blasts': 'maxBlasts',
 	'--when': 'when',
+	'--pickaxe': 'pickaxe',
+	'--grant-ores': 'grantOres',
 };
 
 const BOOLEAN_FLAGS: Record<string, BooleanFlagKey> = {

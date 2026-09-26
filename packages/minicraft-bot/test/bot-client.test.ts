@@ -679,6 +679,20 @@ describe('mine', () => {
 		expect(ws.of('edit')).toHaveLength(1);
 	});
 
+	it('tool: the pickaxe tier sets dur (iron beats the hand) and a multi-block tier sends tool + face', async () => {
+		const { bot, ws } = await connected({ cells: [[12, 201, 10, STONE, 0, 0], [13, 201, 10, STONE, 0, 0]] });
+		const hand = Math.round(miningDuration(BLOCKS[STONE].hardness, 0, 'none') * 1000);
+		const iron = Math.round(miningDuration(BLOCKS[STONE].hardness, 4, 'armed') * 1000);
+		expect(iron).toBeLessThan(hand);
+		void bot.mine(12, 201, 10, undefined, { tier: 4, face: 'px' });
+		expect(ws.of('fx')[0]).toEqual({ t: 'fx', kind: 'mine', x: 12, y: 201, z: 10, tier: STONE, dur: iron, tool: 4, face: 'px' });
+		await vi.advanceTimersByTimeAsync(iron);
+		await flush();
+		expect(ws.of('edit')).toHaveLength(1);
+		void bot.mine(13, 201, 10, undefined, { tier: 2 });
+		expect(ws.of('fx').at(-1)).toEqual({ t: 'fx', kind: 'mine', x: 13, y: 201, z: 10, tier: STONE, dur: Math.round(miningDuration(BLOCKS[STONE].hardness, 2, 'none') * 1000) });
+	});
+
 	it('refuses bedrock and air (false, no fx)', async () => {
 		const { bot, ws } = await connected({ cells: [[12, 201, 10, BEDROCK, 0, 0]] });
 		await expect(bot.mine(12, 201, 10)).resolves.toBe(false);

@@ -57,11 +57,17 @@ export class BehaviourRunner {
 	private follow: FollowState = createFollowState();
 	/** What the awaited body call is, so end() can cancel it. */
 	private inFlight: 'walk' | 'fly' | 'mine' | null = null;
+	private arrivalT = -Infinity;
 
 	constructor(private readonly d: RunnerDeps) {}
 
 	get busy(): boolean {
 		return this.isBusy;
+	}
+
+	/** When the last walk arrived (clock ms; −∞ before any): Expression hops right after it (spec §5.5, Task 16). */
+	get lastArrivalT(): number {
+		return this.arrivalT;
 	}
 
 	/** Starts a behaviour: sets state.behaviour and memory.current, calls plan(), resets the tripwire budget. */
@@ -286,6 +292,7 @@ export class BehaviourRunner {
 					const r = await body.walkTo(a.to, { speed: ctx.style.walkSpeed });
 					cancelled = r === 'cancelled';
 					ok = r === 'arrived';
+					if (ok) this.arrivalT = this.d.clock();
 					break;
 				}
 				case 'fly': {

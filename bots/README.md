@@ -122,7 +122,7 @@ then nearest), ~0.8 s apart → a firework → rest 5 minutes → again.
 
 ```bash
 npm --prefix bots run bot -- builder --target local|live --world <uuid|name> --name <n> [--skin <s>] \
-	--brain laya|jev [--compare] [--no-edits] [--i-deployed-the-server]
+	--brain laya|jev [--compare] [--when always|players] [--no-edits] [--i-deployed-the-server]
 ```
 
 - **`--brain laya`** asks Laya (`npm run brains -- laya`, 400 ms timeout); **`--brain jev`** asks Jev (hosted, 3 s
@@ -148,7 +148,7 @@ cell, flying within reach like the builder → rest `--rest-sec` with an idle lo
 
 ```bash
 npm --prefix bots run bot -- decorator --target local|live --world <uuid|name> --name <n> [--skin <s>] \
-	--brain laya|jev [--compare] [--rest-sec N] [--no-edits] [--i-deployed-the-server]
+	--brain laya|jev [--compare] [--rest-sec N] [--when always|players] [--no-edits] [--i-deployed-the-server]
 ```
 
 - **Where:** only into air, only on natural or bot ground, outside every build's footprint and within 4 blocks of
@@ -172,7 +172,7 @@ restart resumes it. Same flags, engines and safety as the builder; e2e leg: `vil
 
 ```bash
 npm --prefix bots run bot -- village --target local|live --world <uuid|name> --name <n> [--skin <s>] \
-	--brain laya|jev [--compare] [--rest-sec N] [--no-edits] [--i-deployed-the-server]
+	--brain laya|jev [--compare] [--rest-sec N] [--when always|players] [--no-edits] [--i-deployed-the-server]
 ```
 
 ## The helper bot (experiment E5)
@@ -188,7 +188,7 @@ it idles near spawn, looking around. State `bots/.state/helper/<target>/<world>/
 
 ```bash
 npm --prefix bots run bot -- helper --target local|live --world <uuid|name> --name <n> [--skin <s>] \
-	--brain laya|jev [--compare] [--rest-sec N] [--no-edits] [--i-deployed-the-server]
+	--brain laya|jev [--compare] [--rest-sec N] [--when always|players] [--no-edits] [--i-deployed-the-server]
 ```
 
 ## The architect bot (experiment E6)
@@ -206,7 +206,7 @@ each range and validated, else the choices (`llm-params` log line). e2e leg: `ar
 
 ```bash
 npm --prefix bots run bot -- architect --target local|live --world <uuid|name> --name <n> [--skin <s>] \
-	--brain laya|jev [--compare] [--llm-params] [--rest-sec N] [--no-edits] [--i-deployed-the-server]
+	--brain laya|jev [--compare] [--llm-params] [--rest-sec N] [--when always|players] [--no-edits] [--i-deployed-the-server]
 ```
 
 ## The foreman and `--join-plan` (experiment E7)
@@ -228,7 +228,7 @@ served, under a lock (a mkdir'd `plan.json.lock`, broken after 10 s) with atomic
 claim every minute, and a claim not renewed for 15 minutes (a crashed bot) expires. e2e leg: `foreman`.
 
 ```bash
-npm --prefix bots run bot -- foreman --target local|live --world <uuid|name> --name <n> [--skin <s>] [--no-edits] [--i-deployed-the-server]
+npm --prefix bots run bot -- foreman --target local|live --world <uuid|name> --name <n> [--skin <s>] [--when always|players] [--no-edits] [--i-deployed-the-server]
 npm --prefix bots run bot -- builder ... --join-plan      # or architect ... --join-plan
 ```
 
@@ -239,6 +239,15 @@ Builder, architect and helper stop building after `--max-builds N` builds (defau
 state file (a record counts once it placed a block), so it holds across restarts. A capped bot stays online, logs
 `cap-reached` once, and only wanders and looks around near its builds: no edits. Raise the flag (or move the state
 file aside) to let it build again.
+
+## Only while a kid plays (`--when`)
+
+Every builder-family bot (builder, decorator, village, helper, architect, foreman) and the brain v2 companion take
+`--when always|players` (default `always`). With `players` the bot is active only while at least one non-bot player
+is online. When none is, it pauses: it stays connected, ends its current move or build step (a half-built build
+resumes later), makes no model call (Laya, Jev) and no edit, and only looks around; brain v2 keeps perceiving, so it
+notices the player who joins. It resumes 5 s after a player joins (and pauses 5 s after the last one leaves), and logs
+`paused` / `resumed`.
 
 ## Shared bot cells
 
@@ -343,7 +352,7 @@ in a test, the way `bots/test/fixtures/laya-exchange.json` and
 
 ```bash
 npm --prefix bots run bot -- companion --target local|live --world <uuid|name> --brain v2 \
-	[--personality pip|rex] [--name Pip] [--tui] [--no-edits] [--revert-on-exit]
+	[--personality pip|rex] [--name Pip] [--tui] [--when always|players] [--no-edits] [--revert-on-exit]
 ```
 
 - **`--personality`** defaults to `pip` (shy, curious builder); `rex` is the bold explorer.

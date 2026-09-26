@@ -29,11 +29,14 @@ import { clampParams, IDEAS, makeDesign, presetParams, THEMES, themeSlug, type D
 import type { ParamProposer } from './llm-params.js';
 import { StuckWatchdog } from '../nav/navigate.js';
 import { showtimeOf } from '../nav/showtime.js';
+import { idlePaused, PresenceGate, type WhenMode } from '../shared/when.js';
 
 export interface ArchitectBuild extends BuilderBuild { idea: string; theme: string; size: string; style: string; params: Record<string, number>; by: Record<string, string> }
 export interface ArchitectFile extends BuilderFile { builds: ArchitectBuild[] }
 
 export interface ArchitectOpts {
+	/** `--when` (default 'always'): with 'players', paused while no non-bot player is online (shared/when.ts). */
+	when?: WhenMode;
 	name: string; body: Body; world: WorldView; spawn: Vec3;
 	primary: ChoiceEngine | null; secondary?: ChoiceEngine | null;
 	/** --llm-params: proposes the numbers before the size/style choices. */
@@ -71,6 +74,8 @@ export function runArchitect(o: ArchitectOpts): ArchitectHandle {
 	const clock = o.clock ?? (() => Date.now());
 	// The stuck watchdog every approach on this body shares (nav/navigate.ts): its `unstick` lines go to this bot's log.
 	StuckWatchdog.for(o.body, o.world).log = (e) => o.log({ ...e, t: clock() });
+	const gate = new PresenceGate({ mode: o.when ?? 'always', players: () => o.body.players(), clock, log: (e) => o.log({ ...e, t: clock() }) });
+	const paused = () => gate.paused();
 	const pace = o.paceMs ?? 800;
 	const file = loadBuilderFile(o.statePath) as ArchitectFile;
 	const own = new Ownership(o.world, () => file.owned, o.shared ? () => o.shared!.cells() : undefined);
@@ -91,7 +96,7 @@ export function runArchitect(o: ArchitectOpts): ArchitectHandle {
 		wakers.add(done);
 	});
 	const save = () => saveBuilderFile(o.statePath, file);
-	const ask = makeAsk({ primary: o.primary, secondary: o.secondary, clock, log: o.log, stats });
+	const ask = makeAsk({ primary: o.primary, secondary: o.secondary, clock, log: o.log, stats, paused });
 	const themes = THEMES.filter((t) => Object.values(t.blocks).every((b) => o.known.has(b)));
 	const maxBuilds = o.maxBuilds ?? DEFAULT_MAX_BUILDS;
 	const pick = <T>(xs: readonly T[]): T => xs[Math.floor(o.rng() * xs.length) % xs.length];
@@ -225,7 +230,7 @@ export function runArchitect(o: ArchitectOpts): ArchitectHandle {
 	async function restNear(b: BuilderBuild, ms: number): Promise<void> {
 		const until = clock() + ms;
 		const cx = b.origin.x + b.w / 2, cz = b.origin.z + b.d / 2;
-		while (!stopped && clock() < until) {
+		while (!stopped && !paused() && clock() < until) {
 			const left = until - clock();
 			if (o.rng() < 0.5) o.body.lookAt(b.origin.x + o.rng() * b.w, b.origin.y + o.rng() * b.h, b.origin.z + o.rng() * b.d);
 			else {
@@ -266,6 +271,11 @@ export function runArchitect(o: ArchitectOpts): ArchitectHandle {
 				await sleep(5000);
 				continue;
 			}
+			if (paused()) {
+				stats.current = 'paused: no player online';
+				await idlePaused(o.body, sleep, o.rng);
+				continue;
+			}
 			let b = resume;
 			resume = null;
 			try {
@@ -291,7 +301,7 @@ export function runArchitect(o: ArchitectOpts): ArchitectHandle {
 				try {
 					await constructBuild(b, {
 						body: o.body, world: o.world, own, stop, trip, kidsNow, ask, log: o.log, save, sleep, clock, pace, noEdits: o.noEdits,
-						stopped: () => stopped, stats, edits,
+						stopped: () => stopped || paused(), stats, edits,
 						onPlaced: (cell, id) => {
 							file.owned[cellKey(cell)] = id;
 							own.ownWrite(cell.x, cell.y, cell.z, id);
@@ -302,7 +312,10 @@ export function runArchitect(o: ArchitectOpts): ArchitectHandle {
 					stopRenew?.();
 				}
 				if (plan) endLot(plan, b.lot!, o.name, clock(), b.status, b.why, o.log);
-				if (b.status === 'building') continue; // stopped or halted: resume later
+				if (b.status === 'building') {
+					resume = b; // paused, halted or stopped mid-build: resumed later
+					continue;
+				} // stopped or halted: resume later
 				if (b.status === 'done') {
 					stats.buildsDone++;
 					stats.current = `resting after the ${b.size} ${b.idea}`;

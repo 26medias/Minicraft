@@ -33,9 +33,11 @@ export interface ParsedArgs {
 	maxDecorations?: string;
 	/** `--join-plan` (builder, architect, experiment E7): claim the next open lot of the foreman's plan first. */
 	joinPlan: boolean;
+	/** `--when always|players` (every bot): with `players`, active only while a non-bot player is online. */
+	when?: string;
 }
 
-type ValueFlagKey = 'target' | 'world' | 'name' | 'skin' | 'brain' | 'personality' | 'restSec' | 'maxBuilds' | 'maxDecorations';
+type ValueFlagKey = 'target' | 'world' | 'name' | 'skin' | 'brain' | 'personality' | 'restSec' | 'maxBuilds' | 'maxDecorations' | 'when';
 type BooleanFlagKey = 'noEdits' | 'revertOnExit' | 'iDeployedTheServer' | 'builds' | 'tui' | 'compare' | 'jev' | 'llmParams' | 'joinPlan';
 
 const VALUE_FLAGS: Record<string, ValueFlagKey> = {
@@ -48,6 +50,7 @@ const VALUE_FLAGS: Record<string, ValueFlagKey> = {
 	'--rest-sec': 'restSec',
 	'--max-builds': 'maxBuilds',
 	'--max-decorations': 'maxDecorations',
+	'--when': 'when',
 };
 
 const BOOLEAN_FLAGS: Record<string, BooleanFlagKey> = {

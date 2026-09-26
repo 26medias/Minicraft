@@ -371,6 +371,7 @@ async function companionV2(cfg: Config, deps: CliDeps): Promise<void> {
 	let lastSelect: Extract<LogLine, { k: 'select' }> | null = null;
 	let calls: Array<Extract<LogLine, { k: 'call' }>> = [];
 	const handle: Brain2Handle = runBrain2({
+		when: cfg.when,
 		port, clock, wall: () => Date.now(), rng: seededRng(seed), seed,
 		personality: PERSONALITIES[cfg.personality], statePaths: { brainFile, logDir },
 		meta: { ...meta, target: cfg.target.name, live: cfg.target.live }, world: { seed: client.world.seed, gen: client.world.gen },
@@ -543,6 +544,7 @@ async function builderCommand(cfg: Config, deps: CliDeps): Promise<void> {
 	const seed = (Date.now() ^ (process.pid << 16)) >>> 0;
 	deps.print(`${cfg.name} joined "${prepared.listing.name}" as ${prepared.skin}; builder (${primary?.name ?? 'no engine'}${secondary ? ` + ${secondary.name} compare` : ''})${cfg.noEdits ? ' --no-edits' : ''}; log ${logPath}; state ${statePath}`);
 	const handle = runBuilder({
+		when: cfg.when,
 		name: cfg.name, body: port.body, world: port.world, spawn: { x: sp.x, y: 0, z: sp.z }, primary, secondary,
 		noEdits: cfg.noEdits, statePath, rng: seededRng(seed), known: new Set(blockNames()), restMs: deps.builderRestMs ?? cfg.restSec * 1000, maxBuilds: cfg.maxBuilds,
 		planPath: planFilePath(deps.stateRoot, cfg.target.name, uuid), joinPlan: cfg.joinPlan,
@@ -622,6 +624,7 @@ async function decoratorCommand(cfg: Config, deps: CliDeps): Promise<void> {
 	const seed = (Date.now() ^ (process.pid << 16)) >>> 0;
 	deps.print(`${cfg.name} joined "${prepared.listing.name}" as ${prepared.skin}; decorator (${primary?.name ?? 'no engine'}${secondary ? ` + ${secondary.name} compare` : ''})${cfg.noEdits ? ' --no-edits' : ''}; log ${logPath}; state ${statePath}`);
 	const handle = runDecorator({
+		when: cfg.when,
 		name: cfg.name, body: port.body, world: port.world, primary, secondary, noEdits: cfg.noEdits, statePath,
 		builderDir: builderDir(deps.stateRoot, cfg.target.name, uuid), rng: seededRng(seed), known: new Set(blockNames()),
 		restMs: deps.builderRestMs ?? cfg.restSec * 1000, shared: new SharedCells(sharedCellsPath(deps.stateRoot, cfg.target.name, uuid), cfg.name), maxDecorations: cfg.maxDecorations,
@@ -701,6 +704,7 @@ async function villageCommand(cfg: Config, deps: CliDeps): Promise<void> {
 	const seed = (Date.now() ^ (process.pid << 16)) >>> 0;
 	deps.print(`${cfg.name} joined "${prepared.listing.name}" as ${prepared.skin}; village (${primary?.name ?? 'no engine'}${secondary ? ` + ${secondary.name} compare` : ''})${cfg.noEdits ? ' --no-edits' : ''}; log ${logPath}; state ${statePath}`);
 	const handle = runVillage({
+		when: cfg.when,
 		name: cfg.name, body: port.body, world: port.world, spawn: { x: sp.x, y: 0, z: sp.z }, primary, secondary,
 		noEdits: cfg.noEdits, statePath, builderDir: builderDir(deps.stateRoot, cfg.target.name, uuid), rng: seededRng(seed),
 		known: new Set(blockNames()), restMs: deps.builderRestMs ?? cfg.restSec * 1000,
@@ -782,6 +786,7 @@ async function helperCommand(cfg: Config, deps: CliDeps): Promise<void> {
 	const seed = (Date.now() ^ (process.pid << 16)) >>> 0;
 	deps.print(`${cfg.name} joined "${prepared.listing.name}" as ${prepared.skin}; helper (${primary?.name ?? 'no engine'}${secondary ? ` + ${secondary.name} compare` : ''})${cfg.noEdits ? ' --no-edits' : ''}; log ${logPath}; state ${statePath}`);
 	const handle = runHelper({
+		when: cfg.when,
 		name: cfg.name, body: port.body, world: port.world, spawn: { x: sp.x, y: 0, z: sp.z }, primary, secondary,
 		noEdits: cfg.noEdits, statePath, rng: seededRng(seed),
 		known: new Set(blockNames()), restMs: deps.builderRestMs ?? cfg.restSec * 1000, maxBuilds: cfg.maxBuilds,
@@ -864,6 +869,7 @@ async function architectCommand(cfg: Config, deps: CliDeps): Promise<void> {
 	const seed = (Date.now() ^ (process.pid << 16)) >>> 0;
 	deps.print(`${cfg.name} joined "${prepared.listing.name}" as ${prepared.skin}; architect (${primary?.name ?? 'no engine'}${secondary ? ` + ${secondary.name} compare` : ''}${proposer ? ` + ${proposer.name} params` : ''})${cfg.noEdits ? ' --no-edits' : ''}; log ${logPath}; state ${statePath}`);
 	const handle = runArchitect({
+		when: cfg.when,
 		name: cfg.name, body: port.body, world: port.world, spawn: { x: sp.x, y: 0, z: sp.z }, primary, secondary, proposer,
 		noEdits: cfg.noEdits, statePath, builderDir: builderDir(deps.stateRoot, cfg.target.name, uuid), rng: seededRng(seed),
 		known: new Set(blockNames()), restMs: deps.builderRestMs ?? cfg.restSec * 1000, maxBuilds: cfg.maxBuilds,
@@ -936,6 +942,7 @@ async function foremanCommand(cfg: Config, deps: CliDeps): Promise<void> {
 	const seed = (Date.now() ^ (process.pid << 16)) >>> 0;
 	deps.print(`${cfg.name} joined "${prepared.listing.name}" as ${prepared.skin}; foreman${cfg.noEdits ? ' --no-edits' : ''}; plan ${planPath}; log ${logPath}; state ${statePath}`);
 	const handle = runForeman({
+		when: cfg.when,
 		name: cfg.name, body: port.body, world: port.world, spawn: { x: sp.x, y: 0, z: sp.z },
 		noEdits: cfg.noEdits, statePath, planPath, builderDir: builderDir(deps.stateRoot, cfg.target.name, uuid), rng: seededRng(seed),
 		paceMs: deps.foremanPaceMs, shared: new SharedCells(sharedCellsPath(deps.stateRoot, cfg.target.name, uuid), cfg.name),

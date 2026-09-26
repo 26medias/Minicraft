@@ -28,6 +28,7 @@ import { boxOf, doorFronts, lampSpots, planPath, plazaGoal, VillageSearch, type 
 import { LAYOUTS, THEMES, themeBlocks, themeSlug, type Layout, type VillageTheme } from './themes.data.js';
 import { StuckWatchdog } from '../nav/navigate.js';
 import { showtimeOf } from '../nav/showtime.js';
+import { idlePaused, PresenceGate, type WhenMode } from '../shared/when.js';
 
 export interface CellsRec { cells: Array<{ cell: Vec3; block: string }>; placed: string[]; skipped: string[]; status: 'placing' | 'done' | 'abandoned'; why?: string }
 export interface VillageLot { spec: LotSpec; build: BuilderBuild; path?: CellsRec; lamps?: CellsRec }
@@ -61,6 +62,8 @@ export function saveVillageFile(path: string, f: VillageFile): void {
 const MAX_REACH_FAILS = 4;
 
 export interface VillageOpts {
+	/** `--when` (default 'always'): with 'players', paused while no non-bot player is online (shared/when.ts). */
+	when?: WhenMode;
 	name: string; body: Body; world: WorldView; spawn: Vec3;
 	primary: ChoiceEngine | null; secondary?: ChoiceEngine | null;
 	noEdits: boolean; statePath: string;
@@ -82,6 +85,8 @@ export function runVillage(o: VillageOpts): VillageHandle {
 	const clock = o.clock ?? (() => Date.now());
 	// The stuck watchdog every approach on this body shares (nav/navigate.ts): its `unstick` lines go to this bot's log.
 	StuckWatchdog.for(o.body, o.world).log = (e) => o.log({ ...e, t: clock() });
+	const gate = new PresenceGate({ mode: o.when ?? 'always', players: () => o.body.players(), clock, log: (e) => o.log({ ...e, t: clock() }) });
+	const paused = () => gate.paused();
 	const pace = o.paceMs ?? 800;
 	const file = loadVillageFile(o.statePath);
 	const own = new Ownership(o.world, () => file.owned, o.shared ? () => o.shared!.cells() : undefined);
@@ -102,7 +107,7 @@ export function runVillage(o: VillageOpts): VillageHandle {
 		wakers.add(done);
 	});
 	const save = () => saveVillageFile(o.statePath, file);
-	const ask = makeAsk({ primary: o.primary, secondary: o.secondary, clock, log: o.log, stats });
+	const ask = makeAsk({ primary: o.primary, secondary: o.secondary, clock, log: o.log, stats, paused });
 	const themes = THEMES.filter((t) => themeBlocks(t).every((b) => o.known.has(b)));
 
 	const unsubs = [
@@ -193,7 +198,7 @@ export function runVillage(o: VillageOpts): VillageHandle {
 		let reachFails = 0;
 		let gaveUp = false;
 		for (const dc of rec.cells) {
-			if (stopped || trip.halted) return;
+			if (stopped || trip.halted || paused()) return;
 			const k = cellKey(dc.cell);
 			if (done.has(k)) continue;
 			stats.current = `${what} ${rec.placed.length}/${rec.cells.length}`;
@@ -206,7 +211,7 @@ export function runVillage(o: VillageOpts): VillageHandle {
 			let v = verdictNow();
 			if (v.ok) {
 				const there = await approach(o.body, o.world, { origin: dc.cell, w: 1, d: 1 }, dc.cell, (e) => o.log({ ...e, t: clock() }));
-				if (stopped) return;
+				if (stopped || paused()) return;
 				if (!there || eyeDist(o.body.pose(), dc.cell) > PLACE_MAX) {
 					stats.failed++;
 					o.log({ k: 'unreachable', t: clock(), cell: dc.cell, fails: ++reachFails });
@@ -261,7 +266,7 @@ export function runVillage(o: VillageOpts): VillageHandle {
 			save();
 			await sleep(pace);
 		}
-		if (stopped || trip.halted) return;
+		if (stopped || trip.halted || paused()) return;
 		const left = rec.cells.filter((c) => !rec.placed.includes(cellKey(c.cell)) && !rec.skipped.includes(cellKey(c.cell)));
 		if (left.length && !gaveUp) return; // a refusal paused it: resume later
 		rec.status = rec.placed.length > 0 ? 'done' : 'abandoned';
@@ -318,7 +323,7 @@ export function runVillage(o: VillageOpts): VillageHandle {
 
 	async function restNear(c: Vec3, ms: number): Promise<void> {
 		const until = clock() + ms;
-		while (!stopped && clock() < until) {
+		while (!stopped && !paused() && clock() < until) {
 			const left = until - clock();
 			if (o.rng() < 0.6) {
 				const a = o.rng() * Math.PI * 2;
@@ -342,7 +347,7 @@ export function runVillage(o: VillageOpts): VillageHandle {
 		}
 		const plaza = { x: v.centre.x, y: v.lots[0].build.origin.y, z: v.centre.z + 2 };
 		for (const lot of v.lots) {
-			if (stopped || trip.halted) return;
+			if (stopped || trip.halted || paused()) return;
 			const b = lot.build;
 			if (b.status === 'building') {
 				// Re-check the kid rules before starting a lot (a kid may have built nearby since the plan).
@@ -357,7 +362,7 @@ export function runVillage(o: VillageOpts): VillageHandle {
 				o.log({ k: 'lot', t: clock(), id: b.id, role: lot.spec.role, template: lot.spec.template, origin: b.origin });
 				await constructBuild(b, {
 					body: o.body, world: o.world, own, stop, trip, kidsNow, ask, log: o.log, save, sleep, clock, pace, noEdits: o.noEdits,
-					stopped: () => stopped, stats, edits, onPlaced,
+					stopped: () => stopped || paused(), stats, edits, onPlaced,
 				});
 				if (b.status === 'building') return; // stopped or halted: resume later
 				if (b.status === 'done') stats.lotsDone++;
@@ -387,7 +392,7 @@ export function runVillage(o: VillageOpts): VillageHandle {
 				if (lot.lamps.status === 'done') stats.lampsDone++;
 			}
 		}
-		if (stopped || trip.halted) return;
+		if (stopped || trip.halted || paused()) return;
 		if (v.status !== 'done') {
 			v.status = 'done';
 			save();
@@ -407,6 +412,11 @@ export function runVillage(o: VillageOpts): VillageHandle {
 				haltedLogged = true;
 				stats.current = `EDITS HALTED (${trip.halted})`;
 				await sleep(5000);
+				continue;
+			}
+			if (paused()) {
+				stats.current = 'paused: no player online';
+				await idlePaused(o.body, sleep, o.rng);
 				continue;
 			}
 			try {

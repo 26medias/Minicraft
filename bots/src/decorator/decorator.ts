@@ -22,6 +22,7 @@ import type { SharedCells } from '../shared/bot-cells.js';
 import { capCount, capReached, countsTowardCap, DEFAULT_MAX_DECORATIONS } from '../shared/cap.js';
 import { candidateDecorations, niceBuild, readBuilderRecords, type DecorCell, type DecorKind, type KnownBuild } from './decor.js';
 import { StuckWatchdog } from '../nav/navigate.js';
+import { idlePaused, PresenceGate, type WhenMode } from '../shared/when.js';
 
 export interface DecorRecord {
 	id: string; bot: string; buildId: string; kind: DecorKind; description: string; cells: DecorCell[];
@@ -56,6 +57,8 @@ export function saveDecoratorFile(path: string, f: DecoratorFile): void {
 const MAX_REACH_FAILS = 4;
 
 export interface DecoratorOpts {
+	/** `--when` (default 'always'): with 'players', paused while no non-bot player is online (shared/when.ts). */
+	when?: WhenMode;
 	name: string; body: Body; world: WorldView;
 	primary: ChoiceEngine | null; secondary?: ChoiceEngine | null;
 	noEdits: boolean; statePath: string; builderDir: string;
@@ -76,6 +79,8 @@ export function runDecorator(o: DecoratorOpts): DecoratorHandle {
 	const clock = o.clock ?? (() => Date.now());
 	// The stuck watchdog every approach on this body shares (nav/navigate.ts): its `unstick` lines go to this bot's log.
 	StuckWatchdog.for(o.body, o.world).log = (e) => o.log({ ...e, t: clock() });
+	const gate = new PresenceGate({ mode: o.when ?? 'always', players: () => o.body.players(), clock, log: (e) => o.log({ ...e, t: clock() }) });
+	const paused = () => gate.paused();
 	const pace = o.paceMs ?? 800;
 	const file = loadDecoratorFile(o.statePath);
 	let builderOwned: Record<string, number> = {};
@@ -138,6 +143,7 @@ export function runDecorator(o: DecoratorOpts): DecoratorHandle {
 		}
 	}
 	async function ask(what: string, state: string, instructions: string, options: Record<string, string>): Promise<string | null> {
+		if (paused()) return null; // --when players: no model call while paused
 		stats.asks++;
 		const p = usable(o.primary) ? askOne(o.primary, state, instructions, options) : null;
 		const s = usable(o.secondary) ? askOne(o.secondary, state, instructions, options) : null;
@@ -185,7 +191,7 @@ export function runDecorator(o: DecoratorOpts): DecoratorHandle {
 			o.log({ k: 'decoration-end', t: clock(), id: rec.id, status, why, placed: rec.placed.length, cells: rec.cells.length });
 		};
 		for (const dc of rec.cells) {
-			if (stopped || trip.halted) return;
+			if (stopped || trip.halted || paused()) return;
 			const k = cellKey(dc.cell);
 			if (done.has(k)) continue;
 			stats.current = `decorating the ${niceBuild(kb.build)} by ${kb.bot}: ${rec.kind} ${rec.placed.length}/${rec.cells.length}`;
@@ -198,7 +204,7 @@ export function runDecorator(o: DecoratorOpts): DecoratorHandle {
 			let v = verdictNow();
 			if (v.ok) {
 				const there = await approach(o.body, o.world, kb.build, dc.cell, (e) => o.log({ ...e, t: clock() }));
-				if (stopped) return;
+				if (stopped || paused()) return;
 				if (!there || eyeDist(o.body.pose(), dc.cell) > PLACE_MAX) {
 					stats.failed++;
 					o.log({ k: 'unreachable', t: clock(), cell: dc.cell, fails: ++reachFails });
@@ -257,7 +263,7 @@ export function runDecorator(o: DecoratorOpts): DecoratorHandle {
 	async function restNear(b: KnownBuild['build'], ms: number): Promise<void> {
 		const until = clock() + ms;
 		const cx = b.origin.x + b.w / 2, cz = b.origin.z + b.d / 2;
-		while (!stopped && clock() < until) {
+		while (!stopped && !paused() && clock() < until) {
 			const left = until - clock();
 			if (o.rng() < 0.6) {
 				// Look around: at the build, or out at the view.
@@ -350,6 +356,11 @@ export function runDecorator(o: DecoratorOpts): DecoratorHandle {
 				haltedLogged = true;
 				stats.current = `EDITS HALTED (${trip.halted})`;
 				await sleep(5000);
+				continue;
+			}
+			if (paused()) {
+				stats.current = 'paused: no player online';
+				await idlePaused(o.body, sleep, o.rng);
 				continue;
 			}
 			try {

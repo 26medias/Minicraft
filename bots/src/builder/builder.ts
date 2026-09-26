@@ -26,6 +26,7 @@ import { capCount, capReached, countsTowardCap, DEFAULT_MAX_BUILDS } from '../sh
 import { claimLot, planAvoidBoxes, updateLot, type PlanLot } from '../foreman/plan-file.js';
 import { endLot, fitsLot, lotSite, rejectStatus, renewClaim } from '../foreman/join.js';
 import { showtimeOf } from '../nav/showtime.js';
+import { idlePaused, PresenceGate, type WhenMode } from '../shared/when.js';
 
 export interface BuilderBuild {
 	id: string; template: string; variant: 'small' | 'medium'; palette: string; origin: Vec3; w: number; d: number; h: number;
@@ -145,6 +146,8 @@ export async function approach(
 const KID_INSIDE_MAX_MS = 60_000;
 
 export interface BuilderOpts {
+	/** `--when` (default 'always'): with 'players', paused while no non-bot player is online (shared/when.ts). */
+	when?: WhenMode;
 	name: string; body: Body; world: WorldView; spawn: Vec3;
 	primary: ChoiceEngine | null; secondary?: ChoiceEngine | null;
 	noEdits: boolean; statePath: string; log: (o: Record<string, unknown>) => void; status?: (line: string) => void;
@@ -169,6 +172,8 @@ export function runBuilder(o: BuilderOpts): BuilderHandle {
 	const clock = o.clock ?? (() => Date.now());
 	// The stuck watchdog every approach on this body shares (nav/navigate.ts): its `unstick` lines go to this bot's log.
 	StuckWatchdog.for(o.body, o.world).log = (e) => o.log({ ...e, t: clock() });
+	const gate = new PresenceGate({ mode: o.when ?? 'always', players: () => o.body.players(), clock, log: (e) => o.log({ ...e, t: clock() }) });
+	const paused = () => gate.paused();
 	const pace = o.paceMs ?? 800;
 	const file = loadBuilderFile(o.statePath);
 	const own = new Ownership(o.world, () => file.owned, o.shared ? () => o.shared!.cells() : undefined);
@@ -202,7 +207,7 @@ export function runBuilder(o: BuilderOpts): BuilderHandle {
 
 	const kidsNow = (): KidPos[] => o.body.players().filter((p) => !p.bot && p.hasPos).map((p) => ({ name: p.name, x: p.x, y: p.y, z: p.z }));
 
-	const ask = makeAsk({ primary: o.primary, secondary: o.secondary, clock, log: o.log, stats });
+	const ask = makeAsk({ primary: o.primary, secondary: o.secondary, clock, log: o.log, stats, paused });
 
 	function nearestKid(): KidPos | null {
 		const p = o.body.pose();
@@ -332,7 +337,7 @@ export function runBuilder(o: BuilderOpts): BuilderHandle {
 		try {
 			await constructBuild(b, {
 				body: o.body, world: o.world, own, stop, trip, kidsNow, ask, log: o.log, save, sleep, clock, pace, noEdits: o.noEdits,
-				stopped: () => stopped, stats, edits,
+				stopped: () => stopped || paused(), stats, edits,
 				onPlaced: (cell, id) => {
 					file.owned[cellKey(cell)] = id;
 					own.ownWrite(cell.x, cell.y, cell.z, id);
@@ -349,7 +354,7 @@ export function runBuilder(o: BuilderOpts): BuilderHandle {
 	async function restNear(b: BuilderBuild, ms: number): Promise<void> {
 		const until = clock() + ms;
 		const cx = b.origin.x + b.w / 2, cz = b.origin.z + b.d / 2;
-		while (!stopped && clock() < until) {
+		while (!stopped && !paused() && clock() < until) {
 			const left = until - clock();
 			const r = o.rng();
 			if (r < 0.5) {
@@ -394,6 +399,11 @@ export function runBuilder(o: BuilderOpts): BuilderHandle {
 				await sleep(5000);
 				continue;
 			}
+			if (paused()) {
+				stats.current = 'paused: no player online';
+				await idlePaused(o.body, sleep, o.rng);
+				continue;
+			}
 			let b = resume;
 			resume = null;
 			try {
@@ -408,6 +418,10 @@ export function runBuilder(o: BuilderOpts): BuilderHandle {
 					continue;
 				}
 				await construct(b);
+				if (b.status === 'building') {
+					resume = b; // paused, halted or stopped mid-build: resumed later
+					continue;
+				}
 				if (b.status === 'done') stats.buildsDone++;
 				else if (b.status === 'abandoned') stats.buildsAbandoned++;
 				if (b.status === 'done' && !stopped) {
@@ -462,6 +476,8 @@ type Ask = (what: string, state: string, instructions: string, options: Record<s
 export function makeAsk(o: {
 	primary: ChoiceEngine | null; secondary?: ChoiceEngine | null; clock: () => number; log: (e: Record<string, unknown>) => void;
 	stats: { asks: number; fallbacks: number };
+	/** --when players: no model call while paused (null: the caller falls back). */
+	paused?: () => boolean;
 }): Ask {
 	const { clock, stats } = o;
 	const health = new Map<string, { fails: number; until: number }>();
@@ -484,6 +500,7 @@ export function makeAsk(o: {
 		}
 	}
 	return async (what, state, instructions, options) => {
+		if (o.paused?.()) return null;
 		stats.asks++;
 		const p = usable(o.primary) ? askOne(o.primary, state, instructions, options) : null;
 		const s = usable(o.secondary) ? askOne(o.secondary, state, instructions, options) : null;

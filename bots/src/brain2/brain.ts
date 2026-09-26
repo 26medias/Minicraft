@@ -25,6 +25,7 @@ import { Scheduler } from './scheduler.js';
 import { SelectionController } from './selection.js';
 import { Store, initialState, type Cause, type Change, type Patch } from './store.js';
 import type { Build, Dig, Personality, State, Vec3 } from './types.js';
+import { PresenceGate, type WhenMode } from '../shared/when.js';
 
 export interface Brain2Deps {
 	port: Port; clock: Clock; wall: () => number; rng: () => number; seed: number;
@@ -36,6 +37,8 @@ export interface Brain2Deps {
 	jev?: boolean;
 	/** Tests: no timers; the test calls step(). Production: a 100 ms setTimeout chain calls step(). */
 	manual?: boolean;
+	/** `--when` (default 'always'): with 'players', paused while no non-bot player is online (shared/when.ts). */
+	when?: WhenMode;
 }
 export interface Brain2Handle {
 	/** One 100 ms beat: scheduler.tick(), runner.tick() (not awaited, its rejection logged as `runner-error`), expression.tick(), saver.tick(). */
@@ -213,6 +216,11 @@ export function runBrain2(d: Brain2Deps): Brain2Handle {
 	let stopped = false;
 	let timer: ReturnType<typeof setTimeout> | null = null;
 	let lastStatus = clock();
+	// --when players: while no player is online, no scheduler (no model lane, no selection), no runner (no edit, no
+	// move), no expression; perception alone keeps running, so the bot sees the player who joins.
+	const gate = new PresenceGate({ mode: d.when ?? 'always', players: () => body.players(), clock, log: (e) => event(String(e.k), { why: e.why }) });
+	let wasPaused = false;
+	let lastPerceive = -Infinity;
 
 	const status = (): void => {
 		const s = store.state;
@@ -223,6 +231,20 @@ export function runBrain2(d: Brain2Deps): Brain2Handle {
 
 	const step = async (): Promise<void> => {
 		if (stopped) return;
+		if (gate.paused()) {
+			const now = clock();
+			if (!wasPaused) {
+				wasPaused = true;
+				runner.end('interrupted', 'paused: no player online'); // cancels a walk or flight in progress
+			}
+			if (now - lastPerceive >= PERCEIVE_MS) {
+				lastPerceive = now;
+				store.apply(perceiver.tick(now), { kind: 'perception', by: 'perceive' });
+			}
+			saver.tick(store.state);
+			return;
+		}
+		wasPaused = false;
 		await scheduler.tick();
 		const drained = own.drainPending();                     // lazy verification's drops, every beat
 		if (drained.length) store.apply(drained, { kind: 'perception', by: 'ownership' });

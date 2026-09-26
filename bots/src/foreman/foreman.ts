@@ -25,6 +25,7 @@ import type { SharedCells } from '../shared/bot-cells.js';
 import { areaD, areaW, NeighbourhoodSearch, ROWS } from './layout.js';
 import { createPlan, readPlan, type NeighbourhoodPlan, type PlanCell } from './plan-file.js';
 import { StuckWatchdog } from '../nav/navigate.js';
+import { idlePaused, PresenceGate, type WhenMode } from '../shared/when.js';
 
 export interface Progress { placed: string[]; skipped: string[]; status: 'placing' | 'done' }
 export interface ForemanFile { v: 1; planId: string | null; roads: Progress; lamps: Progress; owned: Record<string, number> }
@@ -55,6 +56,8 @@ export function saveForemanFile(path: string, f: ForemanFile): void {
 const MAX_REACH_FAILS = 6;
 
 export interface ForemanOpts {
+	/** `--when` (default 'always'): with 'players', paused while no non-bot player is online (shared/when.ts). */
+	when?: WhenMode;
 	name: string; body: Body; world: WorldView; spawn: Vec3;
 	noEdits: boolean; statePath: string; planPath: string;
 	/** The builder bots' records of this world: their builds are avoided. */
@@ -71,6 +74,8 @@ export function runForeman(o: ForemanOpts): ForemanHandle {
 	const clock = o.clock ?? (() => Date.now());
 	// The stuck watchdog every approach on this body shares (nav/navigate.ts): its `unstick` lines go to this bot's log.
 	StuckWatchdog.for(o.body, o.world).log = (e) => o.log({ ...e, t: clock() });
+	const gate = new PresenceGate({ mode: o.when ?? 'always', players: () => o.body.players(), clock, log: (e) => o.log({ ...e, t: clock() }) });
+	const paused = () => gate.paused();
 	const pace = o.paceMs ?? 800;
 	const file = loadForemanFile(o.statePath);
 	const own = new Ownership(o.world, () => file.owned, o.shared ? () => o.shared!.cells() : undefined);
@@ -135,7 +140,7 @@ export function runForeman(o: ForemanOpts): ForemanHandle {
 		trip.resetPlan(Math.max(1, cells.length - rec.placed.length));
 		let reachFails = 0;
 		for (const dc of cells) {
-			if (stopped || trip.halted) return;
+			if (stopped || trip.halted || paused()) return;
 			const k = cellKey(dc.cell);
 			if (done.has(k)) continue;
 			stats.current = `${what} ${rec.placed.length}/${cells.length}`;
@@ -149,7 +154,7 @@ export function runForeman(o: ForemanOpts): ForemanHandle {
 			let v = verdictNow();
 			if (v.ok) {
 				const there = await approach(o.body, o.world, { origin: dc.cell, w: 1, d: 1 }, dc.cell, (e) => o.log({ ...e, t: clock() }));
-				if (stopped) return;
+				if (stopped || paused()) return;
 				if (!there || eyeDist(o.body.pose(), dc.cell) > PLACE_MAX) {
 					stats.failed++;
 					o.log({ k: 'unreachable', t: clock(), cell: dc.cell, fails: ++reachFails });
@@ -212,7 +217,7 @@ export function runForeman(o: ForemanOpts): ForemanHandle {
 			save();
 			await sleep(pace);
 		}
-		if (stopped || trip.halted) return;
+		if (stopped || trip.halted || paused()) return;
 		rec.status = 'done';
 		save();
 		o.log({ k: `${what.split(' ')[0]}-end`, t: clock(), placed: rec.placed.length, skipped: rec.skipped.length, cells: cells.length });
@@ -222,7 +227,7 @@ export function runForeman(o: ForemanOpts): ForemanHandle {
 	async function wander(p: NeighbourhoodPlan, ms: number): Promise<void> {
 		const until = clock() + ms;
 		const cx = p.corner.x + areaW(p.cols) / 2, cz = p.corner.z + areaD(p.rows) / 2;
-		while (!stopped && clock() < until) {
+		while (!stopped && !paused() && clock() < until) {
 			if (o.rng() < 0.5 && p.roads.length) {
 				const r = p.roads[Math.floor(o.rng() * p.roads.length) % p.roads.length].cell;
 				const y = groundTop(o.world, r.x, r.z) + 1;
@@ -276,6 +281,11 @@ export function runForeman(o: ForemanOpts): ForemanHandle {
 				haltedLogged = true;
 				stats.current = `EDITS HALTED (${trip.halted})`;
 				await sleep(5000);
+				continue;
+			}
+			if (paused()) {
+				stats.current = 'paused: no player online';
+				await idlePaused(o.body, sleep, o.rng);
 				continue;
 			}
 			try {

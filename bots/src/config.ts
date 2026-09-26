@@ -9,6 +9,7 @@ import defaultBotsConfig from '../bots.config.js';
 import { parseArgs } from './cli-args.js';
 import { PERSONALITIES } from './brain2/data/personalities.data.js';
 import type { WorldListing } from 'minicraft-bot';
+import { WHEN_MODES, type WhenMode } from './shared/when.js';
 
 /** Thrown by `loadConfig`, and returned (not thrown) by the other functions here. */
 export class ConfigError extends Error {
@@ -101,6 +102,8 @@ export interface Config {
 	maxDecorations?: number;
 	/** `--join-plan` (builder, architect): claim the foreman's next open lot first. */
 	joinPlan: boolean;
+	/** `--when always|players` (every bot, default always): with `players`, paused while no non-bot player is online. */
+	when: WhenMode;
 	/** Where `.state` lives for this run (injected, defaulted in cli.ts only). */
 	stateRoot: string;
 	statePath(worldUuid: string): string;
@@ -233,6 +236,8 @@ export function loadConfig(input: LoadConfigInput): Config {
 	};
 	const maxBuilds = count('--max-builds', args.maxBuilds);
 	const maxDecorations = count('--max-decorations', args.maxDecorations);
+	const when = (args.when ?? 'always') as WhenMode;
+	if (!WHEN_MODES.includes(when)) throw new ConfigError(`--when must be always or players, not "${args.when}"`);
 
 	const targetName = args.target;
 	const name = args.name ?? 'Bot';
@@ -259,6 +264,7 @@ export function loadConfig(input: LoadConfigInput): Config {
 		maxBuilds,
 		maxDecorations,
 		joinPlan: args.joinPlan,
+		when,
 		stateRoot,
 		statePath(worldUuid: string): string {
 			return `${stateRoot}/${targetName}/${worldUuid}/${name}.json`;

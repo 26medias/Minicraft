@@ -23,6 +23,7 @@ import type { SharedCells } from '../shared/bot-cells.js';
 import { capCount, capReached, countsTowardCap, DEFAULT_MAX_BUILDS } from '../shared/cap.js';
 import { HELP_CHOICES, helpTemplate, helperSite, kidBuilding, kidPalette, type KidPlacement } from './plan.js';
 import { StuckWatchdog } from '../nav/navigate.js';
+import { idlePaused, PresenceGate, type WhenMode } from '../shared/when.js';
 
 export interface HelperBuild extends BuilderBuild { kid: string; kidCells: Vec3[]; kidBlocks: string[]; minGap: number; rot: number }
 export interface HelperFile extends BuilderFile { builds: HelperBuild[] }
@@ -32,6 +33,8 @@ export function helperStatePath(stateRoot: string, target: string, world: string
 }
 
 export interface HelperOpts {
+	/** `--when` (default 'always'): with 'players', paused while no non-bot player is online (shared/when.ts). */
+	when?: WhenMode;
 	name: string; body: Body; world: WorldView; spawn: Vec3;
 	primary: ChoiceEngine | null; secondary?: ChoiceEngine | null;
 	noEdits: boolean; statePath: string; log: (o: Record<string, unknown>) => void; status?: (line: string) => void;
@@ -52,6 +55,8 @@ export function runHelper(o: HelperOpts): HelperHandle {
 	const clock = o.clock ?? (() => Date.now());
 	// The stuck watchdog every approach on this body shares (nav/navigate.ts): its `unstick` lines go to this bot's log.
 	StuckWatchdog.for(o.body, o.world).log = (e) => o.log({ ...e, t: clock() });
+	const gate = new PresenceGate({ mode: o.when ?? 'always', players: () => o.body.players(), clock, log: (e) => o.log({ ...e, t: clock() }) });
+	const paused = () => gate.paused();
 	const pace = o.paceMs ?? 800;
 	const file = loadBuilderFile(o.statePath) as HelperFile;
 	const own = new Ownership(o.world, () => file.owned, o.shared ? () => o.shared!.cells() : undefined);
@@ -76,7 +81,7 @@ export function runHelper(o: HelperOpts): HelperHandle {
 		wakers.add(done);
 	});
 	const save = () => saveBuilderFile(o.statePath, file);
-	const ask = makeAsk({ primary: o.primary, secondary: o.secondary, clock, log: o.log, stats });
+	const ask = makeAsk({ primary: o.primary, secondary: o.secondary, clock, log: o.log, stats, paused });
 	const maxBuilds = o.maxBuilds ?? DEFAULT_MAX_BUILDS;
 	const kidsNow = (): KidPos[] => o.body.players().filter((p) => !p.bot && p.hasPos).map((p) => ({ name: p.name, x: p.x, y: p.y, z: p.z }));
 
@@ -179,7 +184,7 @@ export function runHelper(o: HelperOpts): HelperHandle {
 
 	async function restNear(b: HelperBuild, ms: number): Promise<void> {
 		const until = clock() + ms;
-		while (!stopped && clock() < until) {
+		while (!stopped && !paused() && clock() < until) {
 			o.body.lookAt(b.origin.x + o.rng() * b.w, b.origin.y + o.rng() * b.h, b.origin.z + o.rng() * b.d);
 			await sleep(Math.min(until - clock(), 2000 + o.rng() * 2000));
 		}
@@ -210,6 +215,11 @@ export function runHelper(o: HelperOpts): HelperHandle {
 				await sleep(5000);
 				continue;
 			}
+			if (paused()) {
+				stats.current = 'paused: no player online';
+				await idlePaused(o.body, sleep, o.rng);
+				continue;
+			}
 			let b = resume;
 			resume = null;
 			try {
@@ -224,14 +234,17 @@ export function runHelper(o: HelperOpts): HelperHandle {
 				}
 				await constructBuild(b, {
 					body: o.body, world: o.world, own, stop, trip, kidsNow, ask, log: o.log, save, sleep, clock, pace, noEdits: o.noEdits,
-					stopped: () => stopped, stats, edits,
+					stopped: () => stopped || paused(), stats, edits,
 					onPlaced: (cell, id) => {
 						file.owned[cellKey(cell)] = id;
 						own.ownWrite(cell.x, cell.y, cell.z, id);
 						o.shared?.append(cell, id);
 					},
 				});
-				if (b.status === 'building') continue;
+				if (b.status === 'building') {
+					resume = b; // paused, halted or stopped mid-build: resumed later
+					continue;
+				}
 				helpedUntil.set(b.kid, clock());
 				if (b.status === 'done') {
 					stats.buildsDone++;

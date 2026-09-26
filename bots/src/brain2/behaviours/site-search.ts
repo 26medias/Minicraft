@@ -9,10 +9,12 @@ import type { WorldView } from '../../port.js';
 import type { Ownership } from '../ownership.js';
 import type { Vec3 } from '../types.js';
 import { LIMITS } from '../data/limits.data.js';
+import { inShowtime, type Showtime } from '../../nav/showtime.js';
 
 /** origin = template (0,0,0) in the world (y = median + 1); groundY = the median surface. */
 export interface Site { origin: Vec3; groundY: number; digs: Vec3[]; fills: Vec3[] }
-export interface SiteQuery { w: number; d: number; h: number; anchor: Vec3; avoid: Array<{ min: Vec3; max: Vec3 }> }
+/** showtime: the nearest kid online (nav/showtime.ts) — a qualifying site 15–30 in front of him wins over the plain best. */
+export interface SiteQuery { w: number; d: number; h: number; anchor: Vec3; avoid: Array<{ min: Vec3; max: Vec3 }>; showtime?: Showtime | null }
 /** kids: where the kids stand now (their feet); a site's grown footprint must clear their body buffers. */
 export interface SiteCtx { world: WorldView; own: Ownership; spawn: Vec3; kids?: readonly Vec3[] }
 
@@ -162,6 +164,8 @@ export class SiteSearch {
 	private readonly tops = new Map<string, number>();
 	private readonly done = new Set<string>();
 	private readonly bests: Array<Best | null>;
+	/** Per radius, the best site in the kid's showtime band (only with q.showtime). */
+	private readonly shows: Array<Best | null>;
 	private readonly counts: Array<Record<string, number>>;
 	private next = 0;
 	/** One entry per radius that found nothing, in order (read by Build's `search-failed` line). */
@@ -170,6 +174,7 @@ export class SiteSearch {
 	constructor(private readonly q: SiteQuery, private readonly ctx: SiteCtx) {
 		this.chunks = chunksWithin(q.anchor, this.radii[0]);
 		this.bests = this.radii.map(() => null);
+		this.shows = this.radii.map(() => null);
 		this.counts = this.radii.map(() => ({}));
 	}
 
@@ -201,7 +206,7 @@ export class SiteSearch {
 			}
 			if (this.next < this.chunks.length) return null;
 		}
-		const best = this.bests[this.ri];
+		const best = this.shows[this.ri] ?? this.bests[this.ri];
 		if (best) return best.site;
 		if (this.rejections.length <= this.ri) this.rejections.push({ radius: this.radius, counts: { ...this.counts[this.ri] } });
 		if (this.ri + 1 >= this.radii.length) return 'none';
@@ -226,8 +231,9 @@ export class SiteSearch {
 				continue;
 			}
 			const cost = why.digs.length + why.fills.length;
-			const b = this.bests[i];
-			if (!b || cost < b.cost || (cost === b.cost && dist < b.dist)) this.bests[i] = { site: why, cost, dist };
+			const better = (b: Best | null) => !b || cost < b.cost || (cost === b.cost && dist < b.dist);
+			if (better(this.bests[i])) this.bests[i] = { site: why, cost, dist };
+			if (this.q.showtime && inShowtime(this.q.showtime, ox + this.q.w / 2, oz + this.q.d / 2) && better(this.shows[i])) this.shows[i] = { site: why, cost, dist };
 		}
 	}
 }

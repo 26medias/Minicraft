@@ -27,6 +27,7 @@ import { planAvoidBoxes } from '../foreman/plan-file.js';
 import { boxOf, doorFronts, lampSpots, planPath, plazaGoal, VillageSearch, type Box, type Col, type LotSpec } from './plan.js';
 import { LAYOUTS, THEMES, themeBlocks, themeSlug, type Layout, type VillageTheme } from './themes.data.js';
 import { StuckWatchdog } from '../nav/navigate.js';
+import { showtimeOf } from '../nav/showtime.js';
 
 export interface CellsRec { cells: Array<{ cell: Vec3; block: string }>; placed: string[]; skipped: string[]; status: 'placing' | 'done' | 'abandoned'; why?: string }
 export interface VillageLot { spec: LotSpec; build: BuilderBuild; path?: CellsRec; lamps?: CellsRec }
@@ -149,7 +150,7 @@ export function runVillage(o: VillageOpts): VillageHandle {
 			...planAvoidBoxes(o.planPath),
 		];
 		stats.current = `searching a village site (${theme.name}, ${layout})`;
-		const search = new VillageSearch({ layout, theme, anchor, avoid, maxRadius: o.searchRadius ?? 64 }, { world: o.world, own, spawn: o.spawn, kids: kidsNow() });
+		const search = new VillageSearch({ layout, theme, anchor, avoid, maxRadius: o.searchRadius ?? 64, showtime: showtimeOf(o.body) }, { world: o.world, own, spawn: o.spawn, kids: kidsNow() });
 		for (;;) {
 			if (stopped) return null;
 			const r = search.step();

@@ -83,7 +83,10 @@ export function anchorOf(ctx: BehaviourCtx): Vec3 {
 
 function newSearch(t: Template, ctx: BehaviourCtx, extra: Array<{ min: Vec3; max: Vec3 }> = []): SiteSearch {
 	const avoid = ctx.state.builds.filter((b) => b.status !== 'dismantled' && b.cells.length > 0).map((b) => boxOf(b.cells));
-	return new SiteSearch({ w: t.w, d: t.d, h: t.h, anchor: anchorOf(ctx), avoid: [...avoid, ...extra] }, { world: ctx.world, own: ctx.own, spawn: ctx.spawn, kids: ctx.kids.map((k) => k.pose) });
+	const p = ctx.pose;
+	const kid = [...ctx.kids].sort((a, b) => Math.hypot(a.pose.x - p.x, a.pose.z - p.z) - Math.hypot(b.pose.x - p.x, b.pose.z - p.z))[0];
+	const showtime = kid ? { x: kid.pose.x, z: kid.pose.z, yaw: kid.pose.yaw } : null;
+	return new SiteSearch({ w: t.w, d: t.d, h: t.h, anchor: anchorOf(ctx), avoid: [...avoid, ...extra], showtime }, { world: ctx.world, own: ctx.own, spawn: ctx.spawn, kids: ctx.kids.map((k) => k.pose) });
 }
 
 function setSite(pl: BuildPlan, site: Site): void {

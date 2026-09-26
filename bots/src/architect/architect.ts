@@ -28,6 +28,7 @@ import { endLot, fitsLot, lotSite, rejectStatus, renewClaim } from '../foreman/j
 import { clampParams, IDEAS, makeDesign, presetParams, THEMES, themeSlug, type Design, type DRole, type Idea, type Theme } from './designs.js';
 import type { ParamProposer } from './llm-params.js';
 import { StuckWatchdog } from '../nav/navigate.js';
+import { showtimeOf } from '../nav/showtime.js';
 
 export interface ArchitectBuild extends BuilderBuild { idea: string; theme: string; size: string; style: string; params: Record<string, number>; by: Record<string, string> }
 export interface ArchitectFile extends BuilderFile { builds: ArchitectBuild[] }
@@ -202,7 +203,7 @@ export function runArchitect(o: ArchitectOpts): ArchitectHandle {
 		const { d, by } = r;
 		const anchor = kid ? { x: kid.x, y: kid.y, z: kid.z } : o.spawn;
 		stats.current = `searching a site for the ${d.size} ${d.idea} (${d.w}×${d.d}, ${d.h} high)`;
-		const search = new SiteSearch({ w: d.w, d: d.d, h: d.h, anchor, avoid: [...avoidBoxes(), ...planAvoidBoxes(o.planPath)] }, { world: o.world, own, spawn: o.spawn, kids: kidsNow() });
+		const search = new SiteSearch({ w: d.w, d: d.d, h: d.h, anchor, avoid: [...avoidBoxes(), ...planAvoidBoxes(o.planPath)], showtime: showtimeOf(o.body) }, { world: o.world, own, spawn: o.spawn, kids: kidsNow() });
 		for (;;) {
 			if (stopped) return null;
 			const s = search.step();

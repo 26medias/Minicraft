@@ -25,6 +25,7 @@ import type { SharedCells } from '../shared/bot-cells.js';
 import { capCount, capReached, countsTowardCap, DEFAULT_MAX_BUILDS } from '../shared/cap.js';
 import { claimLot, planAvoidBoxes, updateLot, type PlanLot } from '../foreman/plan-file.js';
 import { endLot, fitsLot, lotSite, rejectStatus, renewClaim } from '../foreman/join.js';
+import { showtimeOf } from '../nav/showtime.js';
 
 export interface BuilderBuild {
 	id: string; template: string; variant: 'small' | 'medium'; palette: string; origin: Vec3; w: number; d: number; h: number;
@@ -293,7 +294,7 @@ export function runBuilder(o: BuilderOpts): BuilderHandle {
 		const kid = nearestKid();
 		const anchor = kid ? { x: kid.x, y: kid.y, z: kid.z } : o.spawn;
 		stats.current = `searching a site for ${opt(t)}`;
-		const search = new SiteSearch({ w: t.w, d: t.d, h: t.h, anchor, avoid: avoidBoxes() }, { world: o.world, own, spawn: o.spawn, kids: kidsNow() });
+		const search = new SiteSearch({ w: t.w, d: t.d, h: t.h, anchor, avoid: avoidBoxes(), showtime: showtimeOf(o.body) }, { world: o.world, own, spawn: o.spawn, kids: kidsNow() });
 		for (;;) {
 			if (stopped) return null;
 			const r = search.step();

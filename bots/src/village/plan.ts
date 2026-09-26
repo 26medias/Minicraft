@@ -10,6 +10,7 @@ import { templateOf } from '../brain2/behaviours/templates.data.js';
 import type { WorldView } from '../port.js';
 import type { Vec3 } from '../types.js';
 import type { Layout, VillageTheme } from './themes.data.js';
+import { inShowtime, type Showtime } from '../nav/showtime.js';
 
 export type LotRole = 'house' | 'tower' | 'statue';
 export interface LotSpec { role: LotRole; template: string; variant: 'small' | 'medium'; w: number; d: number; h: number }
@@ -98,7 +99,8 @@ export function layoutLots(layout: Layout, specs: readonly LotSpec[], c: Col): C
 
 export interface PlannedLot { spec: LotSpec; site: Site }
 export interface VillageSite { centre: Col; n: number; lots: PlannedLot[] }
-export interface VillageSearchQ { layout: Layout; theme: VillageTheme; anchor: Vec3; avoid: Array<{ min: Vec3; max: Vec3 }>; maxRadius?: number; step?: number }
+/** showtime: the nearest kid online (nav/showtime.ts) — plaza centres in his showtime band are tried first. */
+export interface VillageSearchQ { layout: Layout; theme: VillageTheme; anchor: Vec3; avoid: Array<{ min: Vec3; max: Vec3 }>; maxRadius?: number; step?: number; showtime?: Showtime | null }
 export interface VillageSearchCtx { world: WorldView; own: Ownership; spawn: Vec3; kids?: readonly Vec3[] }
 
 /** Lots may sit at most this far above or below the statue's. */
@@ -137,7 +139,9 @@ export class VillageSearch {
 		const R = q.maxRadius ?? 64, st = q.step ?? 2;
 		const ax = Math.round(q.anchor.x), az = Math.round(q.anchor.z);
 		for (let dx = -R; dx <= R; dx += st) for (let dz = -R; dz <= R; dz += st) if (Math.hypot(dx, dz) <= R) this.centres.push({ x: ax + dx, z: az + dz });
-		this.centres.sort((a, b) => Math.hypot(a.x - ax, a.z - az) - Math.hypot(b.x - ax, b.z - az));
+		const show = q.showtime;
+		const band = (c: Col) => (show && inShowtime(show, c.x, c.z) ? 0 : 1);
+		this.centres.sort((a, b) => band(a) - band(b) || Math.hypot(a.x - ax, a.z - az) - Math.hypot(b.x - ax, b.z - az));
 	}
 
 	private top = (x: number, z: number): number => {

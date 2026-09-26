@@ -18,6 +18,9 @@ export { isLiquid as isLiquidId, isSolid as isSolidId } from '../../../src/data/
 export type { VoxelHit } from '../../../src/engine/input/raycast';
 /** Blocks the world generator places (a bot can mine only these) and blocks only crafting makes (never mined, never held by a bot). */
 export { WORLDGEN_BLOCKS, CRAFTED_ONLY } from '../../../src/data/crafting.data';
+/** Toy TNT: the game's blast cells for flatten/tunnel TNT, TNT specs (radius, fuse) and the crafting recipes. Read-only. */
+export { blastCells, tntSpec, RECIPES, FLATTEN_HEIGHT, TUNNEL_LENGTH } from './blast';
+export type { BlastToy, BlastWorld, Cell, Ingredient, Recipe, TntSpec, TunnelDir } from './blast';
 import { spawnV3 } from '../../../src/engine/world/v3/spawn';
 /** The world's generated spawn column, the point "first" joins spawn at (the game uses spawnV3 on every gen). brain2 spec §6. */
 export function worldSpawn(seed: number, _gen: number): { x: number; z: number } {

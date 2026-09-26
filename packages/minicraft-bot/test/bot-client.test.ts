@@ -1441,3 +1441,25 @@ describe('walkTo speed (brain2 spec §5.5)', () => {
 		expect(() => c.walkTo({ x: 5, z: 5 }, { speed: 1.5 })).toThrow(RangeError);
 	});
 });
+
+describe('breakMany', () => {
+	it('breaks a batch in one edit message, journaled; skips air, a changed cell and a cell in a kid; revert restores them', async () => {
+		const { bot, ws } = await connected({
+			players: [kid(2, 12.5, 200, 10.5)],
+			cells: [[10, 200, 10, STONE, 0, 0], [11, 200, 10, STONE, 0, 0], [12, 200, 10, STONE, 0, 0], [13, 200, 10, DIRT, 0, 0], [14, 200, 10, AIR, 0, 0]],
+		});
+		const edits0 = ws.of('edit').length;
+		const out = await bot.breakMany([
+			{ x: 10, y: 200, z: 10 }, { x: 11, y: 200, z: 10, expect: STONE }, { x: 12, y: 200, z: 10 }, { x: 13, y: 200, z: 10, expect: STONE }, { x: 14, y: 200, z: 10 },
+		]);
+		expect(out).toEqual([{ x: 10, y: 200, z: 10 }, { x: 11, y: 200, z: 10 }]);
+		const sent = ws.of('edit').slice(edits0);
+		expect(sent).toHaveLength(1);
+		expect(sent[0].ops).toEqual([[10, 200, 10, AIR, 0, 0], [11, 200, 10, AIR, 0, 0]]);
+		expect(bot.world.getBlock(12, 200, 10)).toBe(STONE); // inside the kid
+		expect(bot.world.getBlock(13, 200, 10)).toBe(DIRT); // not what was expected
+		expect(bot.journal().map((e) => [e.x, e.oldId, e.newId])).toEqual([[10, STONE, AIR], [11, STONE, AIR]]);
+		expect(await bot.revert()).toBe(2);
+		expect(bot.world.getBlock(10, 200, 10)).toBe(STONE);
+	});
+});

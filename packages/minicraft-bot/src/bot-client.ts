@@ -436,6 +436,44 @@ export class BotClient {
 	}
 
 	/**
+	 * Breaks many cells (to air) as one batch, the way a blast removes them: waits the edit gap once, then writes every
+	 * cell and sends them in messages of at most MAX_OPS_PER_EDIT ops (as `revert` does), each journaled. A cell is
+	 * skipped when it is out of the world, air, a liquid, bedrock, inside a kid's body, or (with `expect`) no longer
+	 * holds that id. Resolves the cells broken.
+	 */
+	breakMany(cells: ReadonlyArray<{ x: number; y: number; z: number; expect?: number }>): Promise<Array<{ x: number; y: number; z: number }>> {
+		this.assertConnected('breakMany');
+		const run = async (): Promise<Array<{ x: number; y: number; z: number }>> => {
+			if (this.state !== 'connected') return [];
+			const wait = this.lastEditAt + this.gap - Date.now();
+			if (wait > 0) await new Promise((r) => setTimeout(r, wait));
+			if (this.state !== 'connected') return [];
+			const w = this.core!;
+			const out: Array<{ x: number; y: number; z: number }> = [];
+			const t = Date.now();
+			for (const c of cells) {
+				const x = Math.floor(c.x), y = Math.floor(c.y), z = Math.floor(c.z);
+				if (!w.inBounds(x, y, z)) continue;
+				const id = w.getBlock(x, y, z);
+				if (id === AIR || id === BEDROCK_ID || isLiquid(id) || (c.expect !== undefined && id !== c.expect) || this.insideKid(x, y, z)) continue;
+				const oldColor = w.colorAt(x, y, z);
+				w.localSet(x, y, z, AIR, undefined, false);
+				this.entries.push({ x, y, z, oldId: id, newId: AIR, t, ...(oldColor ? { oldColor } : {}) });
+				out.push({ x, y, z });
+			}
+			if (out.length === 0) return out;
+			w.flushWrites();
+			this.lastEditAt = t;
+			if (this.entries.length > JOURNAL_MAX) this.entries.splice(0, this.entries.length - JOURNAL_MAX);
+			this.persist();
+			return out;
+		};
+		const p = this.chain.then(run, run);
+		this.chain = p.catch(() => false);
+		return p;
+	}
+
+	/**
 	 * Mines a block the way a kid does with the hand: faces it, sends `fx mine` (the kids see cracks), waits
 	 * `ms` (default: the hand's mining time for that block), then breaks it. Resolves false (no fx) for a
 	 * block that can't be mined (air, liquid, bedrock), and false with `fx mine-stop` when cancelled by a

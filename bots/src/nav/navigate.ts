@@ -200,7 +200,7 @@ export interface NavOpts extends LegOpts {
 export async function navigate(body: Body, world: WorldView, to: { x: number; y?: number; z: number }, o: NavOpts = {}): Promise<NavResult> {
 	const wd = o.watchdog;
 	wd?.want(to);
-	if (wd && (await wd.guard()) === 'abandon') return { ok: false, reason: 'stuck (abandoned by the watchdog)' };
+	if (wd && (await wd.guard(o.alive)) === 'abandon') return { ok: false, reason: 'stuck (abandoned by the watchdog)' };
 	const alive = () => !o.alive || o.alive();
 	// A target under a roof or an overhang: its landing column beside it (else the column itself).
 	const dest = to.y !== undefined ? landingFor(world, to) : to;
@@ -377,7 +377,7 @@ export class StuckWatchdog {
 	}
 
 	/** Runs the escalation that is due, if any. 'abandon' after the last resort. */
-	async guard(): Promise<'ok' | 'abandon'> {
+	async guard(alive?: () => boolean): Promise<'ok' | 'abandon'> {
 		if (this.busy) return 'ok';
 		const lv = this.due() as 0 | UnstickLevel;
 		if (lv === 0) return 'ok';
@@ -386,7 +386,7 @@ export class StuckWatchdog {
 		const goal = this.goal!;
 		let ok = false, err: string | undefined;
 		try {
-			ok = await unstick(this.o.body, this.o.world, lv, goal);
+			ok = await unstick(this.o.body, this.o.world, lv, goal, alive);
 		} catch (e) {
 			err = errMsg(e);
 		} finally {
@@ -409,16 +409,18 @@ const HOW: Record<UnstickLevel, string> = { 1: 'fly-high', 2: 'air-path', 3: 'te
 const registry = new WeakMap<Body, StuckWatchdog>();
 
 /** One escalation level (see StuckWatchdog). True when its moves all arrived. */
-export async function unstick(body: Body, world: WorldView, level: UnstickLevel, goal: { x: number; y?: number; z: number }): Promise<boolean> {
-	if (level === 1) return (await flyHigh(body, world, goal)) === 'arrived';
+export async function unstick(body: Body, world: WorldView, level: UnstickLevel, goal: { x: number; y?: number; z: number }, alive?: () => boolean): Promise<boolean> {
+	const o = { alive };
+	if (level === 1) return (await flyHigh(body, world, goal, o)) === 'arrived';
 	const p = body.pose();
 	if (level === 2) {
 		const path = airPathToSky(world, p);
 		if (!path) return false;
-		for (const c of path) if ((await flyLeg(body, c)) !== 'arrived') return false;
+		for (const c of path) if ((await flyLeg(body, c, o)) !== 'arrived') return false;
 		const q = body.pose();
-		return (await ascend(body, bodyTop(world, q.x, q.z) + 1 + CRUISE_ABOVE)) === 'arrived';
+		return (await ascend(body, bodyTop(world, q.x, q.z) + 1 + CRUISE_ABOVE, o)) === 'arrived';
 	}
+	if (alive && !alive()) return false;
 	const top = topSolid(world, Math.floor(p.x), Math.floor(p.z));
 	body.move({ x: p.x, y: Math.min(Math.max(top + 2, p.y), WORLD_TOP_FEET), z: p.z });
 	return true;

@@ -17,7 +17,7 @@ import { BEHAVIOURS, type Behaviour, type BehaviourCtx } from './behaviours/beha
 import { SALIENCE } from './data/salience.data.js';
 import { RING, climbPath } from './behaviours/spiral.js';
 import { escapeTarget } from './behaviours/mine.js';
-import { walkOrFly } from '../nav/navigate.js';
+import { StuckWatchdog, walkOrFly } from '../nav/navigate.js';
 
 export type FitFn = (a: Action, ctx: BehaviourCtx) => Promise<'yes' | 'wait' | 'no'>;
 export interface RunnerDeps {
@@ -70,7 +70,12 @@ export class BehaviourRunner {
 	/** The last `act` line and when, so an exact repeat within 5 s isn't logged again. */
 	private lastAct = { k: '', t: -Infinity };
 
-	constructor(private readonly d: RunnerDeps) {}
+	/** The safety net (nav/navigate.ts): a walk or flight goal with the pose still for 15 s escalates, then gives up. */
+	private readonly wd: StuckWatchdog;
+
+	constructor(private readonly d: RunnerDeps) {
+		this.wd = new StuckWatchdog({ body: d.body, world: d.world, clock: d.clock, log: (e) => d.log('unstick', e) });
+	}
 
 	get busy(): boolean {
 		return this.isBusy;
@@ -150,6 +155,19 @@ export class BehaviourRunner {
 		this.isBusy = true;                                   // rule 0: set before any await
 		try {
 			if (this.climb) return await this.climbTick(ctx);
+			if (this.wd.active) {
+				const gen0 = this.gen;
+				this.inFlight = 'fly';
+				let g: 'ok' | 'abandon';
+				try {
+					g = await this.wd.guard(() => this.gen === gen0);
+				} finally {
+					this.inFlight = null;
+				}
+				if (this.gen !== gen0 || !this.active) return;
+				if (g === 'abandon') return this.failed('stuck (unstick)');
+				ctx = this.ctx();
+			}
 			const act = this.active;
 			const beh = act.beh;
 			const n = beh.next(act.plan, ctx);
@@ -397,6 +415,7 @@ export class BehaviourRunner {
 					break;
 				case 'walk': {
 					this.inFlight = 'walk';
+					if (!this.inStaircase(a.to)) this.wd.want(a.to);
 					// The shared navigator's walk (nav/navigate.ts): at a wall or a cliff, a flight to the same column
 					// (the kids fly too). Never for a dig's step walks, which must stay in the staircase.
 					const r = await walkOrFly(body, world, a.to, {
@@ -416,6 +435,7 @@ export class BehaviourRunner {
 				}
 				case 'fly': {
 					this.inFlight = 'fly';
+					this.wd.want(a.to);
 					const r = await body.flyTo(a.to);
 					cancelled = r === 'cancelled';
 					ok = r === 'arrived';
@@ -448,6 +468,9 @@ export class BehaviourRunner {
 			return;
 		}
 		if (cancelled) return;                                // rule 8: reissued on a later tick, not a failure
+		// The watchdog: an arrival ends the goal; any other action done means the bot is busy, not stuck on a move.
+		if (ok && (a.kind === 'walk' || a.kind === 'fly')) this.wd.reached();
+		else if (ok) this.wd.clear();
 		// A failed move that left the bot down in another dig's staircase (a straight walk drops into the hole, and the
 		// surface overhangs it, so every flight from there is refused): the climb out first (ruling R17), as at a start.
 		const act0 = this.active!;

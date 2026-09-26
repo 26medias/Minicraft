@@ -1,16 +1,17 @@
 /**
  * Build-time texture derivations for scripts/build-atlas.ts (pure: no fs, no sharp,
  * so vitest can check them). Two kinds of tile are not files in src/assets/blocks:
- *   - DERIVED_TEXTURES: a Mojang tile turned to greyscale, then tinted (Big/Mega TNT, spec §6);
+ *   - DERIVED_TEXTURES: a block tile turned to greyscale, then tinted to a target luminance (Big/Mega TNT, the toys,
+ *     launch_pad; texture spec §5.6);
  *   - pickaxe icons: original 16×16 pixel art drawn from the templates below (spec §5).
  */
 
 export type Rgb = [number, number, number];
 
-/** Brightens the greyscale before tinting: TNT's mean luminance is ~100, a plain multiply would be muddy. */
-export const TINT_GAIN = 1.8;
+/** Mean luminance a derived tile is scaled to (texture spec §5.6). 180 is the only tried value where every derived tile passes the brightness assertions. */
+export const DEFAULT_TARGET_LUM = 180;
 
-export const DERIVED_TEXTURES: Record<string, { source: string; tint: Rgb }> = {
+export const DERIVED_TEXTURES: Record<string, { source: string; tint: Rgb; targetLum?: number }> = {
 	big_tnt_top: { source: 'tnt_top', tint: [0xff, 0x8c, 0x1a] },
 	big_tnt_bottom: { source: 'tnt_bottom', tint: [0xff, 0x8c, 0x1a] },
 	big_tnt_side: { source: 'tnt_side', tint: [0xff, 0x8c, 0x1a] },
@@ -23,7 +24,7 @@ export const DERIVED_TEXTURES: Record<string, { source: string; tint: Rgb }> = {
 };
 
 /** Toys spec §2: each blast toy is TNT, greyed, then tinted. Block Bomb is white (achromatic), the rest ≥ 20° of hue apart. */
-function toyTints(): Record<string, { source: string; tint: Rgb }> {
+function toyTints(): Record<string, { source: string; tint: Rgb; targetLum?: number }> {
 	const tints: Record<string, Rgb> = {
 		tunnel_tnt: [0x3c, 0xdc, 0x3c],   // green
 		flatten_tnt: [0x28, 0xdc, 0xe6],  // cyan
@@ -31,14 +32,17 @@ function toyTints(): Record<string, { source: string; tint: Rgb }> {
 		block_bomb: [0xff, 0xff, 0xff],   // white
 		fireworks: [0xff, 0x3c, 0xc8],    // magenta
 	};
-	const out: Record<string, { source: string; tint: Rgb }> = {};
+	const out: Record<string, { source: string; tint: Rgb; targetLum?: number }> = {};
 	for (const [name, tint] of Object.entries(tints)) for (const face of ['top', 'bottom', 'side'])
 		out[`${name}_${face}`] = { source: `tnt_${face}`, tint };
 	return out;
 }
 
-/** RGBA in, RGBA out, same length: luminance (Rec. 601) × gain × tint / 255, clamped; alpha kept. */
-export function greyTint(raw: Uint8Array, tint: Rgb, gain = TINT_GAIN): Uint8Array {
+/** RGBA in, RGBA out: luminance (Rec. 601) scaled so the tile's mean luminance (alpha > 0) is targetLum, × tint / 255, clamped; alpha kept. */
+export function greyTint(raw: Uint8Array, tint: Rgb, targetLum = DEFAULT_TARGET_LUM): Uint8Array {
+	let s = 0, n = 0;
+	for (let i = 0; i < raw.length; i += 4) if (raw[i + 3] > 0) { s += 0.299 * raw[i] + 0.587 * raw[i + 1] + 0.114 * raw[i + 2]; n++; }
+	const gain = n === 0 || s === 0 ? 0 : targetLum / (s / n);
 	const out = new Uint8Array(raw.length);
 	for (let i = 0; i < raw.length; i += 4) {
 		const l = (0.299 * raw[i] + 0.587 * raw[i + 1] + 0.114 * raw[i + 2]) * gain;

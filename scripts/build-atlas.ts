@@ -86,7 +86,7 @@ async function main() {
 			const raw = await readTile(derived ? derived.source : name);
 			// Derived tiles (Big/Mega TNT): greyscale then tint, from the source's untinted pixels.
 			const tint = TEXTURE_TINTS[name];
-			pixels = derived ? greyTint(raw, derived.tint) : tint ? applyTint(raw, tint) : raw;
+			pixels = derived ? greyTint(raw, derived.tint, derived.targetLum) : tint ? applyTint(raw, tint) : raw;
 		}
 
 		const padded = padEdgeReplicate(pixels, TILE, PADDING);

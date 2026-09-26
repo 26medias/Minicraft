@@ -44,11 +44,14 @@ describe('derived TNT textures (spec §6)', () => {
 		expect(out[0]).toBeGreaterThan(out[1]);
 		expect(out[1]).toBeGreaterThan(0);
 		expect(out.slice(4)).toEqual(new Uint8Array([0, 0, 0, 0])); // transparent pixel keeps alpha 0
-		// Equal luminance in → equal colour out, whatever the source hue.
-		const l = (0.299 * 200 + 0.587 * 40 + 0.114 * 40);
-		const grey = Math.round(l);
-		const g = greyTint(new Uint8Array([grey, grey, grey, 255]), [255, 128, 0]);
-		expect(Math.abs(g[0] - out[0])).toBeLessThanOrEqual(1);
+		// Gain comes from the source's own brightness (spec §5.6): a dark and a bright source give
+		// the same mean output luminance. Catches a constant gain, which scaled TNT and shroomlight alike.
+		const dark = new Uint8Array(16 * 16 * 4).map((_, i) => (i % 4 === 3 ? 255 : 40 + (i % 7)));
+		const bright = new Uint8Array(16 * 16 * 4).map((_, i) => (i % 4 === 3 ? 255 : 160 + (i % 7)));
+		const lum = (t: Uint8Array) => { let s = 0; for (let i = 0; i < t.length; i += 4) s += 0.299 * t[i] + 0.587 * t[i + 1] + 0.114 * t[i + 2]; return s / (t.length / 4); };
+		const a = greyTint(dark, [255, 255, 255], 120), b = greyTint(bright, [255, 255, 255], 120);
+		expect(Math.abs(lum(a) - lum(b))).toBeLessThan(2);
+		expect(Math.abs(lum(a) - 120)).toBeLessThan(3);
 	});
 
 	it('Big is orange, Mega is purple, both far from plain TNT and from each other (per face)', async () => {

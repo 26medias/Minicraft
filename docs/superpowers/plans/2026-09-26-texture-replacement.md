@@ -17,6 +17,8 @@ to `dist/`).
 
 **Spec:** `docs/superpowers/specs/2026-09-26-texture-replacement-design.md` (rev 3.1). Read it before any task.
 
+**Gate 2** (rigour, engine, boundary, player) findings are incorporated in this revision.
+
 ## Global Constraints
 
 - Work only in the worktree `/home/julien/Projects/Minicraft/.claude/worktrees/textures` (branch `textures`).
@@ -280,21 +282,6 @@ of that `it` with:
 		expect(Math.abs(lum(a) - 120)).toBeLessThan(3);
 ```
 
-And add a new test at the end of the `describe('derived TNT textures (spec §6)'…)` block:
-
-```ts
-	it('every DERIVED_TEXTURES tile keeps its texture: luminance std > 8, at most 50% clipped (spec §5.6)', async () => {
-		// Catches a gain that washes a tile out (launch_pad clipped 52% at gain 2.5) or flattens it
-		// to a swatch (froglights at constant gain clipped 100%).
-		const { lumStd, clipFraction } = await import('./texture-import');
-		for (const [name, d] of Object.entries(DERIVED_TEXTURES)) {
-			const out = greyTint(await tile(d.source), d.tint, d.targetLum);
-			expect(lumStd(out), `${name} std`).toBeGreaterThan(8);
-			expect(clipFraction(out), `${name} clip`).toBeLessThanOrEqual(0.5);
-		}
-	});
-```
-
 Run: `npx vitest run src/data/atlas-derive.test.ts`
 Expected: FAIL on "greyscale-then-tint" (constant gain: `lum(a)` ≠ `lum(b)`).
 
@@ -338,8 +325,9 @@ Search the repo for other `TINT_GAIN` uses: `grep -rn TINT_GAIN src scripts`. Ex
 - [ ] **Step 7: Run the derive tests on today's (Mojang) art**
 
 Run: `npx vitest run src/data/atlas-derive.test.ts src/data/texture-import.test.ts`
-Expected: PASS, including every existing hue test. The gain model was checked on Mojang TNT (mean luminance
-85–127) in gate 1. If a hue test fails, stop and report; do not edit its assertion.
+Expected: PASS, including every existing hue test (checked on Mojang art at gate 2). If a hue test fails, stop and
+report; do not edit its assertion. The derived-tile std/clip guard is added in Task 4, after the import, because
+Mojang's slime is too flat for it (launch_pad std 5.0).
 
 - [ ] **Step 8: Typecheck and commit**
 
@@ -371,7 +359,7 @@ export type TextureSource =
 	| { over: string; pack: Pack; file: string; overlayAlpha?: number }
 	| { derive: 'tint'; pack: Pack; file: string; tint: Rgb; targetLum?: number }
 	| { same: string };
-export const PACKS: Record<Pack, { repo: string; commit: string; licence: string; licenceUri: string; authors: string; url: string }>;
+export const PACKS: Record<Pack, { title: string; repo: string; commit: string; licence: string; licenceUri: string; authors: string; url: string }>;
 export const CRACK_STAGES: string[];                  // destroy_stage_0..9
 export const TRACED_SOURCES: Array<{ pack: Pack; file: string }>; // the 23 PP files, spec §3
 export const TEXTURE_TINTED: string[];                // names in build-atlas TEXTURE_TINTS (single source of truth)
@@ -402,27 +390,31 @@ export type TextureSource =
 	| { derive: 'tint'; pack: Pack; file: string; tint: Rgb; targetLum?: number }
 	| { same: string };
 
-export const PACKS: Record<Pack, { repo: string; commit: string; licence: string; licenceUri: string; authors: string; url: string }> = {
+export const PACKS: Record<Pack, { title: string; repo: string; commit: string; licence: string; licenceUri: string; authors: string; url: string }> = {
 	ppce: {
+		title: 'Pixel Perfection Community Edition',
 		repo: 'https://github.com/Athemis/PixelPerfectionCE', url: 'https://github.com/Athemis/PixelPerfectionCE',
 		commit: '28e38cab7c1f03f86364ef704f705bebcc13cb3d', licence: 'CC BY-SA 4.0',
 		licenceUri: 'https://creativecommons.org/licenses/by-sa/4.0/',
 		authors: 'Hugh "XSSheep" Rutland and the Pixel Perfection CE contributors (StonePendant, freejusticehere, Stingraych, Nova_Wostra, lazerl0rd, Athemis and others)',
 	},
 	refi: {
+		title: 'REFI Textures',
 		repo: 'https://github.com/MysticTempest/REFI_Textures', url: 'https://content.luanti.org/packages/MysticTempest/refi_textures/',
 		commit: '33f1f719930d1d202beaa5fa6251c26d3a711149', licence: 'CC BY-SA 4.0',
 		licenceUri: 'https://creativecommons.org/licenses/by-sa/4.0/', authors: 'MysticTempest',
 	},
 	bauniclonia: {
+		title: 'Bauniclonia',
 		repo: 'https://codeberg.org/mirtilo/Bauniclonia.git', url: 'https://content.luanti.org/packages/Mirtilo/bauniclonia/',
 		commit: '77318ecabc046efb2caa9237a9efb45c7b401523', licence: 'CC BY-SA 4.0',
 		licenceUri: 'https://creativecommons.org/licenses/by-sa/4.0/', authors: 'Mirtilo',
 	},
 	mineclonia: {
+		title: 'Mineclonia (textures)',
 		repo: 'https://codeberg.org/mineclonia/mineclonia', url: 'https://codeberg.org/mineclonia/mineclonia',
 		commit: 'c1898e3951ded8b3445f4396cc7d7b17844da357',
-		licence: 'CC BY-SA 4.0 (textures based on Pixel Perfection); other files CC BY-SA 3.0, adapted under 4.0',
+		licence: 'CC BY-SA 4.0 (textures based on Pixel Perfection); other files CC BY-SA 3.0 (https://creativecommons.org/licenses/by-sa/3.0/), adapted under 4.0',
 		licenceUri: 'https://creativecommons.org/licenses/by-sa/4.0/',
 		authors: 'the Mineclonia contributors; Pixel Perfection by XSSheep; Pixel Perfection Legacy by Nova Wostra',
 	},
@@ -558,7 +550,8 @@ const PP = 'assets/minecraft/textures/block';
 const TRACED = new Set(['green_glazed_terracotta','light_blue_glazed_terracotta','red_glazed_terracotta','lime_glazed_terracotta','pink_glazed_terracotta','purple_glazed_terracotta','yellow_glazed_terracotta','loom_side','loom_bottom','loom_top','loom_front','smithing_table_front','smithing_table_side','smithing_table_bottom','bee_nest_top','bee_nest_front','bee_nest_side','bee_nest_bottom','beehive_front','beehive_side','beehive_end','lodestone_side','tnt_bottom']);
 type F = { file: string; path: string; corr: number } | null;
 const fill: Record<string, { bn: F; rf: F }> = Object.fromEntries((JSON.parse(readFileSync(`${S}/fill-final.json`, 'utf8')) as any[]).map((e) => [e.mc, e]));
-const rel = (pack: keyof typeof ROOT, abs: string) => relative(ROOT[pack], abs);
+// fill-final.json paths are relative to $S, not to the cwd.
+const rel = (pack: keyof typeof ROOT, p: string) => relative(ROOT[pack], p.startsWith('/') ? p : `${S}/${p}`);
 const RED = '[0xe0, 0x40, 0x2c]';
 const rows: Record<string, string> = {};
 const plain = (pack: string, file: string, extra = '') => `{ pack: '${pack}', file: '${file}'${extra} }`;
@@ -578,7 +571,7 @@ for (const n of requiredTextureNames()) {
 	rows[n] = plain('ppce', `${PP}/${n}.png`);
 }
 Object.assign(rows, {
-	iron_block: plain('refi', 'textures/default_mcl_core/default_steel_block.png'),
+	iron_block: plain('refi', '__REFI_STEEL__'),
 	clay: plain('bauniclonia', 'mineclonia/ITEMS/mcl_core/default_clay.png'),
 	birch_leaves: plain('bauniclonia', 'mineclonia/ITEMS/mcl_core/mcl_core_leaves_birch.png'),
 	tnt_side: `{ derive: 'tint', pack: 'ppce', file: '${PP}/tnt_side2.png', tint: ${RED}, targetLum: 150 }`,
@@ -604,6 +597,8 @@ for (const n of requiredTextureNames()) if (!rows[n]) rows[n] = fromFill(n);
 const out = [
 	"// Source of every PNG in src/assets/blocks/ (texture replacement spec §4.1). One row per file.",
 	"// Swap a tile by editing its row, then `npm run import-textures`. Candidates: `npm run import-textures -- --sheet <name>`.",
+	"// A swap that changes whether a leaves/grass tile is a grey mask also needs TEXTURE_TINTED (texture-sources.ts) and",
+	"// scripts/build-atlas-tints.ts; the tint, ore and provenance tests say which.",
 	"import type { TextureSource } from './texture-sources';",
 	'',
 	'export const TEXTURE_SOURCES: Record<string, TextureSource> = {',
@@ -623,8 +618,17 @@ for n in mcl_sus_nodes_suspicious_overlay mcl_sculk_catalyst_bottom; do find $S/
 find $S/packs/refi/textures -name default_steel_block.png; find $S/packs/bauniclonia -name default_clay.png -o -name mcl_core_leaves_birch.png
 ```
 
-Correct the `iron_block` / `clay` / `birch_leaves` paths to what `find` prints (REFI paths start `textures/…`,
-relative to the REFI repo root). Expected output:
+Correct the `iron_block` (`__REFI_STEEL__`) / `clay` / `birch_leaves` paths to what `find` prints, relative to each
+pack's repo root (REFI paths start `textures/…`). A known-good generator from gate 2 is at
+`$S/gate1-engine/repo2/gen-sources.mts`; compare your output with it if in doubt.
+
+Then check that every row's file exists (the structural tests cannot see this):
+
+```bash
+npx tsx -e "import {TEXTURE_SOURCES} from './src/data/texture-sources.data'; import {existsSync} from 'node:fs'; const S='$S'; const R={ppce:S+'/ppce',refi:S+'/packs/refi',bauniclonia:S+'/packs/bauniclonia',mineclonia:S+'/packs/mineclonia'} as const; const bad=Object.entries(TEXTURE_SOURCES).filter(([,r])=>'pack' in r && !existsSync(R[r.pack]+'/'+r.file)); console.log(bad.length ? bad : 'all files exist'); process.exit(bad.length?1:0)"
+```
+
+Expected: `all files exist`. Expected output:
 `458 rows`. Then run `npx prettier --write src/data/texture-sources.data.ts`.
 
 - [ ] **Step 4: Run the structural tests**
@@ -787,6 +791,8 @@ export async function encodePng(tile: Uint8Array, size = TILE): Promise<Buffer> 
 
 `creditsText` is written in Task 5. For now, create `src/data/texture-credits.ts` containing only
 `export function creditsText(_rows: unknown): string { return ''; }` so the script typechecks. Task 5 replaces it.
+The importer writes the credits files only when the text is non-empty, so no empty credits file is ever committed.
+**Do not build or deploy from this branch before Task 5 is committed.**
 
 - [ ] **Step 4: Write `scripts/import-textures.ts`**
 
@@ -799,7 +805,7 @@ export async function encodePng(tile: Uint8Array, size = TILE): Promise<Buffer> 
  */
 import { execFileSync } from 'node:child_process';
 import { createHash } from 'node:crypto';
-import { existsSync, mkdirSync, mkdtempSync, readdirSync, rmSync, unlinkSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync, unlinkSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join, resolve } from 'node:path';
 import { argv, exit } from 'node:process';
@@ -832,6 +838,21 @@ function checkCommit(pack: Pack, dir: string): void {
 	if (head !== PACKS[pack].commit) throw new Error(`${pack} checkout at ${dir} is ${head}, pinned ${PACKS[pack].commit}`);
 }
 
+/** Minecraft block-texture name → Luanti texture names, from Mineclonia's tools/Conversion_Table.csv. */
+function loadNameMap(mineclonia: string): Map<string, string[]> {
+	const map = new Map<string, string[]>();
+	const csv = join(mineclonia, 'tools/Conversion_Table.csv');
+	if (!existsSync(csv)) return map;
+	for (const line of readFileSync(csv, 'utf8').split('\n')) {
+		const f = line.split(',');
+		if (f.length < 4 || !f[0].includes('/block') || !f[1].endsWith('.png') || !f[3].endsWith('.png')) continue;
+		const mc = f[1].slice(0, -4), lu = f[3].slice(0, -4);
+		map.set(mc, [...(map.get(mc) ?? []), lu]);
+	}
+	return map;
+}
+let nameMap = new Map<string, string[]>();
+
 /** --sheet: current tile and pack candidates for the named textures, 8× nearest. Never inside the repo. */
 async function writeSheet(names: string[], roots: Record<Pack, string>): Promise<void> {
 	const out = resolve(arg('--out') ?? join(tmpdir(), `texture-sheet-${Date.now()}.png`));
@@ -839,9 +860,11 @@ async function writeSheet(names: string[], roots: Record<Pack, string>): Promise
 	const Z = 8, cell = TILE * Z + 8;
 	const rows = names.map((n) => {
 		const c = [{ label: 'current', path: join(ASSETS, `${n}.png`) }];
+		// Fill packs use Luanti names: map the Minecraft name through Mineclonia's Conversion_Table.csv.
+		const wanted = new Set([n, ...(nameMap.get(n) ?? [])]);
 		for (const p of Object.keys(roots) as Pack[]) {
-			const hits = execFileSync('find', [roots[p], '-iname', `*${n}*.png`]).toString().split('\n').filter(Boolean).slice(0, 8);
-			for (const h of hits) c.push({ label: `${p}:${h.slice(roots[p].length + 1)}`, path: h });
+			const all = execFileSync('find', [roots[p], '-name', '*.png']).toString().split('\n').filter(Boolean);
+			for (const h of all) if (wanted.has(h.slice(h.lastIndexOf('/') + 1, -4))) c.push({ label: `${p}:${h.slice(roots[p].length + 1)}`, path: h });
 		}
 		return c;
 	});
@@ -870,6 +893,7 @@ async function main() {
 		}
 		const sheetAt = argv.indexOf('--sheet');
 		if (sheetAt >= 0) {
+			nameMap = loadNameMap(roots.mineclonia);
 			const outPath = arg('--out');
 			await writeSheet(argv.slice(sheetAt + 1).filter((a) => !a.startsWith('--') && a !== outPath), roots);
 			return;
@@ -892,9 +916,11 @@ async function main() {
 		for (const f of readdirSync(ASSETS)) if (f.endsWith('.png') && !tiles.has(f.slice(0, -4))) unlinkSync(join(ASSETS, f));
 		writeFileSync(join(ASSETS, 'SOURCES.json'), JSON.stringify(sources, null, '\t') + '\n');
 		const credits = creditsText(TEXTURE_SOURCES);
-		writeFileSync('CREDITS.md', credits);
-		mkdirSync('public', { recursive: true });
-		writeFileSync('public/CREDITS.txt', credits);
+		if (credits) {
+			writeFileSync('CREDITS.md', credits);
+			mkdirSync('public', { recursive: true });
+			writeFileSync('public/CREDITS.txt', credits);
+		}
 		console.log(`Wrote ${tiles.size} textures to ${ASSETS}`);
 	} finally {
 		if (tmp) rmSync(tmp, { recursive: true, force: true });
@@ -933,10 +959,9 @@ where `$S/packdirs` is a directory of symlinks you create first:
 mkdir -p $S/packdirs && ln -sfn $S/ppce $S/packdirs/ppce && ln -sfn $S/packs/refi $S/packdirs/refi && ln -sfn $S/packs/bauniclonia $S/packdirs/bauniclonia && ln -sfn $S/packs/mineclonia $S/packdirs/mineclonia
 ```
 
-Expected: `Sheet: /tmp/claude-1000/sheet-check.png`, and `git status --short` shows no change under `src/assets/`.
-If `checkCommit` fails for `mineclonia` because `$S/packs/mineclonia` is not a git checkout (it holds textures only),
-fetch it properly: `git -C $S/packs init -q mineclonia-git && git -C $S/packs/mineclonia-git fetch -q --depth 1 https://codeberg.org/mineclonia/mineclonia c1898e3951ded8b3445f4396cc7d7b17844da357 && git -C $S/packs/mineclonia-git checkout -q FETCH_HEAD`,
-point the symlink at it, and re-check that the Task 2 mineclonia paths exist there.
+Expected: `Sheet: /tmp/claude-1000/sheet-check.png`; the log lists `bauniclonia:…/mcl_copper_ore.png` among the copper_ore candidates (found through the name map). `git status --short` shows no change under `src/assets/`.
+Also run `--sheet birch_leaves iron_block clay` and check the log lists `mcl_core_leaves_birch`, `default_steel_block` and `default_clay`.
+All four scratchpad checkouts are git repos at their pinned commits (checked at gate 2), so `checkCommit` passes.
 
 - [ ] **Step 7: Commit**
 
@@ -1136,9 +1161,24 @@ describe('ores stay findable (spec §5.3)', () => {
 import { describe, it, expect } from 'vitest';
 import { TEXTURE_SOURCES } from './texture-sources.data';
 import { clipFraction, lumStd } from './texture-import';
+import { DERIVED_TEXTURES, greyTint } from './atlas-derive';
 import { readTile } from './texture-test-util';
 
-describe('importer-derived tiles keep their texture (spec §5.4, §5.6)', () => {
+describe('derived tiles keep their texture (spec §5.4, §5.6)', () => {
+	it('every build-atlas DERIVED_TEXTURES tile: luminance std > 8, ≤ 50% clipped', async () => {
+		// Catches a gain that washes a tile out (launch_pad clipped 52% at gain 2.5) or flattens it (froglights at constant gain).
+		for (const [name, d] of Object.entries(DERIVED_TEXTURES)) {
+			const out = greyTint(await readTile(d.source), d.tint, d.targetLum);
+			expect(lumStd(out), `${name} std`).toBeGreaterThan(8);
+			expect(clipFraction(out), `${name} clip`).toBeLessThanOrEqual(0.5);
+		}
+	});
+	it('the instrument can go red: the creaking heart at targetLum 70 is too flat', async () => {
+		const r = TEXTURE_SOURCES.creaking_heart_awake;
+		if (!('derive' in r)) throw new Error('creaking_heart_awake must be a derive row');
+		const flat = greyTint(await readTile('pale_oak_log'), r.tint, 70);
+		expect(lumStd(flat)).toBeLessThan(8);
+	});
 	it('every derive/over row: luminance std > 8 and ≤ 50% clipped', async () => {
 		// The build-atlas DERIVED_TEXTURES are checked in atlas-derive.test.ts; these are the importer's baked rows
 		// (plain TNT, froglights, creaking heart, copper, roots, suspicious blocks).
@@ -1154,8 +1194,9 @@ describe('importer-derived tiles keep their texture (spec §5.4, §5.6)', () => 
 
 - [ ] **Step 3: Run the guard tests on the Mojang tree — they must go red**
 
-Run: `npx vitest run src/data/texture-provenance.test.ts src/data/texture-derived.test.ts`
-Expected: FAIL. Provenance: 1083 files ≠ 458 rows, no `SOURCES.json`, and every tile is a Mojang hash.
+Run: `npx vitest run src/data/texture-provenance.test.ts src/data/texture-tints.test.ts src/data/texture-alpha.test.ts`
+Expected: FAIL. Provenance: 1083 files ≠ 458 rows, no `SOURCES.json`, and every tile is a Mojang hash. Tints (b)/(c)
+and alpha also fail on Mojang art. (texture-derived and the ore test need the new art; their red cases are built in.)
 This proves the instrument can go red. Record the failure summary in the commit message of Step 6.
 
 - [ ] **Step 4: Move `TEXTURE_TINTS` into `scripts/build-atlas-tints.ts` and set it per spec §5.2**
@@ -1199,7 +1240,8 @@ name and values; do not edit assertions or spec numbers.
 
 ```bash
 git add src/assets/blocks        # git ≥ 2.0 stages the 625 deletions too
-git add src/data/mojang-tile-hashes.json src/data/texture-test-util.ts src/data/texture-provenance.test.ts src/data/texture-alpha.test.ts src/data/texture-tints.test.ts src/data/texture-ores.test.ts src/data/texture-derived.test.ts scripts/build-atlas.ts scripts/build-atlas-tints.ts CREDITS.md public/CREDITS.txt
+git add src/data/mojang-tile-hashes.json src/data/texture-test-util.ts src/data/texture-provenance.test.ts src/data/texture-alpha.test.ts src/data/texture-tints.test.ts src/data/texture-ores.test.ts src/data/texture-derived.test.ts scripts/build-atlas.ts scripts/build-atlas-tints.ts
+git status --short src/assets/blocks | grep -v '\.png$'   # expect only SOURCES.json (and LICENSE.md from Task 5 on)
 git status --short   # must show nothing unstaged under src/ or scripts/, and no .claude/ paths staged
 git commit -m "feat(textures): replace Mojang block textures with CC BY-SA packs; provenance, alpha, tint, ore and derived-tile guards"
 ```
@@ -1235,10 +1277,14 @@ import { PACKS } from './texture-sources';
 describe('texture credits (spec §4.4)', () => {
 	const text = creditsText(TEXTURE_SOURCES);
 	it('names every pack: authors, URL, pinned commit, licence URI', () => {
-		for (const p of Object.values(PACKS)) {
+		const used = new Set(Object.values(TEXTURE_SOURCES).flatMap((r) => ('pack' in r ? [r.pack] : [])));
+		for (const [id, p] of Object.entries(PACKS)) {
+			if (!used.has(id as never)) continue;
+			expect(text).toContain(p.title);
 			expect(text).toContain(p.authors); expect(text).toContain(p.url); expect(text).toContain(p.commit); expect(text).toContain(p.licenceUri);
 		}
 		expect(text).toContain('Nova Wostra');
+		expect(text).toContain('https://creativecommons.org/licenses/by-sa/3.0/');
 	});
 	it('says the tiles were modified, and how, with the list of derived/overlay rows', () => {
 		expect(text).toMatch(/modified/i);
@@ -1272,7 +1318,7 @@ export function creditsText(rows: Record<string, TextureSource>): string {
 		'derive' in r ? `- ${n}: ${r.pack} ${r.file}, greyscaled and tinted` : `- ${n}: ${(r as { pack: Pack; file: string }).pack} ${(r as { file: string }).file}, composited over ${(r as { over: string }).over}`);
 	const packs = (Object.keys(PACKS) as Pack[]).filter((p) => used.has(p)).map((p) => {
 		const x = PACKS[p];
-		return [`## ${p}`, `- Authors: ${x.authors}`, `- Source: ${x.url} (${x.repo} @ ${x.commit})`, `- Licence: ${x.licence} — ${x.licenceUri}`].join('\n');
+		return [`## ${x.title}`, `- Authors: ${x.authors}`, `- Source: ${x.url} (${x.repo} @ ${x.commit})`, `- Licence: ${x.licence} — ${x.licenceUri}`].join('\n');
 	});
 	return [
 		'# Minicraft texture credits',
@@ -1344,9 +1390,12 @@ In `src/ui/ui.css`, add next to the other `.menu-*` rules:
 .menu-credits:hover { opacity: 1; }
 ```
 
-There is no DOM test environment (vitest runs in node). `scripts/menu-smoke.ts` is the pause-menu smoke. Add to it,
-where it asserts the pause card's buttons, a check that `#pause-credits` exists with
-`getAttribute('href') === 'CREDITS.txt'`. Mirror the existing selector-check style in that file. Run it in Task 7.
+Only add the link when not quitting: wrap the block above in `if (!this.quitting) { … }`.
+
+There is no DOM test environment (vitest runs in node). `scripts/menu-smoke.ts` has **no pause-menu checks yet**,
+so write a new step there. Open a world, press Escape, and assert that `#pause-credits` exists with
+`getAttribute('href') === 'CREDITS.txt'`. Then press Escape again, or click `#pause-resume`, to continue as before.
+Follow that file's existing step and assert style. Run it in Task 7.
 
 - [ ] **Step 6: Typecheck, test, commit**
 
@@ -1465,8 +1514,10 @@ Make each edit below with a short, factual paragraph. Do not add commentary beyo
   models and blockstates, and it now classifies alpha from the new art.
 - `docs/crafting.md:136`: "Slime Pad uses Mojang's slime_block" → "Slime Pad uses the slime_block texture".
 - `docs/liquids.md:40`: water is drawn blue-green by the texture pack and is no longer tinted at build time.
-- `docs/persistence.md`, in the manual website deploy steps: also upload `dist/CREDITS.txt` next to `index.html`
-  (short cache, like `index.html`).
+- `docs/persistence.md`, in the manual website deploy steps, add, in this order: upload the changed `atlas.png` /
+  `atlas.json` before `index.html`, and upload the credits file with
+  `CLOUDSDK_CORE_ACCOUNT=julien@leap-forward.ca gcloud storage cp --cache-control="no-cache, must-revalidate" dist/CREDITS.txt gs://noah.leap-forward.ca/minicraft/CREDITS.txt`.
+  The controller also updates the deploy-notes memory (`minicraft-deploy-notes.md`) with the same lines.
 - `docs/texture-fill-map.md`: a first line under the title: "Historical: the research map that fed
   `src/data/texture-sources.data.ts`, which is now the source of truth. The artifact linked below contains Mojang tiles
   and stays private."
@@ -1503,13 +1554,20 @@ deterministic. Stop and report.
 
 - [ ] **Step 3: Menu smoke (credits link) and the existing smokes**
 
-Run: `npm run smoke:menu && npm run smoke:crafting`
-Expected: PASS, including the new `#pause-credits` href check. These smokes already block the production save API.
+⚠ Port 5173 is used by the user's own dev server in the main checkout (Mojang art), and 5174 by another worktree.
+Never use or kill them. Pick a free port: `P=5180; while ss -ltn | grep -q ":$P "; do P=$((P+1)); done; echo $P`.
+
+Run: `npm run smoke:menu -- --port $P && npm run smoke:crafting -- --port $P`
+Expected: PASS, including the new `#pause-credits` href check. These smokes start their own dev server with the save
+API pointed at a dead port, and abort production routes.
 
 - [ ] **Step 4: Look screenshots**
 
-Write `scripts/texture-look.ts` by copying the browser setup from `scripts/menu-smoke.ts`: headless Chromium, the
-production save API routes aborted, `localhost:5173`, and a fresh world with a fixed seed. Keep that file's world
+Write `scripts/texture-look.ts` by reusing `scripts/menu-smoke.ts`'s `startDev()` and browser setup: its own dev
+server on `--port $P` (free, as above), with `VITE_MINICRAFT_API_URL` set to a dead port; headless Chromium;
+production routes aborted; a fresh world with a fixed seed. **Before the first shot**, `GET http://localhost:$P/CREDITS.txt`
+must return 200 with `# Minicraft texture credits`. Only this worktree's server can serve that, so a wrong server
+fails fast. Keep that file's world
 setup and its way of placing blocks through the debug/cheat hooks the smokes already use. Do not invent new hooks;
 if placement needs one that does not exist, stop and report.
 
@@ -1526,15 +1584,25 @@ Build these scenes by placing blocks, and save one PNG each to
 - `10-wools.png` (all 16 wools), `11-concrete.png`
 - `12-derived.png` (the 16 derive/over tiles: TNT faces, froglights, creaking heart, copper ore, roots, suspicious,
   plus sculk_catalyst)
+- `13-trees.png` (all 9 trees against the sky: oak, birch, spruce, jungle, acacia, dark oak, mangrove, cherry, pale
+  oak; acacia and spruce are now untinted)
 
-Run: `npm run dev` in the background, then `npx tsx scripts/texture-look.ts`. Stop the dev server with
-`fuser -k 5173/tcp` (by port only).
+`04-deepslate-mine.png` is taken **enclosed underground** (a roofed tunnel lit only by the game's own light, such as
+a torch-like light block the cheats place), not in daylight. The deepslate-coal decision depends on it.
+
+Run: `npx tsx scripts/texture-look.ts --port $P`. The script stops its own server (by that port only).
 
 - [ ] **Step 5: Old-vs-new sheet for the user**
 
-Generate `look/00-old-vs-new.png`: every one of the 458 names, Mojang (from `main`, via
-`git show main:src/assets/blocks/<name>.png`) above the new tile, 8× nearest, 24 per row, labelled. Write it to the
-scratchpad only, never the repo.
+Compare the **built atlases**, not raw PNGs, so tints and derived tiles (Big/Mega TNT, toys, launch pad) show as in
+the game:
+- Build main's atlas in a scratch copy:
+  `git archive main | tar -x -C $S/main-tree && ln -s $PWD/node_modules $S/main-tree/node_modules && (cd $S/main-tree && npx tsx scripts/build-atlas.ts)`.
+- This branch's atlas is `public/atlas.png` + `atlas.json`.
+- Render `look/00-old-vs-new-<family>.png`, one sheet per block `group` from `BLOCKS` (basics, wood, stone, ore,
+  deepslate, colours (wool/concrete/terracotta/glazed/glass), nether/end, utility/TNT), plus the crack stages.
+  Each tile shows old above new, 6× nearest, labelled.
+- Write to the scratchpad only, never the repo.
 
 - [ ] **Step 6: Commit the look script, then hand over for approval**
 
@@ -1543,6 +1611,6 @@ git add scripts/texture-look.ts
 git commit -m "test(textures): headless look screenshots for the texture review"
 ```
 
-Then stop. The controller publishes `00-old-vs-new.png` and the scene shots to the user as a private artifact
+Then stop. The controller publishes the `00-old-vs-new-*.png` sheets and the scene shots to the user as a private artifact
 (Mojang tiles inside) and asks for approval or row swaps. Row swaps loop back through Task 4 Step 5 (re-import) and
 Task 7. The approval and the audit output go in the merge commit message. Merging is the user's call.

@@ -2,8 +2,10 @@
  * The foreman's neighbourhood layout (experiment E7), pure: a grid of `cols` × 2 lots (7×7, room for 16 high), 4
  * columns apart; in every gap a 2-wide road between two 1-wide verges: a main street between the two rows (gravel)
  * and a cross street between each pair of columns (cobblestone), lamps (a post and a light) at every crossing and at
- * both ends of the main street. The search tries plan centres by distance from the anchor for 10, then 8, then 6
- * lots; every lot passes brain2's site rules (spawn, leash, other builds, kid positions, flat and natural, headroom,
+ * both ends of the main street. The search tries plan centres by distance from the anchor for 10, then 8, then 6,
+ * then 4 lots (the largest that fits, never fewer than 4), widening its radius in steps (LIMITS.LEASH_STEPS:
+ * 32/64/96, as the site search) when nothing fits closer in; every lot passes brain2's site rules (spawn, leash,
+ * other builds, kid positions, flat and natural, headroom,
  * ≥ 12 from kid cells, as the village), the whole area stays ≥ 16 from spawn and from every kid standing, ≥ 12 from
  * any kid cell, and every road and lamp column is natural ground within 3 of the lots' height.
  */
@@ -77,7 +79,7 @@ export function lampCols(corner: Col, cols: number, rows = ROWS): Col[] {
 	return out;
 }
 
-export interface NeighbourhoodQ { anchor: Vec3; avoid: Array<{ min: Vec3; max: Vec3 }>; maxRadius?: number; step?: number }
+export interface NeighbourhoodQ { anchor: Vec3; avoid: Array<{ min: Vec3; max: Vec3 }>; radii?: readonly number[]; step?: number }
 export interface NeighbourhoodCtx { world: WorldView; own: Ownership; spawn: Vec3; kids?: readonly Vec3[] }
 export interface NeighbourhoodSite { corner: Col; cols: number; lots: PlanLot[]; roads: PlanCell[]; lamps: PlanCell[] }
 
@@ -91,7 +93,8 @@ export function evaluateNeighbourhood(corner: Col, cols: number, q: Neighbourhoo
 	if (rectDist(ctx.spawn, x0, x1, z0, z1) < AREA_CLEAR) return 'spawn';
 	if ((ctx.kids ?? []).some((k) => rectDist(k, x0, x1, z0, z1) < AREA_CLEAR)) return 'kid-position';
 	const lots: PlanLot[] = [];
-	const leash = (q.maxRadius ?? 64) + 40;
+	const radii = q.radii ?? LIMITS.LEASH_STEPS;
+	const leash = radii[radii.length - 1] + 40;
 	for (const [i, o] of gridLots(corner, cols).entries()) {
 		const r = siteOrReject(o.x, o.z, { w: LOT, d: LOT, h: LOT_H, anchor: q.anchor, avoid: q.avoid }, ctx, top, leash);
 		if (typeof r === 'string') return r;
@@ -125,23 +128,34 @@ export function evaluateNeighbourhood(corner: Col, cols: number, q: Neighbourhoo
 }
 
 /**
- * The neighbourhood search, spread over calls: plan centres by distance from the anchor (every `step` blocks within
- * `maxRadius`), 5 columns first (10 lots), then 4, then 3. `step()` judges up to `batch` centres; returns the site,
- * null while searching, 'none' when nothing fits.
+ * The neighbourhood search, spread over calls: plan centres by distance from the anchor (every `step` blocks), 5
+ * columns first (10 lots), then 4, then 3, then 2 (4 lots: the floor). Radius widens in steps (`q.radii`, default
+ * LIMITS.LEASH_STEPS: 32/64/96, as the site search): every column count is tried in full within the closest radius
+ * before the search widens, so a wide, sparse fit never beats a tight one nearby. `step()` judges up to `batch`
+ * centres; returns the site, null while searching, 'none' when nothing fits within the widest radius.
  */
 export class NeighbourhoodSearch {
-	private readonly centres: Col[] = [];
+	private readonly centres: Array<Col & { dist: number }> = [];
 	private readonly tops = new Map<string, number>();
+	private readonly radii: readonly number[];
+	private readonly ciByNi: number[];
 	private ni = 0;
-	private ci = 0;
+	private ri = 0;
 	readonly counts: Record<string, number> = {};
-	static readonly COLS = [5, 4, 3];
+	static readonly COLS = [5, 4, 3, 2];
 
 	constructor(private readonly q: NeighbourhoodQ, private readonly ctx: NeighbourhoodCtx) {
-		const R = q.maxRadius ?? 64, st = q.step ?? 2;
+		this.radii = q.radii ?? LIMITS.LEASH_STEPS;
+		const R = this.radii[this.radii.length - 1], st = q.step ?? 2;
 		const ax = Math.round(q.anchor.x), az = Math.round(q.anchor.z);
-		for (let dx = -R; dx <= R; dx += st) for (let dz = -R; dz <= R; dz += st) if (Math.hypot(dx, dz) <= R) this.centres.push({ x: ax + dx, z: az + dz });
-		this.centres.sort((a, b) => Math.hypot(a.x - ax, a.z - az) - Math.hypot(b.x - ax, b.z - az));
+		for (let dx = -R; dx <= R; dx += st) {
+			for (let dz = -R; dz <= R; dz += st) {
+				const dist = Math.hypot(dx, dz);
+				if (dist <= R) this.centres.push({ x: ax + dx, z: az + dz, dist });
+			}
+		}
+		this.centres.sort((a, b) => a.dist - b.dist);
+		this.ciByNi = NeighbourhoodSearch.COLS.map(() => 0);
 	}
 
 	private top = (x: number, z: number): number => {
@@ -156,17 +170,25 @@ export class NeighbourhoodSearch {
 
 	step(batch = 40): NeighbourhoodSite | null | 'none' {
 		for (let i = 0; i < batch; i++) {
-			if (this.ni >= NeighbourhoodSearch.COLS.length) return 'none';
+			if (this.ri >= this.radii.length) return 'none';
+			if (this.ni >= NeighbourhoodSearch.COLS.length) {
+				this.ri++;
+				this.ni = 0;
+				if (this.ri >= this.radii.length) return 'none';
+				continue;
+			}
+			const ci = this.ciByNi[this.ni];
+			const c = this.centres[ci];
+			if (!c || c.dist > this.radii[this.ri]) {
+				this.ni++;
+				continue;
+			}
+			this.ciByNi[this.ni] = ci + 1;
 			const cols = NeighbourhoodSearch.COLS[this.ni];
-			const c = this.centres[this.ci];
 			const corner = { x: c.x - Math.floor(areaW(cols) / 2), z: c.z - Math.floor(areaD(ROWS) / 2) };
 			const r = evaluateNeighbourhood(corner, cols, this.q, this.ctx, this.top);
 			if (typeof r !== 'string') return r;
 			this.counts[r] = (this.counts[r] ?? 0) + 1;
-			if (++this.ci >= this.centres.length) {
-				this.ci = 0;
-				this.ni++;
-			}
 		}
 		return null;
 	}

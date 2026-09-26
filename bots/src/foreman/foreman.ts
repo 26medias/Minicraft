@@ -1,6 +1,7 @@
 /**
  * The foreman bot (experiment E7): never mines, unlimited blocks. It lays out one neighbourhood per world (layout.ts:
- * 6–10 lots on a road grid near the nearest kid or spawn, every lot passing brain2's site rules), writes it to the
+ * 4–10 lots on a road grid anchored on world spawn, widening its search radius (32/64/96) when nothing fits, every
+ * lot passing brain2's site rules), writes it to the
  * shared plan (plan-file.ts) for builder/architect bots started with --join-plan, and builds the roads (gravel and
  * cobblestone on top of the ground, only into air) and the lamps itself. Every placement goes through the builder's
  * checkPlace (judgeSafety allowFree: kid cells and their buffer, kid body buffer, stop signal, --no-edits, only into
@@ -96,22 +97,15 @@ export function runForeman(o: ForemanOpts): ForemanHandle {
 		o.body.onReconnect(() => own.reset()),
 	];
 	const kidsNow = (): KidPos[] => o.body.players().filter((p) => !p.bot && p.hasPos).map((p) => ({ name: p.name, x: p.x, y: p.y, z: p.z }));
-	function nearestKid(): KidPos | null {
-		const p = o.body.pose();
-		let best: KidPos | null = null;
-		for (const k of kidsNow()) if (!best || Math.hypot(k.x - p.x, k.z - p.z) < Math.hypot(best.x - p.x, best.z - p.z)) best = k;
-		return best;
-	}
 
-	/** The world's plan: the one on disk, else a new one laid out now (null when no site fits yet). */
+	/** The world's plan: the one on disk, else a new one laid out now (null when no site fits yet). Always anchored on world spawn, never the kid, so the neighbourhood stays put across restarts and kid movement. */
 	async function thePlan(): Promise<NeighbourhoodPlan | null> {
 		const cur = readPlan(o.planPath);
 		if (cur) return cur;
-		const kid = nearestKid();
-		const anchor = kid ? { x: kid.x, y: kid.y, z: kid.z } : o.spawn;
+		const anchor = o.spawn;
 		const avoid = o.builderDir ? readBuilderRecords(o.builderDir).builds.map(({ build: b }) => ({ min: b.origin, max: { x: b.origin.x + b.w - 1, y: b.origin.y + b.h - 1, z: b.origin.z + b.d - 1 } })) : [];
 		stats.current = 'searching a neighbourhood site';
-		const search = new NeighbourhoodSearch({ anchor, avoid, maxRadius: o.searchRadius ?? 64 }, { world: o.world, own, spawn: o.spawn, kids: kidsNow() });
+		const search = new NeighbourhoodSearch({ anchor, avoid, radii: o.searchRadius ? [o.searchRadius] : undefined }, { world: o.world, own, spawn: o.spawn, kids: kidsNow() });
 		for (;;) {
 			if (stopped) return null;
 			const r = search.step();
@@ -244,7 +238,7 @@ export function runForeman(o: ForemanOpts): ForemanHandle {
 		const p = await thePlan();
 		if (!p) {
 			stats.current = 'no neighbourhood site found; waiting';
-			await sleep(10_000);
+			await sleep(60_000);
 			return;
 		}
 		if (file.planId !== p.id) {

@@ -4,8 +4,12 @@ import { tmpdir } from 'node:os';
 import { dirname, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { describe, expect, it } from 'vitest';
+import { worldSpawn } from 'minicraft-bot';
 import { CLAIM_MS, claimLot, createPlan, readPlan, updateLot, type NeighbourhoodPlan } from '../../src/foreman/plan-file.js';
-import { gridLots, lampCols, LOT, roadCols } from '../../src/foreman/layout.js';
+import { gridLots, lampCols, LOT, NeighbourhoodSearch, roadCols } from '../../src/foreman/layout.js';
+import { runForeman } from '../../src/foreman/foreman.js';
+import { Ownership } from '../../src/brain2/ownership.js';
+import { FAKE_GEN, FAKE_SEED, FakeBody, FakeWorld, player } from '../fake-port.js';
 
 const BOTS = resolve(dirname(fileURLToPath(import.meta.url)), '..', '..');
 
@@ -94,4 +98,80 @@ describe('foreman layout', () => {
 			for (const l of lots) expect(roads.some((r) => r.x >= l.x - 2 && r.x < l.x + LOT + 2 && r.z >= l.z - 2 && r.z < l.z + LOT + 2)).toBe(true);
 		}
 	});
+
+	// Red without the fix: NeighbourhoodSearch.COLS stopped at 3 (6 lots), so a site that only has room for a
+	// 2×2 grid (4 lots) was never accepted — the search returned 'none' forever.
+	it('accepts a 4-lot (2×2) neighbourhood when nothing bigger fits, instead of finding none', () => {
+		const world = new FakeWorld();
+		const ax = 100, az = 100;
+		const groundY = world.groundY(ax, az, 250) ?? 120;
+		const anchor = { x: ax, y: groundY, z: az };
+		const own = new Ownership(world, () => ({}));
+		// A small flat island, just big enough for a 2×2 grid, ringed by a checkerboard of tall spikes well
+		// above the island's own clearance: any bigger grid (3+ columns) reaches past the island into the
+		// spikes and fails "not flat".
+		for (let x = anchor.x - 150; x <= anchor.x + 150; x++) {
+			for (let z = anchor.z - 150; z <= anchor.z + 150; z++) {
+				const inIsland = Math.abs(x - anchor.x) <= 12 && Math.abs(z - anchor.z) <= 12;
+				if (!inIsland && (x + z) % 2 === 0) world.setNatural(x, groundY + 40, z, 'stone');
+			}
+		}
+		for (let x = anchor.x - 12; x <= anchor.x + 12; x++) {
+			for (let z = anchor.z - 12; z <= anchor.z + 12; z++) {
+				world.setNatural(x, groundY - 1, z, 'grass_block');
+				// Cleared well past any nearby generated hill, so the real terrain can't poke through as "the ground".
+				for (let y = groundY; y <= 220; y++) world.setNatural(x, y, z, 0);
+			}
+		}
+		const search = new NeighbourhoodSearch({ anchor, avoid: [] }, { world, own, spawn: { x: -10_000, y: 0, z: -10_000 }, kids: [] });
+		let r: ReturnType<typeof search.step> = null;
+		for (let i = 0; i < 2000 && r === null; i++) r = search.step();
+		if (r === 'none' || r === null) throw new Error(`the search found nothing (rejections: ${JSON.stringify(search.counts)})`);
+		expect(r.cols).toBe(2);
+		expect(r.lots.length).toBe(4);
+	});
+});
+
+describe('foreman: anchors on world spawn', () => {
+	// Red without the fix: the foreman anchored on the nearest kid. A kid far from spawn, standing over ground
+	// the neighbourhood can never use, meant the search ran in the wrong place and never found a site.
+	it('lays the neighbourhood out around world spawn, never around the nearest kid', async () => {
+		const world = new FakeWorld();
+		const spawn = worldSpawn(FAKE_SEED, FAKE_GEN);
+		const spawnY = world.groundY(spawn.x, spawn.z, 250) ?? 120;
+		// A flat natural patch around spawn: plenty of room for a neighbourhood.
+		for (let x = spawn.x - 60; x <= spawn.x + 60; x++) {
+			for (let z = spawn.z - 60; z <= spawn.z + 60; z++) {
+				world.setNatural(x, spawnY - 1, z, 'grass_block');
+				// Cleared well past any nearby generated hill, so the real terrain can't poke through as "the ground".
+				for (let y = spawnY; y <= 220; y++) world.setNatural(x, y, z, 0);
+			}
+		}
+		// A kid well away from spawn, over ground made deliberately unusable (a checkerboard of spikes): were
+		// the foreman still anchoring on the kid, the search would run here and find nothing, forever.
+		const kid = { x: spawn.x - 200, y: spawnY, z: spawn.z };
+		for (let x = kid.x - 70; x <= kid.x + 70; x++) {
+			for (let z = kid.z - 70; z <= kid.z + 70; z++) if ((x + z) % 2 === 0) world.setNatural(x, spawnY + 40, z, 'stone');
+		}
+		const body = new FakeBody();
+		body.world = world;
+		body.current = { x: kid.x, y: spawnY, z: kid.z, yaw: 0, pitch: 0 };
+		body.list = [player({ id: 1, name: 'Noah', x: kid.x, y: kid.y, z: kid.z, bot: false, hasPos: true })];
+		const root = mkdtempSync(join(tmpdir(), 'foreman-anchor-'));
+		const statePath = join(root, 'Boss.json');
+		const planPath = join(root, 'plan.json');
+		const log: Array<Record<string, unknown>> = [];
+		const h = runForeman({
+			name: 'Boss', body, world, spawn: { x: spawn.x, y: 0, z: spawn.z },
+			noEdits: false, statePath, planPath, rng: () => 0.5, paceMs: 0,
+			log: (e) => log.push(e),
+		});
+		const t0 = Date.now();
+		while (Date.now() - t0 < 8000 && !existsSync(planPath)) await new Promise((r) => setTimeout(r, 20));
+		await h.stop();
+		expect(existsSync(planPath), `no plan written (last log lines: ${JSON.stringify(log.slice(-5))})`).toBe(true);
+		const plan = readPlan(planPath)!;
+		expect(plan.anchor.x).toBe(spawn.x);
+		expect(plan.anchor.z).toBe(spawn.z);
+	}, 10_000);
 });

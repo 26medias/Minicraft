@@ -63,7 +63,7 @@ export async function foremanLeg(c: ForemanLegCtx, budgetMs = 480_000): Promise<
 		const plan0 = readPlan(planPath);
 		if (!c.check(plan0 !== null, `the foreman wrote its plan in ${Math.round((Date.now() - t0) / 1000)} s (${f.stats.current})`) || !plan0) return;
 		c.info(`plan: ${plan0.lots.length} lots at ${plan0.corner.x},${plan0.corner.z}, ${plan0.roads.length} road cells, ${plan0.lamps.length / 2} lamps`);
-		c.check(plan0.lots.length >= 6 && plan0.lots.length <= 10, `6–10 lots (${plan0.lots.length})`);
+		c.check(plan0.lots.length >= 4 && plan0.lots.length <= 10, `4–10 lots (${plan0.lots.length})`);
 		await cliMain(['builder', '--target', 'local', '--world', world, '--name', 'Robo', '--brain', 'laya', '--join-plan'], {
 			...deps,
 			onBuilder: (h, cl) => {

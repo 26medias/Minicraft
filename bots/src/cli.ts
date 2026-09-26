@@ -917,7 +917,7 @@ async function architectCommand(cfg: Config, deps: CliDeps): Promise<void> {
 }
 
 /**
- * `foreman` (experiment E7): lays out one neighbourhood per world (6–10 lots on a road grid) in the shared plan
+ * `foreman` (experiment E7): lays out one neighbourhood per world (4–10 lots on a road grid) in the shared plan
  * `bots/.state/shared/<target>/<world>/plan.json`, then builds the roads and lamps itself. Builder and architect bots
  * started with `--join-plan` build on its lots. No engine; same safety and signals as `builder`.
  */

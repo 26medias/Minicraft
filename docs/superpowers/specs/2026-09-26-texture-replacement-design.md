@@ -1,6 +1,6 @@
-# Texture replacement: Mojang out, CC BY-SA in — design (rev 2, 2026-09-26)
+# Texture replacement: Mojang out, CC BY-SA in — design (rev 3, 2026-09-26)
 
-Status: **rev 2, gate-1 findings incorporated** (rigour, engine, boundary, player lenses). Branch `textures`
+Status: **rev 3** — gate-1 findings (rigour, engine, boundary, player) and the rev-2 re-gate (rigour, engine) incorporated. Branch `textures`
 (worktree off `main` @ 8c7aec3). Background: `docs/texture-replacement-research.md`. Candidate map:
 `docs/texture-fill-map.md` (historical; after this change `src/data/texture-sources.data.ts` is the truth).
 
@@ -18,7 +18,7 @@ not the whole bundle (§10 lists the skins and menu art).
   blockgen and Tiny Pixels rejected.
 - 2026-09-26: **the GitHub repo stays public**, and history is not rewritten. Old commits keep serving the Mojang
   files. The new tree carries a licence notice (§4.5).
-- 2026-09-26: **TNT side is Pixel Perfection's bomb crate** (`tnt_side2`), not the X.
+- 2026-09-26: **TNT side is Pixel Perfection's bomb crate** (`tnt_side2`), not the X. Plain TNT is that art **tinted red** (§5.6), so "red = TNT" and the Big/Mega/toy hue gaps survive.
 - Standing rule: the user approves the look before merge (§8).
 
 ## 2. Non-goals
@@ -33,13 +33,15 @@ not the whole bundle (§10 lists the skins and menu art).
 |---|---|
 | Textures referenced by non-retired `BLOCKS` | 448 |
 | Crack overlay `destroy_stage_0..9` (loaded by `crack-overlay.ts`; Pixel Perfection CE has all 10) | 10 |
-| Pixel Perfection CE, same name, kept | 314 (337 − 23 traced) |
-| Fill from Bauniclonia/REFI | 121 |
-| Derived (§5.4) | 13 + `copper_ore` |
+| From Pixel Perfection CE (file taken as is) | ≈309 |
+| From Bauniclonia / REFI / Mineclonia (file taken as is) | ≈122 |
+| Overlays and tint-derived rows (§5.4, §5.6) | ≈17 |
 | Mojang files deleted (unused) | 625 |
 
-None of the 314 kept Pixel Perfection tiles scores above 0.8 on the trace metric (§6), and the highest pixel
-identity is 0.39. Several rows move off Pixel Perfection for **looks** (§5.5), not provenance.
+These three counts are approximate: the data file is the truth, and a test asserts the total of 448 + 10 = 458 rows.
+Of the 337 Pixel Perfection tiles, 23 are traced and never used. None of the 314 clean ones scores above 0.8 on the
+trace metric (§6), and the highest pixel identity is 0.39. Some rows move off Pixel Perfection for **looks** (§5.5):
+iron_block, clay, birch_leaves, and the TNT faces (tinted, §5.6).
 
 ## 4. Design
 
@@ -48,13 +50,15 @@ One typed row per output PNG, **including the 10 crack stages**:
 ```ts
 type Pack = 'ppce' | 'bauniclonia' | 'refi' | 'mineclonia';
 type TextureSource =
-  | { pack: Pack; file: string; grey?: true; alpha?: 'keep' }  // file = pack-relative path, frame 0
-  | { over: string; pack: Pack; file: string }                   // overlay composited on another output row
-  | { derive: 'tint'; from: string; tint: Rgb; targetLum?: number };
+  | { pack: Pack; file: string; alpha?: 'keep' }                 // file = pack-relative path, frame 0
+  | { over: string; pack: Pack; file: string; overlayAlpha?: number } // overlay composited on another output row; alpha × overlayAlpha
+  | { derive: 'tint'; pack: Pack; file: string; tint: Rgb; targetLum?: number } // greyTint (§5.6) of a pack file
+  | { same: string };                                            // byte-identical copy of another output row
 export const PACKS: Record<Pack, { repo: string; commit: string; licence: string; authors: string }>;
 ```
-- `grey: true` desaturates before writing, for masks that the atlas tints (birch fallback).
 - `alpha: 'keep'` skips normalisation (liquids, crack stages).
+- A `derive` row reads a pack file, not another output row, so no row depends on normalisation order. `over` and
+  `same` refer to output rows, and the importer resolves them after their target, failing on cycles.
 - Pinned commits: PP CE `28e38cab7c1f`, REFI `33f1f719930d`, Bauniclonia `77318ecabc04`,
   **Mineclonia `c1898e3951de`** (4th source: `sculk_catalyst_bottom`, the suspicious overlay).
 
@@ -64,10 +68,15 @@ export const PACKS: Record<Pack, { repo: string; commit: string; licence: string
 - Writes every row as a 16×16 RGBA PNG (frame 0) to `src/assets/blocks/`, applying §5.
 - Deletes every other `*.png` there.
 - Writes `src/assets/blocks/SOURCES.json` with pack, commit, source path and the sha256 of the written file.
-- **Refuses** (exits non-zero) when a row feeding an opaque block (`transparent: false`) has more than 5% of pixels
-  with alpha < 255 and no `over`. This catches overlay-style sources such as `copper_ore`.
-- `--sheet <name...>` renders `old | current | every pack candidate` for the named rows into a PNG, so a tile can
-  be swapped without a dev server. Candidates come from the Mineclonia/VoxeLibre `Conversion_Table.csv` name map.
+- **Refuses** (exits non-zero) when a row feeding an opaque block (`transparent: false`) has more than 5% **fully
+  transparent** (alpha 0) pixels and is not an `over` row. This catches overlay-style sources such as `copper_ore`
+  (73–151 alpha-0 pixels) while letting uniformly semi-transparent art through to the force-255 rule (`slime_block`,
+  alpha 140 on every pixel; `sculk` at 4.3%). This refusal and the §6.2 re-import diff are the **only** guards
+  against a smeared overlay: a smeared PNG, once committed, is fully opaque and passes the alpha test.
+- `--sheet <name...>` renders `Mojang (if the jar is present) | current | every pack candidate` for the named rows
+  into a PNG, so a tile can be swapped without a dev server. Candidates come from the Mineclonia/VoxeLibre
+  `Conversion_Table.csv` name map. It writes to `os.tmpdir()` by default and refuses any output path inside the
+  repo, because the sheet contains Mojang pixels.
 - PNGs and `SOURCES.json` are committed. The build never touches the network.
 
 ### 4.3 Atlas build — `scripts/build-atlas.ts`
@@ -120,32 +129,38 @@ water, lava and `slime_pad` already disagree with their tiles. The rule is per r
 
 **Test (`texture-alpha.test.ts`):**
 - For every non-retired, non-liquid block, `classifyAlpha` over its face files matches its flags.
-- Crack stages and liquids are skipped by name.
+- Liquids are checked explicitly instead: `water_still` has partial alpha (some 0 < α < 255), `lava_still` is fully
+  opaque. Crack stages are checked to be 0/255 cutout.
 - `DERIVED_TEXTURES` entries (no file) are checked through their source row.
 
 ### 5.2 Tints: only grey masks get tinted
 - **Metric:** mean HSV saturation over pixels with alpha > 0. The masks measure 0.19–0.23 (oak, jungle, mangrove,
   grass top); pre-coloured tiles measure 0.32 and up.
-- **Rule:** a texture may be in `TEXTURE_TINTS` only if its saturation is < 0.27.
+- **Rule:** `TEXTURE_TINTS` is an explicit list, and every entry must have saturation < 0.30.
 - **Expected result:**
   - keep grass_block_top, oak, jungle and mangrove leaves;
   - **remove** water_still (PP teal), dark_oak and spruce leaves (already green; tinting makes them near-black),
     and acacia (olive, sat 0.35; confirmed at the look review);
-  - birch: take Bauniclonia's `mcl_core_leaves_birch`, a pale mask, and **keep** the birch tint. PP's birch is
-    autumn orange, which the kid would read as wrong.
+  - birch: take Bauniclonia's `mcl_core_leaves_birch`, a pale mask (sat 0.28), and **keep** the birch tint. PP's
+    birch is autumn orange, which the kid would read as wrong.
 
 **Test (`texture-tints.test.ts`):**
-- (a) Every tinted texture has saturation < 0.27.
+- (a) Every tinted texture has saturation < 0.30 (spruce 0.32, acacia 0.35 and dark oak 0.37 would fail).
 - (b) Every `*_leaves` and `grass_block_top` texture with saturation < 0.27 is tinted, **or** is on
   `UNTINTED_GREY = ['pale_oak_leaves']` (grey by design).
-- (c) After tinting, every leaves texture has mean saturation > 0.25 and mean luminance > 40, so it is neither
-  grey nor near-black foliage.
+- (c) After tinting, every leaves and `grass_block_top` texture not on `UNTINTED_GREY` has mean hue in the green
+  band 60°–150°, mean saturation > 0.25 and mean luminance > 40. This catches orange birch whether tinted or not,
+  and near-black foliage.
+- (d) `birch_leaves` is pinned: it must be in `TEXTURE_TINTS`.
 
 ### 5.3 Ores must stay findable
-Every `*_ore` texture must have at least 12 pixels at CIE-Lab ΔE > 25 from its host stone's mean colour. The host
-is stone, deepslate or netherrack, by name.
-- Bauniclonia's `deepslate_coal_ore` has 0 such pixels, so that row takes **REFI**.
-- **Test:** `texture-ores.test.ts`.
+Every `*_ore` texture must have at least 12 pixels at CIE-Lab ΔE > 25 from the mean colour of its host (the
+**shipped** stone, deepslate or netherrack, by name). The weakest pass today is iron_ore at 14.
+- **Named exception:** `deepslate_coal_ore` uses ΔE > 12. Coal is black on dark deepslate in every pack.
+  Mojang's version has lighter rims (14 px at > 25), and neither Bauniclonia's (0) nor REFI's (0; max ΔE 20) does.
+  Take **Bauniclonia's** (41 px at > 12), which also sits on the same pack's deepslate. This is on the §8 look list;
+  if it reads as invisible in the mine shot, the fix is a new tile, not a looser test.
+- **Test:** `texture-ores.test.ts`. A fully invisible ore (0–few pixels) goes red under either threshold.
 
 ### 5.4 Overlays and derivations (14 rows)
 
@@ -153,12 +168,13 @@ is stone, deepslate or netherrack, by name.
 |---|---|
 | `copper_ore` | `over: 'stone'`, Bauniclonia `mcl_copper_ore` (it is a Luanti overlay: 73 transparent pixels) |
 | `muddy_mangrove_roots_side/top` | `over: 'mud'`, **Bauniclonia** `mcl_mangrove_roots_side/top` (brown; REFI's are dark green) |
-| `suspicious_sand_0`, `suspicious_gravel_0` | `over: 'sand'/'gravel'`, Mineclonia `mcl_sus_nodes_suspicious_overlay`, overlay alpha ×3 (at its drawn max of 48 it is invisible) |
+| `suspicious_sand_0`, `suspicious_gravel_0` | `over: 'sand'/'gravel'`, Mineclonia `mcl_sus_nodes_suspicious_overlay`, `overlayAlpha: 3` (at its drawn max of 48 it is invisible) |
 | `sculk_catalyst_bottom` | Mineclonia `mcl_sculk_catalyst_bottom` (trace score 0.48) |
-| `ochre/verdant/pearlescent_froglight_side` (top = the same tile) | `derive: 'tint'` from `shroomlight`, saturated tints `#f2c14e` / `#7fd36b` / `#e4a6e8`, target luminance 150 (§5.6) |
-| `creaking_heart_awake`, `…_top_awake` | `derive: 'tint'` from `pale_oak_log` / `pale_oak_log_top`, darkened. Accepted as a plain dark log (the eye is lost). |
+| `ochre/verdant/pearlescent_froglight_side` | `derive: 'tint'` from PP `shroomlight`, tints `#f2c14e` / `#7fd36b` / `#e4a6e8`, `targetLum: 210` (light blocks; 150 is drab) |
+| `…_froglight_top` | `same: '…_froglight_side'` |
+| `creaking_heart_awake`, `…_top_awake` | `derive: 'tint'` from the Bauniclonia `mcl_pale_oak_log` / `mcl_pale_oak_log_top` files, tint `#6e5a50`, `targetLum: 70`. Accepted as a plain dark log (the eye is lost). |
 
-**Test:** every derived tile keeps a luminance standard deviation above 8, so no tile collapses to a flat swatch.
+**Test:** every `derive`/`over` output keeps a luminance standard deviation above 8, so no tile collapses to a flat swatch.
 
 ### 5.5 Fill choice and look swaps
 **Default:**
@@ -174,11 +190,10 @@ is stone, deepslate or netherrack, by name.
 |---|---|---|
 | `iron_block` | REFI `default_steel_block` | PP's is black, ΔE 6 from `coal_block` |
 | `clay` | Bauniclonia `default_clay` | PP's is brick-red, ΔE 8 from `bricks` |
-| `deepslate_coal_ore` | REFI | §5.3 |
 | `birch_leaves` | Bauniclonia mask | §5.2 |
-| `tnt_side` | PP `tnt_side2` (bomb, user choice) | — |
-| `tnt_top` | PP `tnt_top2` | matches the bomb crate |
-| `tnt_bottom` | PP `tnt_top1` | PP `tnt_bottom` is traced; Bauniclonia's reads as brick; REFI's breaks the TNT hue test (0.2°) |
+| `tnt_side` | `derive: 'tint'`, PP `tnt_side2` (bomb, user choice), red `#e0402c` | §5.6 |
+| `tnt_top` | `derive: 'tint'`, PP `tnt_top2`, red | matches the bomb crate |
+| `tnt_bottom` | `derive: 'tint'`, PP `tnt_top1`, red | PP `tnt_bottom` is traced; Bauniclonia's reads as brick; REFI's breaks the TNT hue test (0.2°) |
 
 The TNT tiles are finalised against the §5.6 tests and the look review.
 
@@ -186,10 +201,21 @@ The TNT tiles are finalised against the §5.6 tests and the look review.
 `greyTint` uses `TINT_GAIN = 1.8`, tuned for Mojang TNT at luminance ~100. On the new art it fails the existing
 hue tests (Big TNT bottom 199.5 ≤ 200, tunnel top 183) and flattens the froglights (shroomlight luminance 198
 clips 100%).
-- **Change:** the gain per source is `targetLum / meanLum(source)`, with `targetLum` defaulting to today's
-  effective 180.
-- **New test:** at most 10% of a derived tile's pixels clip (any channel at 255), and its luminance standard
-  deviation stays above 8.
+- **Change:** the gain per source is `targetLum / meanLum(source)` (mean over alpha > 0), with `targetLum`
+  defaulting to 180. That is the only value tried (180/160/150) where every derived tile passes the existing
+  brightness assertions.
+- `DERIVED_TEXTURES` rows gain an optional `targetLum`, and `build-atlas` passes it through as
+  `greyTint(raw, d.tint, d.targetLum)`. The same function serves the importer's `derive: 'tint'` rows.
+- **Plain TNT** is itself `derive: 'tint'` of the bomb art in red, so Big/Mega TNT and the toys (grey-tinted from
+  plain TNT) keep their hue gaps. The bomb crate untinted is brown (hue 28), 3° from Big TNT's orange; three
+  existing hue tests fail on it at every gain.
+- **New tests:**
+  - A derived tile's luminance standard deviation stays above 8.
+  - **At most 50% of its pixels clip** (any channel at 255). This catches the real wash-out (the Launch Pad at gain
+    2.5 clipped 52%) while passing sparse bright highlights: the bomb-crate top is 85% black and its dots clip on
+    19–27% of pixels, which looks right.
+  - The existing `greyTint` "equal luminance → equal colour" test is rewritten: two sources with different mean
+    luminance must give equal mean output luminance.
 - The existing hue tests stay unchanged and must pass.
 
 ### 5.7 Known look differences, recorded for the user
@@ -207,7 +233,9 @@ These are shown at the look review, and each is a one-row swap.
   `SOURCES.json`.
 - **No shipped tile equals Mojang:** `src/data/mojang-tile-hashes.json` holds sha256 hashes of Mojang's decoded
   16×16 RGBA frame-0 tiles. These are hashes, not pixels. No shipped tile's decoded hash may match one.
-- **The 23 traced names** may never have `pack: 'ppce'`.
+- **The 23 traced source files** (for example `ppce` + `tnt_bottom.png`) may never be the `pack` + `file` of any
+  row. The guard is keyed on the source file, not the output name: `tnt_bottom` legitimately comes from PP's
+  `tnt_top1`.
 
 **Pre-merge gate, run by hand:**
 1. `scripts/audit-textures.ts` reads the local Minecraft jar and reports every shipped tile's trace score

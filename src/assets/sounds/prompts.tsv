@@ -1,0 +1,26 @@
+hit_stone	0.5	0.7	false	Single short pickaxe tap on stone block, dry crisp click, game sound effect, no reverb
+hit_dirt	0.5	0.7	false	Single short soft thud of a small shovel hitting packed dirt, crumbly, game sound effect, no reverb
+hit_wood	0.5	0.7	false	Single short knock of an axe tapping a wooden plank, hollow woody tock, game sound effect, no reverb
+hit_sand	0.5	0.7	false	Single short scrape into loose sand, soft gritty shhk, game sound effect, no reverb
+hit_leaves	0.5	0.7	false	Single short rustle of a hand grabbing leafy bush, crisp leaves, game sound effect, no reverb
+hit_glass	0.5	0.7	false	Single short light tap on a glass pane, small clink, game sound effect, no reverb
+break_stone	0.8	0.6	false	Stone block cracking apart into rubble, short crunchy break with small pebbles falling, cartoony game sound effect, no reverb
+break_dirt	0.7	0.6	false	Clump of dirt breaking apart and crumbling, short soft crunch, cartoony game sound effect, no reverb
+break_wood	0.8	0.6	false	Wooden block snapping and cracking apart, short woody crack, cartoony game sound effect, no reverb
+break_sand	0.7	0.6	false	Pile of sand collapsing, short soft whoosh of falling grains, game sound effect, no reverb
+break_leaves	0.7	0.6	false	Bunch of leaves torn off a bush, short crispy rustle, game sound effect, no reverb
+break_glass	0.8	0.6	false	Small glass pane shattering, short bright tinkle of shards, not scary, game sound effect, no reverb
+place_block	0.5	0.7	false	Placing a block down, satisfying soft solid thunk, short, cartoony game sound effect, no reverb
+place_stone	0.5	0.7	false	Setting a stone block down on stone, short solid clack, game sound effect, no reverb
+pickup_pop	0.5	0.7	false	Tiny cheerful pop of picking up an item, soft and friendly, game sound effect
+splash	1.2	0.5	false	Jumping into a lake, friendly medium water splash, game sound effect
+tnt	2.5	0.5	false	Cartoon explosion boom, punchy but not scary, short rumble tail, kids game sound effect
+amb_lake	12	0.5	true	Calm lake shore, gentle water lapping on pebbles, soft small waves, no birds, no wind, seamless ambience
+amb_stream	12	0.5	true	Small babbling brook, water flowing over stones, steady trickle, no birds, seamless ambience
+amb_waterfall	12	0.5	true	Waterfall pouring into a pool, steady rushing water roar from a short distance, no birds, seamless ambience
+amb_wind_light	12	0.5	true	Light breeze on an open hilltop, soft airy wind, gentle gusts, no birds, seamless ambience
+amb_wind_strong	12	0.5	true	Strong howling wind at a high mountain summit, whooshing gusts, cold and airy, no birds, seamless ambience
+r2:hit_wood	0.5	0.8	false	Axe chopping into a solid oak log, single sharp woody chop with a dense wooden knock, clear and loud, close up, game sound effect, no reverb
+r2:break_wood	0.8	0.7	false	Thick wooden log splitting and breaking apart, dry splintering crack of real hardwood, loud and close, cartoony game sound effect, no reverb
+r2:amb_lake	12	0.7	true	Tiny gentle waves softly lapping on the sandy shore of a very calm lake, quiet peaceful ripples, slow and delicate, no splashing, no birds, no wind, seamless ambience
+r2:amb_wind_light	12	0.7	true	Steady soft breeze blowing across a grassy hilltop, clearly audible airy wind whoosh with slow gentle gusts, no birds, no leaves, seamless ambience

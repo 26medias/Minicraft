@@ -1,6 +1,6 @@
 /** Types and helpers for texture-sources.data.ts (texture replacement spec §4.1, §5.1). Pure. */
 import type { AlphaMode } from './texture-import';
-import { BLOCKS } from './blocks.data';
+import { BLOCKS, type BlockDef } from './blocks.data';
 import { textureNames } from './catalog-rules';
 import { DERIVED_TEXTURES } from './atlas-derive';
 
@@ -68,10 +68,10 @@ export function requiredTextureNames(): string[] {
 	return [...names].sort();
 }
 
-export function alphaModeFor(name: string): AlphaMode {
+export function alphaModeFor(name: string, blocks: readonly BlockDef[] = BLOCKS): AlphaMode {
 	if (CRACK_STAGES.includes(name)) return 'keep';
 	const modes = new Set<AlphaMode>();
-	for (const b of BLOCKS) {
+	for (const b of blocks) {
 		if (b.retired || !b.textures || !textureNames(b.textures).includes(name)) continue;
 		modes.add(b.liquid !== 'none' ? 'keep' : !b.transparent ? 'opaque' : b.translucent ? 'translucent' : 'cutout');
 	}

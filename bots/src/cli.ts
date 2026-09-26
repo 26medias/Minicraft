@@ -47,7 +47,7 @@ import { ollamaProposer } from './architect/llm-params.js';
 import { builderDir, decoratorStatePath, runDecorator, saveDecoratorFile, type DecoratorHandle } from './decorator/decorator.js';
 import { foremanStatePath, runForeman, saveForemanFile, type ForemanHandle } from './foreman/foreman.js';
 import { planFilePath } from './foreman/plan-file.js';
-import { landscaperStatePath, runLandscaper, saveLandscaperFile, type LandscaperHandle } from './landscaper/landscaper.js';
+import { LANDSCAPER_REST_SEC, landscaperStatePath, runLandscaper, saveLandscaperFile, type LandscaperHandle } from './landscaper/landscaper.js';
 import { boardPath } from './board/board.js';
 
 const BOTS_DIR = resolve(dirname(fileURLToPath(import.meta.url)), '..');
@@ -967,7 +967,7 @@ async function landscaperCommand(cfg: Config, deps: CliDeps): Promise<void> {
 		when: cfg.when,
 		name: cfg.name, body: port.body, world: port.world, spawn: { x: sp.x, y: 0, z: sp.z }, primary, secondary,
 		noEdits: cfg.noEdits, statePath, boardPath: board, planPath: planFilePath(deps.stateRoot, cfg.target.name, uuid), rng: seededRng(seed),
-		restMs: deps.landscaperRestMs ?? cfg.restSec * 1000, maxBlasts: cfg.maxBlasts, areaSize: deps.landscaperAreaSize,
+		restMs: deps.landscaperRestMs ?? (cfg.restSecGiven ? cfg.restSec : LANDSCAPER_REST_SEC) * 1000, maxBlasts: cfg.maxBlasts, areaSize: deps.landscaperAreaSize,
 		pickaxe: cfg.pickaxe, grantOres: cfg.grantOres,
 		mine: (x, y, z, face) => client.mine(x, y, z, mineMs, { tier: cfg.pickaxe, face }),
 		breakMany: (cells) => client.breakMany(cells),
@@ -1042,6 +1042,7 @@ async function foremanCommand(cfg: Config, deps: CliDeps): Promise<void> {
 		when: cfg.when,
 		name: cfg.name, body: port.body, world: port.world, spawn: { x: sp.x, y: 0, z: sp.z },
 		noEdits: cfg.noEdits, statePath, planPath, builderDir: builderDir(deps.stateRoot, cfg.target.name, uuid), rng: seededRng(seed),
+		boardPath: boardPath(deps.stateRoot, cfg.target.name, uuid),
 		paceMs: deps.foremanPaceMs, shared: new SharedCells(sharedCellsPath(deps.stateRoot, cfg.target.name, uuid), cfg.name),
 		log: (o) => {
 			try {

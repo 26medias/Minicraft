@@ -21,7 +21,7 @@ export interface ParsedArgs {
 	tui: boolean;
 	/** `--compare` (builder): ask both Laya and Jev, act on the primary, log both. */
 	compare: boolean;
-	/** `--rest-sec N` (builder): the rest after each finished build, in seconds. */
+	/** `--rest-sec N` (builder: the rest after each finished build; landscaper: the rest between areas, default 15), in seconds. */
 	restSec?: string;
 	/** `--jev` (brain v2, experiment E2): Jev answers selection's social and situational questions. */
 	jev: boolean;

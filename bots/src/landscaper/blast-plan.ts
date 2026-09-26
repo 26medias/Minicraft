@@ -142,9 +142,10 @@ export const spotKey = (x: number, y: number, z: number) => `${x},${y},${z}`;
  * would leave a bot cell), a hole is not natural, the filtered blasts remove fewer than MIN_AREA_REMOVE cells, or the
  * planned result leaves no MIN_FOOTPRINT square flat at L. A centre whose filtered blast removes fewer than
  * MIN_SPOT_REMOVE cells, whose hole would be deeper than MAX_DIG, whose column is below the layer, or that `skipSpot`
- * rules out (tried before), gets no TNT on that layer.
+ * rules out (tried before), gets no TNT on that layer. `footprint` (default MIN_FOOTPRINT) is the side of the flat
+ * square the plan must leave at L: a board request passes its whole size, so the square ends flat at L all over.
  */
-export function evaluateArea(world: WorldView, x0: number, z0: number, size: number, f: Omit<FilterCtx, 'world'>, skipSpot?: (x: number, y: number, z: number) => boolean): AreaPlan | string {
+export function evaluateArea(world: WorldView, x0: number, z0: number, size: number, f: Omit<FilterCtx, 'world'>, skipSpot?: (x: number, y: number, z: number) => boolean, footprint = Math.min(MIN_FOOTPRINT, size)): AreaPlan | string {
 	let lo = Infinity, hi = -Infinity, ice = 0;
 	const tops = new Map<number, number>();
 	const all: number[] = [];
@@ -172,7 +173,7 @@ export function evaluateArea(world: WorldView, x0: number, z0: number, size: num
 	if (floors.length === 0) return 'too steep';
 	let last = 'too little to remove';
 	for (const L of floors) {
-		const r = planAt(world, x0, z0, size, L, hi, f, skipSpot);
+		const r = planAt(world, x0, z0, size, L, hi, f, skipSpot, footprint);
 		if (typeof r !== 'string') return { ...r, range: hi - lo };
 		last = r;
 		// A safety refusal holds at every floor.
@@ -182,7 +183,7 @@ export function evaluateArea(world: WorldView, x0: number, z0: number, size: num
 }
 
 /** The plan at one floor L (see evaluateArea), simulated top layer first on an overlay of the world. */
-function planAt(world: WorldView, x0: number, z0: number, size: number, L: number, hi: number, f: Omit<FilterCtx, 'world'>, skipSpot?: (x: number, y: number, z: number) => boolean): Omit<AreaPlan, 'range'> | string {
+function planAt(world: WorldView, x0: number, z0: number, size: number, L: number, hi: number, f: Omit<FilterCtx, 'world'>, skipSpot: ((x: number, y: number, z: number) => boolean) | undefined, footprint: number): Omit<AreaPlan, 'range'> | string {
 	const gone = new Set<string>();
 	const key = (x: number, y: number, z: number) => `${x},${y},${z}`;
 	const ov = {
@@ -231,7 +232,7 @@ function planAt(world: WorldView, x0: number, z0: number, size: number, L: numbe
 		}
 	}
 	if (seen.size < MIN_AREA_REMOVE) return 'too little to remove';
-	if (!hasFlatSquare(ov, x0, z0, size, L, Math.min(MIN_FOOTPRINT, size))) return 'no flat footprint';
+	if (!hasFlatSquare(ov, x0, z0, size, L, Math.min(footprint, size))) return 'no flat footprint';
 	return { x0, z0, size, L, layers: Math.max(1, ...spots.map((s) => (s.layer ?? 0) + 1)), spots, removes: seen.size, removableFiltered: seen.size, digs };
 }
 

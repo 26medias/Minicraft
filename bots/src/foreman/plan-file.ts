@@ -102,6 +102,23 @@ export function createPlan(path: string, p: NeighbourhoodPlan): NeighbourhoodPla
 	});
 }
 
+/**
+ * Replaces the plan on disk with `p` (the foreman's re-plan on flattened ground): the current plan, if any, is
+ * archived first beside it as `plan-<now>.json`. Returns the archive's path (null when there was no plan).
+ */
+export function replacePlan(path: string, p: NeighbourhoodPlan, now: number): string | null {
+	return withPlanLock(path, () => {
+		const cur = readPlan(path);
+		let archived: string | null = null;
+		if (cur) {
+			archived = join(dirname(path), `plan-${now}.json`);
+			writeFileSync(archived, JSON.stringify(cur));
+		}
+		writePlan(path, p);
+		return archived;
+	});
+}
+
 /** Whether a lot can be claimed now: open, or claimed with a claim older than `claimMs`. */
 export function claimable(l: PlanLot, now: number, claimMs = CLAIM_MS): boolean {
 	return l.status === 'open' || (l.status === 'claimed' && now - (l.claimedAt ?? 0) > claimMs);

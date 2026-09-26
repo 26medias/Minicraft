@@ -24,6 +24,8 @@ export interface Post {
 	center?: { x: number; y: number; z: number };
 	/** The side of the square wanted (flat-needed, build-request), in blocks. */
 	size?: number;
+	/** flattened: the floor's top y (the ground a build stands on is floor + 1). */
+	floor?: number;
 	/** Who asked (a bot name, or the kid's name for a marker). A 'flattened' post is reserved for it first. */
 	requester: string;
 	status: PostStatus;

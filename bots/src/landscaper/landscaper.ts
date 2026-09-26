@@ -6,7 +6,9 @@
  * Flattening TNT by the Craft tab's rules, dig a hole so the TNT sits on natural ground at the floor level, place it,
  * prime it (fx), wait the game's fuse, and apply the game's own blast cells — filtered to natural cells, and dropped
  * whole when any is within 12 of a kid cell, within 24 of a kid, or touches liquid — as batched edits with an fx boom.
- * When the square is done it posts 'flattened' on the board.
+ * When the square is done it posts 'flattened' (region, floor, requester) on the board. A flat-needed request's size is
+ * honoured: a square of that side, flat all over at one floor. No rest between the blasts of one area; between areas it
+ * lands, readies the next TNT, and idles on the ground (the shared wanderer), never hovering.
  *
  * Safety: mining goes through judgeSafety and a Tripwire per dig; a blast's removals go through a plan-bound budget
  * (exactly the filtered cells, nothing else, or the session halts). `--when players` pauses everything (no model
@@ -31,6 +33,8 @@ import { craftUpTo, rawShortfall, type Inventory } from './craft.js';
 import { gather, mineCell, travelTo, type GatherCtx } from './gather.js';
 import type { SharedCells } from '../shared/bot-cells.js';
 import { idlePaused, PresenceGate, type WhenMode } from '../shared/when.js';
+import { flyLeg, landingFor } from '../nav/navigate.js';
+import { pickWanderSpot, wanderer } from '../nav/wander.js';
 
 export const DEFAULT_MAX_BLASTS = 6;
 const TOY = 'flatten_tnt';
@@ -42,6 +46,8 @@ export const SEARCH_RADII = [32, 64, 96, 128];
 export const SPAWN_CLEAR = 16;
 /** An area tried (picked) is not picked again, nor any square overlapping it, for this long. */
 export const TRIED_AREA_MS = 60 * 60_000;
+/** The rest between areas when `--rest-sec` is not given (between blasts of one area there is none). */
+export const LANDSCAPER_REST_SEC = 15;
 
 export interface LandscapeArea extends AreaPlan {
 	id: string; status: 'active' | 'done' | 'abandoned'; t: number; why?: string;
@@ -125,8 +131,10 @@ export interface LandscaperOpts {
 	noEdits: boolean; statePath: string; boardPath: string; planPath?: string;
 	log: (o: Record<string, unknown>) => void; status?: (line: string) => void;
 	rng: () => number; clock?: () => number; statusEveryMs?: number;
-	/** The rest between blasts (default 30 s). */
+	/** The rest between areas (default LANDSCAPER_REST_SEC); none between the blasts of one area. */
 	restMs?: number;
+	/** The TNT fuse it waits (default: the game's); tests shorten it. */
+	fuseMs?: number;
 	/** Blasts in all (counted from the state file, so across restarts); default 6. */
 	maxBlasts?: number;
 	/** 'players': act only while a kid is online (resume 5 s after one joins). */
@@ -222,10 +230,14 @@ export function runLandscaper(o: LandscaperOpts): LandscaperHandle {
 		active: () => o.when !== 'players' || hasPlayer(),
 	});
 
-	/** The candidate squares around `a`, best first: the nearest ring (SEARCH_RADII) that has any. */
-	async function candidates(a: { x: number; z: number }): Promise<AreaPlan[]> {
+	/**
+	 * The candidate squares around `a`, best first: the nearest ring (SEARCH_RADII) that has any. `req` (a board
+	 * request's side): squares of that side, the whole square flat at the floor when done, and all of it (not only its
+	 * centre) at least SPAWN_CLEAR from spawn.
+	 */
+	async function candidates(a: { x: number; z: number }, req?: number): Promise<AreaPlan[]> {
 		const classify = (x: number, y: number, z: number) => own.classify(x, y, z);
-		const size = o.areaSize ?? AREA;
+		const size = req ?? o.areaSize ?? AREA;
 		const kids = kidsNow();
 		const now = clock();
 		const busy = [...file.areas.filter((x) => x.status !== 'abandoned'), ...file.triedAreas.filter((x) => now - x.t < TRIED_AREA_MS)];
@@ -244,13 +256,16 @@ export function runLandscaper(o: LandscaperOpts): LandscaperHandle {
 					const d = Math.hypot(dx, dz);
 					if (d > R || d <= inner) continue;
 					const cx = Math.floor(a.x) + dx, cz = Math.floor(a.z) + dz;
-					if (Math.hypot(cx - o.spawn.x, cz - o.spawn.z) < SPAWN_CLEAR) {
+					const x0 = cx - Math.floor(size / 2), z0 = cz - Math.floor(size / 2);
+					const nearSpawn = req
+						? Math.hypot(Math.max(x0 - o.spawn.x, 0, o.spawn.x - (x0 + size - 1)), Math.max(z0 - o.spawn.z, 0, o.spawn.z - (z0 + size - 1))) < SPAWN_CLEAR
+						: Math.hypot(cx - o.spawn.x, cz - o.spawn.z) < SPAWN_CLEAR;
+					if (nearSpawn) {
 						rejections['near spawn'] = (rejections['near spawn'] ?? 0) + 1;
 						continue;
 					}
-					const x0 = cx - size / 2, z0 = cz - size / 2;
 					if (busy.some((b) => x0 < b.x0 + b.size + 4 && x0 + size + 4 > b.x0 && z0 < b.z0 + b.size + 4 && z0 + size + 4 > b.z0)) continue;
-					const r = evaluateArea(o.world, x0, z0, size, { classify, kidCells, kids }, skipSpot);
+					const r = evaluateArea(o.world, x0, z0, size, { classify, kidCells, kids }, skipSpot, req);
 					if (typeof r === 'string') rejections[r] = (rejections[r] ?? 0) + 1;
 					else out.push(r);
 					await new Promise((res) => setImmediate(res));
@@ -260,7 +275,7 @@ export function runLandscaper(o: LandscaperOpts): LandscaperHandle {
 			if (out.length) break;
 		}
 		out.sort((p, q) => scoreArea(q, a) - scoreArea(p, a));
-		o.log({ k: 'area-search', t: clock(), anchor: a, radius, found: out.length, rejections });
+		o.log({ k: 'area-search', t: clock(), anchor: a, radius, size, found: out.length, rejections });
 		return out;
 	}
 
@@ -280,7 +295,9 @@ export function runLandscaper(o: LandscaperOpts): LandscaperHandle {
 		}
 		const a = src?.center ?? (src?.region ? { x: (src.region.x0 + src.region.x1) / 2, y: 0, z: (src.region.z0 + src.region.z1) / 2 } : anchor());
 		stats.current = src ? `looking at ${src.type} ${src.id}` : 'looking for a hilly patch';
-		const cands = (await candidates(a)).slice(0, 3);
+		// A flat-needed request's size is honoured: a square of that side, flat all over at one floor.
+		const req = src?.type === 'flat-needed' && src.size ? Math.max(src.size, o.areaSize ?? AREA) : undefined;
+		const cands = (await candidates(a, req)).slice(0, 3);
 		if (cands.length === 0) {
 			if (src) complete(o.boardPath, src.id, o.name, clock(), { note: 'no safe area to flatten near it' });
 			return null;
@@ -430,7 +447,7 @@ export function runLandscaper(o: LandscaperOpts): LandscaperHandle {
 		o.body.fx({ kind: 'prime', x: tnt.x, y: tnt.y, z: tnt.z, tier: TOY_ID });
 		o.log({ k: 'prime', t: clock(), area: area.id, tnt, fuseMs: FUSE_MS });
 		stats.current = `TNT ${i + 1}/${area.spots.length} lit at ${tnt.x},${tnt.z}`;
-		await new Promise((r) => setTimeout(r, FUSE_MS));
+		await new Promise((r) => setTimeout(r, o.fuseMs ?? FUSE_MS));
 		// 6. The game's cells now, filtered again: a kid who walked up drops the whole blast.
 		const { destroyed } = blastCells(blastWorld(w), TOY, tnt);
 		const f = filterBlast(destroyed, filterCtx(tnt));
@@ -488,7 +505,7 @@ export function runLandscaper(o: LandscaperOpts): LandscaperHandle {
 		save();
 		try {
 			post(o.boardPath, {
-				type: 'flattened', region: { x0: a.x0, z0: a.z0, x1: a.x0 + a.size - 1, z1: a.z0 + a.size - 1, y: h.hi }, size: a.size,
+				type: 'flattened', region: { x0: a.x0, z0: a.z0, x1: a.x0 + a.size - 1, z1: a.z0 + a.size - 1, y: a.L }, size: a.size, floor: a.L,
 				requester: a.requester ?? o.name, note: `flattened by ${o.name}: heights ${h.lo}..${h.hi}`, key: `flattened-${o.name}-${a.id}`,
 			}, clock());
 			if (a.post) complete(o.boardPath, a.post, o.name, clock(), { note: `flattened ${a.x0},${a.z0} (${a.size}×${a.size})` });
@@ -497,6 +514,48 @@ export function runLandscaper(o: LandscaperOpts): LandscaperHandle {
 		}
 		o.log({ k: 'flattened', t: clock(), id: a.id, x0: a.x0, z0: a.z0, size: a.size, lo: h.lo, hi: h.hi });
 		o.body.fx({ kind: 'firework', x: a.x0 + a.size / 2, y: h.hi + 4, z: a.z0 + a.size / 2 });
+	}
+
+	const wand = wanderer(o.body, o.world, { rng: o.rng, clock, log: (e) => o.log({ ...e, t: clock() }) });
+
+	/** Down onto the ground under it (the navigator's landing) when it is in the air: it never idles hovering. */
+	async function land(): Promise<void> {
+		const p = o.body.pose();
+		const to = landingFor(o.world, { x: p.x, z: p.z });
+		if (p.y - to.y <= 0.5) return;
+		await flyLeg(o.body, to, { alive: () => !stopped }).catch(() => undefined);
+	}
+
+	/** Idles `ms` on the ground: landed first, then short wanders (the shared wanderer) and looks around. */
+	async function idle(ms: number): Promise<void> {
+		await land();
+		const until = clock() + ms;
+		const c = o.body.pose();
+		while (!stopped && clock() < until) {
+			if (o.rng() < 0.4) await wand.go(pickWanderSpot(o.world, { x: c.x, z: c.z }, o.rng, 2, 6), () => !stopped && clock() < until);
+			const q = o.body.pose(), a = o.rng() * Math.PI * 2;
+			o.body.lookAt(q.x + Math.cos(a) * 8, q.y + 1 + o.rng() * 2, q.z + Math.sin(a) * 8);
+			await sleep(Math.max(0, Math.min(until - clock(), 2000 + o.rng() * 2000)));
+		}
+	}
+
+	/** The rest between areas: on the ground, the next area picked and its TNT made ready meanwhile, then idling out the rest. */
+	async function rest(): Promise<void> {
+		const until = clock() + (o.restMs ?? LANDSCAPER_REST_SEC * 1000);
+		stats.current = 'resting between areas';
+		await land();
+		if (file.blasts.filter((b) => !b.dropped).length < maxBlasts && !stopped && !halted()) {
+			const next = file.areas.find((a) => a.status === 'active') ?? await pickArea();
+			if (next && (file.inv[TOY] ?? 0) < 1) {
+				gctx.anchor = { x: next.x0 + next.size / 2, z: next.z0 + next.size / 2 };
+				stats.current = `getting a TNT ready for the next area ${next.id}`;
+				const why = await ensureToy();
+				if (why) o.log({ k: 'precraft-failed', t: clock(), area: next.id, why });
+				await land();
+			}
+		}
+		stats.current = 'resting between areas';
+		await idle(Math.max(0, until - clock()));
 	}
 
 	async function loop(): Promise<void> {
@@ -510,18 +569,18 @@ export function runLandscaper(o: LandscaperOpts): LandscaperHandle {
 					if (!haltedLogged) o.log({ k: 'EDITS-HALTED', t: clock(), why: halted() });
 					haltedLogged = true;
 					stats.current = `EDITS HALTED (${halted()})`;
-					await sleep(5000);
+					await idle(5000);
 					continue;
 				}
 				if (file.blasts.filter((b) => !b.dropped).length >= maxBlasts) {
 					stats.current = `blast cap reached (${maxBlasts}); resting`;
-					await sleep(60_000);
+					await idle(60_000);
 					continue;
 				}
 				const area = file.areas.find((a) => a.status === 'active') ?? await pickArea();
 				if (!area) {
 					stats.current = 'no area to flatten; waiting';
-					await sleep(10_000);
+					await idle(10_000);
 					continue;
 				}
 				gctx.anchor = { x: area.x0 + area.size / 2, z: area.z0 + area.size / 2 };
@@ -533,7 +592,10 @@ export function runLandscaper(o: LandscaperOpts): LandscaperHandle {
 						area.status = 'abandoned';
 						area.why = 'every spot skipped: nothing worth blasting';
 						save();
-					} else finishArea(area);
+					} else {
+						finishArea(area);
+						await rest();
+					}
 					continue;
 				}
 				if (area.post) renew(o.boardPath, area.post, o.name, clock());
@@ -550,7 +612,11 @@ export function runLandscaper(o: LandscaperOpts): LandscaperHandle {
 							area.why = 'every spot skipped: nothing worth blasting';
 							o.log({ k: 'area-dropped', t: clock(), area: area.id, why: area.why });
 							if (area.post) complete(o.boardPath, area.post, o.name, clock(), { status: 'open', note: area.why });
-						} else finishArea(area);
+						} else {
+							finishArea(area);
+							save();
+							await rest();
+						}
 					}
 					save();
 					continue;
@@ -561,14 +627,16 @@ export function runLandscaper(o: LandscaperOpts): LandscaperHandle {
 					area.why = why;
 					if (area.post) complete(o.boardPath, area.post, o.name, clock(), { status: 'open', note: why });
 					save();
-					await sleep(10_000);
+					await idle(10_000);
 					continue;
 				}
 				area.done.push(i);
 				save();
-				if (area.done.length === area.spots.length) finishArea(area);
-				stats.current = 'resting between blasts';
-				await sleep(o.restMs ?? 30_000);
+				// Between the blasts of one area: straight on to the next (its TNT, its hole). The rest is between areas.
+				if (area.done.length === area.spots.length) {
+					finishArea(area);
+					await rest();
+				}
 			} catch (err) {
 				o.log({ k: 'error', t: clock(), err: err instanceof Error ? (err.stack ?? err.message) : String(err) });
 				await sleep(5000);

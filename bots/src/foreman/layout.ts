@@ -10,7 +10,7 @@
  * any kid cell, and every road and lamp column is natural ground within 3 of the lots' height.
  */
 import type { Ownership } from '../brain2/ownership.js';
-import { groundTop, siteOrReject } from '../brain2/behaviours/site-search.js';
+import { boxMeetsKids, groundTop, siteOrReject } from '../brain2/behaviours/site-search.js';
 import { LIMITS } from '../brain2/data/limits.data.js';
 import type { WorldView } from '../port.js';
 import type { Vec3 } from '../types.js';
@@ -88,18 +88,30 @@ const rectDist = (p: { x: number; z: number }, x0: number, x1: number, z0: numbe
 
 /** Every rule for the grid at `corner`: the site, or the first reason it failed. */
 export function evaluateNeighbourhood(corner: Col, cols: number, q: NeighbourhoodQ, ctx: NeighbourhoodCtx, top: (x: number, z: number) => number): NeighbourhoodSite | string {
+	const radii = q.radii ?? LIMITS.LEASH_STEPS;
+	const leash = radii[radii.length - 1] + 40;
+	const lots: PlanLot[] = [];
+	return evaluateGrid(corner, cols, q, ctx, top, (o, i) => {
+		const r = siteOrReject(o.x, o.z, { w: LOT, d: LOT, h: LOT_H, anchor: q.anchor, avoid: q.avoid }, ctx, top, leash);
+		if (typeof r === 'string') return r;
+		if (lots.length && Math.abs(r.origin.y - lots[0].origin.y) > MAX_DY) return 'height';
+		const lot: PlanLot = { id: `lot-${i + 1}`, origin: r.origin, w: LOT, d: LOT, h: LOT_H, status: 'open' };
+		lots.push(lot);
+		return lot;
+	});
+}
+
+/** The grid's shared rules (spawn, kids, roads, lamps, kid cells) around lots judged by `lotAt`. */
+function evaluateGrid(corner: Col, cols: number, q: NeighbourhoodQ, ctx: NeighbourhoodCtx, top: (x: number, z: number) => number, lotAt: (o: Col, i: number) => PlanLot | string): NeighbourhoodSite | string {
 	const W = areaW(cols), D = areaD(ROWS);
 	const x0 = corner.x - 1, x1 = corner.x + W, z0 = corner.z, z1 = corner.z + D - 1;
 	if (rectDist(ctx.spawn, x0, x1, z0, z1) < AREA_CLEAR) return 'spawn';
 	if ((ctx.kids ?? []).some((k) => rectDist(k, x0, x1, z0, z1) < AREA_CLEAR)) return 'kid-position';
 	const lots: PlanLot[] = [];
-	const radii = q.radii ?? LIMITS.LEASH_STEPS;
-	const leash = radii[radii.length - 1] + 40;
 	for (const [i, o] of gridLots(corner, cols).entries()) {
-		const r = siteOrReject(o.x, o.z, { w: LOT, d: LOT, h: LOT_H, anchor: q.anchor, avoid: q.avoid }, ctx, top, leash);
+		const r = lotAt(o, i);
 		if (typeof r === 'string') return r;
-		if (lots.length && Math.abs(r.origin.y - lots[0].origin.y) > MAX_DY) return 'height';
-		lots.push({ id: `lot-${i + 1}`, origin: r.origin, w: LOT, d: LOT, h: LOT_H, status: 'open' });
+		lots.push(r);
 	}
 	const y = lots[0].origin.y;
 	const inAvoid = (c: Col) => q.avoid.some((b) => c.x >= b.min.x - 1 && c.x <= b.max.x + 1 && c.z >= b.min.z - 1 && c.z <= b.max.z + 1);
@@ -125,6 +137,45 @@ export function evaluateNeighbourhood(corner: Col, cols: number, q: Neighbourhoo
 	}
 	if (ctx.own.kidCellWithin((x0 + x1) / 2, (z0 + z1) / 2, LIMITS.SITE_KID_DIST + Math.hypot(x1 - x0, z1 - z0) / 2)) return 'kid-cells';
 	return { corner, cols, lots, roads, lamps };
+}
+
+/**
+ * A neighbourhood on a flattened region (the landscaper's `flattened` board post): the largest grid (5, 4, 3, then 2
+ * columns) whose whole area (lamps included) lies inside `region`, corners tried nearest the region's centre first.
+ * Every lot column is natural ground with its top exactly at `floor`, no liquid on it, air for LOT_H above, clear of
+ * `q.avoid` and of kids standing; roads, lamps, spawn and kid cells as the search's own rules. The site, or the last
+ * reason it failed ('too small' when no grid fits the region at all).
+ */
+export function layoutOnRegion(region: { x0: number; z0: number; x1: number; z1: number }, floor: number, q: Pick<NeighbourhoodQ, 'avoid'>, ctx: NeighbourhoodCtx, top: (x: number, z: number) => number = (x, z) => groundTop(ctx.world, x, z)): NeighbourhoodSite | string {
+	const nq: NeighbourhoodQ = { anchor: { x: (region.x0 + region.x1) / 2, y: floor, z: (region.z0 + region.z1) / 2 }, avoid: q.avoid };
+	let last = 'too small';
+	const lotAt = (o: Col, i: number): PlanLot | string => {
+		for (const b of q.avoid) if (o.x - 1 <= b.max.x && o.x + LOT >= b.min.x && o.z - 1 <= b.max.z && o.z + LOT >= b.min.z) return 'builds';
+		if (boxMeetsKids(o.x - 1, o.x + LOT, o.z - 1, o.z + LOT, ctx.kids ?? [])) return 'kid-position';
+		for (let x = o.x; x < o.x + LOT; x++) {
+			for (let z = o.z; z < o.z + LOT; z++) {
+				if (top(x, z) !== floor) return 'not-flat';
+				if (ctx.own.classify(x, floor, z) !== 'natural') return 'not-natural';
+				if (ctx.world.isLiquid(ctx.world.getBlock(x, floor + 1, z))) return 'liquid';
+				for (let y = floor + 1; y <= floor + LOT_H; y++) if (ctx.world.getBlock(x, y, z) !== 0) return 'headroom';
+			}
+		}
+		return { id: `lot-${i + 1}`, origin: { x: o.x, y: floor + 1, z: o.z }, w: LOT, d: LOT, h: LOT_H, status: 'open' };
+	};
+	for (const cols of NeighbourhoodSearch.COLS) {
+		const W = areaW(cols), D = areaD(ROWS);
+		const corners: Col[] = [];
+		// Lamps stand one column west of the corner and one east of the area: both inside the region.
+		for (let x = region.x0 + 1; x + W <= region.x1; x++) for (let z = region.z0; z + D - 1 <= region.z1; z++) corners.push({ x, z });
+		const cx = (region.x0 + region.x1) / 2, cz = (region.z0 + region.z1) / 2;
+		corners.sort((a, b) => Math.hypot(a.x + W / 2 - cx, a.z + D / 2 - cz) - Math.hypot(b.x + W / 2 - cx, b.z + D / 2 - cz));
+		for (const c of corners) {
+			const r = evaluateGrid(c, cols, nq, ctx, top, lotAt);
+			if (typeof r !== 'string') return r;
+			last = r;
+		}
+	}
+	return last;
 }
 
 /**

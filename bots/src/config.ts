@@ -92,6 +92,8 @@ export interface Config {
 	compare: boolean;
 	/** `--rest-sec` (builder): seconds of rest after each finished build (default 30). */
 	restSec: number;
+	/** `--rest-sec` was given (the landscaper's own default, 15 s, applies otherwise). */
+	restSecGiven?: true;
 	/** `--jev` (brain v2, experiment E2). */
 	jev: boolean;
 	/** `--llm-params` (architect, experiment E6). */
@@ -270,6 +272,7 @@ export function loadConfig(input: LoadConfigInput): Config {
 		tui: args.tui,
 		compare: args.compare,
 		restSec,
+		...(args.restSec !== undefined ? { restSecGiven: true as const } : {}),
 		jev: args.jev,
 		llmParams: args.llmParams,
 		maxBuilds,

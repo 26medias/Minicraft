@@ -7,6 +7,10 @@
  * checkPlace (judgeSafety allowFree: kid cells and their buffer, kid body buffer, stop signal, --no-edits, only into
  * air) and a Tripwire. Its progress persists in its own state file, so a restart resumes the roads. Once they are done
  * it stays online, wandering along the streets and looking at the lots: no more edits.
+ *
+ * The board (board/board.ts): with no viable plan (none, or every lot dropped) it posts one `flat-needed` (24 × 24 near
+ * spawn) at a time; on a `flattened` post (its own answer first, else any open one while no lot is live) it lays a new
+ * plan on that floor, archiving the old one as plan-<ts>.json.
  */
 import { existsSync, mkdirSync, readFileSync, renameSync, writeFileSync } from 'node:fs';
 import { dirname, join } from 'node:path';
@@ -21,15 +25,32 @@ import { approach, checkPlace, eyeDist, PLACE_MAX } from '../builder/builder.js'
 import { cellKey } from '../builder/moves.js';
 import { readBuilderRecords } from '../decorator/decor.js';
 import type { SharedCells } from '../shared/bot-cells.js';
-import { areaD, areaW, NeighbourhoodSearch, ROWS } from './layout.js';
-import { createPlan, readPlan, type NeighbourhoodPlan, type PlanCell } from './plan-file.js';
+import { areaD, areaW, layoutOnRegion, NeighbourhoodSearch, ROWS } from './layout.js';
+import { createPlan, readPlan, replacePlan, type NeighbourhoodPlan, type PlanCell } from './plan-file.js';
+import { claimNext, complete, list, post, type Post } from '../board/board.js';
 import { reopenDroppedLots, REOPEN_EVERY_MS } from './join.js';
 import { StuckWatchdog } from '../nav/navigate.js';
 import { pickWanderSpot, standable, WANDER_MAX, wanderer } from '../nav/wander.js';
 import { idlePaused, PresenceGate, type WhenMode } from '../shared/when.js';
 
 export interface Progress { placed: string[]; skipped: string[]; status: 'placing' | 'done' }
-export interface ForemanFile { v: 1; planId: string | null; roads: Progress; lamps: Progress; owned: Record<string, number> }
+export interface ForemanFile {
+	v: 1; planId: string | null; roads: Progress; lamps: Progress; owned: Record<string, number>;
+	/** Board 'flattened' posts it tried and could not lay a plan on (never claimed again). */
+	skippedPosts?: string[];
+}
+
+/** The side of the flat square the foreman asks for (room for 4 lots, their roads and lamps: 20 × 18). */
+export const FLAT_NEEDED_SIZE = 24;
+/** After a flat-needed request ended without a usable plan, the next one waits this long. */
+export const REFLAT_MS = 30 * 60_000;
+/** How often the foreman looks at the board while it has no viable plan. */
+export const BOARD_POLL_MS = 30_000;
+
+/** Lots a builder can still take or is building on. */
+export const liveLots = (p: NeighbourhoodPlan | null) => !!p && p.lots.some((l) => l.status === 'open' || l.status === 'claimed');
+/** A plan still worth following: some lot not dropped. */
+export const viablePlan = (p: NeighbourhoodPlan | null) => !!p && p.lots.some((l) => l.status !== 'dropped');
 
 export function foremanStatePath(stateRoot: string, target: string, world: string, name: string): string {
 	return join(stateRoot, 'foreman', target, world, `${name}.json`);
@@ -67,6 +88,8 @@ export interface ForemanOpts {
 	rng: () => number; clock?: () => number; paceMs?: number; statusEveryMs?: number;
 	shared?: SharedCells | null;
 	searchRadius?: number;
+	/** The shared board (board/board.ts): with no viable plan it asks the landscaper for flat ground there, and plans on the 'flattened' answer. */
+	boardPath?: string;
 }
 export interface ForemanStats { placed: number; refused: number; failed: number; roadsDone: boolean; lampsDone: boolean; lotsBuilt: number; lots: number; current: string }
 export interface ForemanHandle { stop(): Promise<void>; stats: ForemanStats; file: ForemanFile; done: Promise<void> }
@@ -135,6 +158,71 @@ export function runForeman(o: ForemanOpts): ForemanHandle {
 			}
 			await new Promise((res) => setImmediate(res));
 		}
+	}
+
+	const skipped = () => (file.skippedPosts ??= []);
+	const boardErr = (err: unknown) => o.log({ k: 'board-error', t: clock(), err: err instanceof Error ? err.message : String(err) });
+
+	/**
+	 * A new plan on a 'flattened' board post (one reserved for it first, else any open one): the old plan, if any, is
+	 * archived as plan-<ts>.json and replaced. Null when there is no such post or no grid fits on it.
+	 */
+	function planOnFlattened(old: NeighbourhoodPlan | null): NeighbourhoodPlan | null {
+		const board = o.boardPath!;
+		let fp: Post | null = null;
+		try {
+			const fresh = (q: Post) => !skipped().includes(q.id);
+			fp = claimNext(board, 'flattened', o.name, clock(), (q) => q.requester === o.name && fresh(q)) ?? claimNext(board, 'flattened', o.name, clock(), fresh);
+		} catch (err) {
+			boardErr(err);
+			return null;
+		}
+		if (!fp) return null;
+		const floor = fp.floor ?? fp.region?.y;
+		const where = fp.region ? `${fp.region.x0},${fp.region.z0}..${fp.region.x1},${fp.region.z1}` : '?';
+		stats.current = `planning on flattened area ${fp.id} (${where})`;
+		o.log({ k: 'flattened-claimed', t: clock(), post: fp.id, region: fp.region ?? null, floor: floor ?? null, requester: fp.requester });
+		const avoid = o.builderDir ? readBuilderRecords(o.builderDir).builds.map(({ build: b }) => ({ min: b.origin, max: { x: b.origin.x + b.w - 1, y: b.origin.y + b.h - 1, z: b.origin.z + b.d - 1 } })) : [];
+		const site = fp.region && floor !== undefined ? layoutOnRegion(fp.region, floor, { avoid }, { world: o.world, own, spawn: o.spawn, kids: kidsNow() }) : 'no region';
+		if (typeof site === 'string') {
+			skipped().push(fp.id);
+			save();
+			o.log({ k: 'flattened-unusable', t: clock(), post: fp.id, why: site });
+			// Its own request's answer is done with; anyone else's flat ground goes back to the board for them.
+			complete(board, fp.id, o.name, clock(), fp.requester === o.name ? { note: `${o.name}: no neighbourhood fits (${site})` } : { status: 'open', note: `${o.name}: no neighbourhood fits (${site})` });
+			return null;
+		}
+		const p: NeighbourhoodPlan = {
+			v: 1, id: clock().toString(36), foreman: o.name, t: clock(), anchor: { x: (fp.region!.x0 + fp.region!.x1) / 2, y: floor!, z: (fp.region!.z0 + fp.region!.z1) / 2 },
+			corner: site.corner, cols: site.cols, rows: ROWS, lots: site.lots, roads: site.roads, lamps: site.lamps,
+		};
+		const archived = replacePlan(o.planPath, p, clock());
+		complete(board, fp.id, o.name, clock(), { note: `${o.name}: plan ${p.id}, ${p.lots.length} lots` });
+		// Its own open request (if the answer came from elsewhere) is no longer needed.
+		try {
+			for (const q of list(board, { type: 'flat-needed' })) {
+				if (q.requester !== o.name || q.status !== 'open') continue;
+				const c = claimNext(board, 'flat-needed', o.name, clock(), (r) => r.id === q.id);
+				if (c) complete(board, c.id, o.name, clock(), { note: `answered by ${fp.id}` });
+			}
+		} catch (err) {
+			boardErr(err);
+		}
+		o.log({ k: 'plan', t: clock(), id: p.id, mine: true, on: fp.id, archived, old: old?.id ?? null, corner: p.corner, cols: p.cols, lots: p.lots.map((l) => ({ id: l.id, origin: l.origin })), roads: p.roads.length, lamps: p.lamps.length / 2 });
+		return p;
+	}
+
+	/** Its one open (or being-worked) flat-needed request on the board, posted now if there is none. Null while it waits out REFLAT_MS. */
+	function requestFlat(): Post | null {
+		const board = o.boardPath!;
+		const mine = list(board, { type: 'flat-needed' }).filter((q) => q.requester === o.name);
+		const open = mine.find((q) => q.status !== 'done');
+		if (open) return open;
+		const lastDone = Math.max(-Infinity, ...mine.map((q) => q.doneTs ?? q.t));
+		if (clock() - lastDone < REFLAT_MS) return null;
+		const r = post(board, { type: 'flat-needed', center: { ...o.spawn }, size: FLAT_NEEDED_SIZE, requester: o.name, note: `${o.name}: no neighbourhood plan with a lot left; ${FLAT_NEEDED_SIZE}×${FLAT_NEEDED_SIZE} flat ground near spawn, please` }, clock());
+		o.log({ k: 'flat-needed', t: clock(), post: r.post.id, size: FLAT_NEEDED_SIZE, center: o.spawn });
+		return r.post;
 	}
 
 	/** Places a cell list in order (a cell resting on a skipped cell of the same list is skipped too). */
@@ -251,14 +339,8 @@ export function runForeman(o: ForemanOpts): ForemanHandle {
 
 	let lastReopen = -Infinity;
 	async function once(): Promise<void> {
-		const p = await thePlan();
-		if (!p) {
-			stats.current = 'no neighbourhood site found; waiting';
-			await sleep(60_000);
-			return;
-		}
 		// At start and every 15 min: dropped lots whose reason no longer applies go back to open (join.ts).
-		if (clock() - lastReopen >= REOPEN_EVERY_MS) {
+		if (readPlan(o.planPath) && clock() - lastReopen >= REOPEN_EVERY_MS) {
 			lastReopen = clock();
 			try {
 				reopenDroppedLots(o.planPath, { world: o.world, own, spawn: o.spawn, kids: kidsNow(), avoid: [] }, o.log, clock());
@@ -266,6 +348,24 @@ export function runForeman(o: ForemanOpts): ForemanHandle {
 				o.log({ k: 'lot-error', t: clock(), err: err instanceof Error ? err.message : String(err) });
 			}
 		}
+		let p = readPlan(o.planPath);
+		// No lot left to build on: flat ground from the board (the landscaper's answer) makes a new plan.
+		if (o.boardPath && !liveLots(p)) p = planOnFlattened(p) ?? p;
+		p ??= await thePlan();
+		if (!viablePlan(p)) {
+			if (o.boardPath) {
+				let req: Post | null = null;
+				try {
+					req = requestFlat();
+				} catch (err) {
+					boardErr(err);
+				}
+				stats.current = req ? `waiting for flat ground (board post ${req.id})` : `${p ? 'every lot dropped' : 'no neighbourhood site found'}; waiting`;
+			} else stats.current = p ? 'every lot dropped; waiting' : 'no neighbourhood site found; waiting';
+			await sleep(o.boardPath ? BOARD_POLL_MS : 60_000);
+			return;
+		}
+		if (!p) return;
 		if (file.planId !== p.id) {
 			file.planId = p.id;
 			file.roads = fresh();

@@ -25,6 +25,22 @@ describe('Store (spec §3)', () => {
 		expect(s.apply([{ path: ['inventory', 'stone'], value: 3 }], { kind: 'behaviour', by: 't' })).toEqual([]);
 		expect(s.state.version).toBe(v);
 	});
+	// Red if version bumps once per op instead of once per apply: a no-op alongside a real op would double-bump.
+	it('a patch with one no-op and one real op bumps version once and emits only the real change', () => {
+		const s = new Store(initialState(PIP, pose), new ManualClock().now);
+		s.apply([{ path: ['inventory', 'stone'], value: 3 }], { kind: 'behaviour', by: 't' });
+		const v = s.state.version;
+		const out = s.apply(
+			[
+				{ path: ['inventory', 'stone'], value: 3 }, // no-op: already 3
+				{ path: ['inventory', 'wood'], value: 5 },  // real change
+			],
+			{ kind: 'behaviour', by: 't' },
+		);
+		expect(out).toHaveLength(1);
+		expect(out[0].path).toBe('inventory.wood');
+		expect(s.state.version).toBe(v + 1);
+	});
 	it('undefined deletes a key', () => {
 		const s = new Store(initialState(PIP, pose), new ManualClock().now);
 		s.apply([{ path: ['owned', '1,2,3'], value: 5 }], { kind: 'body', by: 't' });

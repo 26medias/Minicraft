@@ -17,10 +17,12 @@ export interface ParsedArgs {
 	iDeployedTheServer: boolean;
 	/** `revert --builds` (brain v2): take the bot's standing builds apart instead of replaying the journal. */
 	builds: boolean;
+	/** `--tui` (brain v2): the live terminal view. */
+	tui: boolean;
 }
 
 type ValueFlagKey = 'target' | 'world' | 'name' | 'skin' | 'brain' | 'personality';
-type BooleanFlagKey = 'noEdits' | 'revertOnExit' | 'iDeployedTheServer' | 'builds';
+type BooleanFlagKey = 'noEdits' | 'revertOnExit' | 'iDeployedTheServer' | 'builds' | 'tui';
 
 const VALUE_FLAGS: Record<string, ValueFlagKey> = {
 	'--target': 'target',
@@ -36,11 +38,12 @@ const BOOLEAN_FLAGS: Record<string, BooleanFlagKey> = {
 	'--revert-on-exit': 'revertOnExit',
 	'--i-deployed-the-server': 'iDeployedTheServer',
 	'--builds': 'builds',
+	'--tui': 'tui',
 };
 
 /** Parses `--flag value` / `--flag` pairs. Throws a plain `Error` on an unrecognised or malformed flag. */
 export function parseArgs(argv: readonly string[]): ParsedArgs {
-	const out: ParsedArgs = { noEdits: false, revertOnExit: false, iDeployedTheServer: false, builds: false };
+	const out: ParsedArgs = { noEdits: false, revertOnExit: false, iDeployedTheServer: false, builds: false, tui: false };
 	for (let i = 0; i < argv.length; i++) {
 		const arg = argv[i];
 		const valueKey = VALUE_FLAGS[arg];

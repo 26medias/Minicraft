@@ -85,6 +85,8 @@ export interface Config {
 	llm?: LlmDef;
 	/** `revert --builds` (brain v2). */
 	revertBuilds: boolean;
+	/** `--tui` (brain v2): the live terminal view. */
+	tui: boolean;
 	/** Where `.state` lives for this run (injected, defaulted in cli.ts only). */
 	stateRoot: string;
 	statePath(worldUuid: string): string;
@@ -222,6 +224,7 @@ export function loadConfig(input: LoadConfigInput): Config {
 		brains: botsConfig.brains,
 		llm: botsConfig.llm,
 		revertBuilds: args.builds,
+		tui: args.tui,
 		stateRoot,
 		statePath(worldUuid: string): string {
 			return `${stateRoot}/${targetName}/${worldUuid}/${name}.json`;

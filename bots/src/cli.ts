@@ -30,6 +30,8 @@ import { LIMITS } from './brain2/data/limits.data.js';
 import { BrainSaver, brainFilePath, loadBrainFile, reconcileRevert, type BrainFile } from './brain2/persist.js';
 import { Store, initialState, type Patch } from './brain2/store.js';
 import type { State } from './brain2/types.js';
+import type { LogLine } from './brain2/log.js';
+import { applyPoke, startTui, type Poke } from './brain2/tui.js';
 import { SKIN_IDS } from './skins.js';
 
 const BOTS_DIR = resolve(dirname(fileURLToPath(import.meta.url)), '..');
@@ -281,6 +283,12 @@ async function revertCommand(cfg: Config, deps: CliDeps): Promise<void> {
 	}
 }
 
+/** The TUI's poke (spec §8): none against a live target, so the `p` key is refused there. */
+export function pokeFor(live: boolean, store: Store, clock: () => number): ((p: Poke) => void) | undefined {
+	if (live) return undefined;
+	return (p) => applyPoke(store, p, clock());
+}
+
 /**
  * `--brain v2` (spec §10 step 2): runBrain2 with code engines only (part 2 adds Laya and the LLM). Runs until
  * SIGINT/SIGTERM or the connection closes; the brain file is flushed on the way out, and `--revert-on-exit`
@@ -302,13 +310,34 @@ async function companionV2(cfg: Config, deps: CliDeps): Promise<void> {
 	// A monotonic ms clock on the wall's scale: brain2 times never jump with the system clock.
 	const t0 = Date.now() - performance.now();
 	const clock = () => t0 + performance.now();
+	// The TUI's last select and expert feed, from the log as it is written.
+	let lastSelect: Extract<LogLine, { k: 'select' }> | null = null;
+	let calls: Array<Extract<LogLine, { k: 'call' }>> = [];
 	const handle: Brain2Handle = runBrain2({
 		port, clock, wall: () => Date.now(), rng: seededRng(seed), seed,
 		personality: PERSONALITIES[cfg.personality], statePaths: { brainFile, logDir },
 		meta: { ...meta, target: cfg.target.name, live: cfg.target.live }, world: { seed: client.world.seed, gen: client.world.gen },
 		engines: () => ({ laya: null, llm: null }), noEdits: cfg.noEdits,
-		logWrite: (line) => appendFileSync(logPath, `${line}\n`), status: (line) => deps.print(`[${new Date().toISOString()}] ${line}`),
+		logWrite: (line) => {
+			appendFileSync(logPath, `${line}\n`);
+			if (cfg.tui && (line.startsWith('{"k":"select"') || line.startsWith('{"k":"call"'))) {
+				const l = JSON.parse(line) as LogLine;
+				if (l.k === 'select') lastSelect = l;
+				else if (l.k === 'call') calls = [...calls, l].slice(-8);
+			}
+		},
+		// With the TUI up, status lines would scroll it away: the view shows the same.
+		status: cfg.tui ? undefined : (line) => deps.print(`[${new Date().toISOString()}] ${line}`),
 	});
+	let stopTui: (() => void) | null = null;
+	if (cfg.tui) {
+		stopTui = startTui({
+			model: () => ({ state: handle.store.state, lanes: handle.scheduler.lanes(), health: null, lastSelect, calls, now: clock(), world: prepared.listing.name, engines: 'code' }),
+			poke: pokeFor(cfg.target.live, handle.store, clock),
+			quit: () => onSignal('quit'),
+			kid: () => port.body.players().find((p) => !p.bot)?.name,
+		});
+	}
 	const stopAll = async (): Promise<void> => {
 		try {
 			await handle.stop();
@@ -331,6 +360,8 @@ async function companionV2(cfg: Config, deps: CliDeps): Promise<void> {
 			process.exit(130);
 		}
 		exiting = true;
+		stopTui?.();
+		stopTui = null;
 		deps.print(`${signal}: stopping`);
 		stopAll().then(
 			() => deps.print('stopped; brain file flushed'),
@@ -345,6 +376,7 @@ async function companionV2(cfg: Config, deps: CliDeps): Promise<void> {
 	client.on('close', (code) => {
 		if (exiting) return;
 		exiting = true;
+		stopTui?.();
 		deps.print(`connection closed (${code})`);
 		void handle.stop().finally(() => process.exit(code === 1000 ? 0 : 1));
 	});

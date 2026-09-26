@@ -200,6 +200,70 @@ and feed it through `renderText`/`planCandidates`/`question` in a scratch script
 in a test, the way `bots/test/fixtures/laya-exchange.json` and
 `bots/test/fixtures/laya-near-band-labels.json` already do.
 
+## Brain v2: the emotional brain
+
+`--brain v2` runs the emotional brain (`bots/src/brain2/`, spec
+`docs/superpowers/specs/2026-09-25-bot-brain-design.md`). Until part 2 it uses code engines only
+(no Laya, no LLM): every expert runs its code path.
+
+```bash
+npm --prefix bots run bot -- companion --target local|live --world <uuid|name> --brain v2 \
+	[--personality pip|rex] [--name Pip] [--tui] [--no-edits] [--revert-on-exit]
+```
+
+- **`--personality`** defaults to `pip` (shy, curious builder); `rex` is the bold explorer.
+- It runs until SIGINT or SIGTERM (or the server closes the connection), then flushes the brain
+  file and exits. Without `--tui` it prints a status line every 30 s.
+- **The brain file**, `bots/.state/brain/<target>/<worldUuid>/<name>.json`, keeps inventory,
+  builds, digs, `owned`, relations and explored chunks across sessions (written every 5 s).
+- **The log**, `bots/.state/logs/<target>/<worldUuid>/<name>-<timestamp>.jsonl` (the newest 20 are
+  kept): a `meta` line, the `initial` state, then every state change, every `select` (inputs and
+  rows), the model calls and notable events (`plan`, `stop-signal`, `reject`, `EDITS-HALTED`, …).
+- **`revert`** on a v2 bot also reconciles the brain file with what it undid (inventory, `owned`,
+  builds and digs `reverted`). **`revert --builds`** takes the bot's standing builds apart instead
+  (each cell still the bot's gets its old block back, one per 600 ms):
+
+```bash
+npm --prefix bots run bot -- revert --target <target> --world <uuid|name> --name <bot> [--builds]
+```
+
+### The live view (`--tui`)
+
+`--tui` replaces the status lines with a view redrawn 4 times a second: the header (bot,
+personality, world, engine health and latency, the LLM queue, **EDITS HALTED** when set), a bar per
+emotion (`|` marks the personality's baseline; the band, the value, the last delta with its cause
+and age), the relations, the behaviour (progress, the last results, the memory line), the last
+selection's rows by total, the inventory and paused digs, and the newest 8 expert calls.
+
+Keys: **`p`** opens the poke menu (a digit picks an axis, then a digit its value; or a letter
+appends an event such as `player-arrived`), **`q`** quits (as Ctrl-C). An axis poke counts as an
+appraisal, so it can start a gesture and a selection. **Pokes are refused against a live target.**
+
+### Replay and the per-decision check
+
+```bash
+npm run bot:replay -- <log.jsonl>                    # play the session in the same view
+npm run bot:replay -- <log.jsonl> --data <file.ts>   # which recorded decisions other weights flip
+```
+
+Replay re-applies the log's change lines from its `initial` state, so every state the bot went
+through comes back exactly. Keys: **space** pauses, **←/→** step one frame, **`e`** shows the full
+prompt and answer of the newest call, **`q`** quits.
+
+`--data` imports the file (tsx runs it) and reads its named exports `EMOTIONAL` and/or `MERGE`,
+shaped as in `bots/src/brain2/data/weights.data.ts`; a missing one keeps the committed table. Each
+recorded `select` is rescored from its logged inputs under the new tables, and only the decisions
+that flip are listed, under the heading **"per-decision check (not a re-simulation)"**: it says how
+each recorded decision would have scored, not what the bot would have done next.
+
+**What `--data` can't re-check**, because these change what *happens*, not how one recorded
+decision scores (they need a new session):
+
+- the appraisal table (`appraisal.data.ts`) and the salience rules (`salience.data.ts`);
+- the style mappings (`style.ts`) and the gestures (`gestures.data.ts`);
+- the personality baselines and half-lives (`personalities.data.ts`);
+- every threshold in `limits.data.ts`.
+
 ## The status line
 
 Printed every `statusEveryMs` (30 s by default) to stdout:

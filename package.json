@@ -27,7 +27,8 @@
 		"format": "prettier --write .",
 		"bots:install": "npm run build:bot && npm --prefix bots install",
 		"bots:test": "npm run build:bot && npm --prefix bots test",
-		"bots:e2e": "npm run build:bot && npm --prefix bots run e2e --"
+		"bots:e2e": "npm run build:bot && npm --prefix bots run e2e --",
+		"bot:replay": "npm --prefix bots run replay --"
 	},
 	"dependencies": {
 		"alea": "^1.0.1",

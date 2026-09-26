@@ -31,6 +31,7 @@ export class FakeWorld implements WorldView {
 	mustMine = false;
 	private readonly generated = generatedLookup(FAKE_SEED, FAKE_GEN);
 	private readonly overlay = new Map<string, number>();
+	private readonly naturalOverlay = new Map<string, number>();
 
 	private inWorld(x: number, y: number, z: number): boolean {
 		return x >= 0 && x < WORLD_SIZE && z >= 0 && z < WORLD_SIZE && y >= 0 && y < WORLD_HEIGHT;
@@ -39,13 +40,21 @@ export class FakeWorld implements WorldView {
 	getBlock(x: number, y: number, z: number): number {
 		const fx = Math.floor(x), fy = Math.floor(y), fz = Math.floor(z);
 		if (!this.inWorld(fx, fy, fz)) return AIR;
-		return this.overlay.get(`${fx},${fy},${fz}`) ?? this.generated(fx, fy, fz);
+		const k = `${fx},${fy},${fz}`;
+		return this.overlay.get(k) ?? this.naturalOverlay.get(k) ?? this.generated(fx, fy, fz);
 	}
 
 	/** Test-only: writes a cell into the overlay. */
 	set(x: number, y: number, z: number, blockIdOrName: number | string): void {
 		const v = typeof blockIdOrName === 'string' ? id(blockIdOrName) : blockIdOrName;
 		this.overlay.set(`${Math.floor(x)},${Math.floor(y)},${Math.floor(z)}`, v);
+	}
+
+	/** Test-only: overrides a cell as if the world generator had made it that way — it never counts
+	 *  as edited (`isEdited` stays false), for tests that need natural liquid or stone at a chosen cell. */
+	setNatural(x: number, y: number, z: number, blockIdOrName: number | string): void {
+		const v = typeof blockIdOrName === 'string' ? id(blockIdOrName) : blockIdOrName;
+		this.naturalOverlay.set(`${Math.floor(x)},${Math.floor(y)},${Math.floor(z)}`, v);
 	}
 
 	/** Test-only: fills an inclusive box. */

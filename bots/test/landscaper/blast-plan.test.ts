@@ -1,11 +1,15 @@
+import { mkdtempSync, readFileSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
 import { describe, expect, it } from 'vitest';
 import { blastCells, blockId, isLiquidId, isSolidId, blockName } from 'minicraft-bot';
 import type { WorldView } from '../../src/port.js';
 import type { Vec3 } from '../../src/types.js';
-import { blastWorld, evaluateArea, filterBlast, KID_CELL_DIST, KID_POS_DIST, terrainTop, type CellClass } from '../../src/landscaper/blast-plan.js';
-import { BlastBudget } from '../../src/landscaper/landscaper.js';
+import { blastWorld, evaluateArea, filterBlast, KID_CELL_DIST, KID_POS_DIST, MIN_SPOT_REMOVE, terrainTop, type CellClass } from '../../src/landscaper/blast-plan.js';
+import { BlastBudget, runLandscaper, saveLandscaperFile, TRIED_AREA_MS, type LandscaperFile } from '../../src/landscaper/landscaper.js';
+import { FakeBody } from '../fake-port.js';
 
-const STONE = blockId('stone')!, DIRT = blockId('dirt')!, WATER = blockId('water')!, RED = blockId('red_wool')!;
+const ICE = blockId('ice')!, STONE = blockId('stone')!, DIRT = blockId('dirt')!, WATER = blockId('water')!, RED = blockId('red_wool')!;
 
 /** A small synthetic world: a height function of stone, plus overrides. */
 class GridWorld implements WorldView {
@@ -107,7 +111,7 @@ describe('evaluateArea: the planned blasts level a hilly square', () => {
 	});
 
 	it('refuses a square with a kid marker 5 blocks from it, or water in it', () => {
-		const w = new GridWorld((x, z) => 64 + (x > 8 ? 3 : 0) + (z % 3));
+		const w = new GridWorld((x, z) => 64 + (x > 8 ? 3 : 0) + (x < -30 ? 5 : 0) + (z % 3));
 		for (let y = 68; y <= 70; y++) w.set(20, y, 5, RED, true);
 		const classify = (x: number, y: number, z: number): CellClass => (w.isEdited(x, y, z) ? 'kid' : 'natural');
 		const kidCells = [68, 69, 70].map((y) => ({ x: 20, y, z: 5 }));
@@ -126,5 +130,106 @@ describe('BlastBudget', () => {
 		expect(b.halted).toBeNull();
 		expect(b.spend([{ x: 1, y: 2, z: 3 }])).toBe(false);
 		expect(b.halted).toMatch(/unplanned/);
+	});
+});
+
+const natural = (w: GridWorld) => (x: number, y: number, z: number): CellClass => (w.isEdited(x, y, z) ? 'kid' : 'natural');
+const hilly = (x: number, z: number) => 64 + Math.floor(4 * Math.sin(x / 5) + 3 * Math.cos(z / 3) + 4);
+
+describe('evaluateArea: only genuinely uneven, safely blastable squares', () => {
+	it('never picks an already-flat square (every column within ±1), nor a flat one with a small bump', () => {
+		const w = new GridWorld((x, z) => 64 + ((x + z) % 2));
+		expect(evaluateArea(w, 0, 0, 16, { classify: natural(w), kidCells: [], kids: [] })).toBe('already flat');
+		// A 5 × 5 hill (10% of the square) on flat ground: still 90% flat.
+		const b = new GridWorld((x, z) => 64 + (x >= 2 && x < 7 && z >= 2 && z < 7 ? 6 : 0));
+		expect(evaluateArea(b, 0, 0, 16, { classify: natural(b), kidCells: [], kids: [] })).toBe('already flat');
+	});
+
+	it('never picks a square whose blasts are all near kid cells (the live ice patch)', () => {
+		const w = new GridWorld(hilly);
+		expect(typeof evaluateArea(w, 0, 0, 16, { classify: natural(w), kidCells: [], kids: [] })).toBe('object');
+		const kidCells: Vec3[] = [];
+		for (let x = -4; x < 20; x += 3) kidCells.push({ x, y: 66, z: 20 });
+		for (const c of kidCells) w.set(c.x, c.y, c.z, RED, true);
+		expect(evaluateArea(w, 0, 0, 16, { classify: natural(w), kidCells, kids: [] })).toMatch(/kid/);
+	});
+
+	it('refuses an icy surface (> 20% ice)', () => {
+		const w = new GridWorld(hilly);
+		for (let x = 0; x < 16; x++) for (let z = 0; z < 4; z++) w.set(x, terrainTop(w, x, z), z, ICE);
+		expect(evaluateArea(w, 0, 0, 16, { classify: () => 'natural', kidCells: [], kids: [] })).toBe('ice');
+	});
+
+	it('plans no TNT where the filtered blast removes fewer than MIN_SPOT_REMOVE cells, and counts removableFiltered', () => {
+		// One quadrant is a hill; the rest is flat at 64 (only one spot has anything to blast).
+		const w = new GridWorld((x, z) => 64 + (x < 8 && z < 8 ? 5 : 0));
+		const p = evaluateArea(w, 0, 0, 16, { classify: natural(w), kidCells: [], kids: [] });
+		if (typeof p === 'string') throw new Error(p);
+		expect(p.spots.length).toBeGreaterThanOrEqual(1);
+		expect(p.spots.length).toBeLessThan(4);
+		for (const s of p.spots) expect(s.removes).toBeGreaterThanOrEqual(MIN_SPOT_REMOVE);
+		expect(p.removableFiltered).toBe(p.removes);
+		expect(p.removableFiltered).toBeGreaterThanOrEqual(40);
+	});
+});
+
+describe('landscaper loop: skipped spots and tried areas', () => {
+	const base = (dir: string, w: GridWorld, body: FakeBody, logs: Array<Record<string, unknown>>, clock: () => number) => runLandscaper({
+		name: 'Dan', body, world: w, spawn: { x: 100, y: 0, z: 100 }, primary: null, noEdits: true, statePath: join(dir, 's.json'),
+		boardPath: join(dir, 'board.json'), log: (e) => logs.push(e), rng: () => 0.5, clock, breakMany: async () => [],
+	});
+	const until = async (p: () => boolean) => {
+		for (let i = 0; i < 400 && !p(); i++) await new Promise((r) => setTimeout(r, 10));
+		expect(p()).toBe(true);
+	};
+
+	it('a spot whose filtered blast is < 15 cells is skipped: no TNT placed, the spot remembered, the area dropped', async () => {
+		const dir = mkdtempSync(join(tmpdir(), 'land-skip-'));
+		const w = new GridWorld(() => 64);
+		const f: LandscaperFile = {
+			v: 1, inv: { flatten_tnt: 1 }, blasts: [], crafts: [], owned: {}, triedAreas: [], triedSpots: [],
+			areas: [{ id: 'a', status: 'active', t: 0, done: [], x0: 100, z0: 100, size: 8, L: 64, spots: [{ tnt: { x: 104, y: 65, z: 104 }, dig: [] }], removes: 123, removableFiltered: 123, range: 3, digs: 0 }],
+		};
+		saveLandscaperFile(join(dir, 's.json'), f);
+		const body = new FakeBody();
+		const logs: Array<Record<string, unknown>> = [];
+		const h = base(dir, w, body, logs, () => 1000);
+		await until(() => logs.some((l) => l.k === 'blast-skipped'));
+		await h.stop();
+		expect(body.calls.filter((c) => ['place', 'fx', 'mine', 'break'].includes(c.fn))).toEqual([]);
+		expect(logs.some((l) => l.k === 'prime' || l.k === 'blast')).toBe(false);
+		expect(String(logs.find((l) => l.k === 'blast-skipped')!.reason)).toMatch(/< 15/);
+		const saved = JSON.parse(readFileSync(join(dir, 's.json'), 'utf8')) as LandscaperFile;
+		expect(saved.triedSpots).toContain('104,104');
+		expect(saved.areas[0].status).toBe('abandoned');
+	});
+
+	it('never picks the same (or an overlapping) area twice within the hour, even after it was abandoned', async () => {
+		const dir = mkdtempSync(join(tmpdir(), 'land-tried-'));
+		const w = new GridWorld(hilly);
+		const t = 5_000_000;
+		const picked: Array<Record<string, unknown>> = [];
+		for (let run = 0; run < 3; run++) {
+			const logs: Array<Record<string, unknown>> = [];
+			const h = base(dir, w, new FakeBody(), logs, () => t + run * 1000);
+			await until(() => logs.some((l) => l.k === 'area'));
+			await h.stop();
+			picked.push(logs.find((l) => l.k === 'area')!);
+			expect(typeof picked.at(-1)!.removableFiltered).toBe('number');
+			// Whatever happened to it, the area is given up (as the live bot does after a failed blast).
+			const f = JSON.parse(readFileSync(join(dir, 's.json'), 'utf8')) as LandscaperFile;
+			for (const a of f.areas) a.status = 'abandoned';
+			saveLandscaperFile(join(dir, 's.json'), f);
+		}
+		const n = (v: unknown) => v as number;
+		for (let i = 0; i < picked.length; i++) for (let j = i + 1; j < picked.length; j++) {
+			const a = picked[i], b = picked[j];
+			const overlap = n(a.x0) < n(b.x0) + n(b.size) && n(b.x0) < n(a.x0) + n(a.size) && n(a.z0) < n(b.z0) + n(b.size) && n(b.z0) < n(a.z0) + n(a.size);
+			expect(overlap).toBe(false);
+		}
+		// After the hour, the first square may be picked again (its spots still never re-blasted).
+		const f = JSON.parse(readFileSync(join(dir, 's.json'), 'utf8')) as LandscaperFile;
+		expect(f.triedAreas).toHaveLength(3);
+		expect(TRIED_AREA_MS).toBe(60 * 60_000);
 	});
 });

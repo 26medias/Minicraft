@@ -26,7 +26,7 @@ import { makeAsk } from '../builder/builder.js';
 import { readPlan } from '../foreman/plan-file.js';
 import { claimNext, complete, post, renew, type Post } from '../board/board.js';
 import { MarkerWatcher } from '../board/markers.js';
-import { AREA, blastWorld, evaluateArea, filterBlast, kidCellsNear, KID_CELL_DIST, scoreArea, terrainTop, type AreaPlan } from './blast-plan.js';
+import { AREA, blastWorld, evaluateArea, filterBlast, kidCellsNear, KID_CELL_DIST, MIN_SPOT_REMOVE, scoreArea, terrainTop, type AreaPlan } from './blast-plan.js';
 import { craftUpTo, rawShortfall, type Inventory } from './craft.js';
 import { gather, mineCell, travelTo, type GatherCtx } from './gather.js';
 import type { SharedCells } from '../shared/bot-cells.js';
@@ -38,11 +38,15 @@ const TOY_ID = blockId(TOY)!;
 const FUSE_MS = tntSpec(TOY)!.fuse * 1000;
 /** Candidate squares: origins on an 8-block grid within this of the anchor. */
 const SEARCH_R = 48;
+/** An area tried (picked) is not picked again, nor any square overlapping it, for this long. */
+export const TRIED_AREA_MS = 60 * 60_000;
 
 export interface LandscapeArea extends AreaPlan {
 	id: string; status: 'active' | 'done' | 'abandoned'; t: number; why?: string;
 	/** Indices of spots blasted (or skipped). */
 	done: number[];
+	/** Indices of spots skipped (their filtered blast was too small, or tried before): no TNT placed. */
+	skipped?: number[];
 	/** The board post it answers, if any. */
 	post?: string; requester?: string;
 }
@@ -53,6 +57,10 @@ export interface LandscaperFile {
 	owned: Record<string, number>;
 	/** `--grant-ores` was applied to this file (once per file: restarts never re-grant). */
 	granted?: boolean;
+	/** Every area picked (never re-picked, nor overlapped, within TRIED_AREA_MS). */
+	triedAreas: Array<{ x0: number; z0: number; size: number; t: number }>;
+	/** Every blast column tried ("x,z": a TNT placed, or the spot skipped): never blasted again. */
+	triedSpots: string[];
 }
 
 /** The TNT toys the landscaper crafts; `--grant-ores` covers their raw ingredients. */
@@ -70,11 +78,11 @@ export function landscaperStatePath(stateRoot: string, target: string, world: st
 export function loadLandscaperFile(path: string): LandscaperFile {
 	try {
 		const f = JSON.parse(readFileSync(path, 'utf8')) as LandscaperFile;
-		if (f && f.v === 1 && f.inv && Array.isArray(f.areas)) return { ...f, owned: f.owned ?? {} };
+		if (f && f.v === 1 && f.inv && Array.isArray(f.areas)) return { ...f, owned: f.owned ?? {}, triedAreas: f.triedAreas ?? [], triedSpots: f.triedSpots ?? [] };
 	} catch {
 		// fresh
 	}
-	return { v: 1, inv: {}, areas: [], blasts: [], crafts: [], owned: {} };
+	return { v: 1, inv: {}, areas: [], blasts: [], crafts: [], owned: {}, triedAreas: [], triedSpots: [] };
 }
 export function saveLandscaperFile(path: string, f: LandscaperFile): void {
 	mkdirSync(dirname(path), { recursive: true });
@@ -218,7 +226,10 @@ export function runLandscaper(o: LandscaperOpts): LandscaperHandle {
 		const size = o.areaSize ?? AREA;
 		const kidCells = kidCellsNear(o.world, classify, a.x - SEARCH_R - size, a.z - SEARCH_R - size, a.x + SEARCH_R + size, a.z + SEARCH_R + size, KID_CELL_DIST + 8);
 		const kids = kidsNow();
-		const busy = file.areas.filter((x) => x.status !== 'abandoned');
+		const now = clock();
+		const busy = [...file.areas.filter((x) => x.status !== 'abandoned'), ...file.triedAreas.filter((x) => now - x.t < TRIED_AREA_MS)];
+		const tried = new Set(file.triedSpots);
+		const skipSpot = (x: number, z: number) => tried.has(`${x},${z}`);
 		const out: AreaPlan[] = [];
 		const rejections: Record<string, number> = {};
 		for (let dx = -SEARCH_R; dx <= SEARCH_R; dx += 8) {
@@ -226,10 +237,9 @@ export function runLandscaper(o: LandscaperOpts): LandscaperHandle {
 				if (stopped) return [];
 				const x0 = Math.floor(a.x) + dx - size / 2, z0 = Math.floor(a.z) + dz - size / 2;
 				if (busy.some((b) => x0 < b.x0 + b.size + 4 && x0 + size + 4 > b.x0 && z0 < b.z0 + b.size + 4 && z0 + size + 4 > b.z0)) continue;
-				const r = evaluateArea(o.world, x0, z0, size, { classify, kidCells, kids });
+				const r = evaluateArea(o.world, x0, z0, size, { classify, kidCells, kids }, skipSpot);
 				if (typeof r === 'string') rejections[r] = (rejections[r] ?? 0) + 1;
-				else if (r.range >= 2) out.push(r);
-				else rejections['already flat'] = (rejections['already flat'] ?? 0) + 1;
+				else out.push(r);
 				await new Promise((res) => setImmediate(res));
 			}
 		}
@@ -274,8 +284,9 @@ export function runLandscaper(o: LandscaperOpts): LandscaperHandle {
 		}
 		const area: LandscapeArea = { ...pick, id: clock().toString(36), status: 'active', t: clock(), done: [], post: src?.id, requester: src?.requester };
 		file.areas.push(area);
+		file.triedAreas.push({ x0: area.x0, z0: area.z0, size: area.size, t: area.t });
 		save();
-		o.log({ k: 'area', t: clock(), id: area.id, x0: area.x0, z0: area.z0, size: area.size, L: area.L, spots: area.spots.map((s) => s.tnt), removes: area.removes, range: area.range, post: area.post ?? null });
+		o.log({ k: 'area', t: clock(), id: area.id, x0: area.x0, z0: area.z0, size: area.size, L: area.L, spots: area.spots.map((s) => s.tnt), removes: area.removes, removableFiltered: area.removableFiltered, range: area.range, post: area.post ?? null });
 		return area;
 	}
 
@@ -341,19 +352,33 @@ export function runLandscaper(o: LandscaperOpts): LandscaperHandle {
 		return { world: o.world, classify, kids: kidsNow(), kidCells: kidCellsNear(o.world, classify, tnt.x - 8, tnt.z - 8, tnt.x + 8, tnt.z + 8, KID_CELL_DIST + 1) };
 	};
 
-	/** One blast at spot `i` of `area`: null when done (or dropped for safety), else why it could not go ahead. */
-	async function blast(area: LandscapeArea, i: number): Promise<string | null> {
+	/** The filtered cells a blast at `tnt` would remove now. */
+	const filteredNow = (tnt: Vec3) => filterBlast(blastCells(blastWorld(o.world), TOY, tnt).destroyed, filterCtx(tnt));
+	const spotKey = (tnt: Vec3) => `${tnt.x},${tnt.z}`;
+
+	/**
+	 * One blast at spot `i` of `area`: null when done (or dropped for safety), `{ skipped }` when the spot is not worth a
+	 * TNT (tried before, or its filtered blast removes fewer than MIN_SPOT_REMOVE cells: nothing placed), else why it
+	 * could not go ahead.
+	 */
+	async function blast(area: LandscapeArea, i: number): Promise<string | null | { skipped: string }> {
 		const spot = area.spots[i];
 		const tnt = spot.tnt;
 		const w = o.world;
+		// 0. Worth a TNT? Never the same spot twice; never a blast that would remove (almost) nothing.
+		if (file.triedSpots.includes(spotKey(tnt))) return { skipped: 'spot tried before' };
+		const first = filteredNow(tnt);
+		if (first.dropped) return `unsafe now: ${first.dropped}`;
+		if (first.remove.length < MIN_SPOT_REMOVE) return { skipped: `filtered blast removes ${first.remove.length} < ${MIN_SPOT_REMOVE}` };
 		// 1. A TNT in the inventory: mine the ingredients, craft.
 		const noToy = await ensureToy();
 		if (noToy) return noToy;
 		await gate();
 		if (stopped || halted()) return 'stopped';
 		// 2. Is it still safe? (Kids move; the world changes.)
-		const pre = filterBlast(blastCells(blastWorld(w), TOY, tnt).destroyed, filterCtx(tnt));
+		const pre = filteredNow(tnt);
 		if (pre.dropped) return `unsafe now: ${pre.dropped}`;
+		if (pre.remove.length < MIN_SPOT_REMOVE) return { skipped: `filtered blast removes ${pre.remove.length} < ${MIN_SPOT_REMOVE}` };
 		// 3. The hole: dig from the column's top down to the TNT cell, standing in it.
 		stats.current = `digging the hole for TNT ${i + 1}/${area.spots.length} at ${tnt.x},${tnt.z}`;
 		const top = terrainTop(w, tnt.x, tnt.z);
@@ -369,15 +394,21 @@ export function runLandscaper(o: LandscaperOpts): LandscaperHandle {
 		if (stopped || halted()) return 'stopped';
 		o.body.lookAt(tnt.x + 0.5, tnt.y + 0.5, tnt.z + 0.5);
 		if (!(await placeToy(tnt))) return 'place refused';
+		file.triedSpots.push(spotKey(tnt));
+		save();
 		// Out of the blast: straight up above its top, off to the side.
 		const out = { x: tnt.x + 0.5 + 9, y: tnt.y + 16, z: tnt.z + 0.5 };
 		await o.body.flyTo({ x: tnt.x + 0.5, y: out.y, z: tnt.z + 0.5 }).catch(() => undefined);
 		await o.body.flyTo(out).catch(() => undefined);
 		o.body.lookAt(tnt.x + 0.5, tnt.y + 0.5, tnt.z + 0.5);
-		const again = filterBlast(blastCells(blastWorld(w), TOY, tnt).destroyed, filterCtx(tnt));
+		const again = filteredNow(tnt);
 		if (again.dropped || (o.when === 'players' && !hasPlayer())) {
 			await takeBack(tnt);
 			return `not lit: ${again.dropped ?? 'no players online'}`;
+		}
+		if (again.remove.length < MIN_SPOT_REMOVE) {
+			await takeBack(tnt);
+			return { skipped: `not lit: filtered blast removes ${again.remove.length} < ${MIN_SPOT_REMOVE}` };
 		}
 		// 5. Prime (the kids see the fuse), wait the game's fuse — never cut short, even by a stop.
 		o.body.fx({ kind: 'prime', x: tnt.x, y: tnt.y, z: tnt.z, tier: TOY_ID });
@@ -482,12 +513,32 @@ export function runLandscaper(o: LandscaperOpts): LandscaperHandle {
 				gctx.avoid = file.areas.filter((a) => a.status !== 'abandoned').map((a) => ({ x0: a.x0 - 2, z0: a.z0 - 2, x1: a.x0 + a.size + 1, z1: a.z0 + a.size + 1 }));
 				const i = area.spots.findIndex((_, k) => !area.done.includes(k));
 				if (i < 0) {
-					finishArea(area);
+					if (area.spots.length > 0 && (area.skipped?.length ?? 0) === area.spots.length) {
+						area.status = 'abandoned';
+						area.why = 'every spot skipped: nothing worth blasting';
+						save();
+					} else finishArea(area);
 					continue;
 				}
 				if (area.post) renew(o.boardPath, area.post, o.name, clock());
 				const why = await blast(area, i);
 				if (why === 'stopped' || stopped) continue;
+				if (why && typeof why === 'object') {
+					o.log({ k: 'blast-skipped', t: clock(), area: area.id, spot: i, tnt: area.spots[i].tnt, reason: why.skipped });
+					if (!file.triedSpots.includes(spotKey(area.spots[i].tnt))) file.triedSpots.push(spotKey(area.spots[i].tnt));
+					area.done.push(i);
+					(area.skipped ??= []).push(i);
+					if (area.done.length === area.spots.length) {
+						if (area.skipped.length === area.spots.length) {
+							area.status = 'abandoned';
+							area.why = 'every spot skipped: nothing worth blasting';
+							o.log({ k: 'area-dropped', t: clock(), area: area.id, why: area.why });
+							if (area.post) complete(o.boardPath, area.post, o.name, clock(), { status: 'open', note: area.why });
+						} else finishArea(area);
+					}
+					save();
+					continue;
+				}
 				if (why) {
 					o.log({ k: 'blast-failed', t: clock(), area: area.id, spot: i, why });
 					area.status = 'abandoned';

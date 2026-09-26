@@ -272,7 +272,7 @@ export function runBuilder(o: BuilderOpts): BuilderHandle {
 		if (!c || typeof site === 'string') {
 			const status = c && typeof site === 'string' ? rejectStatus(site) : 'open';
 			updateLot(o.planPath, l.id, o.name, clock(), { status, why: typeof site === 'string' ? site : 'nothing fits' });
-			o.log({ k: 'lot-rejected', t: clock(), lot: l.id, why: typeof site === 'string' ? site : 'nothing fits', status });
+			o.log({ k: 'lot-rejected', t: clock(), lot: l.id, why: typeof site === 'string' ? site : 'nothing fits', template: c ? opt(c.t) : null, status });
 			return c && status === 'open' ? 'wait' : 'rejected';
 		}
 		const b: BuilderBuild = {

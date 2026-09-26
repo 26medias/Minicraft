@@ -221,8 +221,11 @@ natural ground within 3 of the lots. It writes the plan, then builds the roads a
 ground, only into air, `checkPlace` and a Tripwire), then strolls the streets with no more edits.
 
 Builder and architect bots started with **`--join-plan`** claim the next open lot that fits (an architect design,
-or a template, no larger than the lot), re-check the site rules there, build, and mark it built (dropped when the site
-fails or the build is abandoned; back to open when a kid stands on it). With no plan or no open lot they fall back to
+or a template, no larger than the lot), re-check only the rules that can change since the plan (their own builds, a
+kid standing on it, kid cells within 12; the foreman's roads and lamps are bot cells, and flatness was checked at plan
+time), build at the lot's height, and mark it built (dropped, with the reason and a `dropCount`, when that check fails
+or the build is abandoned; back to open when a kid stands on it). At start and every 15 min the foreman reopens a
+dropped lot whose check passes again, up to 3 drops. With no plan or no open lot they fall back to
 their own site search, which (like the village's) now avoids the plan's whole area. Claims are first come, first
 served, under a lock (a mkdir'd `plan.json.lock`, broken after 10 s) with atomic writes; a running bot renews its
 claim every minute, and a claim not renewed for 15 minutes (a crashed bot) expires. e2e leg: `foreman`.

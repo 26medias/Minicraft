@@ -27,6 +27,8 @@ export interface PlanLot {
 	status: LotStatus; claimedBy?: string; claimedAt?: number;
 	/** Set by the bot that claimed it: what it builds there, and the build record's id. */
 	design?: string; buildId?: string; builtAt?: number; why?: string;
+	/** How many times the lot was dropped; the foreman stops reopening it at join.ts's MAX_DROPS. */
+	dropCount?: number;
 }
 export interface PlanCell { cell: Vec3; block: string }
 export interface NeighbourhoodPlan {
@@ -140,12 +142,33 @@ export function updateLot(path: string, lotId: string, bot: string, now: number,
 		lot.status = status;
 		if (status === 'claimed') lot.claimedAt = now;
 		else if (status === 'built') lot.builtAt = now;
+		else if (status === 'dropped') lot.dropCount = (lot.dropCount ?? 0) + 1;
 		else if (status === 'open') {
 			delete lot.claimedBy;
 			delete lot.claimedAt;
 		}
 		writePlan(path, p);
 		return true;
+	});
+}
+
+/** Puts the dropped lots `ids` back to open (claim cleared, dropCount kept); returns the ids actually reopened. */
+export function reopenLots(path: string, ids: readonly string[]): string[] {
+	if (ids.length === 0) return [];
+	return withPlanLock(path, () => {
+		const p = readPlan(path);
+		if (!p) return [];
+		const out: string[] = [];
+		for (const l of p.lots) {
+			if (!ids.includes(l.id) || l.status !== 'dropped') continue;
+			l.status = 'open';
+			delete l.claimedBy;
+			delete l.claimedAt;
+			delete l.why;
+			out.push(l.id);
+		}
+		if (out.length) writePlan(path, p);
+		return out;
 	});
 }
 

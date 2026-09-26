@@ -23,6 +23,7 @@ import { readBuilderRecords } from '../decorator/decor.js';
 import type { SharedCells } from '../shared/bot-cells.js';
 import { areaD, areaW, NeighbourhoodSearch, ROWS } from './layout.js';
 import { createPlan, readPlan, type NeighbourhoodPlan, type PlanCell } from './plan-file.js';
+import { reopenDroppedLots, REOPEN_EVERY_MS } from './join.js';
 import { StuckWatchdog } from '../nav/navigate.js';
 import { pickWanderSpot, standable, WANDER_MAX, wanderer } from '../nav/wander.js';
 import { idlePaused, PresenceGate, type WhenMode } from '../shared/when.js';
@@ -248,12 +249,22 @@ export function runForeman(o: ForemanOpts): ForemanHandle {
 		}
 	}
 
+	let lastReopen = -Infinity;
 	async function once(): Promise<void> {
 		const p = await thePlan();
 		if (!p) {
 			stats.current = 'no neighbourhood site found; waiting';
 			await sleep(60_000);
 			return;
+		}
+		// At start and every 15 min: dropped lots whose reason no longer applies go back to open (join.ts).
+		if (clock() - lastReopen >= REOPEN_EVERY_MS) {
+			lastReopen = clock();
+			try {
+				reopenDroppedLots(o.planPath, { world: o.world, own, spawn: o.spawn, kids: kidsNow(), avoid: [] }, o.log, clock());
+			} catch (err) {
+				o.log({ k: 'lot-error', t: clock(), err: err instanceof Error ? err.message : String(err) });
+			}
 		}
 		if (file.planId !== p.id) {
 			file.planId = p.id;

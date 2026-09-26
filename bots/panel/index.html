@@ -32,6 +32,12 @@
 	.bar b { position: absolute; left: 50%; top: -2px; bottom: -2px; width: 1px; background: var(--mute); }
 	#msg { margin-top: 8px; } .err { color: var(--bad); }
 	.grid2 { display: grid; grid-template-columns: 1fr 1fr; gap: 12px; } @media (max-width: 1100px) { .grid2 { grid-template-columns: 1fr; } }
+	.p-card { display: flex; gap: 8px; align-items: flex-start; border: 1px solid var(--line); border-radius: 6px; padding: 6px 8px; margin: 6px 0; cursor: pointer; }
+	.p-card:has(input:checked) { border-color: var(--accent); background: rgba(58,110,165,.08); }
+	.p-card input { margin-top: 3px; }
+	.chip { display: inline-block; padding: 1px 6px; margin: 2px 4px 0 0; border: 1px solid var(--line); border-radius: 10px; font-size: 11px; color: var(--mute); }
+	.p-tendency { font-size: 12px; color: var(--mute); margin-top: 2px; }
+	.p-help { font-size: 12px; color: var(--mute); margin: 4px 0 0; }
 </style>
 </head>
 <body>
@@ -57,7 +63,9 @@
 				</div>
 				<label>World</label><select name="world" id="world"></select>
 				<div id="f-companion">
-					<label>Personality</label><select name="personality"><option value="pip">pip</option><option value="rex">rex</option></select>
+					<label>Personality (Enderman brain only)</label>
+					<div id="personalities"></div>
+					<p class="p-help">What does personality change? It sets the emotions the bot drifts back to and a few preferences; emotions then drive which behaviour it picks and how it moves.</p>
 					<label class="check"><input type="checkbox" name="jev"> Jev answers social/situational (--jev)</label>
 				</div>
 				<div id="f-brain">
@@ -104,6 +112,16 @@ async function loadMeta() {
 	$('#type').innerHTML = meta.types.map((t) => `<option value="${esc(t.id)}">${esc(t.id)}</option>`).join('');
 	if (cur && meta.types.some((t) => t.id === cur)) $('#type').value = cur;
 	if (!$('#skin').options.length) $('#skin').innerHTML = meta.skins.map((s) => `<option>${esc(s)}</option>`).join('');
+	if (!$('#personalities').children.length) {
+		$('#personalities').innerHTML = meta.personalities.map((p, i) => `<label class="p-card">
+			<input type="radio" name="personality" value="${esc(p.id)}" ${i === 0 ? 'checked' : ''}>
+			<span>
+				<b>${esc(p.name)}</b> <span class="mute">— ${esc(p.summary)}</span>
+				<div>${p.chips.map((c) => `<span class="chip">${esc(c)}</span>`).join('')}</div>
+				<div class="p-tendency">${esc(p.tendency)}</div>
+			</span>
+		</label>`).join('');
+	}
 	$('#when').disabled = !meta.whenSupported;
 	$('#when').title = meta.whenSupported ? '' : 'the CLI has no --when flag yet';
 	typeChanged();
@@ -221,8 +239,13 @@ async function loadDetail() {
 		if (unit !== selected) return;
 		$('#detail').hidden = false;
 		$('#d-title').textContent = `${d.unit} — ${d.cmd.type || '?'} ${d.cmd.name || ''}`;
+		const p = d.cmd.personality && meta.personalities.find((x) => x.id === d.cmd.personality);
+		const personalityHtml = p ? `<h3>Personality</h3><b>${esc(p.name)}</b> <span class="mute">— ${esc(p.summary)}</span>
+			<div>${p.chips.map((c) => `<span class="chip">${esc(c)}</span>`).join('')}</div>
+			<div class="p-tendency">${esc(p.tendency)}</div>` : '';
 		$('#d-body').innerHTML = `<div class="mute">${esc(d.active)}/${esc(d.sub)} · restarts ${esc(d.restarts)} · ${esc(d.since)}</div>
 			<div class="mono mute">${esc(d.description)}</div>
+			${personalityHtml}
 			<h3>Journal</h3><div class="mono">${esc(d.journal.join('\n'))}</div>
 			<h3>Log</h3><div class="mono mute">${esc(d.logPath || 'no log found')}</div>
 			${d.summary ? (d.summary.kind === 'brain2' ? renderBrain2(d.summary) : renderBuilder(d.summary)) : ''}`;

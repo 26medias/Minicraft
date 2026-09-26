@@ -1,8 +1,9 @@
 import { describe, expect, it } from 'vitest';
 import {
 	botArgs, isLegacyUnit, isLogOf, isPanelUnit, isStoppableUnit, isValidName, isValidSkin, parseAvailableCommands, parseUnitCommand,
-	parseWorlds, summarizeLog, systemdRunArgv, unitFor, validateStart, type StartSpec,
+	parseWorlds, personalityCard, personalityCards, summarizeLog, systemdRunArgv, unitFor, validateStart, type StartSpec,
 } from '../panel/lib.js';
+import { PIP, REX } from '../src/brain2/data/personalities.data.js';
 
 const WORLD = '6d4d7631-8bd4-4cc1-a949-76f987b2c2d3';
 const CTX = { types: ['companion', 'builder', 'decorator', 'village', 'helper', 'architect', 'foreman'], whenSupported: false };
@@ -75,6 +76,31 @@ describe('argv builder', () => {
 	});
 });
 
+describe('personality cards', () => {
+	it('derives the summary and chips from the live data, not a hardcoded copy', () => {
+		const cards = personalityCards();
+		const pip = cards.find((c) => c.id === 'pip')!;
+		const rex = cards.find((c) => c.id === 'rex')!;
+		expect(pip.name).toBe(PIP.name);
+		expect(pip.summary).toBe(PIP.summary);
+		expect(pip.oneLiner).toContain(`confidence ${PIP.baselines.confidence.toFixed(1)}`);
+		expect(pip.oneLiner).toContain(`~${PIP.preferredDistance} blocks`);
+		expect(pip.chips).toContain('timid');
+		expect(pip.chips.some((c) => c.includes(String(PIP.preferredDistance)))).toBe(true);
+		expect(rex.chips).toContain('bold');
+		expect(rex.oneLiner).toContain(`+${REX.baselines.confidence.toFixed(1)}`);
+	});
+	it('tracks the underlying baselines: change the numbers, the labels and chips change with them', () => {
+		const synthetic = { name: 'Test', summary: 'a test one', baselines: { ...PIP.baselines, confidence: 0.9, curiosity: -0.9, patience: -0.9 }, halfLifeMs: PIP.halfLifeMs, relationHalfLifeMs: PIP.relationHalfLifeMs, preferredDistance: 1 };
+		const card = personalityCard('test', synthetic);
+		expect(card.chips).toContain('bold');
+		expect(card.chips).toContain('incurious');
+		expect(card.chips).toContain('impatient');
+		expect(card.tendency).toContain('gets bored of following sooner');
+		expect(card.oneLiner).toContain('comes close (~1 blocks)');
+	});
+});
+
 describe('CLI output parsing', () => {
 	it('reads the available commands from the unknown-bot error', () => {
 		expect(parseAvailableCommands('unknown bot "zz"; expected companion, revert, builder, decorator, village, helper, architect or foreman')).toEqual(['companion', 'revert', 'builder', 'decorator', 'village', 'helper', 'architect', 'foreman']);
@@ -83,8 +109,11 @@ describe('CLI output parsing', () => {
 		expect(parseWorlds(`${WORLD}  World #1  online: Julien, Noah\n`)).toEqual([{ uuid: WORLD, name: 'World #1', online: 'Julien, Noah' }]);
 	});
 	it('reads a unit description, quoted names included', () => {
-		expect(parseUnitCommand(`/n/npm --prefix bots run bot -- companion --target live --world ${WORLD} --name "Enderman 2" --skin enderman`)).toEqual({ type: 'companion', name: 'Enderman 2', target: 'live', world: WORLD });
+		expect(parseUnitCommand(`/n/npm --prefix bots run bot -- companion --target live --world ${WORLD} --name "Enderman 2" --skin enderman`)).toEqual({ type: 'companion', name: 'Enderman 2', target: 'live', world: WORLD, personality: null });
 		expect(parseUnitCommand(`/n/npx tsx src/cli.ts companion --target live --world ${WORLD} --name "Enderman 3"`).name).toBe('Enderman 3');
+	});
+	it('reads the personality flag for companions', () => {
+		expect(parseUnitCommand(`/n/npm --prefix bots run bot -- companion --target live --world ${WORLD} --name "Enderman 2" --skin enderman --brain v2 --personality rex`).personality).toBe('rex');
 	});
 	it('matches only the named bot\'s logs', () => {
 		expect(isLogOf('Enderman 2-2026-09-26T08-16-45-071Z-2.jsonl', 'Enderman 2')).toBe(true);

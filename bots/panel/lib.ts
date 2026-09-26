@@ -3,6 +3,8 @@
  * log summary. No I/O here (server.ts does that), so every rule is unit-tested in test/panel.test.ts.
  */
 import { SKIN_IDS } from '../src/skins.js';
+import { PERSONALITIES } from '../src/brain2/data/personalities.data.js';
+import type { Personality } from '../src/brain2/types.js';
 
 export { SKIN_IDS };
 
@@ -76,6 +78,70 @@ export const BOT_TYPES: readonly BotType[] = [
 	{ id: 'foreman', family: 'foreman', brain: false, joinPlan: false },
 	{ id: 'landscaper', family: 'builder', brain: true, joinPlan: false },
 ];
+
+// ---- personality cards ---------------------------------------------------------------------------
+
+/** One companion personality, formatted for the start form. Every number here comes from
+ * `personalities.data.ts` at call time — nothing about Pip or Rex is hardcoded here. */
+export interface PersonalityCard {
+	id: string;
+	name: string;
+	summary: string;
+	oneLiner: string;
+	chips: string[];
+	tendency: string;
+}
+
+function signed(v: number): string {
+	const s = v.toFixed(1);
+	return v >= 0 ? `+${s}` : s;
+}
+
+function confidenceLabel(v: number): string {
+	return v <= -0.15 ? 'timid' : v >= 0.15 ? 'bold' : 'level-headed';
+}
+
+function curiosityLabel(v: number): string {
+	return v >= 0.5 ? 'very curious' : v >= 0.15 ? 'curious' : v <= -0.15 ? 'incurious' : 'mildly curious';
+}
+
+function patienceLabel(v: number): string {
+	return v < 0 ? 'impatient' : 'calm';
+}
+
+function distancePhrase(d: number): string {
+	return d >= 3 ? `keeps ~${d} blocks from kids` : `comes close (~${d} blocks)`;
+}
+
+function prettyBlock(id: string): string {
+	return id.replace(/_/g, ' ');
+}
+
+/** A short, generic guess at play style from the baselines — thresholds, not per-personality text. */
+function tendencyPhrase(p: Personality): string {
+	const c = p.baselines.confidence;
+	const verbs = c <= -0.15 ? ['rest', 'watch'] : c >= 0.15 ? ['explore', 'mine'] : ['wander', 'tinker'];
+	const pat = p.baselines.patience;
+	const tail = pat < 0 ? 'gets bored of following sooner' : pat > 0 ? 'builds quietly and sticks with it' : null;
+	return `Tends to ${(tail ? [...verbs, tail] : verbs).join(', ')}.`;
+}
+
+export function personalityCard(id: string, p: Personality): PersonalityCard {
+	const { confidence, curiosity, patience } = p.baselines;
+	const descriptors = [`${confidenceLabel(confidence)} (confidence ${signed(confidence)})`, curiosityLabel(curiosity), patienceLabel(patience)];
+	const likes = [p.favouriteTemplate ? `${p.favouriteTemplate}s` : null, p.favouriteBlock ? prettyBlock(p.favouriteBlock) : null].filter((x): x is string => Boolean(x));
+	const oneLiner = `${p.name} — ${p.summary}: ${descriptors.join(', ')}; ${distancePhrase(p.preferredDistance)}${likes.length ? `; likes ${likes.join(' & ')}` : ''}. ${tendencyPhrase(p)}`;
+	const chips = [
+		confidenceLabel(confidence), curiosityLabel(curiosity), patienceLabel(patience), `~${p.preferredDistance} blocks`,
+		...(p.favouriteTemplate ? [p.favouriteTemplate] : []), ...(p.favouriteBlock ? [prettyBlock(p.favouriteBlock)] : []),
+	];
+	return { id, name: p.name, summary: p.summary, oneLiner, chips, tendency: tendencyPhrase(p) };
+}
+
+/** All companion personalities the CLI knows, for the start form. Reads `PERSONALITIES` fresh each call. */
+export function personalityCards(): PersonalityCard[] {
+	return Object.entries(PERSONALITIES).map(([id, p]) => personalityCard(id, p));
+}
 
 /** Parses the CLI's `unknown bot "x"; expected a, b, c or d` message into the command list. */
 export function parseAvailableCommands(message: string): string[] {
@@ -209,9 +275,9 @@ export function splitCommandLine(s: string): string[] {
 	return out;
 }
 
-export interface UnitCommand { type: string | null; name: string | null; target: string; world: string | null }
+export interface UnitCommand { type: string | null; name: string | null; target: string; world: string | null; personality: string | null }
 
-/** Reads the bot type, name, target and world from a unit's Description. */
+/** Reads the bot type, name, target, world and (for companions) personality from a unit's Description. */
 export function parseUnitCommand(description: string): UnitCommand {
 	const w = splitCommandLine(description);
 	const flag = (f: string): string | null => {
@@ -225,7 +291,7 @@ export function parseUnitCommand(description: string): UnitCommand {
 	const after = dd >= 0 ? w[dd + 1] : cli >= 0 ? w[cli + 1] : undefined;
 	if (after && known.includes(after)) type = after;
 	else if (after?.startsWith('--')) type = 'companion';
-	return { type, name: flag('--name'), target: flag('--target') ?? 'local', world: flag('--world') };
+	return { type, name: flag('--name'), target: flag('--target') ?? 'local', world: flag('--world'), personality: flag('--personality') };
 }
 
 /** Parses `systemctl show` output (blank-line separated blocks of Key=Value). */

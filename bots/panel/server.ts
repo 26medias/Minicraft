@@ -12,7 +12,7 @@ import { dirname, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import {
 	BOT_TYPES, SKIN_IDS, isLegacyUnit, isLogOf, isPanelUnit, isProtectedUnit, isStoppableUnit, isValidName, isValidWorld,
-	parseAvailableCommands, parseShow, parseUnitCommand, parseWorlds, summarizeLog, systemdRunArgv, unitFor, validateStart,
+	parseAvailableCommands, parseShow, parseUnitCommand, parseWorlds, personalityCards, summarizeLog, systemdRunArgv, unitFor, validateStart,
 	type RunEnv,
 } from './lib.js';
 
@@ -203,7 +203,7 @@ export function startServer(opts: { host: string; port: number; dryRun: boolean 
 			if (req.method === 'GET' && url.pathname === '/api/meta') {
 				const [types, laya] = await Promise.all([availableTypes(), layaUp()]);
 				return send(res, 200, {
-					types: BOT_TYPES.filter((t) => types.includes(t.id)), skins: SKIN_IDS, whenSupported: whenSupported(), laya, dryRun: opts.dryRun,
+					types: BOT_TYPES.filter((t) => types.includes(t.id)), skins: SKIN_IDS, personalities: personalityCards(), whenSupported: whenSupported(), laya, dryRun: opts.dryRun,
 				});
 			}
 			if (req.method === 'GET' && url.pathname === '/api/worlds') {

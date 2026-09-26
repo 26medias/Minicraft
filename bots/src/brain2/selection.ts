@@ -11,6 +11,7 @@ import type { Clock } from './clock.js';
 import { LIMITS } from './data/limits.data.js';
 import { EMOTIONAL, MERGE } from './data/weights.data.js';
 import { every, on, type Expert, type Signal } from './experts/expert.js';
+import { SITUATIONAL_QUESTION, YES_NO, behaviourOptions, helpQuestion, nearQuestion, situationalState, socialState, winnerOfProbs, wordCount } from './experts/jev-select.js';
 import type { LogLine, SelectInputs } from './log.js';
 import { paramsBuild, paramsExplore, paramsMine, paramsPlayer, sampleCompany } from './params.js';
 import type { BehaviourRunner } from './runner.js';
@@ -169,7 +170,12 @@ export interface SelectionDeps {
 	params: { player: typeof paramsPlayer; explore: typeof paramsExplore; mine: typeof paramsMine; build: typeof paramsBuild };
 	/** Tests only: disables the switch cap (criterion 1's mutation). */
 	noCap?: boolean;
+	/** Experiment E2: social and situational ask Jev (engine 'jev', the LLM lane); their code rules are the fallbacks. */
+	jev?: boolean;
 }
+type Social = Record<string, { near: number; help: number }>;
+interface SocialSlice { id: number | null; social: Social; prompts?: Record<string, string> }
+interface SituationalSlice { id: number | null; state?: string; options?: Record<string, string> }
 
 const CAUSE = (by: string, why?: string): Cause => ({ kind: 'selection', by, why });
 const selectionChanged = (sig: Signal, test: (sel: Selection | null, c: Change) => boolean): boolean =>
@@ -179,9 +185,9 @@ export class SelectionController {
 	/** The code expert that decides whether to request a selection (writes state.selection). */
 	readonly request: Expert<{ sig: Signal }, { sel: Selection | null }>;
 	/** Code fallback of select.social (Task 20 adds the model engine). */
-	readonly social: Expert<{ id: number | null; social: Record<string, { near: number; help: number }> }, { id: number | null; social: Record<string, { near: number; help: number }> }>;
+	readonly social: Expert<SocialSlice, { id: number | null; social: Social }>;
 	/** select.situational: in the code path its fallback is 'none'. */
-	readonly situational: Expert<{ id: number | null }, { id: number | null; situational: Selection['situational'] }>;
+	readonly situational: Expert<SituationalSlice, { id: number | null; situational: Selection['situational'] }>;
 	/** Merges once social and situational are answered; logs a `select` line; starts the winner via the runner. */
 	readonly merge: Expert<{ sel: Selection | null }, { id: number | null }>;
 
@@ -208,20 +214,59 @@ export class SelectionController {
 			fallback: () => ({ sel: null }),
 		};
 		const asked = (sig: Signal) => selectionChanged(sig, (sel) => !!sel && !sel.done && (sel.social === null || sel.situational === null));
-		const socialOf = (s: Readonly<State>) => ({ id: s.selection && !s.selection.done ? s.selection.id : null, social: socialCode(s, this.d.kidsNow().map((k) => k.name), this.d.clock()) });
+		const jev = !!d.jev;
+		const socialOf = (s: Readonly<State>): SocialSlice => {
+			const now = this.d.clock();
+			const kids = this.d.kidsNow();
+			const out: SocialSlice = { id: s.selection && !s.selection.done ? s.selection.id : null, social: socialCode(s, kids.map((k) => k.name), now) };
+			if (jev) out.prompts = Object.fromEntries(kids.map((k) => [k.name, socialState(s, k, now)]));
+			return out;
+		};
 		this.social = {
-			name: 'select.social', layer: 3, trigger: on(asked), engine: 'code', priority: 2,
+			name: 'select.social', layer: 3, trigger: on(asked), engine: jev ? 'jev' : 'code', priority: 2,
 			reads: (s) => socialOf(s),
-			materialKey: (sl) => JSON.stringify(sl),
-			run: async (sl) => sl,
+			// Jev's answer stays valid for the same selection and kids (the code values move with the clock).
+			materialKey: (sl) => (jev ? `${sl.id}|${Object.keys(sl.social).join(',')}` : JSON.stringify(sl)),
+			run: async (sl, ctx) => {
+				if (!jev || sl.id === null || !sl.prompts || Object.keys(sl.prompts).length === 0) return { id: sl.id, social: sl.social };
+				const eng = ctx.engines.jev;
+				if (!eng) throw new Error('no jev engine');
+				const out: Social = {};
+				const log: Record<string, unknown> = {};
+				await Promise.all(Object.entries(sl.prompts).map(async ([kid, state]) => {
+					const [near, help] = await Promise.all([nearQuestion(kid), helpQuestion(kid)].map((q) => eng.ask(state, { type: 'choice', instructions: q, options: YES_NO }, ctx.signal)));
+					out[kid] = { near: near.probs.yes ?? 0, help: help.probs.yes ?? 0 };
+					log[kid] = { near: near.probs, help: help.probs };
+				}));
+				const prompt = Object.entries(sl.prompts).map(([kid, st]) => `${st}\n${nearQuestion(kid)} / ${helpQuestion(kid)} [yes|no]`).join('\n---\n');
+				ctx.record({ prompt, promptWords: Math.max(...Object.values(sl.prompts).map(wordCount)), answer: log, selectionId: sl.id });
+				return { id: sl.id, social: out };
+			},
 			merge: (p, s) => ({ patch: p.id !== null && s.selection?.id === p.id && s.selection.social === null ? [{ path: ['selection', 'social'], value: p.social }] : [], cause: CAUSE('select.social') }),
-			fallback: (sl) => sl,
+			fallback: (sl) => ({ id: sl.id, social: sl.social }),
+		};
+		const situationalOf = (s: Readonly<State>): SituationalSlice => {
+			const id = s.selection && !s.selection.done ? s.selection.id : null;
+			if (!jev || id === null) return { id };
+			const now = this.d.clock();
+			const kids = this.d.kidsNow();
+			const player = this.meta.get(id)?.player ?? null;
+			const masked = selectInputs(s, kids, now, player, this.d.noEdits(), (k) => this.d.stop.activeFor(k, now)).masked;
+			return { id, state: situationalState(s, kids, now), options: behaviourOptions(ORDER.filter((k) => !masked.includes(k)), player) };
 		};
 		this.situational = {
-			name: 'select.situational', layer: 3, trigger: on(asked), engine: 'code', priority: 3,
-			reads: (s) => ({ id: s.selection && !s.selection.done ? s.selection.id : null }),
+			name: 'select.situational', layer: 3, trigger: on(asked), engine: jev ? 'jev' : 'code', priority: 3,
+			reads: (s) => situationalOf(s),
 			materialKey: (sl) => String(sl.id),
-			run: async (sl) => ({ id: sl.id, situational: 'none' as const }),
+			run: async (sl, ctx) => {
+				if (!jev || sl.id === null || !sl.state || !sl.options || Object.keys(sl.options).length === 0) return { id: sl.id, situational: 'none' as const };
+				const eng = ctx.engines.jev;
+				if (!eng) throw new Error('no jev engine');
+				const a = await eng.ask(sl.state, { type: 'choice', instructions: SITUATIONAL_QUESTION, options: sl.options }, ctx.signal);
+				const w = winnerOfProbs(a) as BehaviourKind;
+				ctx.record({ prompt: `${sl.state}\n${SITUATIONAL_QUESTION} ${JSON.stringify(sl.options)}`, promptWords: wordCount(sl.state), answer: { choice: w, probs: a.probs }, selectionId: sl.id });
+				return { id: sl.id, situational: { behaviour: w, params: {}, because: `jev p=${(a.probs[w] ?? 0).toFixed(2)}` } };
+			},
 			merge: (p, s) => ({
 				patch: p.id !== null && s.selection?.id === p.id && s.selection.situational === null ? [{ path: ['selection', 'situational'], value: p.situational }] : [],
 				cause: CAUSE('select.situational'),
@@ -351,7 +396,8 @@ export class SelectionController {
 	// ── merging ──
 
 	private paramsFor(kind: BehaviourKind, sel: Selection, player: string | null, s: Readonly<State>, kids: KidInfo[], now: number): Record<string, unknown> {
-		if (sel.situational && sel.situational !== 'none' && sel.situational.behaviour === kind) return sel.situational.params;
+		// Jev's vote carries no params ({}): the code picks them, as for any other winner.
+		if (sel.situational && sel.situational !== 'none' && sel.situational.behaviour === kind && Object.keys(sel.situational.params).length) return sel.situational.params;
 		const p = this.d.params;
 		switch (kind) {
 			case 'follow':

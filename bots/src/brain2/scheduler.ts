@@ -111,7 +111,7 @@ export class Scheduler {
 		job.started = this.d.clock();
 		L.running = job;
 		const engines = this.d.engines();
-		const healthy = lane === 'laya' ? engines.laya?.healthy() : engines.llm?.healthy() && (job.slot.e.engine === 'llm' || engines.laya?.healthy());
+		const healthy = job.slot.e.engine === 'jev' ? engines.jev?.healthy() : lane === 'laya' ? engines.laya?.healthy() : engines.llm?.healthy() && (job.slot.e.engine === 'llm' || engines.laya?.healthy());
 		const done = (async () => {
 			if (!healthy) return this.finish(job, undefined, true, 'engine down');
 			const aborted = new Promise<never>((_, rej) => job.ctrl.signal.addEventListener('abort', () => rej(new Error('timeout'))));

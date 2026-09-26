@@ -38,6 +38,7 @@ import { forbiddenByKids } from './body/guard.js';
 import { blockNames, worldSpawn } from 'minicraft-bot';
 import { builderStatePath, runBuilder, saveBuilderFile, type BuilderHandle } from './builder/builder.js';
 import { jevEngine, layaEngine, parseJevKey, type ChoiceEngine } from './builder/engines.js';
+import { Jev } from './brain2/engines/jev.js';
 import { builderDir, decoratorStatePath, runDecorator, saveDecoratorFile, type DecoratorHandle } from './decorator/decorator.js';
 
 const BOTS_DIR = resolve(dirname(fileURLToPath(import.meta.url)), '..');
@@ -324,6 +325,14 @@ export function pokeFor(live: boolean, store: Store, clock: () => number): ((p: 
  * reconciles it with what the revert undid.
  */
 async function companionV2(cfg: Config, deps: CliDeps): Promise<void> {
+	// Experiment E2: --jev needs the key up front (read at runtime, never printed).
+	let jev: Jev | null = null;
+	if (cfg.jev) {
+		const key = JEV_ENV_FILES.map((f) => parseJevKey(deps.readFile(f))).find((k) => k) ?? null;
+		if (!key) throw new ConfigError(`--jev: no JEV_API_KEY in ${JEV_ENV_FILES.join(' or ')}`);
+		jev = new Jev({ key, fetchImpl: deps.fetchImpl ?? fetch });
+	}
+	const engineName = jev ? 'jev' : 'code';
 	const prepared = await prepare(cfg, deps);
 	if (!prepared) return;
 	const client = await connect(cfg, prepared.listing, prepared.skin, deps);
@@ -337,7 +346,7 @@ async function companionV2(cfg: Config, deps: CliDeps): Promise<void> {
 	const logPath = logFile.path;
 	const brainFile = brainPathOf(cfg, uuid);
 	const meta = { worldUuid: uuid, bot: cfg.name };
-	deps.print(`${cfg.name} joined "${prepared.listing.name}" as ${prepared.skin}; brain v2 (${cfg.personality}, code engines); log ${logPath}; brain file ${brainFile}`);
+	deps.print(`${cfg.name} joined "${prepared.listing.name}" as ${prepared.skin}; brain v2 (${cfg.personality}, ${engineName} engines); log ${logPath}; brain file ${brainFile}`);
 	// A monotonic ms clock on the wall's scale: brain2 times never jump with the system clock.
 	const t0 = Date.now() - performance.now();
 	const clock = () => t0 + performance.now();
@@ -348,7 +357,7 @@ async function companionV2(cfg: Config, deps: CliDeps): Promise<void> {
 		port, clock, wall: () => Date.now(), rng: seededRng(seed), seed,
 		personality: PERSONALITIES[cfg.personality], statePaths: { brainFile, logDir },
 		meta: { ...meta, target: cfg.target.name, live: cfg.target.live }, world: { seed: client.world.seed, gen: client.world.gen },
-		engines: () => ({ laya: null, llm: null }), noEdits: cfg.noEdits,
+		engines: () => ({ laya: null, llm: null, jev }), jev: !!jev, noEdits: cfg.noEdits,
 		logWrite: (line) => {
 			logFile.write(line);
 			if (cfg.tui && (line.startsWith('{"k":"select"') || line.startsWith('{"k":"call"'))) {
@@ -366,7 +375,7 @@ async function companionV2(cfg: Config, deps: CliDeps): Promise<void> {
 	let stopTui: (() => void) | null = null;
 	if (cfg.tui) {
 		stopTui = startTui({
-			model: () => ({ state: handle.store.state, lanes: handle.scheduler.lanes(), health: null, lastSelect, calls, now: clock(), world: prepared.listing.name, engines: 'code' }),
+			model: () => ({ state: handle.store.state, lanes: handle.scheduler.lanes(), health: null, lastSelect, calls, now: clock(), world: prepared.listing.name, engines: engineName }),
 			poke: pokeFor(cfg.target.live, handle.store, clock),
 			quit: () => onSignal('quit'),
 			kid: () => port.body.players().find((p) => !p.bot)?.name,

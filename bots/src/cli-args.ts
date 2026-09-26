@@ -23,10 +23,12 @@ export interface ParsedArgs {
 	compare: boolean;
 	/** `--rest-sec N` (builder): the rest after each finished build, in seconds. */
 	restSec?: string;
+	/** `--jev` (brain v2, experiment E2): Jev answers selection's social and situational questions. */
+	jev: boolean;
 }
 
 type ValueFlagKey = 'target' | 'world' | 'name' | 'skin' | 'brain' | 'personality' | 'restSec';
-type BooleanFlagKey = 'noEdits' | 'revertOnExit' | 'iDeployedTheServer' | 'builds' | 'tui' | 'compare';
+type BooleanFlagKey = 'noEdits' | 'revertOnExit' | 'iDeployedTheServer' | 'builds' | 'tui' | 'compare' | 'jev';
 
 const VALUE_FLAGS: Record<string, ValueFlagKey> = {
 	'--target': 'target',
@@ -45,11 +47,12 @@ const BOOLEAN_FLAGS: Record<string, BooleanFlagKey> = {
 	'--builds': 'builds',
 	'--tui': 'tui',
 	'--compare': 'compare',
+	'--jev': 'jev',
 };
 
 /** Parses `--flag value` / `--flag` pairs. Throws a plain `Error` on an unrecognised or malformed flag. */
 export function parseArgs(argv: readonly string[]): ParsedArgs {
-	const out: ParsedArgs = { noEdits: false, revertOnExit: false, iDeployedTheServer: false, builds: false, tui: false, compare: false };
+	const out: ParsedArgs = { noEdits: false, revertOnExit: false, iDeployedTheServer: false, builds: false, tui: false, compare: false, jev: false };
 	for (let i = 0; i < argv.length; i++) {
 		const arg = argv[i];
 		const valueKey = VALUE_FLAGS[arg];

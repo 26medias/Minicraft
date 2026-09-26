@@ -2,7 +2,8 @@ import type { Answer, Choice } from '../../brain/brain.js';
 import type { Cause, Change, Patch } from '../store.js';
 import type { State, WorldEvent } from '../types.js';
 
-export type EngineChoice = 'code' | 'laya' | 'llm' | 'both-agree' | 'llm-dir-laya-stay';
+/** 'jev' (experiment E2): hosted SystemOne choice questions, run on the LLM lane. */
+export type EngineChoice = 'code' | 'laya' | 'llm' | 'both-agree' | 'llm-dir-laya-stay' | 'jev';
 export interface Signal { changes: Change[]; events: WorldEvent[] } // accumulated since the expert last fired
 export type Trigger =
 	| { kind: 'every'; ms: number }
@@ -13,7 +14,7 @@ export const on = (match: (s: Signal) => boolean): Trigger => ({ kind: 'on', mat
 export const debounce = (match: (s: Signal) => boolean, o: { quietMs: number; maxWaitMs: number }): Trigger => ({ kind: 'debounce', match, ...o });
 export interface LayaEngine { healthy(): boolean; ask(state: string, q: Choice, signal: AbortSignal): Promise<Answer> }
 export interface LlmEngine { healthy(): boolean; json<T>(prompt: string, schema: object, signal: AbortSignal): Promise<{ value: T; raw: string }> }
-export interface Engines { laya: LayaEngine | null; llm: LlmEngine | null }
+export interface Engines { laya: LayaEngine | null; llm: LlmEngine | null; jev?: LayaEngine | null }
 export interface CallRecord { prompt?: string; promptWords?: number; answer?: unknown; selectionId?: number } // selectionId: criterion 6 links calls to the select line
 export interface RunCtx { signal: AbortSignal; engines: Engines; record(r: CallRecord): void }
 export type Lane = 'code' | 'laya' | 'llm';

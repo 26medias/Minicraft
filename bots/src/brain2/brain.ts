@@ -32,6 +32,8 @@ export interface Brain2Deps {
 	world: { seed: number; gen: number };     // for worldSpawn
 	engines: () => Engines;                   // { laya: null, llm: null } until part 2
 	noEdits: boolean; logWrite: (line: string) => void; status?: (line: string) => void;
+	/** Experiment E2: select.social and select.situational ask `engines().jev` (their code rules are the fallbacks). */
+	jev?: boolean;
 	/** Tests: no timers; the test calls step(). Production: a 100 ms setTimeout chain calls step(). */
 	manual?: boolean;
 }
@@ -160,7 +162,7 @@ export function runBrain2(d: Brain2Deps): Brain2Handle {
 	});
 	const selection = new SelectionController({
 		store, clock, kidsNow: () => perceiver.kids(), stop, noEdits: () => d.noEdits, runner, log: (l: LogLine) => log.write(l),
-		params: { player: paramsPlayer, explore: paramsExplore, mine: paramsMine, build: paramsBuild },
+		params: { player: paramsPlayer, explore: paramsExplore, mine: paramsMine, build: paramsBuild }, jev: d.jev,
 	});
 	const expression = new Expression({ store, body, clock, kids: () => perceiver.kids(), lastArrivalT: () => runner.lastArrivalT, busy: () => runner.busy });
 	const saver = new BrainSaver(d.statePaths.brainFile, { worldUuid: d.meta.worldUuid, bot: d.meta.bot }, d.wall);

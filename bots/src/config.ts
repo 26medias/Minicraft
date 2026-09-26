@@ -91,6 +91,8 @@ export interface Config {
 	compare: boolean;
 	/** `--rest-sec` (builder): seconds of rest after each finished build (default 30). */
 	restSec: number;
+	/** `--jev` (brain v2, experiment E2). */
+	jev: boolean;
 	/** Where `.state` lives for this run (injected, defaulted in cli.ts only). */
 	stateRoot: string;
 	statePath(worldUuid: string): string;
@@ -212,6 +214,7 @@ export function loadConfig(input: LoadConfigInput): Config {
 	}
 
 	const restSec = args.restSec === undefined ? 30 : Number(args.restSec);
+	if (args.jev && brain !== 'v2') throw new ConfigError('--jev needs --brain v2');
 	if (!Number.isFinite(restSec) || restSec < 0) throw new ConfigError(`--rest-sec must be a number of seconds >= 0, not "${args.restSec}"`);
 
 	const targetName = args.target;
@@ -234,6 +237,7 @@ export function loadConfig(input: LoadConfigInput): Config {
 		tui: args.tui,
 		compare: args.compare,
 		restSec,
+		jev: args.jev,
 		stateRoot,
 		statePath(worldUuid: string): string {
 			return `${stateRoot}/${targetName}/${worldUuid}/${name}.json`;

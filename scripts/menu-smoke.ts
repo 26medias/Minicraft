@@ -426,6 +426,39 @@ for (const sig of ['SIGINT', 'SIGTERM', 'SIGHUP'] as const) process.on(sig, () =
 		check(rulesAfter.dailyMin === 45, '+15 min does not touch the rules');
 		await page.click('#menu-back');
 		check(await text(page, '#play-line') === '15 minutes left today', `+15 min gives 15 minutes (got ${await text(page, '#play-line')})`);
+		const openParents = async (sel: string) => {
+			await page.click('#home-parents');
+			await page.fill('#pin-input', '1234');
+			await page.click('#pin-go');
+			await page.waitForSelector(sel);
+		};
+		// No limit today hides +15; Back to normal drops today's extras too.
+		await openParents('#today-unlimited');
+		await page.click('#today-unlimited');
+		await page.waitForSelector('#today-msg.ok');
+		check(await page.locator('#today-plus').count() === 0, 'under No limit today, +15 min is not offered');
+		await page.click('#today-unlimited');
+		await page.waitForSelector('#today-msg.ok');
+		const back = JSON.parse((await ls(page, 'minicraft:v1:today')) ?? '{}');
+		check(back.extraMin === 0 && back.unlimited === false, `Back to normal today drops the extras (got ${JSON.stringify(back)})`);
+		await page.click('#menu-back');
+		check(await text(page, '#play-line') === 'All done for today · play again tomorrow', `back to normal on a used-up day is done again (got ${await text(page, '#play-line')})`);
+		// Lifting the daily limit on a used-up day unlocks him: he picks again.
+		await openParents('#rule-daily');
+		await page.selectOption('#rule-daily', '');
+		await page.click('#rules-save');
+		await page.waitForSelector('#rules-msg.ok');
+		await page.click('#menu-back');
+		check(await page.locator('#play-line').isHidden(), `lifting the daily limit unlocks a used-up day (line: ${await text(page, '#play-line')})`);
+		await page.click('#home-single');
+		await page.waitForSelector('#duration-value');
+		check(!(await page.locator('#single-play').isDisabled()), 'lifting the daily limit: Play is enabled and the kid picks');
+		await page.click('#menu-back');
+		await openParents('#rule-daily');
+		await page.selectOption('#rule-daily', '45');
+		await page.click('#rules-save');
+		await page.waitForSelector('#rules-msg.ok');
+		await page.click('#menu-back');
 		await page.click('#home-parents');
 		await page.fill('#pin-input', '1234');
 		await page.click('#pin-go');

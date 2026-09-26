@@ -17,7 +17,7 @@ type Harness = {
 	clock: { now: number; visible: boolean };
 };
 
-function harness(s: PlaytimeSession, now = T0, lockedText?: string): Harness {
+function harness(s: PlaytimeSession, now = T0, lockedText?: string, expired?: () => string | null): Harness {
 	const calls: string[] = [];
 	const saved: PlaytimeSession[] = [];
 	const clock = { now, visible: true };
@@ -34,6 +34,7 @@ function harness(s: PlaytimeSession, now = T0, lockedText?: string): Harness {
 		now: () => clock.now,
 		visible: () => clock.visible,
 		lockedText,
+		expired,
 	};
 	h.ctl = new PlaytimeController(s, deps);
 	return h as Harness;
@@ -109,5 +110,29 @@ describe('PlaytimeController without break time', () => {
 	it('has no playAgain: nothing ends a freeze', () => {
 		const h = harness(session({ playedMs: 30 * MIN, frozenAt: T0 - 20 * MIN }));
 		expect('playAgain' in h.ctl).toBe(false);
+	});
+});
+
+describe('PlaytimeController expiry (the day changed)', () => {
+	it('freezes once with the expiry text, then does nothing more', () => {
+		let stop: string | null = null;
+		const h = harness(session({ playedMs: 0, limitMs: 24 * 60 * MIN }), T0, undefined, () => stop);
+		advance(h, 5_000);
+		expect(h.calls).toEqual([]);
+		stop = 'A NEW DAY · PRESS MENU';
+		advance(h, 1_000);
+		expect(h.calls).toEqual(['deps.freeze', 'overlay.freeze:A NEW DAY · PRESS MENU']);
+		h.calls.length = 0;
+		advance(h, 60_000);
+		expect(h.calls).toEqual([]);
+	});
+	it('a session already frozen by its limit is not frozen twice', () => {
+		const h = harness(session({ playedMs: 30 * MIN, frozenAt: T0 }), T0, undefined, () => 'A NEW DAY · PRESS MENU');
+		h.ctl.tick();
+		// The limit's own freeze (TIME'S UP, ASK A PARENT), not the new-day one.
+		expect(h.calls).toEqual(['deps.freeze', 'overlay.freeze:']);
+		h.calls.length = 0;
+		advance(h, 5_000);
+		expect(h.calls).toEqual([]);
 	});
 });

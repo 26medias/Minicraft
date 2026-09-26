@@ -34,15 +34,18 @@ button says what it did in a line next to it (`✓ Saved. Play 45 min a day, fro
 the screen stays open.
 
 1. **Today.** A summary (`Played 20 min of 45 min today. Play opens at 7:00 AM.`) and:
-   - **+15 min today** and **No limit today** / **Back to normal today** (only under a daily
-     limit). Stored in `minicraft:v1:today` with the local date; a record from another day
-     means nothing, so extras end at midnight on their own.
+   - **+15 min today** and **No limit today** (only under a daily limit). While No limit today
+     is on, the only button is **Back to normal today**, which also drops any +15. Stored in
+     `minicraft:v1:today` with the local date, read at the press (the screen may stay open past
+     midnight); a record from another day means nothing, so extras end at midnight on their own.
    - **Reset today's time**: clears the play session and today's extras. Rules, PIN and worlds are
      untouched.
 2. **Every day.** *Can't play before* (checkbox + time) and *Play time per day*. Changing a field
    says `Not saved yet.`; **Save rules** writes `minicraft:v1:rules` and confirms in plain words.
-   Saving never uses up today's time and never resets it; the time already played today counts
-   against the new limit. Without a PIN a warning says anyone can change the rules.
+   Saving never uses up today's time; the time already played today counts against a new limit.
+   Lifting the daily limit (to No limit) clears today's session, which was made under the old
+   limit and would otherwise keep him locked. Without a PIN a warning says anyone can change the
+   rules. The saved message scrolls into view.
 3. **Parent PIN.** Four digits, typed twice. Change or Remove once set. The PIN prompt carries the
    recovery hint: `localStorage.removeItem('minicraft:v1:pin')` in the browser console on the
    game's tab; nothing else is lost.
@@ -54,8 +57,10 @@ At Play, `resolveSession(stored, chosen, rules, today, now)` decides:
 
 - **Under a daily limit** the session is the day's. A stored session started today keeps its
   played time; its limit is recomputed from today's rules (daily + extras), and it is frozen iff
-  played ≥ limit. A session from another day is ignored. No limit today → no timer. The kid's
-  duration is not asked.
+  played ≥ limit. A session from another day is ignored. No limit today → a day-long timer
+  (never reached), so the running game can still be stopped at midnight. The kid's duration is
+  not asked. Unreadable rules give an already-locked session, so they fail closed even past the
+  menu's gate.
 - **Without a daily limit** (no rules, or only a start time) the kid's duration applies per
   sitting: the stored session if it is not stale (a frozen one is not escaped by picking "No
   limit"), else a new one of the chosen duration, else no timer. The duration moves in 5-minute
@@ -97,8 +102,18 @@ DST: the start gate is local wall-clock minutes. A start time inside the spring-
 when the clock reaches the next real minute; inside the fall-back repeated hour it opens on the
 first pass, closes during the second, and reopens.
 
-A game already running does not notice a change made in Parents from another tab; it keeps its
-session until it reloads. Parents is only reachable from the menu, not during a game.
+**Midnight.** Under any rule, a running game stops when the local day changes (`TIME'S UP` /
+`A NEW DAY · PRESS MENU`); MENU then Play starts the new day under its start time and limit. So a
+tab left open overnight carries neither yesterday's minutes nor "No limit today" into the
+morning. Without rules nothing happens at midnight.
+
+Known limits, accepted for a family tool:
+
+- A game already running does not notice a change made in Parents from another tab; it keeps
+  its session until it reloads. Parents is only reachable from the menu, not during a game.
+- Two tabs playing at once each keep their own copy of the session (the last to save wins), so
+  they can together exceed the day. Pre-existing.
+- Setting the computer's clock back beats every rule. A browser-only game cannot prevent it.
 
 ## Semantics
 

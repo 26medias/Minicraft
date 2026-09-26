@@ -37,7 +37,7 @@ import type { WorldSave } from './persistence/adapter';
 import { PlaytimeController } from './game/playtime-controller';
 import { loadSession, saveSession } from './persistence/playtime';
 import { loadRules, loadToday } from './persistence/rules';
-import { playStatus, resolveSession } from './game/rules';
+import { dayChanged, dayKey, NEW_DAY_TEXT, playStatus, resolveSession } from './game/rules';
 import { PlaytimeOverlay } from './ui/playtime-overlay';
 import { TICK_MS } from './data/playtime.data';
 import { Inventory } from './ui/inventory';
@@ -823,6 +823,7 @@ async function main() {
 		const today = loadToday(rulesNow);
 		const session = resolveSession(loadSession(), clampDuration(duration, null), loadedRules, today, rulesNow);
 		const status = playStatus({ rules: loadedRules, session: loadSession(), today, now: rulesNow });
+		const startDay = dayKey(rulesNow);
 		// Multiplayer: the leaver's countdown messages (spec §7.4).
 		const leaving = mp ? new LeavingCountdown((secondsLeft) => void mp.client.send({ t: 'leaving', secondsLeft })) : null;
 		let playtime: PlaytimeController | null = null;
@@ -831,6 +832,8 @@ async function main() {
 			playtime = new PlaytimeController(session, {
 				overlay: new PlaytimeOverlay(app),
 				lockedText: status.lockedText,
+				// A tab left open overnight must not carry yesterday's time (or "No limit today") into today.
+				expired: () => (dayChanged(loadedRules, startDay, Date.now()) ? NEW_DAY_TEXT : null),
 				freeze: () => {
 					closeInventory();
 					if (!quitting) closePause();

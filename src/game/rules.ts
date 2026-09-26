@@ -67,7 +67,8 @@ export function extrasFor(today: Today | null, now: number): { extraMin: number;
  * Under a daily limit the session is the day's: a stored session started today
  * carries its played time, and its limit is always recomputed from today's rules
  * (daily + extras), so a rule change or "+15 min" applies at the next Play. A
- * session from another day is ignored. "No limit today" gives no timer.
+ * session from another day is ignored. "No limit today" still gets a timer, a
+ * whole day long, so a running game can be stopped when the day changes.
  *
  * Without a daily limit: the stored session if not stale (a frozen one is not
  * escaped by picking "No limit"), else a new one of `chosenMin`, else no timer.
@@ -79,12 +80,12 @@ export function resolveSession(
 	today: Today | null,
 	now: number,
 ): PlaytimeSession | null {
-	if (loaded.kind === 'broken') return null;
+	// Fails closed here too, not only at the menu's gate: a locked session.
+	if (loaded.kind === 'broken') return { limitMs: 60_000, breakMs: null, playedMs: 60_000, frozenAt: now, startedAt: now, updatedAt: now };
 	const daily = rulesOf(loaded)?.dailyMin ?? null;
 	if (daily !== null) {
 		const ex = extrasFor(today, now);
-		if (ex.unlimited) return null;
-		const limitMs = (daily + ex.extraMin) * 60_000;
+		const limitMs = ex.unlimited ? DAY_MS : (daily + ex.extraMin) * 60_000;
 		const base = stored && sameLocalDay(stored.startedAt, now) ? stored : null;
 		const playedMs = base?.playedMs ?? 0;
 		return {
@@ -99,6 +100,27 @@ export function resolveSession(
 	if (stored && !isStale(stored, now)) return stored;
 	if (chosenMin === null) return null;
 	return { limitMs: chosenMin * 60_000, breakMs: null, playedMs: 0, frozenAt: null, startedAt: now, updatedAt: now };
+}
+
+/** Longer than any day: the limit of a "No limit today" session. */
+const DAY_MS = 24 * 3_600_000;
+
+/**
+ * Saving rules without a daily limit over rules that had one drops today's
+ * session: it was made under the old limit and would otherwise keep the kid
+ * locked (or on its old countdown) although the parent just lifted the limit.
+ */
+export function rulesChangeClearsSession(prev: LoadedRules, next: Rules): boolean {
+	if (next.dailyMin !== null) return false;
+	return prev.kind === 'broken' || (prev.kind === 'set' && prev.rules.dailyMin !== null);
+}
+
+/** The freeze text when a running game outlives its day under parent rules. */
+export const NEW_DAY_TEXT = 'A NEW DAY · PRESS MENU';
+
+/** A game started on `startDay` under parent rules must stop once the local day changes. */
+export function dayChanged(loaded: LoadedRules, startDay: string, now: number): boolean {
+	return rulesActive(loaded) && dayKey(now) !== startDay;
 }
 
 export type PlayStatus = {

@@ -12,7 +12,7 @@ import { DurationControl } from './duration-control';
 import {
 	clearPin, clearToday, loadPin, loadRules, loadToday, savePin, saveRules, saveToday,
 } from '../persistence/rules';
-import { dayKey, playStatus, rulesSentence, todaySummary, type PlayStatus, type StatusInput } from '../game/rules';
+import { dayKey, playStatus, rulesChangeClearsSession, rulesSentence, todaySummary, type PlayStatus, type StatusInput, type Today } from '../game/rules';
 import { mpApiFromEnv, type MpApi, type MpWorldRow } from '../net/mp-api';
 import { loadMpPrefs, saveMpPrefs, type MpPrefs } from '../persistence/mp-prefs';
 import { SKINS, skinColor, skinOf, type SkinId } from '../data/skins.data';
@@ -763,7 +763,12 @@ export class MainMenu {
 			const m = document.createElement('div');
 			m.className = 'menu-msg';
 			m.id = id;
-			if (flash?.id === id) { m.textContent = flash.text; m.classList.add('ok'); }
+			if (flash?.id === id) {
+				m.textContent = flash.text;
+				m.classList.add('ok');
+				// The message may be below the fold on a laptop: bring it into view.
+				requestAnimationFrame(() => m.scrollIntoView?.({ block: 'nearest' }));
+			}
 			return m;
 		};
 		const say = (m: HTMLElement, text: string, ok: boolean) => {
@@ -787,21 +792,24 @@ export class MainMenu {
 		summary.textContent = todaySummary(this.statusInput());
 		body.appendChild(summary);
 		const todayRow = row();
-		const now = Date.now();
-		const today = loadToday(now) ?? { day: dayKey(now), extraMin: 0, unlimited: false };
-		const writeToday = (t: typeof today, text: string) => {
-			if (!saveToday(t)) { say(todayMsg, failText, false); return; }
+		// Read at the press, not at the render: the screen may stay open past midnight.
+		const current = (): Today => {
+			const now = Date.now();
+			return loadToday(now) ?? { day: dayKey(now), extraMin: 0, unlimited: false };
+		};
+		const writeToday = (change: Partial<Today>, text: string) => {
+			if (!saveToday({ ...current(), ...change })) { say(todayMsg, failText, false); return; }
 			rerender({ id: 'today-msg', text });
 		};
 		if (rules.dailyMin !== null) {
-			this.button(todayRow, '+15 min today', 'today-plus', () =>
-				writeToday({ ...today, extraMin: today.extraMin + 15 }, '✓ Added 15 minutes, for today only.'));
-			if (today.unlimited) {
+			if (current().unlimited) {
 				this.button(todayRow, 'Back to normal today', 'today-unlimited', () =>
-					writeToday({ ...today, unlimited: false }, '✓ The daily limit is back on for today.'));
+					writeToday({ unlimited: false, extraMin: 0 }, `✓ Back to the usual ${formatDuration(rules.dailyMin)} for today.`));
 			} else {
+				this.button(todayRow, '+15 min today', 'today-plus', () =>
+					writeToday({ extraMin: current().extraMin + 15 }, '✓ Added 15 minutes, for today only.'));
 				this.button(todayRow, 'No limit today', 'today-unlimited', () =>
-					writeToday({ ...today, unlimited: true }, '✓ No time limit today. The usual rules are back tomorrow.'));
+					writeToday({ unlimited: true }, '✓ No time limit today. The usual rules are back tomorrow.'));
 			}
 		}
 		this.button(todayRow, "Reset today's time", 'today-reset', () => {
@@ -848,7 +856,7 @@ export class MainMenu {
 		dailyRow.appendChild(dailyLabel);
 		const rulesHint = document.createElement('div');
 		rulesHint.className = 'menu-hint';
-		rulesHint.textContent = 'Play time is counted for the whole day, in every world, and starts fresh at midnight. With "No limit" the kids pick how long before each game.';
+		rulesHint.textContent = 'Play time is counted for the whole day, in every world, and starts fresh at midnight. With "No limit" there is no daily limit; the kids can still set their own timer before each game.';
 		body.appendChild(rulesHint);
 		const saveRow = row();
 		const rulesMsg = message('rules-msg');
@@ -865,6 +873,7 @@ export class MainMenu {
 			}
 			const next = { startMin: start, dailyMin: daily.value === '' ? null : Number(daily.value) };
 			if (!saveRules(next)) { say(rulesMsg, failText, false); return; }
+			if (rulesChangeClearsSession(loaded, next)) clearSession();
 			rerender({ id: 'rules-msg', text: `✓ Saved. ${rulesSentence(next, Date.now())}` });
 		});
 		body.appendChild(rulesMsg);

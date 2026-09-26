@@ -1,5 +1,8 @@
 import { describe, it, expect } from 'vitest';
-import { dayKey, playStatus, resolveSession, rulesSentence, todaySummary, type LoadedRules, type Today } from './rules';
+import {
+	dayChanged, dayKey, playStatus, resolveSession, rulesChangeClearsSession, rulesSentence, todaySummary,
+	type LoadedRules, type Today,
+} from './rules';
 import type { PlaytimeSession } from './playtime';
 import { STALE_SESSION_MS } from '../data/playtime.data';
 
@@ -39,8 +42,9 @@ describe('resolveSession without a daily limit (the kid picks)', () => {
 		const stored = session({ playedMs: 10 * MIN });
 		expect(resolveSession(stored, 30, rules(420, null), null, T0 + MIN)).toEqual(stored);
 	});
-	it('broken rules → no session (the gate refuses play anyway)', () => {
-		expect(resolveSession(null, 30, broken, null, T0)).toBeNull();
+	it('broken rules → a locked session (fails closed even past the menu gate)', () => {
+		expect(resolveSession(null, 30, broken, null, T0)!.frozenAt).toBe(T0);
+		expect(resolveSession(null, null, broken, null, T0)!.frozenAt).toBe(T0);
 	});
 });
 
@@ -80,10 +84,13 @@ describe('resolveSession under a daily limit', () => {
 		const s = session({ startedAt: at(7, 10), playedMs: 45 * MIN, frozenAt: at(8) });
 		expect(resolveSession(s, null, r, today(at(12, 0, 6), 15), at(12))!.frozenAt).toBe(at(8));
 	});
-	it('No limit today → no timer', () => {
+	it('No limit today → an unfrozen day-long timer (so the day change can still stop the game)', () => {
 		const now = at(12);
 		const s = session({ startedAt: at(7, 10), playedMs: 45 * MIN, frozenAt: at(8) });
-		expect(resolveSession(s, null, r, today(now, 0, true), now)).toBeNull();
+		const got = resolveSession(s, null, r, today(now, 0, true), now)!;
+		expect(got.frozenAt).toBeNull();
+		expect(got.limitMs).toBeGreaterThanOrEqual(24 * 60 * MIN);
+		expect(got.playedMs).toBe(45 * MIN);
 	});
 	it('a new daily limit applies to the time already played today', () => {
 		const s = session({ startedAt: at(7, 10), playedMs: 30 * MIN, limitMs: 60 * MIN });
@@ -155,5 +162,27 @@ describe('rulesSentence and todaySummary', () => {
 	});
 	it('before the start time, it says when play opens', () => {
 		expect(todaySummary({ rules: rules(420, 45), session: null, today: null, now: at(5) })).toMatch(/^Played 0 min of 45 min today\. Play opens at 7:00/);
+	});
+});
+
+describe('rule changes and the day change', () => {
+	it('lifting the daily limit clears the day\'s session; other saves do not', () => {
+		expect(rulesChangeClearsSession(rules(420, 30), { startMin: 420, dailyMin: null })).toBe(true);
+		expect(rulesChangeClearsSession(broken, { startMin: null, dailyMin: null })).toBe(true);
+		expect(rulesChangeClearsSession(rules(420, 30), { startMin: 420, dailyMin: 45 })).toBe(false);
+		expect(rulesChangeClearsSession(rules(420, null), { startMin: 480, dailyMin: null })).toBe(false);
+		expect(rulesChangeClearsSession(none, { startMin: null, dailyMin: null })).toBe(false);
+	});
+	it('after the clear, a used-up day under a lifted limit lets the kid pick again', () => {
+		// The scenario both reviews hit: 30 min a day used up, then "No limit" per day.
+		expect(playStatus({ rules: rules(null, null), session: null, today: null, now: at(9) })).toMatchObject({ canPlay: true, kidPicks: true });
+	});
+	it('a game under rules stops when the local day changes; without rules it does not', () => {
+		const start = dayKey(at(23, 50));
+		expect(dayChanged(rules(420, 45), start, at(23, 59))).toBe(false);
+		expect(dayChanged(rules(420, 45), start, at(0, 1, 8))).toBe(true);
+		expect(dayChanged(rules(420, null), start, at(0, 1, 8))).toBe(true);
+		expect(dayChanged(broken, start, at(0, 1, 8))).toBe(true);
+		expect(dayChanged(none, start, at(0, 1, 8))).toBe(false);
 	});
 });

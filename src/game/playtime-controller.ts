@@ -18,6 +18,8 @@ export type PlaytimeDeps = {
 	visible(): boolean;
 	/** Shown instead of ASK A PARENT on a freeze (under a daily limit). */
 	lockedText?: string;
+	/** Checked every tick: a text means "stop now" (the day changed under parent rules). */
+	expired?: () => string | null;
 };
 
 /**
@@ -27,6 +29,7 @@ export type PlaytimeDeps = {
  */
 export class PlaytimeController {
 	private timer: PlayTimer;
+	private expiredFired = false;
 
 	constructor(
 		session: PlaytimeSession,
@@ -67,6 +70,14 @@ export class PlaytimeController {
 
 	private tickUnsafe(): void {
 		const { overlay } = this.deps;
+		if (this.expiredFired) return;
+		const stop = this.timer.session.frozenAt === null ? this.deps.expired?.() ?? null : null;
+		if (stop !== null) {
+			this.expiredFired = true;
+			this.deps.freeze();
+			overlay.freeze(stop);
+			return;
+		}
 		const events = this.timer.tick(this.deps.now(), this.deps.visible());
 		if (this.timer.dirty) this.deps.save(this.timer.session);
 		for (const ev of events) {

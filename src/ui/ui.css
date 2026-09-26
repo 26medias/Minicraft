@@ -1056,3 +1056,35 @@
 	text-overflow: ellipsis;
 	white-space: nowrap;
 }
+
+/* Pause menu (pause menu spec §3.3): the game stays visible, dimmed. Above the I screen (15), below
+   the toasts and colour picker (20), the play timer (25/30) and the multiplayer screens (50). */
+#pause-root {
+	position: fixed;
+	inset: 0;
+	background: rgba(0, 0, 0, 0.55);
+	color: #fff;
+	display: flex;
+	flex-direction: column;
+	align-items: center;
+	overflow-y: auto;
+	pointer-events: auto;
+	z-index: 18;
+}
+#pause-root.hidden {
+	display: none;
+}
+/* Set apart from Return to Game and Controls against mis-clicks (margins collapse: 28 px is the gap). */
+.menu-card button.pause-quit {
+	margin-top: 28px;
+}
+.controls-row {
+	display: flex;
+	justify-content: space-between;
+	gap: 24px;
+	padding: 4px 0;
+}
+.controls-keys {
+	font-weight: 600;
+	text-align: right;
+}

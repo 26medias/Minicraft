@@ -36,6 +36,8 @@ export interface Body {
 	/** Every server-ordered edit (anyone's, the bot's own echoes included). Returns the unsubscribe. */
 	onEdit(cb: (edit: EditEvent) => void): () => void;
 	onFx(cb: (fx: FxMsg) => void): () => void;
+	/** Fires after the SDK reconnects and the world snapshot has been swapped in. Returns the unsubscribe. */
+	onReconnect(cb: () => void): () => void;
 }
 
 /** A read-only view of the world. Mirrors `BotWorld`, plus the generated terrain and `mustMine`. */
@@ -158,6 +160,7 @@ export function realPort(client: BotClient, listing: WorldListing): Port {
 			};
 		},
 		onFx: (cb) => client.on('fx', cb),
+		onReconnect: (cb) => client.on('reconnect', () => cb()),
 	};
 
 	const view: WorldView = {

@@ -168,6 +168,7 @@ export class FakeBody implements Body {
 	};
 	private readonly editCbs = new Set<(e: EditEvent) => void>();
 	private readonly fxCbs = new Set<(fx: FxMsg) => void>();
+	private readonly reconnectCbs = new Set<() => void>();
 	/** Identifies whichever walk or flight is currently pending (they share one slot, as the SDK). */
 	private pendingMotion: { resolve: (r: WalkResult) => void } | null = null;
 
@@ -292,6 +293,13 @@ export class FakeBody implements Body {
 		};
 	}
 
+	onReconnect(cb: () => void): () => void {
+		this.reconnectCbs.add(cb);
+		return () => {
+			this.reconnectCbs.delete(cb);
+		};
+	}
+
 	/** Test-only: delivers an edit to every `onEdit` subscriber. */
 	emitEdit(e: EditEvent): void {
 		for (const cb of [...this.editCbs]) cb(e);
@@ -300,6 +308,11 @@ export class FakeBody implements Body {
 	/** Test-only: delivers an fx to every `onFx` subscriber. */
 	emitFx(fx: FxMsg): void {
 		for (const cb of [...this.fxCbs]) cb(fx);
+	}
+
+	/** Test-only: delivers a reconnect to every `onReconnect` subscriber. */
+	emitReconnect(): void {
+		for (const cb of [...this.reconnectCbs]) cb();
 	}
 
 	/** Test-only: a kid's single-op edit of one cell, applied to `world` (old id read from it). */

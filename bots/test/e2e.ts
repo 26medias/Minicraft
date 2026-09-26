@@ -757,8 +757,9 @@ async function main(): Promise<void> {
 		}
 		const B2 = ['brain2-help', 'brain2-alone', 'brain2-mine', 'brain2-revert', 'brain2-follow-watch', 'brain2-cli'];
 		if (B2.some(want)) {
-			// On the `local` target's port: the real CLI (`revert`, `--brain v2`) reaches it by the committed config.
-			const b2 = await startServer(LOCAL_PORT);
+			// On the `local` target's port when a leg runs the real CLI (`revert`, `--brain v2`): it reaches the server by
+			// the committed config. The in-process legs alone take a free port (18090 may be another session's server).
+			const b2 = await startServer(want('brain2-revert') || want('brain2-cli') ? LOCAL_PORT : undefined);
 			console.log(`\nbrain2: mcserver pid ${b2.pid} on ${b2.url}`);
 			try {
 				const ctx = { server: b2, stateRoot: join(runDir, 'state'), botsDir: BOTS_DIR, want, leg, check, info };

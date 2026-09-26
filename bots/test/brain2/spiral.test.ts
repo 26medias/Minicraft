@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { RING, safeToMine, spiralStep, spiralsFor, type Spiral, type Step } from '../../src/brain2/behaviours/spiral.js';
+import { RING, climbPath, exitOf, safeToMine, spiralStep, spiralsFor, stepAt, type Spiral, type Step } from '../../src/brain2/behaviours/spiral.js';
 import type { Vec3 } from '../../src/brain2/types.js';
 
 const Y0 = 100;
@@ -119,5 +119,38 @@ describe('spiral dig geometry (spec §6.2 rev 3.3)', () => {
 		expect(sps.map((s) => s.lastStep)).toEqual([...sps.map((s) => s.lastStep)].sort((a, b) => a - b));
 		expect(sps[0].lastStep).toBe(4);
 		expect(spiralsFor({ x: 10, y: Y0, z: 10 }, flat)).toEqual([]);
+	});
+	// Ruling R17. Red if the climb skips a step (walkTo only climbs 1 block), walks the steps in the wrong order, or
+	// exits into a column whose surface a step cleared (a hole, not natural ground) or that isn't beside step 0.
+	it('climbPath: from every step, one step up per walk, then out onto the intact surface beside step 0', () => {
+		for (const c of cases()) {
+			const exit = exitOf(c.sp);
+			expect(c.cleared.has(k({ x: exit.x, y: Y0 - 1, z: exit.z })), `${c.name} exit surface`).toBe(false);
+			expect(c.cleared.has(k({ x: exit.x, y: Y0, z: exit.z })) || c.cleared.has(k({ x: exit.x, y: Y0 + 1, z: exit.z })), `${c.name} exit headroom`).toBe(false);
+			expect(exit.x === c.sp.px && exit.z === c.sp.pz).toBe(false);
+			for (const st of c.steps) {
+				const pose = { x: st.feet.x + 0.5, y: st.feet.y, z: st.feet.z + 0.5 };
+				expect(stepAt(c.sp, pose), c.name).toBe(st.i);
+				const path = climbPath(c.sp, pose);
+				expect(path, `${c.name} from ${st.i}`).toHaveLength(st.i + 1);
+				// Feet heights along the way: each waypoint's column is face-adjacent to the last and 1 higher.
+				let at: Vec3 = st.feet;
+				for (let j = 0; j < path.length; j++) {
+					const to = j < st.i ? c.steps[st.i - 1 - j].feet : exit;
+					expect({ x: to.x + 0.5, z: to.z + 0.5 }).toEqual(path[j]);
+					expect(faceAdjacent(at, to), `${c.name} from ${st.i} walk ${j}`).toBe(true);
+					expect(to.y - at.y).toBe(1);
+					at = to;
+				}
+			}
+			// Not on a step: on the surface, on the pillar, one block off a step's feet height.
+			const s0 = c.steps[0].feet;
+			expect(climbPath(c.sp, { x: exit.x + 0.5, y: Y0, z: exit.z + 0.5 })).toEqual([]);
+			expect(climbPath(c.sp, { x: c.sp.px + 0.5, y: Y0, z: c.sp.pz + 0.5 })).toEqual([]);
+			expect(climbPath(c.sp, { x: s0.x + 0.5, y: s0.y + 1, z: s0.z + 0.5 })).toEqual([]);
+			// Only the dug steps count (upTo = stepsDone).
+			const last = c.steps.at(-1)!.feet;
+			expect(stepAt(c.sp, { x: last.x + 0.5, y: last.y, z: last.z + 0.5 }, c.steps.length - 1)).toBe(-1);
+		}
 	});
 });

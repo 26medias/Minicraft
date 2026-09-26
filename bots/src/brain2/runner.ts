@@ -15,6 +15,7 @@ import { styleOf, type Style } from './style.js';
 import { EDIT_KINDS, type Action, type ActionEntry, type ActiveBehaviour, type BehaviourKind, type Outcome, type Vec3, type WorldEvent } from './types.js';
 import { BEHAVIOURS, type Behaviour, type BehaviourCtx } from './behaviours/behaviour.js';
 import { SALIENCE } from './data/salience.data.js';
+import { climbPath } from './behaviours/spiral.js';
 
 export type FitFn = (a: Action, ctx: BehaviourCtx) => Promise<'yes' | 'wait' | 'no'>;
 export interface RunnerDeps {
@@ -32,6 +33,8 @@ const MAX_WAITS = 3;
 const MAX_REJECTIONS = 3;
 const MAX_FAILURES = 3;
 const PAST_KEPT = 20;
+/** A climb-out walk failing this many times in a row ends the behaviour `stuck (climb)` (ruling R17). */
+const MAX_CLIMB_BLOCKED = 2;
 
 type RawEvent = Omit<WorldEvent, 'id' | 'salient' | 't'>;
 interface Active {
@@ -58,6 +61,10 @@ export class BehaviourRunner {
 	/** What the awaited body call is, so end() can cancel it. */
 	private inFlight: 'walk' | 'fly' | 'mine' | null = null;
 	private arrivalT = -Infinity;
+	/** Ruling R17: the climb out of a dig's staircase, walked before the new behaviour's first action. */
+	private climb: { digId: string; path: Array<{ x: number; z: number }>; blocked: number } | null = null;
+	/** Digs whose climb out failed this session: not retried, so a stuck bot can't loop on it. */
+	private climbFailed = new Set<string>();
 
 	constructor(private readonly d: RunnerDeps) {}
 
@@ -96,6 +103,7 @@ export class BehaviourRunner {
 		this.active.plan = plan;
 		if (beh.planPatch) this.apply(beh.planPatch(plan, ctx));
 		this.resetPlan();
+		this.climb = this.climbFor(beh, plan, ctx.pose);
 	}
 
 	/** Ends the current behaviour with an outcome: moves memory.current to memory.past (keep 20), writes an `outcome` event, cancels motion. */
@@ -107,6 +115,7 @@ export class BehaviourRunner {
 		else if (this.inFlight === 'walk' || this.inFlight === 'fly') body.move(body.pose());
 		if (this.inFlight === 'mine') body.stopMining();
 		this.gen++;                                           // rule 6: a result arriving later is discarded
+		this.climb = null;
 		if (a.plan !== null && a.beh.endPatch) {
 			// Guarded: end() also runs from tick()'s catch, so a throw here would escape tick() as an unhandled rejection.
 			try {
@@ -136,6 +145,7 @@ export class BehaviourRunner {
 		if (this.waitUntil > ctx.now) return;
 		this.isBusy = true;                                   // rule 0: set before any await
 		try {
+			if (this.climb) return await this.climbTick(ctx);
 			const act = this.active;
 			const beh = act.beh;
 			const n = beh.next(act.plan, ctx);
@@ -176,6 +186,52 @@ export class BehaviourRunner {
 	}
 
 	// ── internals ──
+
+	/**
+	 * Ruling R17: when a behaviour starts with the bot down on a dig's step (and it isn't the dig that behaviour
+	 * carries on, `inDig`), the climb out: the dug steps back up, one walk each, then the exit beside the pillar.
+	 */
+	private climbFor(beh: Behaviour<Record<string, unknown>, unknown>, plan: unknown, pose: Vec3): BehaviourRunner['climb'] {
+		const own = beh.inDig?.(plan) ?? null;
+		for (const d of this.d.store.state.digs) {
+			if (d.status === 'reverted' || d.id === own || this.climbFailed.has(d.id) || !d.spiral) continue;
+			const path = climbPath(d.spiral, pose, d.stepsDone);
+			if (path.length === 0) continue;
+			this.d.log('climb', { dig: d.id, walks: path.length });
+			return { digId: d.id, path, blocked: 0 };
+		}
+		return null;
+	}
+
+	/** One climb walk per tick; a cancelled walk is reissued; blocked twice in a row → the dig dropped, `stuck (climb)`. */
+	private async climbTick(ctx: BehaviourCtx): Promise<void> {
+		const c = this.climb!, gen = this.gen, body = this.d.body;
+		let r: 'arrived' | 'cancelled' | 'failed' = 'failed';
+		this.inFlight = 'walk';
+		try {
+			r = await body.walkTo(c.path[0], { speed: ctx.style.walkSpeed });
+		} catch {
+			r = 'failed';                                     // BlockedError or a lost connection
+		} finally {
+			this.inFlight = null;
+		}
+		if (this.gen !== gen || this.climb !== c || r === 'cancelled') return;
+		if (r === 'arrived') {
+			this.arrivalT = this.d.clock();
+			c.path.shift();
+			c.blocked = 0;
+			if (c.path.length === 0) {
+				this.climb = null;
+				this.d.log('climb', { dig: c.digId, out: true });
+			}
+			return;
+		}
+		if (++c.blocked < MAX_CLIMB_BLOCKED) return;
+		this.climb = null;
+		this.climbFailed.add(c.digId);
+		this.apply([{ path: ['digs'], value: this.d.store.state.digs.map((d) => (d.id === c.digId ? { ...d, status: 'dropped' as const } : d)) }]);
+		this.failed('stuck (climb)');
+	}
 
 	private apply(p: Patch): void {
 		if (p.length) this.d.store.apply(p, CAUSE);

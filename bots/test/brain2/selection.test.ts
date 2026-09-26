@@ -181,6 +181,23 @@ describe('scoring (spec §5.3)', () => {
 		expect(wins).toBeLessThanOrEqual(4);
 	});
 
+	// Ruling R17. Red if the resume bonus outranks a Mine that just failed: the outcome trigger re-picked the same
+	// failing Mine about once a second (batch F concern 1).
+	it('a paused dig\'s resume bonus does not re-pick a Mine that just failed; a paused or stale Mine still resumes', () => {
+		const s = baseState();
+		s.inventory = { stone: 40 };
+		s.digs = [{ id: 'd1', block: 'stone', entrance: { x: 0, y: Y, z: 0 }, target: { x: 1, y: Y - 20, z: 0 }, stepsDone: 5, cells: [], status: 'paused', spiral: { px: 0, pz: 0, y0: Y, phase: 7, lastStep: 19 } }];
+		const past = (outcome: Outcome, endedT: number): ActionEntry => ({ behaviour: 'mine', params: { block: 'stone' }, lastedMs: 500, outcome, why: outcome === 'failed' ? 'same action failed 3 times' : outcome, endedT });
+		const mineRow = (t: number) => scoreRows(s, [], t, null, false).find((r) => r.behaviour === 'mine')!;
+		s.memory.past = [past('failed', 1000)];
+		expect(selectInputs(s, [], 2000, null, false).recency.mine).toBe('bad');
+		expect(mineRow(2000).recency).toBeLessThan(0);
+		expect(selectInputs(s, [], 1000 + 5 * 60_000 + 1, null, false).recency.mine).toBe('resume');   // no longer recent
+		s.memory.past = [past('paused', 1000)];
+		expect(selectInputs(s, [], 2000, null, false).recency.mine).toBe('resume');
+		expect(mineRow(2000).recency).toBeGreaterThan(0);
+	});
+
 	// Red if scoreRows drifts from scoreInputs over selectInputs (replay relies on it, Task 21).
 	it('scoreRows = scoreInputs(selectInputs(…)) with the live tables', () => {
 		const s = baseState();

@@ -64,10 +64,13 @@ export function selectInputs(s: Readonly<State>, kids: KidInfo[], now: number, p
 	const typicalMaxMs = Object.fromEntries(ORDER.map((k) => [k, BEHAVIOURS[k]?.typicalMs[1] ?? DEFAULT_TYPICAL_MAX])) as SelectInputs['typicalMaxMs'];
 	const pausedDigs = s.digs.filter((d) => d.status === 'paused');
 	const recency = Object.fromEntries(ORDER.map((k) => {
-		if (k === 'mine' && pausedDigs.length > 0) return [k, 'resume'];
 		const last = s.memory.past.find((e) => e.behaviour === k);
-		if (!last || now - last.endedT > RECENT_MS) return [k, 'none'];
-		return [k, last.outcome === 'abandoned' || last.outcome === 'failed' ? 'bad' : 'recent'];
+		const recent = !!last && now - last.endedT <= RECENT_MS;
+		const bad = recent && (last.outcome === 'abandoned' || last.outcome === 'failed');
+		// A Mine that just failed isn't resumed at once (ruling R17): 'bad' outranks the resume bonus.
+		if (k === 'mine' && pausedDigs.length > 0 && !bad) return [k, 'resume'];
+		if (!recent) return [k, 'none'];
+		return [k, bad ? 'bad' : 'recent'];
 	})) as SelectInputs['recency'];
 	const line = freshLine(s, player, now);
 	const lineFresh = !!player && lineParams(line, player) !== null;

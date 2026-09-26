@@ -44,3 +44,44 @@ export function safeToMine(sp: Spiral, cell: Vec3): boolean {
 	}
 	return true;
 }
+
+/**
+ * The dug step (0 … `upTo` − 1) whose feet cell the pose stands on, or −1 (ruling R17). Every step's feet are below
+ * y0, so a hit means the bot is down in the staircase.
+ */
+export function stepAt(sp: Spiral, pose: { x: number; y: number; z: number }, upTo = sp.lastStep + 1): number {
+	const fx = Math.floor(pose.x), fz = Math.floor(pose.z);
+	for (let i = 0; i < Math.min(upTo, sp.lastStep + 1); i++) {
+		const f = spiralStep(sp, i).feet;
+		if (f.x === fx && f.z === fz && Math.abs(pose.y - f.y) < 0.5) return i;
+	}
+	return -1;
+}
+
+/**
+ * The exit onto natural ground beside the pillar: the ring column before step 0, at the surface (feet y0). It is
+ * face-adjacent to step 0 and one block up, and no step clears its surface block (only steps 0–2 reach the surface
+ * layer, in other columns); the pillar area was checked natural with headroom at plan time.
+ */
+export function exitOf(sp: Spiral): Vec3 {
+	const [dx, dz] = RING[(sp.phase + 7) % 8];
+	return { x: sp.px + dx, y: sp.y0, z: sp.pz + dz };
+}
+
+/**
+ * The climb out of the staircase (ruling R17): from step k (the pose's step, see `stepAt`), the column centres of
+ * steps k − 1 … 0 in order (one walk each: walkTo is 2D and only climbs 1 block), then the exit column. [] when
+ * the pose is on none of the dug steps.
+ */
+export function climbPath(sp: Spiral, pose: { x: number; y: number; z: number }, upTo = sp.lastStep + 1): Array<{ x: number; z: number }> {
+	const k = stepAt(sp, pose, upTo);
+	if (k < 0) return [];
+	const out: Array<{ x: number; z: number }> = [];
+	for (let i = k - 1; i >= 0; i--) {
+		const f = spiralStep(sp, i).feet;
+		out.push({ x: f.x + 0.5, z: f.z + 0.5 });
+	}
+	const e = exitOf(sp);
+	out.push({ x: e.x + 0.5, z: e.z + 0.5 });
+	return out;
+}

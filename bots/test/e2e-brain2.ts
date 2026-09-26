@@ -227,13 +227,13 @@ export async function brain2Legs(c: Brain2Ctx): Promise<void> {
 			const st0 = bot.handle.store.state;
 			bot.handle.store.apply([{ path: ['events'], value: [...st0.events, { id: bot.handle.store.nextEventId(), kind: 'need', t: Date.now(), block: 'iron_ore', detail: 'iron_ore', salient: true }] }], { kind: 'poke', by: 'e2e' });
 			const poker = setInterval(poke, 5000);
-			const pausedAt: Array<{ t: number; steps: number }> = [];
+			const pausedAt: Array<{ t: number; steps: number; y: number }> = [];
 			const resumed: Array<{ t: number; steps: number }> = [];
 			let prev: Dig['status'] | null = null;
 			const unsub = bot.handle.store.subscribe(() => {
 				const d = bot.handle.store.state.digs[0];
 				if (!d) return;
-				if (d.status === 'paused' && prev !== 'paused') pausedAt.push({ t: Date.now(), steps: d.stepsDone });
+				if (d.status === 'paused' && prev !== 'paused') pausedAt.push({ t: Date.now(), steps: d.stepsDone, y: bot.client.pose().y });
 				if (d.status === 'active' && prev === 'paused') resumed.push({ t: Date.now(), steps: d.stepsDone });
 				prev = d.status;
 			});
@@ -258,6 +258,11 @@ export async function brain2Legs(c: Brain2Ctx): Promise<void> {
 			const episode = [...past].reverse().find((p) => p.outcome === 'paused' && p.why === 'paused');
 			check(episode !== undefined && episode.lastedMs >= 120_000 && pausedAt.length > 0,
 				`an episode ran to its 120 s and ended paused itself: ${past.map((p) => `${p.outcome}(${p.why}) ${(p.lastedMs / 1000).toFixed(0)} s`).join(', ') || 'no mine ended'}; ${mines.length} mine starts; paused at step ${pausedAt[0]?.steps ?? '-'}`);
+			// Ruling R17: the episode climbs back out before it ends paused (the bot is at the surface, not in its hole).
+			check(pausedAt.length > 0 && pausedAt[0].y >= d.spiral.y0 - 0.01, `paused at the surface: feet y ${pausedAt[0]?.y.toFixed(1) ?? '-'} (y0 ${d.spiral.y0})`);
+			const climbFails = bot.walks.filter((w) => w.r === 'error').length;
+			info(`walks: ${bot.walks.length}, blocked/errored: ${climbFails}; mine outcomes: ${past.map((p) => p.why).join(', ')}`);
+			check(!past.some((p) => p.why === 'stuck (climb)' || p.why === 'same action failed 3 times'), 'no Mine ended stuck (climb) or on a thrice-failed action');
 			check(resumed.length > 0 && resumed[0].steps === pausedAt[0]?.steps && d.stepsDone > resumed[0].steps, `resumed from stepsDone ${resumed[0]?.steps ?? '-'} (paused at ${pausedAt[0]?.steps ?? '-'}), now ${d.stepsDone}`);
 			// The world, read by a fresh observer (a bot: not a kid to anyone).
 			const obs = new BotClient({ url: c.server.url, token: TOKEN });

@@ -1,6 +1,9 @@
 import { describe, expect, it } from 'vitest';
 import { BehaviourRunner } from '../../src/brain2/runner.js';
-import { spiralStep, spiralsFor, type Spiral } from '../../src/brain2/behaviours/spiral.js';
+import { BlockedError } from 'minicraft-bot';
+import { LIMITS } from '../../src/brain2/data/limits.data.js';
+import { exitOf, spiralStep, spiralsFor, type Spiral } from '../../src/brain2/behaviours/spiral.js';
+import { BEHAVIOURS, type Behaviour } from '../../src/brain2/behaviours/behaviour.js';
 import { createPerceiver } from '../../src/brain2/perception.js';
 import { Ownership } from '../../src/brain2/ownership.js';
 import { Tripwire } from '../../src/brain2/safety.js';
@@ -9,6 +12,7 @@ import { ManualClock } from '../../src/brain2/clock.js';
 import { PIP } from '../../src/brain2/data/personalities.data.js';
 import { StopSignal } from '../../src/body/stop-signal.js';
 import type { Dig, Vec3 } from '../../src/brain2/types.js';
+import type { Pose } from '../../src/types.js';
 import { FakeBody, FakeWorld, id, player } from '../fake-port.js';
 
 // A natural dirt "tower" in open air above seed 12345's terrain (surface y≈104–138): columns 200..215 × 200..215,
@@ -415,5 +419,149 @@ describe('Mine (spec §6.2)', () => {
 		expect(kid.dig().status).toBe('active');
 		expect(await kid.runToEnd()).toMatchObject({ outcome: 'done' });
 		expect(kid.store.state.digs).toHaveLength(1);
+	});
+});
+
+/** The walkTo targets in body calls from index `from` on. */
+const walksFrom = (r: Rig, from: number) => r.body.calls.slice(from).filter((c) => c.fn === 'walkTo').map((c) => c.args[0] as { x: number; z: number });
+const centreOf = (c: { x: number; z: number }) => ({ x: c.x + 0.5, z: c.z + 0.5 });
+/** The climb from step k: steps k−1 … 0, then the exit column beside step 0 (built here, independently of climbPath). */
+const expectedClimb = (sp: Spiral, k: number) => [...Array.from({ length: k }, (_, j) => centreOf(spiralStep(sp, k - 1 - j).feet)), centreOf(exitOf(sp))];
+/** Digs a deep stone staircase to ≥ 10 steps, then interrupts it: the bot is left on its last dug step. */
+async function deepAndInterrupted(r: Rig): Promise<{ sp: Spiral; done: number }> {
+	const t = deep(r, 'stone');
+	r.start('stone');
+	await r.until(() => (r.store.state.digs[0]?.stepsDone ?? 0) >= 10);
+	r.runner.end('interrupted', 'test');
+	const sp = expected(t), done = r.dig().stepsDone;
+	const on = spiralStep(sp, done - 1).feet;
+	expect(r.body.pose()).toMatchObject({ x: on.x + 0.5, y: on.y, z: on.z + 0.5 });   // down in the staircase
+	return { sp, done };
+}
+/** Swaps BEHAVIOURS.rest for a probe that records the pose its first next() sees and ends done. */
+async function withProbe(fn: (seen: Pose[]) => Promise<void>): Promise<void> {
+	const seen: Pose[] = [];
+	const probe: Behaviour<Record<string, unknown>, object> = {
+		kind: 'rest', typicalMs: [1000, 1000], plan: () => ({}), plannedEdits: () => 0, owns: () => false,
+		next: (_p, ctx) => {
+			seen.push(ctx.pose);
+			return 'done';
+		},
+	};
+	const orig = BEHAVIOURS.rest;
+	BEHAVIOURS.rest = probe;
+	try {
+		await fn(seen);
+	} finally {
+		BEHAVIOURS.rest = orig;
+	}
+}
+const blockAllWalks = (r: Rig) => {
+	r.body.walkImpl = async () => {
+		throw new BlockedError(r.body.pose(), 'wall');
+	};
+};
+
+describe('Mine climbs out (ruling R17)', () => {
+	// Red if the episode ends paused down in the staircase (walkTo is 2D: nothing afterwards can walk out), climbs
+	// several steps in one walk, or edits on the way up.
+	it('a paused episode climbs its dug steps back up, one walk each, then onto the ground beside the pillar', async () => {
+		const r = mineRig();
+		const t = deep(r, 'stone');
+		const sp = expected(t);
+		r.start('stone');
+		await r.until(() => (r.store.state.digs[0]?.stepsDone ?? 0) >= 12);
+		r.clock.advance(LIMITS.MINE_EPISODE_MS);
+		const from = r.body.calls.length, minesBefore = r.mines().length;
+		const k0 = r.dig().stepsDone;
+		expect(await r.runToEnd(500)).toMatchObject({ outcome: 'paused' });
+		const k1 = r.dig().stepsDone;
+		expect(k1 - k0).toBeLessThanOrEqual(1);                      // at most the step in hand is finished
+		expect(walksFrom(r, from).slice(-k1)).toEqual(expectedClimb(sp, k1 - 1));
+		const exit = exitOf(sp);
+		expect(r.body.pose()).toMatchObject({ x: exit.x + 0.5, y: Y0, z: exit.z + 0.5 });
+		expect(r.mines().length - minesBefore).toBeLessThanOrEqual(3);
+		expect(r.dig().status).toBe('paused');
+		expect(r.tripwire.halted).toBeNull();
+	});
+
+	// Red if a done Mine stays at the bottom of its staircase.
+	it('a done Mine climbs out too', async () => {
+		const r = mineRig();
+		const t = shallowIron(r);
+		const sp = expected(t);
+		r.start('iron_ore');
+		expect(await r.runToEnd()).toMatchObject({ outcome: 'done' });
+		const exit = exitOf(sp);
+		expect(r.body.pose()).toMatchObject({ x: exit.x + 0.5, y: Y0, z: exit.z + 0.5 });
+		expect(walksFrom(r, 0).slice(-(sp.lastStep + 1))).toEqual(expectedClimb(sp, sp.lastStep));
+		expect(r.dig().status).toBe('done');
+	});
+
+	// Red if the runner lets another behaviour act from down in a staircase (its walks are blocked there).
+	it('another behaviour starting with the bot down in a staircase: the runner climbs it out first', async () => {
+		const r = mineRig();
+		const { sp, done } = await deepAndInterrupted(r);
+		await withProbe(async (seen) => {
+			const from = r.body.calls.length;
+			r.runner.start('rest', {});
+			expect(await r.runToEnd(500)).toMatchObject({ behaviour: 'rest', outcome: 'done' });
+			expect(walksFrom(r, from)).toEqual(expectedClimb(sp, done - 1));
+			const exit = exitOf(sp);
+			expect(seen[0]).toMatchObject({ x: exit.x + 0.5, y: Y0, z: exit.z + 0.5 });
+		});
+		expect(r.dig().status).toBe('paused');
+	});
+
+	// Red if a resume from inside the staircase walks up to step 0 first (the live fail-loop), or the runner climbs
+	// the bot out of the very dig it resumes.
+	it('a resume with the bot on one of the dig\'s steps goes on from there: no walk-down, no climb', async () => {
+		const r = mineRig();
+		const { sp, done } = await deepAndInterrupted(r);
+		const from = r.body.calls.length;
+		r.start('stone');
+		expect(r.dig().status).toBe('active');
+		await r.until(() => r.mines().length > 0 && r.body.calls.slice(from).some((c) => c.fn === 'mine'));
+		const first = r.body.calls.slice(from).find((c) => c.fn === 'mine' || c.fn === 'walkTo')!;
+		expect(first.fn).toBe('mine');
+		expect(spiralStep(sp, done).clear.map(k)).toContain((first.args as number[]).join(','));
+		expect(r.logs.filter(([kind]) => kind === 'climb')).toEqual([]);
+	});
+
+	// Red if a blocked resume walk falls to the runner's 3-failure rule (the dig stays paused and is re-picked
+	// about once a second), or doesn't drop the dig.
+	it('a resume walk-down blocked twice → failed \'stuck (climb)\', the dig dropped, a stuck event', async () => {
+		const r = mineRig();
+		const { done } = await deepAndInterrupted(r);
+		r.body.current = { x: 212.5, y: Y0, z: 212.5, yaw: 0, pitch: 0 };   // on the surface: walks down from step 0
+		const id0 = r.dig().id;
+		blockAllWalks(r);
+		const from = r.body.calls.length;
+		r.start('stone');
+		expect(await r.runToEnd(100)).toMatchObject({ outcome: 'failed', why: 'stuck (climb)' });
+		expect(walksFrom(r, from)).toHaveLength(2);
+		expect(r.store.state.digs.find((d) => d.id === id0)).toMatchObject({ status: 'dropped', stepsDone: done });
+		expect(r.store.state.events.filter((e) => e.kind === 'stuck')).toEqual([expect.objectContaining({ detail: 'stuck (climb)', salient: true })]);
+	});
+
+	// Red if a blocked climb isn't bounded (the runner retries it at every start: a loop), or doesn't drop the dig.
+	it('a runner climb blocked twice → the new behaviour fails \'stuck (climb)\', the dig dropped, never retried', async () => {
+		const r = mineRig();
+		await deepAndInterrupted(r);
+		blockAllWalks(r);
+		await withProbe(async (seen) => {
+			const from = r.body.calls.length;
+			r.runner.start('rest', {});
+			expect(await r.runToEnd(100)).toMatchObject({ behaviour: 'rest', outcome: 'failed', why: 'stuck (climb)' });
+			expect(walksFrom(r, from)).toHaveLength(2);
+			expect(seen).toEqual([]);
+			expect(r.dig().status).toBe('dropped');
+			expect(r.store.state.events.filter((e) => e.kind === 'stuck')).toEqual([expect.objectContaining({ detail: 'stuck (climb)' })]);
+			const again = r.body.calls.length;
+			r.runner.start('rest', {});
+			expect(await r.runToEnd(100)).toMatchObject({ outcome: 'done' });
+			expect(walksFrom(r, again)).toEqual([]);
+			expect(seen).toHaveLength(1);
+		});
 	});
 });

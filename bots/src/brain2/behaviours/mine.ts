@@ -2,7 +2,9 @@
  * Mine {block} (spec §6.2, R14): a tunnel-free spiral staircase down to the nearest target, dug in episodes of at
  * most 120 s that end `paused` and resume at the last step. Each step: the floor check (fill or `stuck (gap)`, never
  * re-routing), the hazard check, the 3 cells top-down, then a walk onto the step. At the bottom it mines the target
- * and its vein (only cells `safeToMine`), up to N. Uncovered ores that aren't the target write `found`.
+ * and its vein (only cells `safeToMine`), up to N. Uncovered ores that aren't the target write `found`. Ruling R17:
+ * on `paused` and `done` it climbs back out (step by step, then beside the pillar) before ending; a resume goes on from
+ * the step the bot stands on; a resume or climb walk failing twice ends `stuck (climb)` and drops the dig.
  */
 import { blockId } from 'minicraft-bot';
 import type { Dig, Vec3, WorldEvent } from '../types.js';
@@ -12,7 +14,7 @@ import { key, type Ownership } from '../ownership.js';
 import type { Patch } from '../store.js';
 import { anchorOf } from './build.js';
 import { boxMeetsKids, groundTop } from './site-search.js';
-import { safeToMine, spiralStep, spiralsFor, type Spiral, type Step } from './spiral.js';
+import { climbPath, safeToMine, spiralStep, spiralsFor, stepAt, type Spiral, type Step } from './spiral.js';
 import type { Behaviour, BehaviourCtx, Next } from './behaviour.js';
 
 export interface MineParams { block: string; digId?: string }
@@ -38,6 +40,13 @@ export interface MinePlan {
 	changed: boolean;
 	/** Target cells mined this episode: the vein grows from them. */
 	seeds: Vec3[];
+	/**
+	 * Ruling R17: on `paused` and `done`, the climb out first (the dug steps back up, one walk each, then the exit
+	 * beside the pillar); the outcome is returned once the path is walked.
+	 */
+	exit: { outcome: 'paused' | 'done'; path: Array<{ x: number; z: number }> } | null;
+	/** Failed walks in a row on the resume walk-down or the climb out: 2 → `stuck (climb)`, the dig dropped (R17). */
+	walkBlocked: number;
 }
 
 const CHUNK = 16;
@@ -48,7 +57,9 @@ const EPISODE_STEPS = Math.ceil(LIMITS.MINE_EPISODE_MS / (3 * LIMITS.EDIT_GAP_MI
 const KID_DIST = LIMITS.SITE_KID_DIST + 1.5;
 const REACH = 4.5;
 /** Failures that drop the dig for good: the route is unsafe or a kid's (the others pause it, fixable). */
-const DROP_REASONS: readonly string[] = ['hazard', 'stuck (kid-liquid)', 'stuck (kid-block)'];
+const DROP_REASONS: readonly string[] = ['hazard', 'stuck (kid-liquid)', 'stuck (kid-block)', 'stuck (climb)'];
+/** A resume or climb walk failing this many times in a row ends the episode `stuck (climb)` (ruling R17). */
+const MAX_WALK_BLOCKED = 2;
 /** Floor fills take the most-held of these natural blocks. */
 const FILL_BLOCKS = ['dirt', 'stone', 'deepslate', 'sand', 'grass_block', 'granite', 'diorite', 'andesite', 'tuff'];
 const FACES: ReadonlyArray<[number, number, number]> = [[1, 0, 0], [-1, 0, 0], [0, 1, 0], [0, -1, 0], [0, 0, 1], [0, 0, -1]];
@@ -172,6 +183,21 @@ function scanStep(pl: MinePlan, ctx: BehaviourCtx): Next {
 	return { kind: 'wait', ms: 0 };
 }
 
+/**
+ * Ruling R17: ends with `outcome` only once the bot is out of the staircase. The first call computes the climb
+ * from the bot's step (none when it isn't on one, e.g. still on the pillar); each call walks the next waypoint.
+ */
+function exitStep(pl: MinePlan, ctx: BehaviourCtx, outcome?: 'paused' | 'done'): Next {
+	if (!pl.exit) {
+		if (!pl.spiral || !pl.dig || pl.record) return outcome!;
+		pl.exit = { outcome: outcome!, path: climbPath(pl.spiral, ctx.pose, pl.dig.stepsDone) };
+		pl.walkBlocked = 0;
+	}
+	if (pl.walkBlocked >= MAX_WALK_BLOCKED) return { failed: 'stuck (climb)' };
+	const to = pl.exit.path[0];
+	return to ? { kind: 'walk', to, speed: ctx.style.walkSpeed } : pl.exit.outcome;
+}
+
 /** Writes the plan's dig (with `fields`) into state.digs. */
 function digPatch(pl: MinePlan, ctx: BehaviourCtx, fields: Partial<Dig>): Patch {
 	const d = pl.dig!;
@@ -216,7 +242,7 @@ export const mine: Behaviour<MineParams, MinePlan> = {
 			&& Math.hypot(d.spiral.px - anchor.x, d.spiral.pz - anchor.z) <= LIMITS.LEASH && !pillarNearKids(d.spiral, ctx));
 		const pl: MinePlan = {
 			params: p, dig: null, spiral: null, scan: null, phase: 'scan', stepIdx: 0, mined: 0, episodeStart: null, planned: 0,
-			anchor, cands: [], scanned: 0, walkDown: 0, resumeTo: 0, dropIds, record: false, changed: false, seeds: [],
+			anchor, cands: [], scanned: 0, walkDown: 0, resumeTo: 0, dropIds, record: false, changed: false, seeds: [], exit: null, walkBlocked: 0,
 		};
 		if (resume) {
 			pl.dig = { ...resume, status: 'active' };
@@ -224,6 +250,9 @@ export const mine: Behaviour<MineParams, MinePlan> = {
 			pl.phase = 'descend';
 			pl.stepIdx = resume.stepsDone;
 			pl.resumeTo = resume.stepsDone;
+			// Ruling R17: already down on one of its dug steps → the walk-down goes on from there.
+			const on = stepAt(resume.spiral, ctx.pose, resume.stepsDone);
+			if (on >= 0) pl.walkDown = on + 1;
 			pl.planned = budget(resume.spiral, resume.stepsDone, ctx);
 			return pl;
 		}
@@ -240,9 +269,11 @@ export const mine: Behaviour<MineParams, MinePlan> = {
 		}];
 	},
 	next(pl, ctx) {
+		if (pl.exit) return exitStep(pl, ctx);
+		if (pl.walkBlocked >= MAX_WALK_BLOCKED) return { failed: 'stuck (climb)' };
 		// The episode is timed from the first next() after the resume walk-down (a fresh dig: the first next()).
 		if (pl.walkDown >= pl.resumeTo) pl.episodeStart ??= ctx.now;
-		if (pl.episodeStart !== null && ctx.now - pl.episodeStart >= LIMITS.MINE_EPISODE_MS) return 'paused';
+		if (pl.episodeStart !== null && ctx.now - pl.episodeStart >= LIMITS.MINE_EPISODE_MS) return exitStep(pl, ctx, 'paused');
 		if (pl.phase === 'scan') return scanStep(pl, ctx);
 		if (pl.record) return { kind: 'wait', ms: 0 };
 		const sp = pl.spiral!, w = ctx.world, walkSpeed = ctx.style.walkSpeed;
@@ -275,7 +306,7 @@ export const mine: Behaviour<MineParams, MinePlan> = {
 			// 4. Onto the step.
 			return { kind: 'walk', to: centre(st.feet), speed: walkSpeed };
 		}
-		if (pl.mined >= LIMITS.MINE_N) return 'done';
+		if (pl.mined >= LIMITS.MINE_N) return exitStep(pl, ctx, 'done');
 		if (pl.phase === 'target') {
 			const t = pl.dig!.target;
 			if (w.getBlock(t.x, t.y, t.z) === blockId(pl.params.block)) {
@@ -286,9 +317,10 @@ export const mine: Behaviour<MineParams, MinePlan> = {
 			pl.phase = 'vein';
 		}
 		const v = veinCell(pl, ctx);
-		return v ? { kind: 'mine', cell: v } : 'done';
+		return v ? { kind: 'mine', cell: v } : exitStep(pl, ctx, 'done');
 	},
 	plannedEdits: (pl) => pl.planned,
+	inDig: (pl) => pl.dig?.id ?? null,
 	owns(pl, a) {
 		const sp = pl.spiral;
 		if (!sp || !pl.dig) return false;
@@ -311,12 +343,25 @@ export const mine: Behaviour<MineParams, MinePlan> = {
 			pl.record = false;
 			return [{ path: ['digs'], value: [...ctx.state.digs, pl.dig] }];
 		}
+		// Ruling R17: the climb out and the resume walk-down, one step per walk; failures in a row are counted.
+		if (a.kind === 'walk' && pl.exit) {
+			const to = pl.exit.path[0];
+			if (!ok) pl.walkBlocked++;
+			else if (to && a.to.x === to.x && a.to.z === to.z) {
+				pl.exit.path.shift();
+				pl.walkBlocked = 0;
+			}
+			return [];
+		}
+		if (a.kind === 'walk' && pl.walkDown < pl.resumeTo) {
+			if (ok) {
+				pl.walkDown++;
+				pl.walkBlocked = 0;
+			} else pl.walkBlocked++;
+			return [];
+		}
 		if (!ok || !pl.dig) return [];
 		if (a.kind === 'walk') {
-			if (pl.walkDown < pl.resumeTo) {
-				pl.walkDown++;
-				return [];
-			}
 			if (pl.phase === 'descend' && pl.stepIdx <= pl.spiral!.lastStep) {
 				const f = centre(spiralStep(pl.spiral!, pl.stepIdx).feet);
 				if (a.to.x === f.x && a.to.z === f.z) {

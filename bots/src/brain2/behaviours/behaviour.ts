@@ -43,6 +43,11 @@ export interface Behaviour<P = Record<string, unknown>, PL = unknown> {
 	 * patch applied with cause {kind:'behaviour'}.
 	 */
 	onResult?(plan: PL, a: Action, ok: boolean, ctx: BehaviourCtx): Patch;
+	/**
+	 * The dig this behaviour carries on from where the bot stands (Mine's resume), or null. Before any other
+	 * behaviour's first action, the runner climbs the bot out of a dig's staircase it stands in (ruling R17).
+	 */
+	inDig?(plan: PL): string | null;
 	/** Whether the result means plannedEdits must be recomputed (Help-build line extension, Build replan). */
 	recompute?(plan: PL): boolean;
 	/** Store writes when the behaviour ends, whatever the outcome: e.g. Build marks its build `done`, Mine marks its dig `paused`/`dropped`. The runner applies it in end(). */

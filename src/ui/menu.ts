@@ -919,7 +919,9 @@ export class MainMenu {
 		const pad = (n: number) => String(n).padStart(2, '0');
 		const lockable = world ?? (existing?.worldId ? { id: existing.worldId, name: existing.worldName ?? 'this world' } : null);
 		let onlyWorld = existing ? existing.worldId !== null : lockable !== null;
-		let startsNow = false;
+		// Changing a plan that has already started keeps it going now; its old time has passed and
+		// would read as tomorrow, pushing the session a day (review finding).
+		let startsNow = existing !== null && existing.startAt <= Date.now();
 		const startDefault = existing ? new Date(existing.startAt) : null;
 		let limitMin: number = existing?.limitMin ?? 45;
 
@@ -954,10 +956,10 @@ export class MainMenu {
 		}
 
 		section('Starts');
-		choice(card, 'sched-start', 'sched-now', 'Now', false, () => { startsNow = true; });
+		choice(card, 'sched-start', 'sched-now', 'Now', startsNow, () => { startsNow = true; });
 		const atRow = document.createElement('div');
 		atRow.className = 'sched-at';
-		const atRadio = choice(atRow, 'sched-start', 'sched-at', 'At', true, () => { startsNow = false; });
+		const atRadio = choice(atRow, 'sched-start', 'sched-at', 'At', !startsNow, () => { startsNow = false; });
 		const time = document.createElement('input');
 		time.type = 'time';
 		time.id = 'sched-time';

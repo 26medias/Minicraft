@@ -397,6 +397,20 @@ for (const sig of ['SIGINT', 'SIGTERM', 'SIGHUP'] as const) process.on(sig, () =
 		check(await text(page, '#play-line') === '45 minutes left', `in time: minutes left (got ${await text(page, '#play-line')})`);
 		const changed = JSON.parse((await ls(page, 'minicraft:v1:plan')) ?? '{}');
 		check(changed.id === plan.id, 'Change keeps the plan (its played time)');
+		// Change again on a plan that has started: it stays "Now", not tomorrow (review finding).
+		await page.click('#plan-parents');
+		await page.fill('#pin-input', '1234');
+		await page.click('#pin-go');
+		await page.waitForSelector('#plan-change');
+		await page.click('#plan-change');
+		await page.waitForSelector('#sched-now');
+		check(await page.locator('#sched-now').isChecked(), 'Change on a started plan pre-selects Now');
+		check((await text(page, '#sched-ok')).includes(' · now · '), `…and reads "now", not tomorrow (got ${await text(page, '#sched-ok')})`);
+		await page.click('#sched-ok');
+		await page.waitForSelector('#single-play:not([disabled])');
+		check(await text(page, '#play-line') === '45 minutes left', `after Change it is still playable now (got ${await text(page, '#play-line')})`);
+		const again = JSON.parse((await ls(page, 'minicraft:v1:plan')) ?? '{}');
+		check(again.startAt <= Date.now(), 'the changed plan still starts now');
 
 		// Used up: All done, Play off; +15 gives 15 minutes; End schedule frees play.
 		await page.evaluate((id) => {

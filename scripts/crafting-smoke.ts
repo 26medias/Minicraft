@@ -270,7 +270,8 @@ for (const sig of ['SIGINT', 'SIGTERM', 'SIGHUP'] as const) process.on(sig, () =
 			h.setCells = (cells, multi) => { w.__area = { cells: cells.map((c) => [c.x, c.y, c.z]), multi }; orig(cells, multi); };
 			w.__mc.cam.pitch = -Math.PI / 2 + 0.01;
 		});
-		await page.keyboard.press('Escape'); // no-op if already closed
+		// The I screen is already closed (line 249's Escape); pressing Escape here with nothing
+		// open would now open the pause menu (rule (b)), so it is dropped rather than kept "to be safe".
 		await seed(page, recipeFor('pickaxe:4'));
 		await craftVia(page, 'pickaxe:4');
 		await page.keyboard.press('Escape');
@@ -286,7 +287,8 @@ for (const sig of ['SIGINT', 'SIGTERM', 'SIGHUP'] as const) process.on(sig, () =
 		await page.screenshot({ path: `${OUT}/iron-highlight.png` });
 
 		// 9. Toys (toys spec §5, §3.1, §4): the dot, a Slime Pad crafted, the remembered tab, Shift = sneak, a real bounce.
-		await page.keyboard.press('Escape'); // no-op if already closed
+		// The I screen is already closed (Iron's Escape above); an Escape here with nothing open
+		// would now open the pause menu (rule (b)), so it is dropped rather than kept "to be safe".
 		await seed(page, recipeFor('block:slime_pad')); // counts change while I is closed: the dot rule steps with no tab on screen
 		await page.keyboard.press('KeyI');
 		check(await page.locator('.inventory-tab.active[data-tab="craft"]').count() === 1, 'I reopens on the Craft tab');

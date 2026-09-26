@@ -5,9 +5,12 @@ import type { LoadedAtlas } from './atlas';
 import { MESH_RADIUS } from '../world/radii';
 import { installRadialFog } from './radial-fog';
 import { Sun } from './sun';
+import { SkyDome, applyGrade, installSkyFog } from './sky';
 
-// Before any material compiles: fog by distance, not by view depth (a mountain must not fade as you turn to it).
+// Before any material compiles: fog by distance, not by view depth (a mountain must not fade as you turn to it),
+// fading to the sky's colour along the view ray.
 installRadialFog();
+installSkyFog();
 
 /**
  * Fog from the mesh ring (spec §3.E): far sits inside the mesh frontier (≥ MESH_RADIUS × 16 blocks) so the
@@ -32,14 +35,16 @@ export class Renderer {
 	private last = performance.now();
 	private gpuString: string | null = null;
 	private sun: Sun;
+	private sky: SkyDome;
 
 	constructor(container: HTMLElement, atlas: LoadedAtlas) {
 		this.scene = new THREE.Scene();
-		this.scene.background = new THREE.Color(0x87ceeb); // sky blue
+		// The SkyDome paints the sky; fog's colour is unused (installSkyFog fades to the sky along each ray).
 		this.scene.fog = new THREE.Fog(0x87ceeb, FOG_NEAR, FOG_FAR);
 
 		this.camera = new THREE.PerspectiveCamera(75, 1, 0.1, 500);
 		this.camera.position.set(8, 70, 8);
+		this.sky = new SkyDome(this.scene);
 		this.sun = new Sun(this.scene);
 
 		this.gl = new THREE.WebGLRenderer({
@@ -80,6 +85,8 @@ export class Renderer {
 			side: THREE.FrontSide,
 			alphaTest: 0.01,
 		});
+
+		for (const m of [this.material, this.liquidMaterial, this.translucentMaterial]) applyGrade(m);
 
 		this.resize();
 		window.addEventListener('resize', () => this.resize());
@@ -218,6 +225,7 @@ export class Renderer {
 		const dt = Math.min(0.1, (now - this.last) / 1000);
 		this.last = now;
 		this.tickFn?.(dt);
+		this.sky.update(this.camera);
 		this.sun.update(this.camera);
 		this.gl.render(this.scene, this.camera);
 		requestAnimationFrame(this.frame);

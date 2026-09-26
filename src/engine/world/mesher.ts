@@ -2,6 +2,7 @@ import type { BlockId, Face } from '../../data/blocks.data';
 import { BLOCKS, isLiquid, isSolid, isTranslucent, isTransparent } from '../../data/blocks.data';
 import type { Chunk } from './chunk';
 import { CHUNK_SIZE_X, CHUNK_SIZE_Z, indexOf } from './coords';
+import { SUN_DIR_RAW } from './shadows';
 
 export type ChunkMesh = {
 	positions: Float32Array;
@@ -21,9 +22,24 @@ export type UvFn = (id: BlockId, face: Face) => [number, number, number, number]
 
 export type Neighbors = { px?: Chunk; nx?: Chunk; pz?: Chunk; nz?: Chunk };
 
-const SKY_COLOR: [number, number, number] = [0.9, 0.95, 1.0];
+/**
+ * Skylight splits into two parts (docs/lighting.md, "Sun and sky"): a cool fill from the blue sky,
+ * which every sky-lit face gets, shadowed or not, and a warm direct sun, which only reaches faces
+ * turned toward the sun and out of cast shadow. A top face in full sun sums to about white, slightly
+ * warm; a shadow keeps only the fill, so it reads blue rather than grey. Values are linear.
+ */
+const SKY_FILL: [number, number, number] = [0.36, 0.42, 0.56];
+const SUN_COLOR: [number, number, number] = [0.78, 0.66, 0.4];
 const MIN_AMBIENT = 0.03;
-const SHADOW_FLOOR = 0.5;
+/**
+ * Block light (lamps, lava) is still scaled as before the sun/sky split: halved where no sun reaches
+ * (caves), full in the open, so lit caves keep the brightness they were tuned at.
+ */
+const BLOCK_SHADOW_FLOOR = 0.5;
+/** How much of the sky a face sees: all of it facing up, less on a wall, least facing down. */
+const SKY_VIEW_UP = 1.0;
+const SKY_VIEW_SIDE = 0.8;
+const SKY_VIEW_DOWN = 0.6;
 
 // Per-face constant data: normal, direction offset, 4 corner offsets (positions within a unit cube),
 // and 4 per-corner UV selectors ([uIndex, vIndex] where 0 picks u0/v0, 1 picks u1/v1).
@@ -162,6 +178,10 @@ const FACE_NORMAL = new Int8Array(6 * 3);
 const FACE_DIR = new Int8Array(6 * 3);
 const FACE_CORNER = new Int8Array(6 * 4 * 3);
 const FACE_UVSEL = new Int8Array(6 * 4 * 2);
+/** Per face: max(0, normal · sun direction), how squarely the face meets the sun. */
+const FACE_SUN = new Float32Array(6);
+/** Per face: the share of the sky the face sees (SKY_VIEW_*). */
+const FACE_SKY = new Float32Array(6);
 
 /**
  * AO / light / shadow sampling pattern per face: the 4 voxels on the OUTWARD side of a
@@ -189,6 +209,9 @@ for (let fi = 0; fi < 6; fi++) {
 	const nx = f.normal[0],
 		ny = f.normal[1],
 		nz = f.normal[2];
+	const sunLen = Math.hypot(...SUN_DIR_RAW);
+	FACE_SUN[fi] = Math.max(0, (nx * SUN_DIR_RAW[0] + ny * SUN_DIR_RAW[1] + nz * SUN_DIR_RAW[2]) / sunLen);
+	FACE_SKY[fi] = ny > 0 ? SKY_VIEW_UP : ny < 0 ? SKY_VIEW_DOWN : SKY_VIEW_SIDE;
 	const axisNormal = Math.abs(nx) > 0 ? 0 : Math.abs(ny) > 0 ? 1 : 2;
 	const pat = new Int8Array(4 * 4);
 	let k = 0;
@@ -437,9 +460,8 @@ const C_OUT = new Float32Array(3);
 
 /**
  * Compute the vertex colour for the corner (cx, cy, cz) of a face with pattern index fi:
- * averaged (sky, r, g, b) → RGB, times AO factor, times the shadow factor. Arithmetic
- * order matches the original sampleCornerLight / lightSampleToRGB / aoFactorForCorner /
- * sampleCornerShadow exactly so the output bytes are identical.
+ * averaged (sky, r, g, b) light → sky fill + direct sun (scaled by the sunlit fraction and
+ * the face's angle to the sun) + block light (BLOCK_SHADOW_FLOOR), clamped, times the AO factor.
  */
 function cornerColor(
 	chunk: Chunk,
@@ -476,34 +498,25 @@ function cornerColor(
 			}
 		}
 	}
-	// sampleCornerLight: average over the 4 voxels (count is always 4 for an axis normal).
-	const sky = sumSky / 4;
-	const lr = sumR / 4;
-	const lg = sumG / 4;
-	const lb = sumB / 4;
-	// lightSampleToRGB
-	const skyScale = sky / 15;
-	const blockR = lr / 15;
-	const blockG = lg / 15;
-	const blockB = lb / 15;
-	let r = SKY_COLOR[0] * skyScale + blockR + MIN_AMBIENT;
-	let g = SKY_COLOR[1] * skyScale + blockG + MIN_AMBIENT;
-	let b = SKY_COLOR[2] * skyScale + blockB + MIN_AMBIENT;
+	// Average over the 4 voxels (count is always 4 for an axis normal).
+	const skyScale = sumSky / 4 / 15;
+	const fill = skyScale * FACE_SKY[fi];
+	const sunlitFrac = sumSun / 4;
+	const sun = skyScale * FACE_SUN[fi] * sunlitFrac;
+	const block = (BLOCK_SHADOW_FLOOR + (1 - BLOCK_SHADOW_FLOOR) * sunlitFrac) / 4 / 15;
+	let r = SKY_FILL[0] * fill + SUN_COLOR[0] * sun + sumR * block + MIN_AMBIENT;
+	let g = SKY_FILL[1] * fill + SUN_COLOR[1] * sun + sumG * block + MIN_AMBIENT;
+	let b = SKY_FILL[2] * fill + SUN_COLOR[2] * sun + sumB * block + MIN_AMBIENT;
 	if (r > 1) r = 1;
 	if (g > 1) g = 1;
 	if (b > 1) b = 1;
-	// aoFactorForCorner
 	let ao: number;
 	if (edgeCount === 0) ao = 1.0;
 	else if (edgeCount === 1) ao = 0.85;
 	else ao = diagOpaque ? 0.5 : 0.7;
-	// sampleCornerShadow
-	const sunlitFrac = sumSun / 4;
-	const shadowFactor = SHADOW_FLOOR + (1 - SHADOW_FLOOR) * sunlitFrac;
-	const mult = ao * shadowFactor;
-	C_OUT[0] = r * mult;
-	C_OUT[1] = g * mult;
-	C_OUT[2] = b * mult;
+	C_OUT[0] = r * ao;
+	C_OUT[1] = g * ao;
+	C_OUT[2] = b * ao;
 }
 
 /** Emit one quad (4 vertices + 6 indices) for block (x, y, z), face fi, into bufs. */

@@ -216,3 +216,61 @@ describe('meshChunk at height 256', () => {
 		expect(result.opaque.indices.length).toBe(36);
 	});
 });
+
+describe('meshChunk — sun and sky', () => {
+	/**
+	 * Mean vertex colour per face normal key ('1,0,0', '0,1,0', ...) over the opaque mesh, for the quads
+	 * whose centre, floored, passes `only` (a top face's centre floors to the voxel above its block).
+	 */
+	function faceColors(c: Chunk, w: World, only: (x: number, y: number, z: number) => boolean = () => true) {
+		const mesh = meshChunk(c, w.neighbors(c), uvStub).opaque;
+		const acc = new Map<string, number[]>();
+		const centre = (i: number, axis: number) => Math.floor((mesh.positions[i + axis] + mesh.positions[i + 3 + axis] + mesh.positions[i + 6 + axis] + mesh.positions[i + 9 + axis]) / 4);
+		for (let i = 0; i < mesh.positions.length; i += 12) { // one quad = 4 vertices
+			if (!only(centre(i, 0), centre(i, 1), centre(i, 2))) continue;
+			const key = `${mesh.normals[i]},${mesh.normals[i + 1]},${mesh.normals[i + 2]}`;
+			const a = acc.get(key) ?? [0, 0, 0, 0];
+			for (let v = 0; v < 4; v++) for (let ch = 0; ch < 3; ch++) a[ch] += mesh.colors[i + v * 3 + ch];
+			a[3] += 4;
+			acc.set(key, a);
+		}
+		return new Map([...acc].map(([k, a]) => [k, [a[0] / a[3], a[1] / a[3], a[2] / a[3]]]));
+	}
+	const sum = (c: number[]) => c[0] + c[1] + c[2];
+
+	it('a lone block in the open: top brightest, the sun-facing sides next, the sides turned away darkest', () => {
+		const w = new World(1);
+		const c = w.ensureChunk(0, 0);
+		c.blocks.fill(0);
+		c.blocks[indexOf(5, 30, 5)] = stone;
+		fillChunkLights(w, c);
+		computeChunkShadows(w, c);
+		const f = faceColors(c, w);
+		// The sun is toward −x, −z (shadows.ts SUN_DIR_RAW): −x meets it more squarely than −z.
+		const top = sum(f.get('0,1,0')!), nx = sum(f.get('-1,0,0')!), nz = sum(f.get('0,0,-1')!);
+		const px = sum(f.get('1,0,0')!), pz = sum(f.get('0,0,1')!);
+		expect(top).toBeGreaterThan(nx);
+		expect(nx).toBeGreaterThan(nz);
+		expect(nz).toBeGreaterThan(px);
+		expect(px).toBeCloseTo(pz, 5); // no sun on either: sky fill only
+	});
+
+	it('sunlit tops are warm (red ≥ blue) and a cast shadow is blue (blue > red), not grey', () => {
+		const w = new World(1);
+		const c = w.ensureChunk(0, 0);
+		c.blocks.fill(0);
+		for (let x = 0; x < 16; x++) for (let z = 0; z < 16; z++) c.blocks[indexOf(x, 30, z)] = stone;
+		// A roof 3 blocks up casts its shadow on the floor about (1.5, 0.9) blocks toward +x, +z (away from the sun):
+		// floor-level voxels x 8..10, z 7..9 are unsunlit, so the top of (9, 30, 8) and all it samples are in shadow.
+		for (let x = 6; x < 9; x++) for (let z = 6; z < 9; z++) c.blocks[indexOf(x, 34, z)] = stone;
+		fillChunkLights(w, c);
+		computeChunkShadows(w, c);
+		const floor = (x0: number, x1: number, z0: number, z1: number) => (x: number, y: number, z: number) =>
+			y === 31 && x >= x0 && x < x1 && z >= z0 && z < z1;
+		const lit = faceColors(c, w, floor(2, 4, 2, 4)).get('0,1,0')!;
+		const shade = faceColors(c, w, floor(9, 10, 8, 9)).get('0,1,0')!;
+		expect(lit[0]).toBeGreaterThanOrEqual(lit[2]);
+		expect(shade[2]).toBeGreaterThan(shade[0] + 0.05);
+		expect(sum(shade)).toBeLessThan(sum(lit) * 0.7);
+	});
+});

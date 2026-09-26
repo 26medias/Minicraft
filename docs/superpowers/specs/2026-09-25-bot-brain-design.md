@@ -1,8 +1,11 @@
 # Bot brain: emotions, behaviours and a blackboard of experts
 
-**Status:** design, rev 2, 2026-09-25. It was brainstormed with Julien on 2026-09-25.
+**Status:** design, rev 3, 2026-09-25. It was brainstormed with Julien on 2026-09-25.
 - **Rev 1** (`193069b`) went through gate 1 with four reviewers: models, rigour, engine and sequencing, and consumer. All four ran probes.
-- **Rev 2** repairs every finding, and adds rulings R12–R15, which Julien made on the review's questions. The disposition of every finding is in §12.
+- **Rev 2** (`e7b20dd`) repaired every finding and added rulings R12–R15, which Julien made on the review's questions.
+- **Rev 3** repairs the re-gate of rev 2, where the same four reviewers re-ran their probes.
+
+The disposition of every finding is in §12.
 
 Branch `bot-brain`, cut from `bots` at `b70cc3a`.
 
@@ -48,19 +51,26 @@ Branch `bot-brain`, cut from `bots` at `b70cc3a`.
 
 The plan must turn each one into a test or a measured check, and name the defect that turns each test red.
 
-1. **Behaviour reads as alive, not random.** In a recorded 20-minute session with one kid, every switch has a logged reason. No switch happens before the 20 s minimum unless its cause is `done`, `failed`, or an urgent trigger (§5.3).
+1. **Behaviour reads as alive, not random.** In a recorded 20-minute session with one kid, every switch has a logged reason. No switch happens before the 20 s minimum unless its cause is `done`, `failed`, or an urgent trigger (§5.3). **In any 5-minute window there are at most 10 switches, urgent ones included.** This catches back-and-forth switching, which the first rule exempts.
 2. **Emotions move the right way.** On the labelled appraisal set (§9.2), the chosen engine configuration gets the direction right in ≥ 80% of cases, and each class (down, stay, up) scores ≥ 60% recall. An always-`stay` baseline must fail the same bar. It's measured against live models, not in CI. If no configuration reaches 80%, the plan stops and the numbers go to Julien.
-3. **Different personalities behave differently, and it's the personality doing it.** Two personalities, the same scripted event stream, with model answers from a cache keyed by prompt hash. A cache miss calls the live model and records the answer, so personality differences reach the prompts. At least 2 behaviours must differ by more than 20 points of time share.
+3. **Different personalities behave differently, and it's the personality doing it.** Two personalities, the same scripted event stream, with model answers from a cache keyed by prompt hash. A cache miss calls the live model and records the answer, so personality differences reach the prompts.
+- **Deterministic answers:** every LLM call uses temperature 0 and a fixed `seed`, and times in prompts are rounded (§4.3), so a replayed stream hits the same prompts.
+- **The cache is committed**, and the test reports its hit rate. At least 2 behaviours must differ by more than 20 points of time share.
 4. **Kid safety holds.** No edit ever lands on a `kid` cell or inside its buffer (§4.5), in a cell touching liquid, or inside a kid's buffer. This is property-tested against the safety tier, and asserted in every end-to-end run.
 5. **It never freezes.** With Laya down, the LLM down, or both down, the bot keeps choosing behaviours and acting, using the code fallbacks.
 6. **Any decision can be explained.** From the replay of a session, every behaviour switch shows its merge breakdown (§5.3) and links to the exact prompts and answers behind each input.
-7. **It's good company.** In a 20-minute session with a kid present:
-   - the bot spends ≥ 60% of its time within 16 blocks of the kid;
-   - on the recorded "kid lays a line" fixtures, Help-build wins in ≥ 80% of them, both with models up and with models down;
-   - the bot makes 0 edits within 12 blocks of a `kid` cell, Help-build excepted.
-
-   The 60% is a tuning target. If it's missed, the weights change; the design doesn't.
-8. **An ordinary session never trips the runaway tripwire.** A full medium house, a full tower, and a 3-minute stone staircase, each at the fastest pacing, all run without halting edits.
+7. **It's good company.** Measured in a 20-minute end-to-end session. The kid is the scripted `kid-client` (`bots/test/kid-client.ts`) with a fixed script: wander 3 min, lay 2 lines of 6 blocks, stand watching 3 min, fly around 2 min, repeat.
+   - The bot spends ≥ 60% of its time within 16 blocks of the kid, measured as 3D distance. A deep dig counts against it, which is intended. The 60% is a tuning target: if it's missed, the weights change, not the design.
+   - On the "kid lays a line" fixtures, Help-build wins in ≥ 80% of them, both with models up and with models down.
+   - On the "kid near, not laying a line" fixtures, Help-build wins in ≤ 20% of them. This makes sure a bonus big enough to win everywhere turns the test red.
+   - The same two checks still pass on the **R13 fixture**: the kid breaks 3 bot blocks every session for 5 sessions, so Grievance ends up "low" or "very low".
+   - Every Build site, dig entrance and dig route is ≥ 12 blocks (horizontally) from any `kid` cell **when it is planned or replanned**. Kid cells that appear later don't stop a build in progress.
+8. **An ordinary session never trips the runaway tripwire.** Each of these runs at the fastest pacing without halting edits:
+   - a full medium house, including levelling;
+   - a full tower;
+   - a full 120 s stone Mine episode, including a cave crossing with floor fills;
+   - a Build that replans once;
+   - a Help-build line that the kid keeps extending to 20 blocks.
 
 ## 3. Architecture
 
@@ -89,8 +99,15 @@ The plan must turn each one into a test or a measured check, and name the defect
 - **The store** is the single source of truth. Experts never call each other. They read a slice and propose a patch, and only `store.apply` mutates state. Every mutation produces a change event `{path, old, new, cause, t}`, including decay (§5.1), so a replay reproduces the live run exactly.
 - **The scheduler** runs experts when their trigger matches.
   - **The Laya lane** takes one call at a time, by priority: fit, then social, then appraisal.
-  - **The LLM lane** is a single queue by priority: selection, then parameters, then appraisal. Each expert has at most **one** queued call; a newer request replaces the queued one (drop the oldest).
-- **Stale answers.** Each expert declares a `materialKey(slice)`: a string built only from what would change its answer. That's the behaviour kind, the ids of the salient events it read, and word bands (§4.1), never raw values. When an answer arrives, it's dropped if the expert's current `materialKey` differs from the one it read. `version` still goes up on every apply, but it's only used for ordering, never for staleness, so decay never makes an answer stale.
+  - **The LLM lane** is a single queue by priority: selection, then parameters, then appraisal, then anything else. Each expert has at most **one** queued call; a newer request replaces the queued one (drop the oldest).
+- **Stale answers.** Each expert declares a `materialKey(slice)`: a string built only from what would change its answer. It contains:
+  - the active behaviour kind;
+  - the ids of the salient events it read, **except plain `placed`/`broke`**, which count as a bucket (0, 1–3, 4+) per player;
+  - the ids of the most recent **appraisal** patch on each axis it read.
+
+  It never contains raw values, word bands or decay patches, so **decay can't make an answer stale**, by construction. A kid building steadily doesn't make answers stale either (the rev 2 key survived only 30% of the time at 2 kid edits a second).
+
+  When an answer arrives and the key has changed, the answer is dropped and the expert's **fallback** is used for that trigger. There's no retry. `version` goes up on every apply, but it's only used for ordering.
 - **Model answers are proposals.** Each expert's `merge` is code: it clamps, bounds and validates. An answer that is malformed, out of range or names something off its list counts as a failure, and the fallback is used.
 
 ### 3.1 The expert contract
@@ -111,7 +128,9 @@ interface Expert<S, P> {
 ```
 
 - **Debounce** is trailing, with a maximum wait: the trigger fires `quietMs` after the last matching event, or at `maxWaitMs` at the latest.
-- `both-agree` asks Laya and the LLM, and keeps a direction only if both give it; otherwise the answer is `stay`.
+- **Combination engines** are defined only for **direction** questions (`appraise.detect`). Social and fit questions use a single engine.
+  - `both-agree`: Laya and the LLM must give the same direction, otherwise the answer is `stay`. The re-gate measured this: it only ever adds `stay`, and the LLM never says stay, so it scores no better than Laya.
+  - `llm-dir-laya-stay`: Laya's binary wording decides whether the axis moves at all, and the LLM decides which way. It's a benchmark candidate.
 - **Prompt-budget test.** For every Laya-capable expert, the whole request (state text, instructions and option text) is rendered from a deliberately busy state: 8 players, 30 events, a long history. It must:
   - stay under `promptBudgetWords`, counted as whitespace-separated words;
   - contain no player name other than the ones the question is about.
@@ -130,9 +149,13 @@ interface Expert<S, P> {
   | `select.situational` | 350 ms | 437 ms |
 
   **Ollama doesn't enforce numeric schema bounds.** Every numeric field is re-validated in `merge` (§5.2).
+- **Every LLM call is deterministic:** temperature 0 with a fixed `seed`. At 0.2, the re-gate got 6 different answers out of 6 on the same prompt.
+- **Startup loads the model with `keep_alive: -1`**, so it stays loaded.
 - **The health check** fails, and the bot runs on fallbacks for that engine, when:
   - Laya's `/health` fails;
   - Ollama's `/api/ps` shows `size_vram` smaller than the model's size, which means it's partly on the CPU and too slow.
+
+  A model missing from `/api/ps` isn't a failure. It means "load it", followed by one more check.
 - **Code:** the default engine, and every model expert's fallback.
 
 ## 4. The state
@@ -182,21 +205,34 @@ Each axis's words come from its poles.
 
 `AxisState = { value, pendingDrift, deltas: {amount, cause, agoS}[] }`. It keeps the last 10 deltas.
 
-**Decay (repaired).** On every tick, decay adds `(baseline − value) · (1 − 2^(−dt/halfLife))` to `pendingDrift`. When |pendingDrift| ≥ 0.01, it's applied as one patch with `cause: 'decay'`, and `pendingDrift` resets. Every axis therefore decays at its true rate. For example, Mood at 1.0 with baseline 0 reaches 0.5 after 2 min, and there's a test for it. Decay events are never appraisal deltas: they don't count toward the selection trigger's Σ|Δ| (§5.3), and they aren't listed in `deltas`.
+**Word bands have ±0.03 hysteresis:** a value has to cross an edge by 0.03 before its band changes.
+
+**Decay (repaired twice).**
+1. On every tick, decay adds `(baseline − (value + pendingDrift)) · (1 − 2^(−dt/halfLife))` to `pendingDrift`. It's computed from the value *including* the pending drift, so it can't overshoot.
+2. When |pendingDrift| ≥ 0.01, it's applied as one patch with `cause: 'decay'`, and `pendingDrift` resets.
+3. When |value − baseline| < 0.01, the value snaps to the baseline and decay stops.
+
+Every axis decays at its true rate. Tests:
+- Mood at 1.0 with baseline 0 is 0.5 ± 0.01 after 2 min.
+- An axis whose baseline sits on a band edge changes band at most twice while it settles. Decay events are never appraisal deltas: they don't count toward the selection trigger's Σ|Δ| (§5.3), and they aren't listed in `deltas`.
 
 ### 4.2 Relations (per player)
 
 These are Affection, Cooperation, Respect and Grievance (−1 resentful, +1 grateful), in [−1, 1], with the full range allowed toward kids (R13). Each has the same fields as `AxisState`, plus `metSessions`, `minutesTogether` and `lastSeenAgoS`.
 
 - **Within a session:** decay as in §4.1. Grievance's half-life is 30 min; the others' is 4 h.
-- **Between sessions:** loading the file moves each axis halfway back to 0, but **only if the file's `lastSessionEnd` is more than 30 minutes ago**, so a crash or restart doesn't wipe feelings.
+- **Between sessions:** loading the file moves each axis halfway back to 0, but **only if the file's `lastAlive` is more than 30 minutes ago**, so a crash or restart doesn't wipe feelings. `lastAlive` is written on every debounced write (at most 5 s apart) as well as on exit, so a crash leaves it fresh.
 - **Players are keyed by name.** Bots (🤖) never get a relation entry.
 
 ### 4.3 Action memory
 
-`ActionEntry = { behaviour, params, lastedS, outcome: 'done' | 'abandoned' | 'interrupted' | 'failed' | 'paused', why }`. `paused` means a Mine episode that ended on its time budget with its dig saved (§6.2). Models never see timestamps. One shared renderer prints the memory line, for example:
+`ActionEntry = { behaviour, params, lastedS, outcome: 'done' | 'abandoned' | 'interrupted' | 'failed' | 'paused', why }`. `paused` means a Mine episode that ended on its time budget with its dig saved (§6.2). Models never see timestamps, only durations in seconds, as Julien asked.
 
-> Now: Explore, started 12 s ago. Before: Build tower 94 s (done). Follow Noah 40 s (interrupted: Noah flew away).
+**Seconds in prompts are rounded:** to 5 s below a minute, and to 30 s above. Prompts then repeat exactly, which makes the answer cache (criterion 3) and the benchmark reproducible.
+
+One shared renderer prints the memory line, for example:
+
+> Now: Explore, started 10 s ago. Before: Build tower 94 s (done). Follow Noah 40 s (interrupted: Noah flew away).
 
 ### 4.4 World events
 
@@ -219,15 +255,19 @@ Every event has `agoS`, and a `salient` flag set by `salience` (§5.1).
 
 Every cell is one of three classes. Gate 1 showed that matching coordinates against `builds` or the journal lets a kid's block be mistaken for the bot's, so ownership is decided by the current block:
 
-- **`bot`**: `owned` has the cell, **and** the world's current block equals the id the bot wrote. Any foreign `onBlockChange` on an owned cell (`by` ≠ the bot) deletes it from `owned` at once. `owned` is persisted in the brain file, not taken from the SDK journal, which is capped at 10,000 entries and cleared when the state file joins another world. When the file loads, every entry is checked against the world, and mismatches are dropped.
+- **`bot`**: `owned` has the cell, **and** the world's current block equals the id the bot wrote. Any foreign `onBlockChange` on an owned cell (`by` ≠ the bot) deletes it from `owned` at once. `owned` is persisted in the brain file, not taken from the SDK journal, which is capped at 10,000 entries and cleared when the state file joins another world. When the file loads, every entry in a loaded chunk is checked against the world, and mismatches are dropped. Entries in chunks that aren't loaded yet count as `kid` until their chunk loads and passes the check.
+
+**A known limit:** if a kid breaks a bot cell and re-places the same block while the bot is offline, the bot can't tell, and the cell still counts as `bot`. It's rare, and nothing fixes it.
 - **`natural`**: not `bot`, and never edited. The check is the SDK overlay: `world.isEdited(x,y,z)`, a new read-only SDK accessor over the private `ChunkOverlay`, O(1). Gate 1 found 0 of 262,144 unedited cells differing from the generator. The overlay also catches a kid re-placing the same block, which comparing against the generator can't.
 - **`kid`**: everything else. That includes other bots' edits and liquid flows set off by edits. This is deliberately conservative.
+
+**The kid-cell index.** Distance rules ("≥ 12 blocks from any `kid` cell") can't be checked cell by cell: that's about 160,000 point queries per candidate site. The bot keeps a per-chunk set of `kid` cells, built once per chunk from a second read-only SDK accessor, `editedCellsInChunk(cx, cz)`. `onBlockChange` keeps it current. Distance checks then run against those sets, not against the world.
 
 **The buffer applies to `kid` cells only:** 1 block for placing, 2 blocks for breaking next to a `kid` cell that is air (a dug base). Bot cells have no buffer, so the bot can build its second block and dig its next step.
 
 ### 4.6 Persistence (R4)
 
-The file is `bots/.state/brain/<target>/<world-uuid>/<bot>.json`, keyed by world uuid as `bots/src/config.ts:204` does. It holds `relations`, `inventory`, `builds`, `digs`, `owned`, `explored`, `lastSessionEnd` and `schemaVersion`.
+The file is `bots/.state/brain/<target>/<world-uuid>/<bot>.json`, keyed by world uuid as `bots/src/config.ts:204` does. It holds `relations`, `inventory`, `builds`, `digs`, `owned`, `explored`, `lastAlive` and `schemaVersion`.
 
 - **Personality always comes from `*.data.ts`**, so tuning takes effect on the next run.
 - **Writes:** atomic (a temp file, then a rename), debounced to 5 s, and on exit.
@@ -263,12 +303,23 @@ The file is `bots/.state/brain/<target>/<world-uuid>/<bot>.json`, keyed by world
   - the 1–3 salient events of the burst, as short sentences.
 - Budget: 60 words.
 - **Engine and wording are config (R15).** The benchmark (§9.2) chooses between:
-  - the three-way question, "go down, stay, or go up?";
-  - two binary calls, "more ‹hi› now?" and "more ‹lo› now?". This scored 8/12 in gate 1, best among the Laya wordings;
-  - the LLM (9/12);
-  - `both-agree`.
+  - Laya, three-way: "go down, stay, or go up?" (5/12 in gate 1);
+  - Laya, two binary calls: "more ‹hi› now?" and "more ‹lo› now?" (8/12);
+  - the LLM, one call per burst: a schema answer covering every axis in the burst (9/12, never says `stay`);
+  - the LLM few-shot: the same call with 4 labelled examples, one of them `stay`;
+  - `llm-dir-laya-stay` (§3.1);
+  - `both-agree` (§3.1), kept only as a baseline.
 - An answer with max(p) < 0.5 counts as `stay`.
-- **Cost:** (8 + 4k) calls, measured at p50 12 ms and p95 19 ms each, even while the LLM is generating. That's about 0.2 s for k = 1.
+- **Cost per burst**, for k players involved:
+
+  | Engine | Calls per burst | Time |
+  |---|---|---|
+  | Laya three-way | (8 + 4k) calls, at p50 12 ms and p95 19 ms each | ≈ 0.15 s |
+  | Laya binary | 2 × (8 + 4k) calls | ≈ 0.3 s |
+  | LLM | 1 batched call | p50 ≈ 0.6 s |
+  | Combinations | the sum of their parts | ≤ 1 s |
+
+  All of these stay under `maxWaitMs`.
 
 **`appraise.size`** is one LLM call per burst, covering the axes `detect` flagged.
 - **Input:** the flagged axes with their directions, the burst's events, the personality in one sentence, and the word bands.
@@ -294,6 +345,8 @@ The file is `bots/.state/brain/<target>/<world-uuid>/<bot>.json`, keyed by world
   - the behaviour's target player gone;
   - `line-started` by a kid within 16 blocks;
   - `looking-at-me`.
+
+  **Limits on urgent triggers:** at most one per trigger kind per player every 20 s. An urgent trigger never interrupts a behaviour that already serves the same player: a `line-started` from Noah doesn't interrupt Help-build {Noah}. That stops two kids laying lines from bouncing the bot between them. The switch cap in criterion 1 is the backstop.
 - **Keep-going (code, R15)** every 30 s: it triggers selection when:
   - the behaviour has run past its `typicalS` upper bound, or
   - Stimulation is "low" or "very low" and the behaviour has run ≥ 60 s, or
@@ -306,7 +359,7 @@ The file is `bots/.state/brain/<target>/<world-uuid>/<bot>.json`, keyed by world
    - "Do I want to be near ‹name› right now?"
    - "Does ‹name› seem to want help?"
 
-   Code maps the answers to scores for Follow, Watch and Help-build per player. Gate 1 measured "wants help?" at `no` 0.65 on a real line-laying scene, so this question is in the benchmark (§9.2). Help-build doesn't depend on it: `line-started` is urgent, and the emotional table gives Help-build a flat bonus while `line-started` is fresh (≤ 15 s).
+   Code maps the answers to scores for Follow, Watch and Help-build per player. Gate 1 measured "wants help?" at `no` 0.65 on a real line-laying scene, so this question is in the benchmark (§9.2). Help-build doesn't depend on it: `line-started` is urgent, and the emotional table gives Help-build a flat bonus while `line-started` is fresh (≤ 15 s). The bonus is sized to beat the social penalty of Grievance at "very low", which is what the R13 fixture checks (criterion 7).
 3. **`select.situational`** (LLM): the whole state as prose. It outputs `{behaviour: enum, params, because}`. It picked `watch` 22 out of 22 times on a line scene in gate 1, so its merge weight starts low (§11), and its prompt is benchmarked like the others.
 
 **`select.merge`** (code) adds fixed weights (R9, from data):
@@ -339,7 +392,8 @@ The full breakdown (behaviour × input × weight → total) is logged on every r
 - its preferred distance from players comes from Confidence and Affection.
 
 **Gestures** are short reactions (≤ 2 s), triggered by appraisal deltas.
-- They fire **only when the bot is inside some kid's view**: within 20 blocks and within ±50° of that kid's yaw. Otherwise they're skipped, since nobody would see them.
+- They fire **only when the bot is inside some kid's view**: within 20 blocks, within ±50° of that kid's yaw, and within ±35° of that kid's pitch. Otherwise they're skipped, since nobody would see them.
+- **The greeting is the exception.** It's held for up to 20 s until the bot is in the arriving kid's view. Its walk goes to a spot in front of the kid, so it can be seen.
 - At most one every 5 s.
 - A gesture moves with `move()`, which cancels a walk, so the behaviour reissues its current action afterwards.
 - Gate 1 measured that small head motions (look down, pause) don't read at distance, so positive gestures are big, and negative ones are distinct from them.
@@ -347,17 +401,17 @@ The full breakdown (behaviour × input × weight → total) is logged on every r
 | Change | Gesture |
 |---|---|
 | Mood +≥ 0.3 | a double hop, plus a `firework` fx if the cause is a finished build |
-| Mood −≥ 0.2 | stop and sink: crouch-look down for 1.5 s, then a slow turn |
+| Mood −≥ 0.2 | stop, then a slow full turn, then a 2 s pause. There's no crouch in the protocol, and a look-down doesn't read at distance. |
 | Confidence −≥ 0.2, **not** caused by a kid approaching | back off 2 blocks from the cause |
 | Affection toward P +≥ 0.15 | turn to P and hop |
 | Grievance toward P −≥ 0.2 | turn away from P (R13) |
 | Curiosity +≥ 0.2, or `found` | turn toward the thing and pause 1.5 s; for uncovered ore, stand beside it facing it for 3 s |
-| Patience < −0.5 and a failed outcome | an abrupt 180° turn and a 3-block walk away from the failed spot (it has to differ from the happy double hop) |
+| Patience < −0.5 and a failed outcome | an abrupt turn, then a 3-block walk **at a right angle to the nearest kid's direction**, so it doesn't read as leaving the kid. It has to look different from the happy double hop. |
 | `player-arrived` with Affection ≥ 0.3 (greeting) | turn, walk 2 blocks toward them, hop |
 
 ## 6. The behaviours
 
-**One leash for everything:** while any kid is present, every target (a site, a dig start, a waypoint, the Rest spot) must lie within **32 blocks** of the nearest kid. With no kid present, the leash is 32 blocks from the bot's latest build, or from world spawn if there are no builds.
+**One leash for everything:** while any kid is present, every target must lie within **32 blocks, measured horizontally,** of the nearest kid. The targets are a site, a dig **entrance**, a waypoint and the Rest spot. A dig's leash is checked on its entrance, both when it starts and when it resumes; depth isn't leashed (R14). With no kid present, the leash is 32 blocks from the bot's latest build, or from world spawn if there are no builds.
 
 ```ts
 interface Behaviour<P> {
@@ -366,9 +420,18 @@ interface Behaviour<P> {
 	next(plan: Plan, state: State): Action | 'done' | { failed: string } | 'paused';
 	judgeFit?(action: Action, state: State): FitQuestion | null;
 	typicalS: [number, number];
-	plannedEdits(plan: Plan): number;           // for the tripwire (§7.2)
+	plannedEdits(plan: Plan): number;           // for the tripwire (§7.2); recomputed as below
 }
 ```
+
+**How `plannedEdits` is computed for each behaviour:**
+
+| Behaviour | Budget |
+|---|---|
+| Build | levelling cells + template cells. A replan (at most one) replaces the budget with the new plan's count. |
+| Mine | the episode's route cells (breaks) + a **floor allowance** of 10% of them (placements for cave floors) |
+| Help-build | recomputed each time the kid extends the line: the remaining cells of the detected line + 1 |
+| Explore, Follow, Watch, Rest | 0 |
 
 | Behaviour | Plan | Next action | Ends |
 |---|---|---|---|
@@ -391,28 +454,38 @@ Everything the bot breaks goes into its inventory as the same block id (there ar
 Each comes in small and medium.
 
 **Clutter limits** (data):
-- at most 3 standing builds per world; with 3, Build is masked unless it's adding to one of its own;
+- **at most 3 standing builds per world.** A build is standing while ≥ 50% of its cells are still `bot`.
+  - At the cap, Build may pick **renew**: take apart the oldest standing build first (only its `bot` cells, with the blocks going back to inventory), then build the new one. So the bot keeps building after the third build.
+  - Taking apart counts in that plan's `plannedEdits`.
 - a site must be ≥ 12 blocks from any `kid` cell, and ≥ 16 blocks from world spawn;
-- a dig's entrance must be ≥ 12 blocks from any `kid` cell.
+- a dig's entrance and its whole route must be ≥ 12 blocks (horizontally) from any `kid` cell when it's planned.
+- at most 3 paused digs. A dig is dropped once its cells are no longer `bot`.
 
 ### 6.1 The Build site search
 
 Gate 1 found that a strictly flat 7×7 site is missing within 48 blocks at 29 of 54 sampled positions. Allowing ±1 height, it's missing at only 2 of 54. So:
 
 - **What qualifies:** the footprint plus a 1-block margin is all `natural` and within ±1 of the median height, with the build's height clear above. It must meet the clutter limits and the leash.
-- **Levelling is part of the plan:** fill low cells from inventory, then dig high cells, whose blocks go to inventory. Those edits count in `plannedEdits`.
+- **Levelling is part of the plan:** first dig the high cells, whose blocks go to inventory, then fill the low cells from it. Digging first means an empty inventory can still level. Those edits count in `plannedEdits`. The re-gate measured up to 16 digs and 20 fills, margin included, on the first site found.
 - **The search is spread over ticks:** one chunk per slice, yielding between slices, because one 48-block search measured 75–312 ms of synchronous generation, which would stall the 100 ms pose ticks. The SDK's `region()` is capped at 32 per side, so the search walks chunks itself.
 - **No site within the leash** means Build fails with `no-site`, and the recency penalty keeps it from being picked again at once.
 
 ### 6.2 Mine and digs (R14)
 
 - **The target** is the nearest cell of the block type that is reachable through `natural` and `bot` cells. The bot knows it from the generator: this is x-ray, accepted for v1.
-- **The route** is a walkable staircase, 1 wide and 2 high, going down one step at a time.
+- **The route is a spiral staircase.** A straight staircase would end about 100 blocks sideways from its entrance on a deep dig.
+  - **Shape:** a 3×3 spiral around a central pillar, going down one block per step, 8 steps per turn. Each step is **3 high**. A kid's jump reaches 1.33 blocks, so a 2-high step would leave no headroom to climb it; 3 high lets a kid who wanders in walk back out.
+  - **The entrance** is chosen straight above the target, or as close to that as the leash and the ≥ 12 block rule allow. A final horizontal tunnel of at most 8 blocks, also 3 high, reaches the target.
+  - So the bot never goes more than about 10 blocks sideways from its entrance.
 - **A dig** is persisted as `{block, entrance, target, cells done, status}`. A Mine episode lasts at most 120 s. At the time budget it ends as `paused`, not `failed`, and the next Mine for the same block resumes the dig at its last step.
-- **Deep targets take several episodes.** The nearest deepslate diamond measured 98–101 steps down, about 9 minutes of stone digging.
-- **Floor check (sense tier):** before stepping, the cell under the next step must be solid. If it's air (a cave), the bot places a block from inventory, or re-routes when it has none.
+- **Deep targets take several episodes.** The nearest deepslate diamond measured 98–101 blocks down, about 9–12 minutes of stone digging at 3 breaks a step.
+- **Floor check (sense tier):** before stepping, the cell under the next step must be solid. If it's air (a cave), the bot:
+  1. places a block from inventory, within the floor allowance;
+  2. with an empty inventory, re-routes around the gap (the spiral picks its other rotation direction);
+  3. if neither works, the episode ends `stuck`.
 - **Hazards:** a route cell touching liquid ends the episode as `hazard`, and the dig is re-routed next time.
 - **Kids nearby:** a kid inside the staircase's buffer blocks it. That counts as `stuck`, not `hazard`.
+- **A kid's liquid in the dig:** if a kid sets off liquid that flows into the dig, those cells become `kid`. The dig can't resume, and it ends `stuck (kid-liquid)`. That's the safe direction.
 - **Uncovered ore:** when the staircase uncovers an ore on the way, the bot writes `found`, which triggers the stand-beside-it gesture. Ores that aren't the target are left in place.
 
 ## 7. The planner → judge → execute loop and safety
@@ -450,7 +523,7 @@ Edits for the rest of the session are **halted** (`body.editsHalted`) when eithe
 
 - **Rate:** more edits in the last 60 s than `60 000 / EDIT_GAP_MIN_MS × 1.2` (120 at the 600 ms floor). Gate 1 measured normal pacing at 33–100 edits a minute, above rev 1's limit of 30. This limit sits above the fastest legal pace, so it catches pacing bugs, not work.
 - **Churn:** the same cell edited 3 times within 10 minutes. Levelling and help-build write a cell at most twice.
-- **Plan overrun:** a behaviour tries more edits than its `plannedEdits` + 10%.
+- **Plan overrun:** a behaviour tries more edits than its `plannedEdits` (as computed in §6) + 10%.
 
 The halt is logged loudly and shown in the TUI. The bot keeps running with edits masked out. Criterion 8 checks that normal sessions never trip it.
 
@@ -475,7 +548,9 @@ The gap between actions comes from style: 0.6 s (excited) to 2 s (calm). The saf
   - the expert feed: expert, engine, latency, prompt words, answer, fallback, patch.
 - **Logs:** one JSONL line per change event and per expert call. A call's line holds the exact prompt, answer, latency, fallback flag, `materialKey` and merged patch. The last 20 logs are kept per world, in `bots/.state/logs/…`.
 - **`npm run bot:replay <log>`** renders a recorded session. Space pauses, ←/→ steps, and `e` shows the full call behind the highlighted line.
-- **`npm run bot:replay <log> --data <override.ts>`** is counterfactual tuning. It re-runs the recorded event stream and model answers through changed data tables (weights, gestures, fallbacks), and lists every selection that flips. That's how Julien tunes the roughly 330 hand-set numbers without playing a new session each time.
+- **`npm run bot:replay <log> --data <override.ts>`** is a **per-decision check**, not a re-simulation. It re-scores each recorded selection on its own recorded inputs (the model answers, the emotions and the events at that moment) with the changed data tables, and lists the decisions that would have gone differently.
+  - It can't show what would have happened afterwards: after the first different decision, the real session would have diverged.
+  - It's still how Julien tunes the roughly 330 hand-set numbers without playing a new session for every change. The output is labelled to say so.
 - **Poke keys** (`--tui` only, refused against the live target): set an emotion axis, or inject an event from a menu.
 
 ## 9. Testing
@@ -517,6 +592,7 @@ bots/bench/   labelled cases and the bench runner
 
 **SDK additions** (`packages/minicraft-bot`, no game or server change):
 - `world.isEdited(x,y,z)`, a read-only accessor over the overlay;
+- `world.editedCellsInChunk(cx, cz)`, which lists a chunk's edited cells, for the kid-cell index (§4.5);
 - an optional `speed` on `walkTo`, still ≤ 1 block per pose.
 
 Everything else (`flyTo`, `mine`, `break`, `journal`, `revert`, `onBlockChange` with `by`) exists already.
@@ -533,7 +609,7 @@ It all lives in `brain2/`, so today's companion keeps working. `--brain v2` swit
 ## 11. Open items and starting numbers
 
 - **Starting weights are guesses**, tuned through `replay --data` and logged with their before and after numbers. `select.situational` starts at the lowest merge weight of the three passes because of its measured watch prior.
-- **The benchmark could fail** criterion 2 for every configuration. If so, the plan stops and Julien decides (criterion 2).
+- **The benchmark will probably fail criterion 2.** On the 12 gate cases, the best engine was the LLM at 9/12 (75%), with 0% recall on `stay`. No combination tried beat it. The few-shot and `llm-dir-laya-stay` candidates haven't been measured yet. If nothing reaches the bar, the plan stops at step 3 (§10), and Julien decides with the numbers in front of him. Options then: lower the bar, use a bigger model, or keep the code fallback table for some axes.
 - **Mine uses x-ray (R14).** It's accepted for v1. The staircase keeps it looking like a kid's digging.
 
 ## 12. Gate 1 dispositions (rev 1 → rev 2)
@@ -576,3 +652,27 @@ It all lives in `brain2/`, so today's companion keeps working. `--brain v2` swit
 | About 330 hand-set numbers; no counterfactual (consumer 9) | §8 merge breakdown and `replay --data` |
 | Criteria miss what a parent cares about (consumer 10) | Criterion 7 added |
 | Backing off when the kid approaches (consumer 11) | Fixed §5.5 |
+
+### Re-gate of rev 2 → rev 3
+
+| Finding (lens) | Disposition |
+|---|---|
+| A straight deep staircase ends about 100 blocks from its entrance and the kid (consumer B1, engine N1, rigour M4) | Fixed §6.2: a 3×3 spiral with a final tunnel of ≤ 8 blocks; the leash is horizontal, on the entrance, at start and resume (§6) |
+| No engine reaches criterion 2 (models B1) | Candidates added (§5.2: few-shot, `llm-dir-laya-stay`, one batched LLM call); §11 warns that the stop rule will probably fire |
+| Decay oscillates and changes bands, making answers stale (rigour M1) | Fixed §4.1 (drift from value + pending, snap, band hysteresis); §3 `materialKey` excludes bands and decay by construction |
+| Answers are stale whenever a kid builds (rigour M2) | Fixed §3 (plain edits bucketed; on a stale answer, the fallback, no retry) |
+| `plannedEdits` undefined for Help-build, cave floors and replans (rigour M3, engine minor) | Fixed §6 table; criterion 8 extended |
+| Urgent triggers can make the bot flip back and forth (rigour M5) | Fixed §5.3 limits; criterion 1 switch cap |
+| Criterion 7's 12-block rule had no mechanism behind it (rigour M6) | Criterion 7 reworded to plan and replan time |
+| Answer cache not reproducible (models M1) | Fixed §3.2 (temperature 0, seed), §4.3 rounded seconds, criterion 3 |
+| Cost of `detect` not updated (models M2) | Fixed §5.2 cost table, one batched LLM call |
+| Criterion 7 can't fail against an always-Help-build bonus (models M3) | Negative fixtures added to criterion 7 |
+| Ollama unloads the model when idle (models m1) | Fixed §3.2 (`keep_alive: -1`, "not loaded" means load) |
+| `isEdited` can't list cells; the 12-block rule is too costly (engine N2) | Fixed §4.5 kid-cell index; SDK `editedCellsInChunk` (§10) |
+| Levelling order; floor fills unbudgeted; a 2-high staircase is unclimbable; liquid in digs; offline overwrite (engine minors) | Fixed §6.1, §6 table, §6.2 (3 high), §6.2, §4.5 (stated as a limit) |
+| Greeting hidden when the kid arrives facing away (consumer M2) | Fixed §5.5 (held until the bot is in view, walks in front) |
+| Grievance from R13 pushes the bot away over many sessions (consumer M3) | R13 kept. The R13 fixture is in criterion 7; the line bonus is sized to beat "very low" Grievance (§5.3) |
+| The bot never builds again after 3 builds (consumer M4) | Fixed §6 ("standing" defined, **renew**) |
+| `replay --data` overclaims (consumer M5) | Fixed §8 (labelled as a per-decision check) |
+| Crouch gesture impossible; impatience reads as leaving; view check yaw-only; criterion 7 distance undefined (consumer minors) | Fixed §5.5, criterion 7 |
+| Criterion 8 vs the 120 s cap; crash restart halving; `both-agree` scope and lane priority; unloaded `owned` chunks (rigour minors) | Fixed criterion 8, §4.2 `lastAlive`, §3.1, §3, §4.5 |

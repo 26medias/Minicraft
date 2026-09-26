@@ -200,7 +200,7 @@ describe('landscaper loop: skipped spots and tried areas', () => {
 		expect(logs.some((l) => l.k === 'prime' || l.k === 'blast')).toBe(false);
 		expect(String(logs.find((l) => l.k === 'blast-skipped')!.reason)).toMatch(/< 15/);
 		const saved = JSON.parse(readFileSync(join(dir, 's.json'), 'utf8')) as LandscaperFile;
-		expect(saved.triedSpots).toContain('104,104');
+		expect(saved.triedSpots).toContain('104,65,104');
 		expect(saved.areas[0].status).toBe('abandoned');
 	});
 
@@ -232,4 +232,74 @@ describe('landscaper loop: skipped spots and tried areas', () => {
 		expect(f.triedAreas).toHaveLength(3);
 		expect(TRIED_AREA_MS).toBe(60 * 60_000);
 	});
+});
+
+describe('terracing: a hill steeper than one blast is cut in layers', () => {
+	/** Applies a plan's blasts in order (dig, then the filtered game cells); every blast must pass the filter. */
+	const apply = (w: GridWorld, p: Exclude<ReturnType<typeof evaluateArea>, string>) => {
+		const classify = natural(w);
+		for (const s of p.spots) {
+			for (const c of s.dig) w.set(c.x, c.y, c.z, 0);
+			const f = filterBlast(blastCells(blastWorld(w), 'flatten_tnt', s.tnt).destroyed, { world: w, classify, kidCells: [], kids: [] });
+			expect(f.dropped).toBeNull();
+			expect(f.remove.length).toBeGreaterThanOrEqual(MIN_SPOT_REMOVE);
+			for (const c of f.remove) w.set(c.x, c.y, c.z, 0);
+		}
+	};
+
+	it('a range-25 hill yields 2–3 layers, top layer first, and leaves a 12 × 12 terrace at the floor', () => {
+		const h = (x: number, z: number) => 64 + Math.floor((x * 25) / 15) + (z % 2);
+		const w = new GridWorld(h);
+		const p = evaluateArea(w, 0, 0, 16, { classify: natural(w), kidCells: [], kids: [] });
+		if (typeof p === 'string') throw new Error(p);
+		expect(p.range).toBeGreaterThanOrEqual(25);
+		expect(p.layers).toBeGreaterThanOrEqual(2);
+		expect(p.layers).toBeLessThanOrEqual(3);
+		const ls = p.spots.map((s) => s.layer!);
+		expect([...ls].sort((a, b) => b - a)).toEqual(ls);
+		expect(new Set(p.spots.map((s) => `${s.tnt.x},${s.tnt.y},${s.tnt.z}`)).size).toBe(p.spots.length);
+		apply(w, p);
+		// Every column at or above the floor now ends at it; lower columns are untouched.
+		let flatCols = 0;
+		for (let x = 0; x < 16; x++) for (let z = 0; z < 16; z++) {
+			const t = terrainTop(w, x, z);
+			if (h(x, z) >= p.L) expect(t).toBe(p.L);
+			else expect(t).toBe(h(x, z));
+			if (t === p.L) flatCols++;
+		}
+		expect(flatCols).toBeGreaterThanOrEqual(144);
+	});
+
+	it('a range-50 cliff is too steep', () => {
+		const w = new GridWorld((x) => 64 + (x >= 6 ? 50 : 0));
+		expect(evaluateArea(w, 0, 0, 16, { classify: natural(w), kidCells: [], kids: [] })).toBe('too steep');
+	});
+});
+
+describe('landscaper search widens to 128', () => {
+	it('finds an area beyond 96 when everything nearer spawn is water', async () => {
+		class Lake extends GridWorld {
+			override getBlock(x: number, y: number, z: number): number {
+				if (Math.max(Math.abs(x), Math.abs(z)) < 100 && y === hilly(x, z) + 1) return WATER;
+				return super.getBlock(x, y, z);
+			}
+		}
+		const dir = mkdtempSync(join(tmpdir(), 'land-wide-'));
+		const w = new Lake(hilly);
+		const logs: Array<Record<string, unknown>> = [];
+		const h = runLandscaper({
+			name: 'Dan', body: new FakeBody(), world: w, spawn: { x: 0, y: 0, z: 0 }, primary: null, noEdits: true, statePath: join(dir, 's.json'),
+			boardPath: join(dir, 'board.json'), log: (e) => logs.push(e), rng: () => 0.5, clock: () => 1000, breakMany: async () => [],
+		});
+		for (let i = 0; i < 3000 && !logs.some((l) => l.k === 'area'); i++) await new Promise((r) => setTimeout(r, 10));
+		await h.stop();
+		const search = logs.find((l) => l.k === 'area-search')!;
+		expect(search.radius).toBe(128);
+		const a = logs.find((l) => l.k === 'area')!;
+		expect(a).toBeDefined();
+		const n = (v: unknown) => v as number;
+		expect(Math.hypot(n(a.x0) + n(a.size) / 2, n(a.z0) + n(a.size) / 2)).toBeGreaterThan(96);
+		expect(typeof a.floor).toBe('number');
+		expect(typeof a.layers).toBe('number');
+	}, 60_000);
 });

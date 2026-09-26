@@ -5,8 +5,9 @@
  *   kid's TNT would, never a guess.
  * - `filterBlast` is the hard safety rule: only natural cells are removed, and the whole blast is dropped when any
  *   cell it would remove is within KID_CELL_DIST of a kid's cell, within KID_POS_DIST of a kid, or touches a liquid.
- * - `evaluateArea` plans one square: its floor level L (the lowest column top), the flatten centres covering it and
- *   the hole each needs so the TNT sits on natural ground at L; it refuses squares a blast could not safely level.
+ * - `evaluateArea` plans one square: its floor level L (the lowest top, or a terrace floor on a hill), the flatten
+ *   centres covering it (stacked in layers on a hill) and the hole each needs so the TNT sits on natural ground; it
+ *   refuses squares the blasts could not safely level.
  */
 import { blastCells, FLATTEN_HEIGHT, tntSpec, type BlastWorld } from 'minicraft-bot';
 import type { WorldView } from '../port.js';
@@ -16,8 +17,8 @@ export const KID_CELL_DIST = 12;
 export const KID_POS_DIST = 24;
 /** The side of the square a landscaper levels (the task's "≥ 16 × 16 flat"). */
 export const AREA = 16;
-/** The deepest hole the bot digs to seat a TNT at the floor level. */
-export const MAX_DIG = 8;
+/** The deepest hole the bot digs to seat a TNT at its layer's floor (a lower layer's hole goes down one blast height). */
+export const MAX_DIG = FLATTEN_HEIGHT + 1;
 const FLATTEN_RADIUS = tntSpec('flatten_tnt')!.radius;
 const FACES: ReadonlyArray<[number, number, number]> = [[1, 0, 0], [-1, 0, 0], [0, 1, 0], [0, -1, 0], [0, 0, 1], [0, 0, -1]];
 const WORLD_TOP = 255;
@@ -87,17 +88,21 @@ export function terrainTop(world: WorldView, x: number, z: number): number {
 }
 
 export interface BlastSpot {
-	/** The TNT cell: the column (x, z), at the floor level + 1. */
+	/** The TNT cell: the column (x, z), at its layer's floor + 1. */
 	tnt: Vec3;
-	/** The cells to dig first, top-down, so the TNT cell is air on natural ground (empty when it already is). */
+	/** The cells to dig first, top-down, so the TNT cell is air on natural ground (as planned: after the layers above). */
 	dig: Vec3[];
 	/** The cells its filtered blast removes (on the world as planned). */
 	removes?: number;
+	/** Its layer: 0 blasts at the floor L, k at L + k × FLATTEN_HEIGHT (spots are ordered top layer first). */
+	layer?: number;
 }
 export interface AreaPlan {
 	x0: number; z0: number; size: number;
-	/** The floor level: every column of the square ends with its top at L. */
+	/** The floor level: every column at or above it ends with its top at L (lower columns are left as they are). */
 	L: number;
+	/** How many stacked blast layers the plan uses (1 = one TNT per centre, as before terracing). */
+	layers?: number;
 	spots: BlastSpot[];
 	/** Natural cells the blasts would remove (on the world as it is now; overlaps counted once). */
 	removes: number;
@@ -117,23 +122,39 @@ export function spotColumns(x0: number, z0: number, size: number, radius = FLATT
 	return out;
 }
 
+/** The most blast layers stacked on one spot: an area may rise at most MAX_LAYERS × FLATTEN_HEIGHT above its floor. */
+export const MAX_LAYERS = 3;
+/** The flat footprint a terrace must leave at its floor: a contiguous square of this side (or the whole area, if smaller). */
+export const MIN_FOOTPRINT = 12;
+/** The percentile of the surface heights a terrace's floor is cut at (when one blast layer cannot level the whole square). */
+export const FLOOR_PERCENTILE = 0.3;
+
+/** The key a tried blast spot is remembered by (its TNT cell: layers share a column). */
+export const spotKey = (x: number, y: number, z: number) => `${x},${y},${z}`;
+
 /**
- * Plans levelling the square [x0, x0 + size) × [z0, z0 + size): L = the lowest terrain top in it, one flatten TNT per
- * spotColumns centre at L + 1. Refused (a string) when: a column has no ground, water lies on it, more than
- * MAX_ICE_SHARE of its surface is ice, it is already flat (FLAT_SHARE of it within ±1), the range is past what one
- * blast removes, a centre's hole would be deeper than MAX_DIG, any blast breaks filterBlast (or would leave a bot
- * cell), or the filtered blasts remove fewer than MIN_AREA_REMOVE cells. A centre whose filtered blast removes fewer
- * than MIN_SPOT_REMOVE cells (or that `skipSpot` rules out: tried before) gets no TNT.
+ * Plans levelling the square [x0, x0 + size) × [z0, z0 + size). The floor L is the lowest top when one blast layer
+ * levels it all (the whole square ends flat); else a terrace: L = the FLOOR_PERCENTILE surface height (then the 15th
+ * percentile, then the lowest), with up to MAX_LAYERS stacked blasts per centre, top layer first (TNT at
+ * L + 1 + k × FLATTEN_HEIGHT), and the columns below L left as they are. Refused (a string) when: a column has no
+ * ground, water lies on it, more than MAX_ICE_SHARE of its surface is ice, it is already flat (FLAT_SHARE of it within
+ * ±1), it rises more than MAX_LAYERS × FLATTEN_HEIGHT above every floor ('too steep'), any blast breaks filterBlast (or
+ * would leave a bot cell), a hole is not natural, the filtered blasts remove fewer than MIN_AREA_REMOVE cells, or the
+ * planned result leaves no MIN_FOOTPRINT square flat at L. A centre whose filtered blast removes fewer than
+ * MIN_SPOT_REMOVE cells, whose hole would be deeper than MAX_DIG, whose column is below the layer, or that `skipSpot`
+ * rules out (tried before), gets no TNT on that layer.
  */
-export function evaluateArea(world: WorldView, x0: number, z0: number, size: number, f: Omit<FilterCtx, 'world'>, skipSpot?: (x: number, z: number) => boolean): AreaPlan | string {
+export function evaluateArea(world: WorldView, x0: number, z0: number, size: number, f: Omit<FilterCtx, 'world'>, skipSpot?: (x: number, y: number, z: number) => boolean): AreaPlan | string {
 	let lo = Infinity, hi = -Infinity, ice = 0;
 	const tops = new Map<number, number>();
+	const all: number[] = [];
 	for (let x = x0; x < x0 + size; x++) {
 		for (let z = z0; z < z0 + size; z++) {
 			const t = terrainTop(world, x, z);
 			if (t < 0) return 'no ground';
 			lo = Math.min(lo, t);
 			hi = Math.max(hi, t);
+			all.push(t);
 			tops.set(t, (tops.get(t) ?? 0) + 1);
 			if (world.isLiquid(world.getBlock(x, t + 1, z))) return 'water';
 			if (isIce(world.blockName(world.getBlock(x, t, z)) ?? '')) ice++;
@@ -144,38 +165,93 @@ export function evaluateArea(world: WorldView, x0: number, z0: number, size: num
 	let flat = 0;
 	for (const h of tops.keys()) flat = Math.max(flat, (tops.get(h - 1) ?? 0) + (tops.get(h) ?? 0) + (tops.get(h + 1) ?? 0));
 	if (flat >= FLAT_SHARE * cols) return 'already flat';
-	const L = lo;
-	if (hi - L > FLATTEN_HEIGHT + 1) return 'too steep';
+	all.sort((a, b) => a - b);
+	const pct = (p: number) => all[Math.min(all.length - 1, Math.floor(p * all.length))];
+	// One layer levels the whole square: the floor is its lowest top (as before terracing). Else terrace floors, highest first.
+	const floors = hi - lo <= FLATTEN_HEIGHT + 1 ? [lo] : [...new Set([pct(FLOOR_PERCENTILE), pct(0.15), lo])].filter((L) => hi - L <= MAX_LAYERS * FLATTEN_HEIGHT);
+	if (floors.length === 0) return 'too steep';
+	let last = 'too little to remove';
+	for (const L of floors) {
+		const r = planAt(world, x0, z0, size, L, hi, f, skipSpot);
+		if (typeof r !== 'string') return { ...r, range: hi - lo };
+		last = r;
+		// A safety refusal holds at every floor.
+		if (!(r === 'too little to remove' || r === 'no flat footprint')) return r;
+	}
+	return last;
+}
+
+/** The plan at one floor L (see evaluateArea), simulated top layer first on an overlay of the world. */
+function planAt(world: WorldView, x0: number, z0: number, size: number, L: number, hi: number, f: Omit<FilterCtx, 'world'>, skipSpot?: (x: number, y: number, z: number) => boolean): Omit<AreaPlan, 'range'> | string {
+	const gone = new Set<string>();
+	const key = (x: number, y: number, z: number) => `${x},${y},${z}`;
+	const ov = {
+		getBlock: (x: number, y: number, z: number) => (gone.has(key(x, y, z)) ? 0 : world.getBlock(x, y, z)),
+		isSolid: (v: number) => world.isSolid(v),
+		isLiquid: (v: number) => world.isLiquid(v),
+		blockName: (v: number) => world.blockName(v),
+	} as unknown as WorldView;
+	const bw = blastWorld(ov);
+	const layers = Math.max(1, Math.ceil((hi - L - 1) / FLATTEN_HEIGHT));
 	const spots: BlastSpot[] = [];
 	const seen = new Set<string>();
 	let digs = 0;
-	const bw = blastWorld(world);
-	for (const c of spotColumns(x0, z0, size)) {
-		if (skipSpot?.(c.x, c.z)) continue;
-		const top = terrainTop(world, c.x, c.z);
-		if (top - L > MAX_DIG) return 'hole too deep';
-		const dig: Vec3[] = [];
-		for (let y = top; y >= L + 1; y--) if (world.getBlock(c.x, y, c.z) !== 0) dig.push({ x: c.x, y, z: c.z });
-		// The TNT sits on the floor: natural, solid.
-		if (!world.isSolid(world.getBlock(c.x, L, c.z)) || f.classify(c.x, L, c.z) !== 'natural') return 'no natural floor';
-		for (const q of dig) if (f.classify(q.x, q.y, q.z) !== 'natural') return 'hole not natural';
-		const tnt = { x: c.x, y: L + 1, z: c.z };
-		const { destroyed } = blastCells(bw, 'flatten_tnt', tnt);
-		if (destroyed.some((q) => f.classify(q.x, q.y, q.z) !== 'natural' && !(q.x === tnt.x && q.y === tnt.y && q.z === tnt.z))) return 'a bot or kid cell in the blast';
-		const r = filterBlast(destroyed, { ...f, world });
-		if (r.dropped) return r.dropped;
-		const above = r.remove.filter((q) => q.y > L);
-		if (above.length < MIN_SPOT_REMOVE) continue;
-		digs += dig.length;
-		for (const q of above) seen.add(`${q.x},${q.y},${q.z}`);
-		spots.push({ tnt, dig, removes: above.length });
+	for (let k = layers - 1; k >= 0; k--) {
+		const base = L + k * FLATTEN_HEIGHT;
+		for (const c of spotColumns(x0, z0, size)) {
+			if (skipSpot?.(c.x, base + 1, c.z)) continue;
+			const top = terrainTop(ov, c.x, c.z);
+			if (top < base || top - base > MAX_DIG) continue;
+			const dig: Vec3[] = [];
+			for (let y = top; y >= base + 1; y--) if (ov.getBlock(c.x, y, c.z) !== 0) dig.push({ x: c.x, y, z: c.z });
+			// The TNT sits on the layer's floor: natural, solid.
+			if (!ov.isSolid(ov.getBlock(c.x, base, c.z)) || f.classify(c.x, base, c.z) !== 'natural') {
+				if (k === 0) return 'no natural floor';
+				continue;
+			}
+			for (const q of dig) if (f.classify(q.x, q.y, q.z) !== 'natural') return 'hole not natural';
+			for (const q of dig) gone.add(key(q.x, q.y, q.z));
+			const tnt = { x: c.x, y: base + 1, z: c.z };
+			const { destroyed } = blastCells(bw, 'flatten_tnt', tnt);
+			const undo = () => { for (const q of dig) gone.delete(key(q.x, q.y, q.z)); };
+			if (destroyed.some((q) => f.classify(q.x, q.y, q.z) !== 'natural' && !(q.x === tnt.x && q.y === tnt.y && q.z === tnt.z))) return 'a bot or kid cell in the blast';
+			const r = filterBlast(destroyed, { ...f, world: ov });
+			if (r.dropped) return r.dropped;
+			const above = r.remove.filter((q) => q.y > base);
+			if (above.length < MIN_SPOT_REMOVE) {
+				undo();
+				continue;
+			}
+			digs += dig.length;
+			for (const q of above) {
+				gone.add(key(q.x, q.y, q.z));
+				if (q.y > L) seen.add(key(q.x, q.y, q.z));
+			}
+			spots.push({ tnt, dig, removes: above.length, layer: k });
+		}
 	}
 	if (seen.size < MIN_AREA_REMOVE) return 'too little to remove';
-	return { x0, z0, size, L, spots, removes: seen.size, removableFiltered: seen.size, range: hi - lo, digs };
+	if (!hasFlatSquare(ov, x0, z0, size, L, Math.min(MIN_FOOTPRINT, size))) return 'no flat footprint';
+	return { x0, z0, size, L, layers: Math.max(1, ...spots.map((s) => (s.layer ?? 0) + 1)), spots, removes: seen.size, removableFiltered: seen.size, digs };
+}
+
+/** Whether a contiguous `side` × `side` square of columns in the area has its top exactly at L (after the plan). */
+function hasFlatSquare(ov: WorldView, x0: number, z0: number, size: number, L: number, side: number): boolean {
+	// 2D prefix sums of "column top == L".
+	const n = size + 1;
+	const ps = new Array<number>(n * n).fill(0);
+	for (let i = 1; i <= size; i++) for (let j = 1; j <= size; j++) {
+		const ok = terrainTop(ov, x0 + i - 1, z0 + j - 1) === L ? 1 : 0;
+		ps[i * n + j] = ok + ps[(i - 1) * n + j] + ps[i * n + j - 1] - ps[(i - 1) * n + j - 1];
+	}
+	for (let i = side; i <= size; i++) for (let j = side; j <= size; j++) {
+		if (ps[i * n + j] - ps[(i - side) * n + j] - ps[i * n + j - side] + ps[(i - side) * n + j - side] === side * side) return true;
+	}
+	return false;
 }
 
 /** How good a plan is: hilly but not a mountain, little digging, close to the anchor. Higher is better. */
 export function scoreArea(p: AreaPlan, anchor: { x: number; z: number }): number {
 	const d = Math.hypot(p.x0 + p.size / 2 - anchor.x, p.z0 + p.size / 2 - anchor.z);
-	return Math.min(p.range, 6) * 10 - p.removes / 100 - p.digs * 2 - d / 4;
+	return Math.min(p.range, 6) * 10 - p.removes / 100 - p.digs * 2 - d / 4 - ((p.layers ?? 1) - 1) * 15;
 }

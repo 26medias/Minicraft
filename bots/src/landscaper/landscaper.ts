@@ -26,7 +26,7 @@ import { makeAsk } from '../builder/builder.js';
 import { readPlan } from '../foreman/plan-file.js';
 import { claimNext, complete, post, renew, type Post } from '../board/board.js';
 import { MarkerWatcher } from '../board/markers.js';
-import { AREA, blastWorld, evaluateArea, filterBlast, kidCellsNear, KID_CELL_DIST, MIN_SPOT_REMOVE, scoreArea, terrainTop, type AreaPlan } from './blast-plan.js';
+import { AREA, blastWorld, evaluateArea, filterBlast, kidCellsNear, KID_CELL_DIST, MIN_SPOT_REMOVE, scoreArea, spotKey as cellKey, terrainTop, type AreaPlan } from './blast-plan.js';
 import { craftUpTo, rawShortfall, type Inventory } from './craft.js';
 import { gather, mineCell, travelTo, type GatherCtx } from './gather.js';
 import type { SharedCells } from '../shared/bot-cells.js';
@@ -36,8 +36,10 @@ export const DEFAULT_MAX_BLASTS = 6;
 const TOY = 'flatten_tnt';
 const TOY_ID = blockId(TOY)!;
 const FUSE_MS = tntSpec(TOY)!.fuse * 1000;
-/** Candidate squares: origins on an 8-block grid within this of the anchor. */
-const SEARCH_R = 48;
+/** Candidate squares: centres on an 8-block grid, within each radius of the anchor in turn (the search widens only when a ring finds nothing). */
+export const SEARCH_RADII = [32, 64, 96, 128];
+/** No candidate square's centre is nearer world spawn than this. */
+export const SPAWN_CLEAR = 16;
 /** An area tried (picked) is not picked again, nor any square overlapping it, for this long. */
 export const TRIED_AREA_MS = 60 * 60_000;
 
@@ -59,7 +61,7 @@ export interface LandscaperFile {
 	granted?: boolean;
 	/** Every area picked (never re-picked, nor overlapped, within TRIED_AREA_MS). */
 	triedAreas: Array<{ x0: number; z0: number; size: number; t: number }>;
-	/** Every blast column tried ("x,z": a TNT placed, or the spot skipped): never blasted again. */
+	/** Every blast spot tried ("x,y,z", its TNT cell: a TNT placed, or the spot skipped): never blasted again. */
 	triedSpots: string[];
 }
 
@@ -220,31 +222,45 @@ export function runLandscaper(o: LandscaperOpts): LandscaperHandle {
 		active: () => o.when !== 'players' || hasPlayer(),
 	});
 
-	/** The candidate squares around `a`, best first. */
+	/** The candidate squares around `a`, best first: the nearest ring (SEARCH_RADII) that has any. */
 	async function candidates(a: { x: number; z: number }): Promise<AreaPlan[]> {
 		const classify = (x: number, y: number, z: number) => own.classify(x, y, z);
 		const size = o.areaSize ?? AREA;
-		const kidCells = kidCellsNear(o.world, classify, a.x - SEARCH_R - size, a.z - SEARCH_R - size, a.x + SEARCH_R + size, a.z + SEARCH_R + size, KID_CELL_DIST + 8);
 		const kids = kidsNow();
 		const now = clock();
 		const busy = [...file.areas.filter((x) => x.status !== 'abandoned'), ...file.triedAreas.filter((x) => now - x.t < TRIED_AREA_MS)];
 		const tried = new Set(file.triedSpots);
-		const skipSpot = (x: number, z: number) => tried.has(`${x},${z}`);
+		const skipSpot = (x: number, y: number, z: number) => tried.has(cellKey(x, y, z));
 		const out: AreaPlan[] = [];
 		const rejections: Record<string, number> = {};
-		for (let dx = -SEARCH_R; dx <= SEARCH_R; dx += 8) {
-			for (let dz = -SEARCH_R; dz <= SEARCH_R; dz += 8) {
-				if (stopped) return [];
-				const x0 = Math.floor(a.x) + dx - size / 2, z0 = Math.floor(a.z) + dz - size / 2;
-				if (busy.some((b) => x0 < b.x0 + b.size + 4 && x0 + size + 4 > b.x0 && z0 < b.z0 + b.size + 4 && z0 + size + 4 > b.z0)) continue;
-				const r = evaluateArea(o.world, x0, z0, size, { classify, kidCells, kids }, skipSpot);
-				if (typeof r === 'string') rejections[r] = (rejections[r] ?? 0) + 1;
-				else out.push(r);
-				await new Promise((res) => setImmediate(res));
+		let inner = -1;
+		let radius = 0;
+		for (const R of SEARCH_RADII) {
+			radius = R;
+			const kidCells = kidCellsNear(o.world, classify, a.x - R - size, a.z - R - size, a.x + R + size, a.z + R + size, KID_CELL_DIST + 8);
+			for (let dx = -R; dx <= R; dx += 8) {
+				for (let dz = -R; dz <= R; dz += 8) {
+					if (stopped) return [];
+					const d = Math.hypot(dx, dz);
+					if (d > R || d <= inner) continue;
+					const cx = Math.floor(a.x) + dx, cz = Math.floor(a.z) + dz;
+					if (Math.hypot(cx - o.spawn.x, cz - o.spawn.z) < SPAWN_CLEAR) {
+						rejections['near spawn'] = (rejections['near spawn'] ?? 0) + 1;
+						continue;
+					}
+					const x0 = cx - size / 2, z0 = cz - size / 2;
+					if (busy.some((b) => x0 < b.x0 + b.size + 4 && x0 + size + 4 > b.x0 && z0 < b.z0 + b.size + 4 && z0 + size + 4 > b.z0)) continue;
+					const r = evaluateArea(o.world, x0, z0, size, { classify, kidCells, kids }, skipSpot);
+					if (typeof r === 'string') rejections[r] = (rejections[r] ?? 0) + 1;
+					else out.push(r);
+					await new Promise((res) => setImmediate(res));
+				}
 			}
+			inner = R;
+			if (out.length) break;
 		}
 		out.sort((p, q) => scoreArea(q, a) - scoreArea(p, a));
-		o.log({ k: 'area-search', t: clock(), anchor: a, found: out.length, rejections });
+		o.log({ k: 'area-search', t: clock(), anchor: a, radius, found: out.length, rejections });
 		return out;
 	}
 
@@ -275,7 +291,7 @@ export function runLandscaper(o: LandscaperOpts): LandscaperHandle {
 			const options = Object.fromEntries(cands.map((c, i) => {
 				const cx = c.x0 + c.size / 2, cz = c.z0 + c.size / 2;
 				const d = Math.round(Math.hypot(cx - a.x, cz - a.z));
-				return [`area-${i + 1}`, `a ${c.range > 6 ? 'steep' : c.range > 3 ? 'hilly' : 'bumpy'} patch ${d} blocks ${dirName(cx - a.x, cz - a.z)} (${c.removes} blocks to blast, ${c.spots.length} TNT)`];
+				return [`area-${i + 1}`, `a ${c.range > 6 ? 'steep' : c.range > 3 ? 'hilly' : 'bumpy'} patch ${d} blocks ${dirName(cx - a.x, cz - a.z)} (${c.removes} blocks to blast, ${c.spots.length} TNT${(c.layers ?? 1) > 1 ? ` in ${c.layers} layers` : ''})`];
 			}));
 			const state = `I am ${o.name}, a landscaper robot. I blow away hills with Flattening TNT so my friends can build houses on flat ground. ${src ? `Someone asked for flat ground here (${src.type}).` : 'Nobody asked yet; I pick a spot near the village.'}`;
 			const choice = await ask('area', state, 'Pick the patch that would make the nicest flat building ground for the least blasting.', options);
@@ -286,7 +302,7 @@ export function runLandscaper(o: LandscaperOpts): LandscaperHandle {
 		file.areas.push(area);
 		file.triedAreas.push({ x0: area.x0, z0: area.z0, size: area.size, t: area.t });
 		save();
-		o.log({ k: 'area', t: clock(), id: area.id, x0: area.x0, z0: area.z0, size: area.size, L: area.L, spots: area.spots.map((s) => s.tnt), removes: area.removes, removableFiltered: area.removableFiltered, range: area.range, post: area.post ?? null });
+		o.log({ k: 'area', t: clock(), id: area.id, x0: area.x0, z0: area.z0, size: area.size, L: area.L, spots: area.spots.map((s) => s.tnt), removes: area.removes, removableFiltered: area.removableFiltered, range: area.range, floor: area.L, layers: area.layers ?? 1, post: area.post ?? null });
 		return area;
 	}
 
@@ -354,7 +370,7 @@ export function runLandscaper(o: LandscaperOpts): LandscaperHandle {
 
 	/** The filtered cells a blast at `tnt` would remove now. */
 	const filteredNow = (tnt: Vec3) => filterBlast(blastCells(blastWorld(o.world), TOY, tnt).destroyed, filterCtx(tnt));
-	const spotKey = (tnt: Vec3) => `${tnt.x},${tnt.z}`;
+	const spotKey = (tnt: Vec3) => cellKey(tnt.x, tnt.y, tnt.z);
 
 	/**
 	 * One blast at spot `i` of `area`: null when done (or dropped for safety), `{ skipped }` when the spot is not worth a

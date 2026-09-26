@@ -81,7 +81,7 @@ export function claimablePost(p: Post, now: number, claimMs = BOARD_CLAIM_MS): b
 
 /** Adds a post (open). With `key`, returns the existing post of that key instead of adding a second one. */
 export function post(path: string, p: NewPost, now: number): { post: Post; added: boolean } {
-	return update(path, (b) => {
+	return update<{ post: Post; added: boolean }>(path, (b) => {
 		const same = p.key ? b.posts.find((q) => q.key === p.key) : undefined;
 		if (same) return { out: { post: same, added: false }, write: false };
 		const np: Post = { ...p, id: `${p.type}-${now.toString(36)}-${Math.random().toString(36).slice(2, 7)}`, status: 'open', t: now };

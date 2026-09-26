@@ -89,6 +89,8 @@ export interface Config {
 	tui: boolean;
 	/** `--compare` (builder): ask both engines, act on the primary. */
 	compare: boolean;
+	/** `--rest-sec` (builder): seconds of rest after each finished build (default 30). */
+	restSec: number;
 	/** Where `.state` lives for this run (injected, defaulted in cli.ts only). */
 	stateRoot: string;
 	statePath(worldUuid: string): string;
@@ -209,6 +211,9 @@ export function loadConfig(input: LoadConfigInput): Config {
 		throw new ConfigError(`unknown --personality "${args.personality}"; expected one of ${Object.keys(PERSONALITIES).join(', ')}`);
 	}
 
+	const restSec = args.restSec === undefined ? 30 : Number(args.restSec);
+	if (!Number.isFinite(restSec) || restSec < 0) throw new ConfigError(`--rest-sec must be a number of seconds >= 0, not "${args.restSec}"`);
+
 	const targetName = args.target;
 	const name = args.name ?? 'Bot';
 
@@ -228,6 +233,7 @@ export function loadConfig(input: LoadConfigInput): Config {
 		revertBuilds: args.builds,
 		tui: args.tui,
 		compare: args.compare,
+		restSec,
 		stateRoot,
 		statePath(worldUuid: string): string {
 			return `${stateRoot}/${targetName}/${worldUuid}/${name}.json`;

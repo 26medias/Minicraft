@@ -69,6 +69,75 @@ const NICE: Record<string, string> = {
 };
 const WEIGHT: Record<string, number> = { house: 3, tower: 2, wall: 1, creeper: 2, person: 1, heart: 2 };
 const REACH = 4.5;
+/** Never place a block when the eye is farther than this from the cell centre. */
+export const PLACE_MAX = 5;
+const WORLD_TOP_FEET = 254;
+const MAX_REACH_FAILS = 5;
+
+export const eyeDist = (p: Vec3, cell: Vec3) => Math.hypot(cell.x + 0.5 - p.x, cell.y + 0.5 - (p.y + 1.6), cell.z + 0.5 - p.z);
+
+const inFootprint = (b: { origin: Vec3; w: number; d: number }, p: { x: number; z: number }, m = 0) =>
+	p.x >= b.origin.x - m && p.x < b.origin.x + b.w + m && p.z >= b.origin.z - m && p.z < b.origin.z + b.d + m;
+
+/**
+ * Flies to a stand spot just outside the footprint beside `cell`. On a blocked flight (a tree trunk, a wall) it
+ * unsticks: straight up through a clear column (+6, +12, +20), across at max(that height, cell.y + 4), then down.
+ * Returns true only when the eye ends within PLACE_MAX of the cell centre.
+ */
+export async function approach(
+	body: Body, world: WorldView, b: { origin: Vec3; w: number; d: number }, cell: Vec3, log: (e: Record<string, unknown>) => void = () => undefined,
+): Promise<boolean> {
+	const p = body.pose();
+	const c = { x: cell.x + 0.5, y: cell.y + 0.5, z: cell.z + 0.5 };
+	if (!inFootprint(b, p, 0.4) && eyeDist(p, cell) <= REACH) return true;
+	const sides = [
+		{ x: b.origin.x - 1.2, z: c.z }, { x: b.origin.x + b.w + 1.2, z: c.z },
+		{ x: c.x, z: b.origin.z - 1.2 }, { x: c.x, z: b.origin.z + b.d + 1.2 },
+	].sort((u, v) => Math.hypot(u.x - c.x, u.z - c.z) - Math.hypot(v.x - c.x, v.z - c.z));
+	const fly = async (t: Vec3) => (await body.flyTo(t)) === 'arrived';
+	const good = () => eyeDist(body.pose(), cell) <= PLACE_MAX;
+	for (const s of sides.slice(0, 2)) {
+		const y = Math.max(cell.y, groundTop(world, Math.floor(s.x), Math.floor(s.z)) + 1);
+		try {
+			if (await fly({ x: s.x, y, z: s.z })) return good();
+			continue; // cancelled: try the other side
+		} catch (err) {
+			log({ k: 'fly-blocked', to: s, err: err instanceof Error ? err.message : String(err) });
+		}
+		// Unstick: straight up through a clear column, across high, then down.
+		try {
+			const q = body.pose();
+			const fx = Math.floor(q.x), fz = Math.floor(q.z), fy = Math.floor(q.y);
+			let alt: number | null = null;
+			for (const dy of [6, 12, 20]) {
+				const hy = Math.min(fy + dy, WORLD_TOP_FEET);
+				if (hy <= fy) break;
+				let clear = true;
+				for (let yy = fy; yy <= hy + 1 && clear; yy++) if (world.getBlock(fx, yy, fz) !== 0) clear = false;
+				if (!clear) continue;
+				try {
+					if (await fly({ x: q.x, y: hy, z: q.z })) {
+						alt = hy;
+						break;
+					}
+				} catch {
+					// try higher
+				}
+			}
+			if (alt === null) {
+				log({ k: 'unstick-failed', at: { x: q.x, y: q.y, z: q.z } });
+				continue;
+			}
+			const cruise = Math.min(Math.max(alt, cell.y + 4), WORLD_TOP_FEET);
+			if (cruise > alt && !(await fly({ x: q.x, y: cruise, z: q.z }))) continue;
+			if (!(await fly({ x: s.x, y: cruise, z: s.z }))) continue;
+			if (await fly({ x: s.x, y, z: s.z })) return good();
+		} catch (err) {
+			log({ k: 'fly-failed', to: s, err: err instanceof Error ? err.message : String(err) });
+		}
+	}
+	return good() && !inFootprint(b, body.pose(), 0.4);
+}
 const KID_INSIDE_MAX_MS = 60_000;
 
 export interface BuilderOpts {
@@ -76,7 +145,7 @@ export interface BuilderOpts {
 	primary: ChoiceEngine | null; secondary?: ChoiceEngine | null;
 	noEdits: boolean; statePath: string; log: (o: Record<string, unknown>) => void; status?: (line: string) => void;
 	rng: () => number; clock?: () => number; paceMs?: number; statusEveryMs?: number;
-	/** The rest after each finished build (default 5 min: a night makes dozens of builds, not hundreds). */
+	/** The rest after each finished build (default 30 s; the CLI's --rest-sec). It idles visibly near the build meanwhile. */
 	restMs?: number;
 	/** Block names the catalog knows (the SDK's blockNames()); palettes with an unknown name are dropped. */
 	known: ReadonlySet<string>;
@@ -216,35 +285,11 @@ export function runBuilder(o: BuilderOpts): BuilderHandle {
 		}
 	}
 
-	const insideBox = (b: BuilderBuild, p: { x: number; z: number }, m = 0) =>
-		p.x >= b.origin.x - m && p.x < b.origin.x + b.w + m && p.z >= b.origin.z - m && p.z < b.origin.z + b.d + m;
+	const insideBox = inFootprint;
 
-	/** Flies within reach of `cell`, to a spot just outside the footprint at the cell's height. Best effort. */
-	async function reach(b: BuilderBuild, cell: Vec3): Promise<void> {
-		const p = o.body.pose();
-		const c = { x: cell.x + 0.5, y: cell.y + 0.5, z: cell.z + 0.5 };
-		if (!insideBox(b, p, 0.4) && Math.hypot(c.x - p.x, c.y - (p.y + 1.6), c.z - p.z) <= REACH) return;
-		const sides = [
-			{ x: b.origin.x - 1.2, z: c.z }, { x: b.origin.x + b.w + 1.2, z: c.z },
-			{ x: c.x, z: b.origin.z - 1.2 }, { x: c.x, z: b.origin.z + b.d + 1.2 },
-		].sort((u, v) => Math.hypot(u.x - c.x, u.z - c.z) - Math.hypot(v.x - c.x, v.z - c.z));
-		for (const s of sides.slice(0, 2)) {
-			const y = Math.max(cell.y, groundTop(o.world, Math.floor(s.x), Math.floor(s.z)) + 1);
-			try {
-				if ((await o.body.flyTo({ x: s.x, y, z: s.z })) === 'arrived') return;
-			} catch {
-				// Blocked: go up and over, then down.
-				try {
-					const q = o.body.pose();
-					const hy = Math.max(q.y, y) + 10;
-					await o.body.flyTo({ x: q.x, y: hy, z: q.z });
-					await o.body.flyTo({ x: s.x, y: hy, z: s.z });
-					if ((await o.body.flyTo({ x: s.x, y, z: s.z })) === 'arrived') return;
-				} catch (err) {
-					o.log({ k: 'fly-failed', t: clock(), to: s, err: err instanceof Error ? err.message : String(err) });
-				}
-			}
-		}
+	/** Flies within reach of `cell`; true only when the eye ends within PLACE_MAX of the cell centre. */
+	async function reach(b: BuilderBuild, cell: Vec3): Promise<boolean> {
+		return approach(o.body, o.world, b, cell, (e) => o.log({ ...e, t: clock() }));
 	}
 
 	async function construct(b: BuilderBuild): Promise<void> {
@@ -252,6 +297,7 @@ export function runBuilder(o: BuilderOpts): BuilderHandle {
 		const done = new Set<string>([...b.placed, ...b.skipped]);
 		trip.resetPlan(Math.max(1, plan.length - b.placed.length));
 		let kidInsideSince: number | null = null;
+		let reachFails = 0;
 		const tag = `${b.variant} ${b.template}`;
 		const end = (status: 'done' | 'abandoned', why: string) => {
 			b.status = status;
@@ -298,8 +344,18 @@ export function runBuilder(o: BuilderOpts): BuilderHandle {
 			});
 			let v = verdictNow();
 			if (v.ok) {
-				await reach(b, pick.cell);
+				const there = await reach(b, pick.cell);
 				if (stopped) return;
+				// Never place from afar: only after a successful approach, with the eye within PLACE_MAX.
+				if (!there || eyeDist(o.body.pose(), pick.cell) > PLACE_MAX) {
+					stats.failed++;
+					reachFails++;
+					o.log({ k: 'unreachable', t: clock(), cell: pick.cell, fails: reachFails, eyeDist: Math.round(eyeDist(o.body.pose(), pick.cell) * 10) / 10 });
+					if (reachFails >= MAX_REACH_FAILS) return end('abandoned', 'cannot reach the site');
+					await sleep(Math.max(pace, 1000));
+					continue;
+				}
+				reachFails = 0;
 				v = verdictNow();
 			}
 			if (!v.ok) {
@@ -345,6 +401,30 @@ export function runBuilder(o: BuilderOpts): BuilderHandle {
 		}
 	}
 
+	/** Rests for `ms` while visibly alive: every few seconds a short hop beside the build or a look at it. */
+	async function restNear(b: BuilderBuild, ms: number): Promise<void> {
+		const until = clock() + ms;
+		const cx = b.origin.x + b.w / 2, cz = b.origin.z + b.d / 2;
+		while (!stopped && clock() < until) {
+			const left = until - clock();
+			const r = o.rng();
+			if (r < 0.5) {
+				// Look at a random spot on the build.
+				o.body.lookAt(b.origin.x + o.rng() * b.w, b.origin.y + o.rng() * b.h, b.origin.z + o.rng() * b.d);
+			} else {
+				// A short hop to a spot just outside the footprint (never inside it).
+				const a = o.rng() * Math.PI * 2;
+				const rad = Math.max(b.w, b.d) / 2 + 1.5 + o.rng() * 2;
+				const x = cx + Math.cos(a) * rad, z = cz + Math.sin(a) * rad;
+				const y = groundTop(o.world, Math.floor(x), Math.floor(z)) + 1;
+				if (y > 0) await Promise.race([o.body.flyTo({ x, y, z }).catch(() => undefined), sleep(Math.min(left, 4000))]);
+				if (stopped) return;
+				o.body.lookAt(cx, b.origin.y + b.h / 2, cz);
+			}
+			await sleep(Math.min(until - clock(), 2500 + o.rng() * 2500));
+		}
+	}
+
 	async function loop(): Promise<void> {
 		let resume = file.builds.find((b) => b.status === 'building') ?? null;
 		let haltedLogged = false;
@@ -368,7 +448,7 @@ export function runBuilder(o: BuilderOpts): BuilderHandle {
 				await construct(b);
 				if (b.status === 'done' && !stopped) {
 					stats.current = `resting after the ${b.variant} ${b.template}`;
-					await sleep(o.restMs ?? 300_000);
+					await restNear(b, o.restMs ?? 30_000);
 				}
 			} catch (err) {
 				o.log({ k: 'error', t: clock(), err: err instanceof Error ? (err.stack ?? err.message) : String(err) });

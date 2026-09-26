@@ -52,6 +52,14 @@ describe('loadConfig: port 8080 refusal', () => {
 		expect(() => loadConfig({ argv: ['--target', 'bad'], env: {}, readFile: noFile, homedir: () => '/home/fake', stateRoot: '.state', config })).toThrow(ConfigError);
 	});
 
+	it('--rest-sec: 30 by default, a number of seconds, refuses garbage', () => {
+		const config = testConfig({ loc: { url: 'http://127.0.0.1:18090', token: 'x' } });
+		const load = (extra: string[]) => loadConfig({ argv: ['--target', 'loc', ...extra], env: {}, readFile: noFile, homedir: () => '/home/fake', stateRoot: '.state', config });
+		expect(load([]).restSec).toBe(30);
+		expect(load(['--rest-sec', '5']).restSec).toBe(5);
+		expect(() => load(['--rest-sec', 'soon'])).toThrow(ConfigError);
+	});
+
 	it('a non-8080 port is accepted', () => {
 		const config = testConfig({ local: { url: 'http://localhost:18090', token: 'e2e' } });
 		const cfg = loadConfig({ argv: ['--target', 'local'], env: {}, readFile: noFile, homedir: () => '/home/fake', stateRoot: '.state', config });

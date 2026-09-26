@@ -21,9 +21,11 @@ export interface ParsedArgs {
 	tui: boolean;
 	/** `--compare` (builder): ask both Laya and Jev, act on the primary, log both. */
 	compare: boolean;
+	/** `--rest-sec N` (builder): the rest after each finished build, in seconds. */
+	restSec?: string;
 }
 
-type ValueFlagKey = 'target' | 'world' | 'name' | 'skin' | 'brain' | 'personality';
+type ValueFlagKey = 'target' | 'world' | 'name' | 'skin' | 'brain' | 'personality' | 'restSec';
 type BooleanFlagKey = 'noEdits' | 'revertOnExit' | 'iDeployedTheServer' | 'builds' | 'tui' | 'compare';
 
 const VALUE_FLAGS: Record<string, ValueFlagKey> = {
@@ -33,6 +35,7 @@ const VALUE_FLAGS: Record<string, ValueFlagKey> = {
 	'--skin': 'skin',
 	'--brain': 'brain',
 	'--personality': 'personality',
+	'--rest-sec': 'restSec',
 };
 
 const BOOLEAN_FLAGS: Record<string, BooleanFlagKey> = {

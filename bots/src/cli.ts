@@ -99,7 +99,7 @@ export interface CliDeps {
 	sleep?: (ms: number) => Promise<void>;
 	/** Test hook: the running builder and its client (the e2e stops it itself). */
 	onBuilder?: (h: BuilderHandle, client: BotClient) => void;
-	/** Test hook: the builder's rest between builds (default 5 min). */
+	/** Test hook: the builder's rest between builds (default: --rest-sec, 30 s). */
 	builderRestMs?: number;
 }
 
@@ -515,7 +515,7 @@ async function builderCommand(cfg: Config, deps: CliDeps): Promise<void> {
 	deps.print(`${cfg.name} joined "${prepared.listing.name}" as ${prepared.skin}; builder (${primary?.name ?? 'no engine'}${secondary ? ` + ${secondary.name} compare` : ''})${cfg.noEdits ? ' --no-edits' : ''}; log ${logPath}; state ${statePath}`);
 	const handle = runBuilder({
 		name: cfg.name, body: port.body, world: port.world, spawn: { x: sp.x, y: 0, z: sp.z }, primary, secondary,
-		noEdits: cfg.noEdits, statePath, rng: seededRng(seed), known: new Set(blockNames()), restMs: deps.builderRestMs,
+		noEdits: cfg.noEdits, statePath, rng: seededRng(seed), known: new Set(blockNames()), restMs: deps.builderRestMs ?? cfg.restSec * 1000,
 		log: (o) => {
 			try {
 				appendFileSync(logPath, `${JSON.stringify(o)}\n`);

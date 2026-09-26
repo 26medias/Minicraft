@@ -35,10 +35,11 @@ Go is at `~/.local/go/bin`). `bots/` holds local TypeScript bots that join a
 world as players (brain2 companion, builders, decorator, village, helper,
 architect, foreman, landscaper; overview: `docs/bots.md`; runbook:
 `bots/README.md`). `bots/panel/` is their local control panel
-(http://127.0.0.1:7777, user unit `botpanel`).
+(http://127.0.0.1:7777, user unit `botpanel`). Building a bot? Read
+`docs/bot-builders-guide.md` first.
 
 Per-subsystem docs live in `docs/`: `lighting.md`, `liquids.md`, `movement.md`, `worldgen.md`, `worldgen-from-seed.md` (rebuild reference), `performance.md`,
-`persistence.md`, `inventory.md`, `crafting.md`, `playtime.md`, `multiplayer.md`, `protocol.md`, `bots.md`. `docs/specs.md` is the source of truth for the tech stack.
+`persistence.md`, `inventory.md`, `crafting.md`, `playtime.md`, `multiplayer.md`, `protocol.md`, `bots.md`, `bot-builders-guide.md`. `docs/specs.md` is the source of truth for the tech stack.
 
 ⚠ **The kid's real worlds live in the localStorage of
 `https://noah.leap-forward.ca` and in `gs://minicraft-worlds`. Never point tests

@@ -3,7 +3,7 @@
 Local TypeScript bots that join a Minicraft multiplayer world as players. They run on Julien's own
 desktop, never deployed. This file is the runbook: setup, every command and flag, and the details of
 each bot. The system overview (bot types, architecture, the board, safety, state files, running them
-live under systemd, the control panel, known issues) is **`docs/bots.md`**.
+live under systemd, the control panel, known issues) is **`docs/bots.md`**. Building a bot? Read **`docs/bot-builders-guide.md`** first.
 
 Designs: `docs/superpowers/specs/2026-09-25-companion-bot-design.md` (companion v1) and
 `docs/superpowers/specs/2026-09-25-bot-brain-design.md` (brain v2). The other bots were live
@@ -583,6 +583,9 @@ localhost only, and it rejects foreign `Host` headers and non-JSON POSTs.
   `--rest-sec` need the CLI. Running it as the `botpanel` user unit: `docs/bots.md`.
 
 ## Adding a bot
+
+The full recipe (rules, APIs, skeletons, checklists, the e2e leg, live failure modes) is
+`docs/bot-builders-guide.md`. In short:
 
 Companion v1 lives in `bots/src/bots/companion.ts`, brain v2 in `bots/src/brain2/`, and each other bot
 in its own directory (`builder/`, `decorator/`, …). The reusable pieces:

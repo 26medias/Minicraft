@@ -11,7 +11,9 @@ flatten, so that when Noah connects the world has visibly moved on. They are for
 - **Movement is code.** Models (Laya, Jev, Ollama) only answer small multiple-choice questions ("which project?",
   "which site?"). Where to walk, what is safe and when to stop are always code.
 
-The runbook with every command and flag is `bots/README.md`. The brain2 design is
+The runbook with every command and flag is `bots/README.md`. Building a new bot or changing one? Read
+[`docs/bot-builders-guide.md`](bot-builders-guide.md) first (the rules, the APIs, skeletons, checklists and live
+failure modes). The brain2 design is
 `docs/superpowers/specs/2026-09-25-bot-brain-design.md` (part 1 implemented, part 2 pending); everything else here was
 built as fast live experiments on the `bot-brain` branch, recorded in the session ledger
 `.superpowers/sdd/2026-09-25-bot-brain/progress.md`.

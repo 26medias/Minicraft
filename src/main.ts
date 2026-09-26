@@ -51,6 +51,9 @@ import { shouldHandleKey, buildKeyToAction, sneakKeyChange } from './game/input-
 import { isMultiBlock, nextOwnedTier } from './game/tools';
 import { isHandEdit } from './game/hand-edit';
 import type { MenuAction } from './ui/menu';
+import { escapeAction, shouldOpenOnUnlock, type PauseState } from './game/pause-model';
+import { controlRows } from './ui/controls-model';
+import { PauseMenu } from './ui/pause-menu';
 import { clampDuration } from './game/session-policy';
 import { beginSolo, boot, clearAutojoin, failRejoin, setAutojoin, type AutojoinArgs } from './game/boot';
 import { onFatalClose, type FatalDeps } from './game/mp-exit';
@@ -445,12 +448,16 @@ async function main() {
 			jump: false,
 			sneak: false,
 		};
-		// One `paused` with two owners. `loop` is declared below; these closures
+		// One `paused` with three owners. `loop` is declared below; these closures
 		// run only after it exists (same pattern as the ignite handler).
 		let frozen = false;
 		let inventoryOpen = false;
+		/** Pause menu spec §3.2: the Esc menu is up. */
+		let pauseOpen = false;
+		/** Spec §3.6: Quit was clicked; the reload is coming and nothing else may start. */
+		let quitting = false;
 		const updatePaused = () => {
-			loop.paused = frozen || inventoryOpen;
+			loop.paused = frozen || inventoryOpen || pauseOpen;
 		};
 		const resetKeys = () => {
 			keys.forward = keys.back = keys.left = keys.right = keys.jump = keys.sneak = false;
@@ -468,7 +475,9 @@ async function main() {
 		};
 		syncHotbar();
 		const openInventory = () => {
-			if (inventoryOpen || frozen || colorPicker.isOpen) return;
+			// pauseOpen here is belt and braces: the I key is already dropped by onKey and #pause-root
+			// covers the HUD pickaxe, so no path can reach this while the pause menu is up.
+			if (inventoryOpen || frozen || colorPicker.isOpen || pauseOpen) return;
 			inventoryOpen = true;
 			updatePaused();
 			loop.setLeftMouseDown(false);
@@ -485,6 +494,31 @@ async function main() {
 			resetKeys();
 		};
 		inventory.onClose = closeInventory;
+		const canvas = renderer.gl.domElement;
+		const pauseMenu = new PauseMenu(app, () => controlRows(opts.keybindings));
+		const pauseState = (): PauseState => ({
+			locked: document.pointerLockElement === canvas,
+			pauseOpen,
+			controlsShown: pauseMenu.controlsShown,
+			quitting,
+			inventoryOpen,
+			pickerOpen: colorPicker.isOpen,
+			frozen,
+		});
+		const openPause = () => {
+			pauseOpen = true;
+			updatePaused();
+			loop.setLeftMouseDown(false); // multiplayer: mine-stop goes out on the next frame
+			hud.setMiningProgress(0);
+			pauseMenu.open(mp ? 'Game Menu' : 'Paused');
+		};
+		const closePause = () => {
+			if (!pauseOpen) return;
+			pauseMenu.close();
+			pauseOpen = false;
+			updatePaused();
+			resetKeys();
+		};
 		inventory.onPick = (id) => {
 			player.hotbar[player.selected] = id;
 			syncHotbar(player.selected);
@@ -538,7 +572,7 @@ async function main() {
 		const onKey = (down: boolean) => (e: KeyboardEvent) => {
 			const a = keyToAction[e.code];
 			if (!a) return;
-			if (!shouldHandleKey(down, a, { frozen, inventoryOpen, pickerOpen: colorPicker.isOpen })) return;
+			if (!shouldHandleKey(down, a, { frozen, inventoryOpen, pickerOpen: colorPicker.isOpen, pauseOpen })) return;
 			switch (a) {
 				case 'forward':
 					keys.forward = down;
@@ -622,7 +656,7 @@ async function main() {
 		// Toys spec §4: Shift is sneak (it stops pads). Its own listener, because onKey returns early for a key
 		// with no action. Shift-replace reads e.shiftKey on the click and Shift+Tab reads it on Tab: no clash.
 		const onSneak = (down: boolean) => (e: KeyboardEvent) => {
-			const v = sneakKeyChange(e.code, down, { frozen, inventoryOpen, pickerOpen: colorPicker.isOpen });
+			const v = sneakKeyChange(e.code, down, { frozen, inventoryOpen, pickerOpen: colorPicker.isOpen, pauseOpen });
 			if (v !== null) keys.sneak = v;
 		};
 		window.addEventListener('keydown', onSneak(true));
@@ -634,6 +668,9 @@ async function main() {
 			if (e.code !== 'Tab') return;
 			if (frozen) return;
 			e.preventDefault();
+			// Under the pause menu Tab does nothing at all (spec §5, gate 2): it neither cycles the
+			// hotbar nor moves focus, so focus stays on Return to Game and can never reach Quit.
+			if (pauseOpen) return;
 			if (player.hotbar.length === 0) return;
 			const delta = e.shiftKey ? -1 : 1;
 			player.selected =
@@ -648,7 +685,7 @@ async function main() {
 		const perfOverlay = new PerfOverlay(app);
 		window.addEventListener('keydown', (e) => {
 			if (e.code !== 'F3') return;
-			if (frozen || inventoryOpen || colorPicker.isOpen) return;
+			if (frozen || inventoryOpen || colorPicker.isOpen || pauseOpen) return;
 			if ((document.activeElement as HTMLElement | null)?.tagName === 'INPUT') return;
 			e.preventDefault();
 			perfOverlay.toggle();
@@ -788,6 +825,7 @@ async function main() {
 				lockedText: schedule ? `PLAY AGAIN AT ${formatStartTime(schedule.startMin, Date.now()).toUpperCase()} TOMORROW` : undefined,
 				freeze: () => {
 					closeInventory();
+					if (!quitting) closePause();
 					loop.setLeftMouseDown(false);
 					frozen = true;
 					loop.frozenByTimer = true;
@@ -1000,6 +1038,7 @@ async function main() {
 				if (loop.mpDisconnected) return;
 				loop.mpDisconnected = true;
 				closeInventory();
+				if (!quitting) closePause();
 				loop.setLeftMouseDown(false);
 				frozen = true;
 				updatePaused();
@@ -1009,7 +1048,7 @@ async function main() {
 			};
 			// Replays a loss or fatal close that arrived before this point (review of I1).
 			link.wire(() => {
-				if (loop.mpDisconnected) return;
+				if (loop.mpDisconnected || quitting) return;
 				freezeForNetwork();
 				ui.showReconnecting();
 				new Reconnector({
@@ -1028,6 +1067,55 @@ async function main() {
 
 			if (import.meta.env.DEV) mpDebug = { sync, client, remote, overlay: mp.overlay, log: debugLog, overlayCells: () => overlayCells(mp.overlay) };
 		}
+		// Pause menu (spec §3). Return to Game asks for the lock and leaves the menu up: the menu
+		// closes only when the lock is really granted, so a refusal (Chromium's ~1.5 s cooldown after
+		// the kid's own Esc, M2) leaves it open and he just clicks again. No pointerlockerror handler
+		// is needed for that reason.
+		pauseMenu.onResume = () => {
+			const p = canvas.requestPointerLock() as unknown;
+			if (p instanceof Promise) p.catch(() => {});
+		};
+		document.addEventListener('pointerlockchange', () => {
+			if (document.pointerLockElement === canvas) {
+				if (!quitting) closePause();
+				return;
+			}
+			if (shouldOpenOnUnlock(pauseState())) openPause();
+		});
+		// Capture phase (spec §5.2): runs before the I screen's and the colour picker's own Esc
+		// handlers, and still runs when the search box stops propagation — so the Esc that closes
+		// one of them is judged on the state from before, and opens nothing.
+		window.addEventListener(
+			'keydown',
+			(e) => {
+				if (e.code !== 'Escape') return;
+				const action = escapeAction(pauseState(), e.repeat);
+				if (action === 'open') openPause();
+				else if (action === 'back') pauseMenu.showCard();
+			},
+			true,
+		);
+		const QUIT_FLUSH_CAP_MS = 3000;
+		pauseMenu.onQuit = () => {
+			if (quitting) return;
+			quitting = true;
+			pauseMenu.setQuitting();
+			if (mp) {
+				// Spec §3.6, in order: never rejoin, tell the friend, push the last edits.
+				clearAutojoin(sessionStorage);
+				// `leaving` exists in every multiplayer session, timer or not; update(0) sends 0 even on a
+				// countdown that never started, and marks every threshold fired so nothing follows.
+				leaving?.update(0);
+				mpSync?.flushFrame();
+			}
+			// A stalled cloud upload must not leave "Saving…" up forever: the local copy is already
+			// written synchronously inside the flush, and pagehide writes it again on the reload.
+			const cap = new Promise<void>((r) => setTimeout(r, QUIT_FLUSH_CAP_MS));
+			void Promise.race([autosave.flush().catch(() => {}), cap]).then(() => {
+				if (mp) mp.client.close(1000);
+				location.reload();
+			});
+		};
 		// ----------------------------------------------------------------------
 		loop.start();
 		if (import.meta.env.DEV) {
@@ -1039,6 +1127,7 @@ async function main() {
 				world, player, loop, apiUrl, cam, highlight, mustMine, syncHotbar, keys,
 				playtime, mp: mpDebug, cracks, camera: renderer.camera,
 				markDirtyCalls: () => markDirtyCalls,
+				pause: { isOpen: () => pauseOpen, controlsShown: () => pauseMenu.controlsShown, quitting: () => quitting },
 				worldHash: (chunks: Array<[number, number]>) => worldHash(world, chunks),
 				refReplay: (actions: RefAction[], o: Omit<RefReplayOpts, 'seed' | 'height' | 'gen'>) =>
 					refReplay(actions, { ...o, seed: world.seed, height: world.height, gen: world.genVersion }),

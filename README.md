@@ -94,7 +94,7 @@ In fly or swim mode: pitch the camera up to ascend, down to descend — W moves 
 - **C** — open the light-color picker (20-tile pastel palette). If you're aimed at a lamp block when you press C, selecting a color recolors *that* lamp and sets the default for future placements. If you're not aimed at a lamp, the color becomes the default.
 
 ### Menu
-- **Esc** — exit pointer-lock (you leave the game to the browser but the world keeps running).
+- **Esc** — open the game menu: **Return to Game**, **Controls** (every key, read-only) and **Quit to Menu** (saves, then back to the main menu). Solo play stops while it is open; in multiplayer your friend's world keeps going. The play timer keeps counting. With the I screen or the color picker open, Esc closes that instead.
 - Back on the main menu you can create new worlds, continue existing ones, delete them, and remap keys via **Options**.
 
 ## Features

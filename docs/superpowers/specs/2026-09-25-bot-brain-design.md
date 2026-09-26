@@ -1,11 +1,12 @@
 # Bot brain: emotions, behaviours and a blackboard of experts
 
-**Status:** design, rev 3.2, 2026-09-25. It was brainstormed with Julien on 2026-09-25.
+**Status:** design, rev 3.3, 2026-09-25. It was brainstormed with Julien on 2026-09-25.
 - **Rev 1** (`193069b`) went through gate 1 with four reviewers: models, rigour, engine and sequencing, and consumer. All four ran probes.
 - **Rev 2** (`e7b20dd`) repaired every finding and added rulings R12–R15, which Julien made on the review's questions.
 - **Rev 3** (`e1cddce`) repaired the re-gate of rev 2, where the same four reviewers re-ran their probes.
 - **Rev 3.1** (`183a02d`) repaired a fresh reviewer's check of rev 3.
-- **Rev 3.2** repairs a narrow check of rev 3.1.
+- **Rev 3.2** repaired a narrow check of rev 3.1.
+- **Rev 3.3** takes in gate 2 (plan review): the switch cap on every switch (Julien's ruling), the dig with no tunnel, world spawn from the SDK, and `pendingDrift` kept private.
 
 The disposition of every finding is in §12.
 
@@ -207,7 +208,7 @@ Each axis's words come from its poles.
 | Outlook | discouraged | hopeful | realistic | 10 min |
 | Stimulation | bored | overstimulated | comfortably engaged | 1 min |
 
-`AxisState = { value, pendingDrift, deltas: {amount, cause, agoS}[] }`. It keeps the last 10 deltas.
+`AxisState = { value, band, deltas: {amount, cause, agoS}[] }`. It keeps the last 10 deltas. The decay expert keeps `pendingDrift` privately, not in the store (gate 2): storing it wrote one change per axis every 500 ms. Nothing needs it for replay, since the value patches are logged.
 
 **Word bands have ±0.03 hysteresis:** a value has to cross an edge by 0.03 before its band changes.
 
@@ -353,10 +354,16 @@ The file is `bots/.state/brain/<target>/<world-uuid>/<bot>.json`, keyed by world
   - `looking-at-me`.
 
   **Limits on urgent triggers:** at most one per trigger kind per player every 20 s. An urgent trigger never interrupts a behaviour that already serves the same player: a `line-started` from Noah doesn't interrupt Help-build {Noah}. **The urgent governor**, a runtime rule, allows an urgent switch only if:
-- there has been no urgent switch in the last 30 s, across all players and kinds, **and**
-- there have been fewer than 9 switches of any kind in the last 5 minutes.
+- there has been no urgent switch in the last 30 s, across all players and kinds.
 
-Otherwise the trigger becomes a normal one. **Stop signals and hazards are exempt**: they always interrupt at once. That stops two kids laying lines from bouncing the bot between them. Criterion 1's two-kid fixture tests it at 3, 4, 5 and 7 s alternation. Without the governor it produced 30 switches.
+Otherwise the trigger becomes a normal one.
+
+**The switch cap** (gate 2, Julien's ruling) applies to **every** switch: there must have been fewer than 9 switches in the last 5 minutes. A switch is a change of behaviour kind **or** of target player; moving Help-build from Noah to Mia is one. Three kinds of switch don't count and are never capped:
+- a behaviour ending by itself (`done`, `failed`, `paused`);
+- stop signals;
+- hazards.
+
+**Stop signals and hazards** also bypass the governor: they always interrupt at once. Without the cap, the governor alone allowed 11–17 switches in 5 minutes at 3–7 s alternation. That stops two kids laying lines from bouncing the bot between them. Criterion 1's two-kid fixture tests it at 3, 4, 5 and 7 s alternation. Without the governor it produced 30 switches.
 - **Keep-going (code, R15)** every 30 s: it triggers selection when:
   - the behaviour has run past its `typicalS` upper bound, or
   - Stimulation is "low" or "very low" and the behaviour has run ≥ 60 s, or
@@ -467,7 +474,7 @@ Each comes in small and medium.
 - **at most 3 standing builds per world.** A build is standing while ≥ 50% of its **template cells still hold the template's block**. `bot` cells holding air don't count, since the bot's own breaks leave those; counting them would keep a taken-apart build standing forever.
   - At the cap, Build may pick **renew**: take apart the oldest standing build first (only its `bot` cells, with the blocks going back to inventory), then build the new one **on a different site** that doesn't overlap the old footprint. So the bot keeps building after the third build, and never writes the same cell 3 times.
   - Taking apart counts in that plan's `plannedEdits`.
-- a site must be ≥ 12 blocks from any `kid` cell, and ≥ 16 blocks from world spawn;
+- a site must be ≥ 12 blocks from any `kid` cell, and ≥ 16 blocks from world spawn. World spawn is the generator's `spawnV3(seed)`, exported read-only by the SDK. It's not the bot's join position, which is often its last position or a spot beside a kid;
 - a dig's entrance and its whole route must be ≥ 12 blocks (horizontally) from any `kid` cell when it's planned.
 - at most 3 paused digs. A dig is dropped once its cells are no longer `bot`.
 
@@ -485,8 +492,10 @@ Gate 1 found that a strictly flat 7×7 site is missing within 48 blocks at 29 of
 - **The target** is the nearest cell of the block type that is reachable through `natural` and `bot` cells. The bot knows it from the generator: this is x-ray, accepted for v1.
 - **The route is a spiral staircase.** A straight staircase would end about 100 blocks sideways from its entrance on a deep dig.
   - **Shape:** a 3×3 spiral around a central pillar, going down one block per step, 8 steps per turn. Each step is **3 high**. A kid's jump reaches 1.33 blocks, so a 2-high step would leave no headroom to climb it; 3 high lets a kid who wanders in walk back out.
-  - **The entrance** is chosen straight above the target, or as close to that as the leash and the ≥ 12 block rule allow. A final horizontal tunnel of at most 8 blocks, also 3 high, reaches the target.
-  - So the bot never goes more than about 10 blocks sideways from its entrance.
+  - **There's no tunnel** (gate 2). A final tunnel cut through the pillar or an earlier step's floor in about a quarter of the cases. Instead, the pillar is placed so that the target's column is one of the 8 ring columns, and the spiral's **phase** is chosen so that the last step lands in a ring column face-adjacent to the target, at the target's height. The bot then mines the target from that step.
+  - Each target has 8 possible pillars, (target − ring offset). If none satisfies the leash and the ≥ 12 block rule, the next-nearest target is tried.
+  - Vein extensions (target blocks next to the first one) are mined only if they're not a step floor, not the pillar, and not a cleared cell of another step.
+  - So the bot never goes more than 1 block sideways from its pillar.
 - **A dig** is persisted as `{block, entrance, target, cells done, status}`. A Mine episode lasts at most 120 s. At the time budget it ends as `paused`, not `failed`, and the next Mine for the same block resumes the dig at its last step.
 - **Deep targets take several episodes.** The nearest deepslate diamond measured 98–101 blocks down, about 9–12 minutes of stone digging at 3 breaks a step.
 - **Floor check (sense tier):** before stepping, the cell under the next step must be solid. If it's air (a cave), the bot:

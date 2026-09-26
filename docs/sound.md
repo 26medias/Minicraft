@@ -9,8 +9,8 @@ Status: **built, rev 2** (after the engine and kid-lens reviews; Audio screen ad
 | Moment | Sound | Rule |
 |---|---|---|
 | Digging a block | `sfx/hit_<material>` | First hit when the mine starts, then one every 250 ms until it breaks or is cancelled; none within 100 ms of the break; blocks that break in under 300 ms play no hits. |
-| The block breaks | `sfx/break_<material>` | Once per break. An area break (big pickaxe) plays one break sound for the aimed block's material, not one per block. |
-| The block goes into the inventory | `sfx/pickup` | 60 ms after the break sound, at most once every 500 ms (area breaks and TNT included: `onBlocksRemoved` fires only when something was removed, and every removed block is added). |
+| The block breaks | — | No sound of its own (Julien, 2026-09-26: the break sounds were annoying). The hits stop and the pickup pops. |
+| The block goes into the inventory | `sfx/pickup` | When the block breaks, at most once every 500 ms (area breaks and TNT included: `onBlocksRemoved` fires only when something was removed, and every removed block is added). |
 | Placing a block | `sfx/place_hard` (stone, glass materials) or `sfx/place_soft` (everything else) | Once per successful place or shift-replace. The existing refused-place `playNope` stays. |
 | Falling or jumping into water | `sfx/splash` | The feet enter water after at least 1 s out of it, falling faster than 5 blocks/s (so swimming and hopping at the surface never splashes). |
 | TNT (all kinds) | `sfx/tnt` | At detonation, attenuated by distance (full next to it, silent from 64 blocks). A chain plays a boom at most every 250 ms and at most 3 at once. Fireworks keep their own effect; no boom. |
@@ -61,7 +61,7 @@ distance `d` from the listener's eye: `gain = clamp(1 − d / 32, 0, 1)²`. No s
 (keeps it simple; the kid plays with laptop speakers).
 
 Other players (multiplayer): only an `edit` that `isHandEdit` accepts (≤ 9 ops, no liquids, checked
-before it is applied) makes a sound: one per message, the nearest cell's break or place sound, at
+before it is applied) makes a sound: one per message, the nearest cell's place sound (a friend's break is silent, like ours), at
 most one every 150 ms. Blasts and water flow never do. Edits in the first 3 s of a world are the
 world catching up and stay silent. Remote mining plays a hit at the existing puff (every 450 ms).
 TNT seen by `onFx 'boom'` plays `tnt` attenuated. All attenuated by distance.
@@ -155,7 +155,7 @@ two places cannot drift apart.
   allowed, its own dev server on port 5199, every non-localhost request aborts the run). It first
   requires the AudioContext to be running and the files decoded. Then: a real Shift+right-click
   replaces stone with planks (exactly `place_soft`); mining a stone block with the hand logs one
-  hit per 250 ms (± 1), one `break_stone` after them, then `pickup`; over a 12×12 pool the lake
+  hit per 250 ms (± 1), then one `pickup` and nothing else; over a 12×12 pool the lake
   level is > 0.5; at y 235 the lake is 0 and strong wind > 0.8; inside rock the wind is 0; Esc →
   Audio shows three sliders and Music 0 is saved; the main menu's Audio shows it.
   Checked red on two mutants (no place sound; hits every 50 ms).

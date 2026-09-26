@@ -174,10 +174,9 @@ for (const sig of ['SIGINT', 'SIGTERM', 'SIGHUP'] as const) process.on(sig, () =
 		console.log(`     sounds: ${mined.join(' ')}`);
 		const hits = mined.filter((n) => n === 'hit_stone').length;
 		const expected = Math.floor((took - 100) / 250) + 1;
-		check(mined.every((n) => ['hit_stone', 'break_stone', 'pickup'].includes(n)), 'only stone sounds and the pickup');
+		check(mined.every((n) => ['hit_stone', 'pickup'].includes(n)), 'only stone hits and the pickup (a break makes no sound of its own)');
 		check(Math.abs(hits - expected) <= 1, `one hit per 250 ms: ${hits} hits in ${took} ms (expected ${expected} ± 1)`);
-		check(mined.filter((n) => n === 'break_stone').length === 1 && mined.lastIndexOf('hit_stone') < mined.indexOf('break_stone'), 'one break_stone, after the hits');
-		check(mined.indexOf('pickup') > mined.indexOf('break_stone'), 'pickup after the break');
+		check(mined.filter((n) => n === 'pickup').length === 1 && mined.lastIndexOf('hit_stone') < mined.indexOf('pickup'), 'one pickup, after the hits');
 
 		// 3. Nature. Over a 12×12 pool of still water in the open: lake up, no wind near sea level.
 		await mc(page, (m, ids) => {

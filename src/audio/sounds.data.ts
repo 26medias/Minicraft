@@ -20,12 +20,6 @@ export const SOUND_VOLUME = {
 	hit_sand: 0.36,
 	hit_leaves: 1.0,
 	hit_glass: 3.0,
-	break_stone: 0.75,
-	break_dirt: 1.0,
-	break_wood: 0.6,
-	break_sand: 0.27,
-	break_leaves: 0.42,
-	break_glass: 0.56,
 	place_soft: 0.8,
 	place_hard: 1.25,
 	pickup: 2.4,
@@ -48,7 +42,6 @@ export const SOUND_FILES: Record<SoundName, string> = Object.fromEntries(
 ) as Record<SoundName, string>;
 
 export const hitSound = (m: BlockSound): SoundName => `hit_${m}`;
-export const breakSound = (m: BlockSound): SoundName => `break_${m}`;
 export const placeSound = (m: BlockSound): SoundName => (m === 'stone' || m === 'glass' ? 'place_hard' : 'place_soft');
 
 /** Music files and their levelling gains (same review). */

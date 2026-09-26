@@ -828,13 +828,11 @@ async function main() {
 		};
 		loop.onBlockBroken = (ev) => {
 			countRemoved([ev.blockId]);
-			audio.broke(ev.blockId);
+			audio.pickup();
 		};
-		loop.onBlocksRemoved = (removed, aimedId) => {
+		loop.onBlocksRemoved = (removed) => {
 			countRemoved(removed.map((r) => r.blockId));
-			// A mined area break sounds like its aimed block; a blast has its boom and only the pickup.
-			if (aimedId !== undefined) audio.broke(aimedId);
-			else audio.pickup();
+			audio.pickup();
 		};
 		loop.onDetonate = (x, y, z, effect) => {
 			if (effect !== 'firework') audio.boom(x, y, z);
@@ -1028,7 +1026,7 @@ async function main() {
 						// A friend's place or break swings their arm (spec §7); water flow, drains and explosions don't.
 						if (m.by !== you && isHandEdit(m.ops, loadedBlock)) {
 							remote.swing(m.by, performance.now());
-							audio.remoteEdit(m.ops, loadedBlock);
+							audio.remoteEdit(m.ops);
 						}
 						sync.onEdit(m, you);
 						break;

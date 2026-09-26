@@ -9,7 +9,7 @@ import { waterLevels, windLevels, type Sampler } from './ambience';
 import { audioContext, loadSounds, setDuck, soundsReady, startLoop, playSound, type LoopHandle } from './engine';
 import { music } from './music';
 import { distanceGain, hitsDue, makeBoomGate, makeSplashDetector, makeThrottle, PICKUP_EVERY_MS } from './rules';
-import { breakSound, hitSound, placeSound, type SoundName } from './sounds.data';
+import { hitSound, placeSound, type SoundName } from './sounds.data';
 
 type MiningNow = { x: number; y: number; z: number; blockId: BlockId; elapsedMs: number; durationMs: number } | null;
 
@@ -132,16 +132,13 @@ export class GameAudio {
 		}
 	}
 
-	/** A mined block broke (one, or an area: one sound for the aimed block's material). */
-	broke(aimedId: BlockId): void {
-		if (this.silenced) return;
-		playSound(breakSound(this.material(aimedId)));
-		this.pickup();
-	}
-
-	/** Blocks went into the inventory (a break, an area break, a blast). */
+	/**
+	 * Blocks went into the inventory (a break, an area break, a blast). A break itself makes no sound
+	 * (Julien, 2026-09-26: the break sound was annoying); the hits stop and the pickup pops.
+	 */
 	pickup(): void {
-		if (this.pickupGate(performance.now())) playSound('pickup', 1, 0.06);
+		if (this.silenced) return;
+		if (this.pickupGate(performance.now())) playSound('pickup');
 	}
 
 	placed(id: BlockId): void {
@@ -166,18 +163,16 @@ export class GameAudio {
 	// --- Other players --------------------------------------------------------------------------
 
 	/**
-	 * A friend's hand edit (main.ts checks isHandEdit, so blasts and water flow never get here), BEFORE
-	 * it is applied: `blockAt` still sees the old blocks. One sound per message, the nearest cell,
-	 * and at most one every 150 ms (kid-lens #1).
+	 * A friend's hand edit (main.ts checks isHandEdit, so blasts and water flow never get here): a
+	 * place sounds, once per message at the nearest cell, at most one every 150 ms (kid-lens #1).
 	 */
-	remoteEdit(ops: readonly (readonly number[])[], blockAt: (x: number, y: number, z: number) => number): void {
+	remoteEdit(ops: readonly (readonly number[])[]): void {
 		if (this.silenced) return;
 		const solid = (id: number) => id > 0 && (BLOCKS[id]?.liquid ?? 'none') === 'none';
 		for (const [x, y, z, id] of ops) {
-			const old = blockAt(x, y, z);
 			let sound: SoundName;
+			// A friend's break is silent, like ours; only their places sound.
 			if (solid(id)) sound = placeSound(this.material(id));
-			else if (id === 0 && solid(old)) sound = breakSound(this.material(old));
 			else continue;
 			const d = this.dist(x, y, z);
 			if (!this.remotePending || d < this.remotePending.d) this.remotePending = { sound, d };

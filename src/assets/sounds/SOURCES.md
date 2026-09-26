@@ -7,7 +7,7 @@ No third-party recordings. The prompts are in `prompts.tsv`
 
 | File | Prompt row | Notes |
 |---|---|---|
-| sfx/hit_*.mp3, sfx/break_*.mp3 | hit_<material>, break_<material> | wood is from the round-2 prompt; hit_wood trimmed to the chop |
+| sfx/hit_*.mp3 | hit_<material> | wood is from the round-2 prompt; hit_wood trimmed to the chop. The break sounds were removed on 2026-09-26. |
 | sfx/place_soft.mp3 | place_block | |
 | sfx/place_hard.mp3 | place_stone | |
 | sfx/pickup.mp3, splash.mp3, tnt.mp3 | pickup_pop, splash, tnt | |

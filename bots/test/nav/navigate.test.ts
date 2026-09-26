@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import { BlockedError } from 'minicraft-bot';
 import { airPathToSky, bodyFits, navigate, StuckWatchdog, walkOrFly } from '../../src/nav/navigate.js';
-import { pickWanderSpot, wanderer } from '../../src/nav/wander.js';
+import { pickWanderSpot, standable, wanderer } from '../../src/nav/wander.js';
 import { FakeBody, FakeWorld } from '../fake-port.js';
 import type { Vec3 } from '../../src/types.js';
 
@@ -243,5 +243,33 @@ describe('idle wander (nav/wander.ts)', () => {
 		for (let i = 0; i < 5; i++) expect(await w.go(spot, () => true)).toBe(false);
 		expect(body.calls.filter((c) => c.fn === 'walkTo' || c.fn === 'flyTo').length).toBe(moves);
 		expect(body.calls.filter((c) => c.fn === 'lookAt').length).toBeGreaterThanOrEqual(5);
+	});
+
+	it('a lake under ice: no spot in an ice-free hole (real water up to the surface), the ice itself still stands', () => {
+		const world = floorWorld();
+		// A pond over x, z ∈ [300, 309], lakebed at Y − 1 (the floor), water Y..Y + 2, ice capping it at Y + 3 —
+		// except a 3 × 3 hole with no ice, open straight to the sky above the water.
+		world.fill({ x: 300, y: Y, z: 300 }, { x: 309, y: Y + 2, z: 309 }, 'water');
+		world.fill({ x: 300, y: Y + 3, z: 300 }, { x: 309, y: Y + 3, z: 309 }, 'ice');
+		world.fill({ x: 304, y: Y + 3, z: 304 }, { x: 306, y: Y + 3, z: 306 }, 0);
+		for (let x = 304; x <= 306; x++)
+			for (let z = 304; z <= 306; z++) expect(standable(world, x + 0.5, z + 0.5)).toBeNull();
+		// standing on the ice itself is fine (only under it, in the water, is not)
+		expect(standable(world, 300.5, 300.5)).toEqual({ x: 300.5, y: Y + 4, z: 300.5 });
+	});
+
+	it('a bot starting underwater (a hole in the ice) gets out via the nearest dry open-sky cell, not the far picked spot', async () => {
+		const world = floorWorld();
+		// The same pond, no ice this time: every cell in it is liquid, so none of it is ever a valid destination.
+		world.fill({ x: 300, y: Y, z: 300 }, { x: 309, y: Y + 2, z: 309 }, 'water');
+		const body = physBody(world, { x: 304.5, y: Y, z: 304.5 }); // feet and head both start submerged
+		const w = wanderer(body, world, { rng: seq(5), clock: () => Date.now(), log: () => undefined });
+		const farSpot = { x: 340.5, y: Y, z: 340.5 }; // a valid dry spot, but far — the nearby escape should win
+		expect(await w.go(farSpot, () => true)).toBe(true);
+		const p = body.pose();
+		const fx = Math.floor(p.x), fy = Math.floor(p.y), fz = Math.floor(p.z);
+		expect(world.isLiquid(world.getBlock(fx, fy, fz))).toBe(false);
+		expect(world.isLiquid(world.getBlock(fx, fy + 1, fz))).toBe(false);
+		expect(Math.hypot(p.x - 304.5, p.z - 304.5)).toBeLessThanOrEqual(17); // the nearby escape, not (340.5, 340.5)
 	});
 });

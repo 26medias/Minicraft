@@ -8,10 +8,12 @@
 import { groundTop } from '../brain2/behaviours/site-search.js';
 import type { Body, WorldView } from '../port.js';
 import type { Vec3 } from '../types.js';
-import { bodyFits, navigate, openSky, StuckWatchdog } from './navigate.js';
+import { bodyFits, navigate, nearestOpenSky, openSky, StuckWatchdog } from './navigate.js';
 
 /** Wander destinations stay within this many blocks (horizontally) of the centre. */
 export const WANDER_MAX = 12;
+/** How far the escape (bot currently in liquid) looks for a dry open-sky cell. */
+export const ESCAPE_SEARCH = 16;
 /** Navigator failures in a row before the bot stops trying to move for a while. */
 export const FAIL_LIMIT = 2;
 /** How long it only looks around after FAIL_LIMIT failures. */
@@ -44,6 +46,12 @@ export function pickWanderSpot(world: WorldView, c: { x: number; z: number }, rn
 	return null;
 }
 
+/** True when the bot's feet or head cell is liquid (it is currently in the water, not just standing near it). */
+function inLiquid(world: WorldView, p: Vec3): boolean {
+	const x = Math.floor(p.x), y = Math.floor(p.y), z = Math.floor(p.z);
+	return world.isLiquid(world.getBlock(x, y, z)) || world.isLiquid(world.getBlock(x, y + 1, z));
+}
+
 export interface Wanderer {
 	/**
 	 * One idle move to `spot` (null: none found) through the navigator. Returns false (and only looks around) when
@@ -70,11 +78,17 @@ export function wanderer(body: Body, world: WorldView, o: { rng: () => number; c
 				return false;
 			}
 			if (fails >= FAIL_LIMIT) fails = 0; // the still spell is over: try moving again
+			const p = body.pose();
+			// Currently in the water (e.g. a hole in lake ice): the nearest dry open-sky cell within ESCAPE_SEARCH
+			// wins over the picked spot; failing that, `spot` itself is now always dry and open-sky, and navigate
+			// flies when the walk there is blocked.
+			const escape = inLiquid(world, p) ? nearestOpenSky(world, p.x, Math.floor(p.y), p.z, ESCAPE_SEARCH) : null;
+			const dest = escape ?? spot;
 			const t0 = o.clock();
 			const live = () => alive() && o.clock() - t0 < STEP_MS;
 			let timer: ReturnType<typeof setTimeout> | undefined;
 			const r = await Promise.race([
-				navigate(body, world, { x: spot.x, z: spot.z }, { alive: live, log: (e) => o.log({ ...e, t: o.clock() }), watchdog: StuckWatchdog.for(body, world) }),
+				navigate(body, world, { x: dest.x, z: dest.z }, { alive: live, log: (e) => o.log({ ...e, t: o.clock() }), watchdog: StuckWatchdog.for(body, world) }),
 				new Promise<{ ok: false; reason: string }>((res) => (timer = setTimeout(() => res({ ok: false, reason: 'timeout' }), STEP_MS))),
 			]);
 			clearTimeout(timer);
@@ -85,7 +99,7 @@ export function wanderer(body: Body, world: WorldView, o: { rng: () => number; c
 			if (!alive()) return false;
 			fails++;
 			StuckWatchdog.for(body, world).clear();
-			o.log({ k: 'wander-fail', t: o.clock(), to: spot, reason: r.reason, fails });
+			o.log({ k: 'wander-fail', t: o.clock(), to: dest, reason: r.reason, fails });
 			if (fails >= FAIL_LIMIT) {
 				stillUntil = o.clock() + STILL_MS;
 				o.log({ k: 'wander-still', t: o.clock(), ms: STILL_MS });

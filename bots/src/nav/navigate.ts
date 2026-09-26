@@ -77,9 +77,21 @@ export async function walkOrFly(body: Body, world: WorldView, to: Col, o: WalkOr
 	}
 }
 
-/** True when nothing solid stands in column (x, z) at or above feet y (the sky is open above a body there). */
+/** The world's build height ceiling (matches site-search's column scan). */
+const WORLD_TOP = 255;
+
+/**
+ * True when nothing solid or liquid stands in column (x, z) at or above feet y: true open sky, not water under an ice
+ * patch (ice is solid and already caught here; a hole in the ice still has water filling the column up to its real
+ * surface, which this rejects even though the water itself isn't solid).
+ */
 export function openSky(world: WorldView, x: number, z: number, y: number): boolean {
-	return topSolid(world, Math.floor(x), Math.floor(z)) < Math.floor(y);
+	const bx = Math.floor(x), bz = Math.floor(z), by = Math.floor(y);
+	for (let cy = WORLD_TOP; cy >= by; cy--) {
+		const b = world.getBlock(bx, cy, bz);
+		if (world.isSolid(b) || world.isLiquid(b)) return false;
+	}
+	return true;
 }
 
 /** Feet cell (x, y, z) and the one above are not solid: a body fits there. */
